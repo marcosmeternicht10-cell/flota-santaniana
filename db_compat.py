@@ -92,15 +92,15 @@ class _CursorWrapper:
         if USE_POSTGRES and sql_t.strip().upper().startswith("INSERT"):
             if "RETURNING" not in sql_t.upper():
                 sql_t = sql_t.rstrip().rstrip(";") + " RETURNING id"
+            # Ejecutar (si falla, dejar que la excepción suba para hacer rollback)
+            self._cur.execute(sql_t, params)
+            # Capturar el id devuelto por RETURNING
             try:
-                self._cur.execute(sql_t, params)
                 row = self._cur.fetchone()
                 if row:
                     self.lastrowid = row[0] if not isinstance(row, dict) else row.get("id")
             except Exception:
-                # Si la tabla no tiene columna id, ejecutar sin RETURNING
-                sql_no_ret = re.sub(r"\s+RETURNING\s+id\s*$", "", sql_t, flags=re.IGNORECASE)
-                self._cur.execute(sql_no_ret, params)
+                self.lastrowid = None
             return self
         else:
             self._cur.execute(sql_t, params)
@@ -131,12 +131,30 @@ class _ConnectionWrapper:
     def execute(self, sql, params=()):
         """Atajo: crea cursor, ejecuta y lo devuelve (como sqlite3)."""
         cur = self.cursor()
-        cur.execute(sql, params)
+        try:
+            cur.execute(sql, params)
+        except Exception:
+            # En PostgreSQL, si una sentencia falla hay que hacer rollback
+            # o la transacción queda "abortada" y bloquea todo lo demás.
+            if USE_POSTGRES:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            raise
         return cur
 
     def executemany(self, sql, seq):
         cur = self.cursor()
-        cur.executemany(sql, seq)
+        try:
+            cur.executemany(sql, seq)
+        except Exception:
+            if USE_POSTGRES:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+            raise
         return cur
 
     def cursor(self):
