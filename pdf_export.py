@@ -3,15 +3,12 @@ pdf_export.py — Generación de reportes PDF con gráficos
 Sistema de Gestión de Flota - La Santaniana
 
 Usa matplotlib para los gráficos (barras + torta) y reportlab para el PDF.
+matplotlib se importa solo cuando se genera un PDF (ahorra RAM al arrancar).
 """
 
 import os
 import io
 import datetime
-import matplotlib
-matplotlib.use("Agg")  # backend sin pantalla
-import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -21,6 +18,14 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
 )
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+
+def _get_plt():
+    """Importa matplotlib solo cuando se necesita (ahorra ~26 MB de RAM)."""
+    import matplotlib
+    matplotlib.use("Agg")  # backend sin pantalla
+    import matplotlib.pyplot as plt
+    return plt
 
 # ─── Paleta corporativa ───────────────────────────────────────────────────────
 AZUL      = "#185FA5"
@@ -43,6 +48,8 @@ def gs(v):
 
 def _grafico_barras(k, ruta):
     """Barras horizontales de la estructura de costos."""
+    plt = _get_plt()
+    from matplotlib.ticker import FuncFormatter
     conceptos = ["Ingreso", "Costos\nvariables", "Margen\ncontribución",
                  "Fijos\ndirectos", "Fijos\nindirectos", "Utilidad\noperativa"]
     valores = [k["ingreso"], k["costos_variables"], k["margen_contribucion"],
@@ -78,6 +85,7 @@ def _grafico_barras(k, ruta):
 
 def _grafico_torta(k, ruta):
     """Torta de distribución del ingreso."""
+    plt = _get_plt()
     variables   = k["costos_variables"]
     fijos       = k["costos_fijos_directos"] + k["costos_fijos_indirectos"]
     utilidad    = max(0, k["utilidad_operativa"])
@@ -409,6 +417,7 @@ def generar_reporte_gerencial_pdf(reporte, ruta_salida):
 
     # Items por tipo (gráfico)
     if reporte['items_por_tipo']:
+        plt = _get_plt()
         story.append(Paragraph("Trabajos por tipo", seccion_style))
         fig, ax = plt.subplots(figsize=(6, 3))
         tipos = [i['tipo'].title() for i in reporte['items_por_tipo']]

@@ -47,7 +47,7 @@ async function api(url, opts) {
     window.location.href = "/login";
     return {};
   }
-  // Sin permiso (rol consulta intentando modificar)
+  // Sin permiso para esta acción (solo admin puede gestionar usuarios)
   if (r.status === 403) {
     const data = await r.json().catch(() => ({}));
     toast(data.error || "No tenés permiso para esta acción", "error");
@@ -2505,7 +2505,7 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administrador", operador: "Operador", consulta: "Solo consulta" };
+const LABEL_ROL = { admin: "Administración", taller: "Taller" };
 
 async function renderUsuarios() {
   status("Gestión de usuarios");
@@ -2532,17 +2532,16 @@ async function renderUsuarios() {
             <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez"></div>
             <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" style="width:140px"></div>
             <div class="field"><label>Rol</label>
-              <select id="u-rol" style="width:160px">
-                <option value="operador">Operador (carga datos)</option>
-                <option value="admin">Administrador (todo)</option>
-                <option value="consulta">Solo consulta (ver)</option>
+              <select id="u-rol" style="width:180px">
+                <option value="taller">Taller (operación)</option>
+                <option value="admin">Administración (todo)</option>
               </select>
             </div>
             <button class="btn btn-primary" onclick="guardarUsuario()"><i class="ti ti-plus"></i> Crear</button>
           </div>
           <p class="hint" style="margin-top:14px">
             <i class="ti ti-info-circle"></i>
-            <b>Administrador</b>: acceso total + gestión de usuarios. <b>Operador</b>: carga y edita datos. <b>Solo consulta</b>: únicamente puede ver, no modificar.
+            <b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios.
           </p>
         </div>
       </div>

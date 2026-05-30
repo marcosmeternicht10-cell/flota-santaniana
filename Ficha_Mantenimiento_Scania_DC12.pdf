@@ -290,7 +290,7 @@ def inicializar_db():
             usuario         TEXT NOT NULL UNIQUE,
             nombre          TEXT DEFAULT '',
             password_hash   TEXT NOT NULL,
-            rol             TEXT DEFAULT 'operador',
+            rol             TEXT DEFAULT 'taller',
             activo          INTEGER DEFAULT 1,
             fecha_creacion  TEXT DEFAULT (date('now')),
             ultimo_acceso   TEXT
@@ -1749,8 +1749,8 @@ def _verificar_password(password, password_hash):
         return False
 
 
-def crear_usuario(usuario, password, nombre="", rol="operador"):
-    """Crea un nuevo usuario. rol: 'admin', 'operador', 'consulta'."""
+def crear_usuario(usuario, password, nombre="", rol="taller"):
+    """Crea un nuevo usuario. rol: 'admin' o 'taller'."""
     conn = get_connection()
     try:
         conn.execute("""INSERT INTO usuarios (usuario, nombre, password_hash, rol)
@@ -1824,6 +1824,15 @@ def contar_usuarios():
 
 def crear_admin_por_defecto():
     """Crea un admin inicial si no hay ningún usuario. Devuelve credenciales."""
+    # Migrar roles viejos (operador/consulta) al nuevo rol 'taller'
+    try:
+        conn = get_connection()
+        conn.execute("UPDATE usuarios SET rol='taller' WHERE rol IN ('operador','consulta')")
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
     if contar_usuarios() == 0:
         crear_usuario("admin", "santaniana2026", "Administrador", "admin")
         return ("admin", "santaniana2026")
