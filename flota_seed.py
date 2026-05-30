@@ -1,112 +1,310 @@
-%PDF-1.4
-%���� ReportLab Generated PDF document (opensource)
-1 0 obj
-<<
-/F1 2 0 R /F2 3 0 R
->>
-endobj
-2 0 obj
-<<
-/BaseFont /Helvetica /Encoding /WinAnsiEncoding /Name /F1 /Subtype /Type1 /Type /Font
->>
-endobj
-3 0 obj
-<<
-/BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding /Name /F2 /Subtype /Type1 /Type /Font
->>
-endobj
-4 0 obj
-<<
-/Contents 10 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 9 0 R /Resources <<
-/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
->> /Rotate 0 /Trans <<
+"""
+flota_seed.py — Carga masiva de la flota oficial de La Santaniana
+desde el archivo Excel "FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx"
 
->> 
-  /Type /Page
->>
-endobj
-5 0 obj
-<<
-/Contents 11 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 9 0 R /Resources <<
-/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
->> /Rotate 0 /Trans <<
+Mapea cada vehículo a su plan de mantenimiento según marca/carrocería/año.
+También carga seguros (Pasajeros + RC) y habilitaciones municipales/Senatran.
+"""
 
->> 
-  /Type /Page
->>
-endobj
-6 0 obj
-<<
-/Contents 12 0 R /MediaBox [ 0 0 595.2756 841.8898 ] /Parent 9 0 R /Resources <<
-/Font 1 0 R /ProcSet [ /PDF /Text /ImageB /ImageC /ImageI ]
->> /Rotate 0 /Trans <<
+import os
+import pandas as pd
+from database import (
+    inicializar_db, agregar_vehiculo, obtener_vehiculos,
+    asignar_plan, obtener_planes, agregar_documento,
+)
+from mantenimiento_seed import cargar_planes_default
 
->> 
-  /Type /Page
->>
-endobj
-7 0 obj
-<<
-/PageMode /UseNone /Pages 9 0 R /Type /Catalog
->>
-endobj
-8 0 obj
-<<
-/Author (\(anonymous\)) /CreationDate (D:20260528173111+00'00') /Creator (\(unspecified\)) /Keywords () /ModDate (D:20260528173111+00'00') /Producer (ReportLab PDF Library - \(opensource\)) 
-  /Subject (\(unspecified\)) /Title (\(anonymous\)) /Trapped /False
->>
-endobj
-9 0 obj
-<<
-/Count 3 /Kids [ 4 0 R 5 0 R 6 0 R ] /Type /Pages
->>
-endobj
-10 0 obj
-<<
-/Filter [ /ASCII85Decode /FlateDecode ] /Length 2112
->>
-stream
-Gb!;e8U&oI&AJ$CbUlS)df_seA8[9qX[udL;U^OV0Ep3M8OB8PeG8hZE"fX@@aVj&=6iF)1uo(Zf`r_Zies%nE=22I"rH_6&.`CI5^^V-fk5Ok48JK$e9Cc5U!0DK!lc47QhVP`h3+9mS2;5@P(U7<4@cj1,E<`=KS8:1^ghfr%eg'l75Yb,md(oPOWm^7#i@=!rB,YqjE`_pr]%H[]S+rOb[)/a^Z'#Rc3kl;k<=[*'"Z'8n4Oqa%cNpur*m+5\JkgJ&_:i[nrS2!rb!9i)`J)$mo935TU8YIi_7;m((sN-'f&^eP$+L%?(#QWaC.@di:OLD#).9_RDpTe-q'6>]KpL3.!#IIo;fJbJ:>N4;m4bihk(I8_-\Qm#qlJEq@;OJ_F4OTP"Sk2N&5_M2g.<2K1A"X*c!X:0q)0iJl`iWM_9)]do^-Q^ss_\Hg[S.ID"g^9s5-f>B-G+<dJV(E%B[<H$ZIM7gZFkd;Je5Og%euR(:6>p`f9206O#J7c\#e^*fW?_UVXT^O-_G[;')s1:u_q?N$rpRqb>c]F.&e6fLrsXFAI,ETRh!7%Acp.d3[+_(K9LL(#XWLF$Kj^rHU>VRf99NRaP>R[#Lm)RK)([1.Dm]p4%B0Kt;if_FC8LLuZfrsG0_=*%/&&)H86[6^S7V3,EiLE:$o;p7>KR1^IakTRu+P;'<#9R(fPZQIh=p@rXQ0!jIU*]G4NZ(F7tHj?e*hK#^=K]lRtIUVN;"K.6@cs.b2;Ip"?p_\'.-?ZaH0MHefJoL!C/n<J,hQE/"mY9_]W0Z6T/f%OqX4*62:kQ$e5rDOOfb(TVgJ8W+V&lp#f9G1(I/^EQ4sIp;Ch5VlW,.%LHAos8b1HkfaB8M".WW3hE.g3<n0!aHnIT;f7q_S]@@d.;a!"D,-1.En>u\C&<&0*EpjOR/)>I#VR4e/I!$6t,FFYUoh.Z/=@e>n,:4;]7dLg(1.r,r/eR"of.$hb8INLB__3/>_8*!Z`Tc!_*F"IX8C_2Sj[Ym[-F8bGJh8Qh`3ZZ(i`R4t:PqmMS-2KYbA"/_G1*:##OlH'Yb6uV"CJ@YA@=EJ^":D3A%B*L!FS[&7Fh5dO6]I&.Yu:>#KkCg#!uV/.>Ur(SjOhcr-l>T4>H!5s!Fqq,4W&-uIH<IcHuj[^q"=qH@@q'4Bp,D/HdqS"Dkrn/34!aVVeZgYW;W]aa^VAl(d#XSG8[lmU2h+frSAUt[qc"^7=n?1^4eZ=Uu;AC/5a+uA&j]eGB#F_)#4dnG`,p7%fl4gg5R&b;N:Cs6#ji!bF.TSWf[AWXI4t]l4&qq,mZ$Q;T"Dg08=8KAZN(7R`b\YOsA>5'Y%5<c#e5'9-IpbGd5Pe5k28[6&^!Ca0j4Anj#R>C8H#1#+SunnTKm,k2TP8a7ALG!_)u$'#dX"DbI$m`LE[$SlUUj/iYJ),Fh1iNdlU?%<;=B0Z4BfS`:9f1^>5L,hXL&Z6`qbmuhYCP/u5MMHMh_1E:R/B%`>$?FqIf[Notk/d[jr#sG.Y_IZBWhQoklAOF>VX[Bp)6f;1Ki#>Dc>Dho3HIu997LT7WN/:I/UWtPU#;3t.,B"`E\1etMT<,<cp%rBKI,VVHCDW[?M%:*6^6qLIe"_CU<r7OQ*:IqmL6F=i!<[HTa8]V5[d?ed<>>2jNPH5ND!>d?[!i!T4$7HfloN.X[XtZ)+a3hMi,ikiMG.KY$J>pPVMJ[3]2o:sha:=1UHm!tMn5dTA+`*6<-sqh^<4)NjN(b@L<3\d.6S:4:#mcqKEG5VW=KJ&?bPbajQK(68&MTV.Z7I]dQ9;d\^ddX\9^7^d9,4.b*gD-3=WV0rMDU3.3Zu4hqqbQ^R`YW%dDEIeS;`sh93GNi=hGg3g2;$C+6Jik]gaJPVZTH>n<&XHj=S`:!5Di6d(4%'Ck1#EHKcGe7U55<hDTWH^8,)W'tT!%G",LCKMD.O;@4Ea,L^Q=U:ON#ECY\"klPJobWY=T:M4G15""6q.KuLG`D5u.%+r!eLC'N,"K#Vs.ab"7'=MTI'hGh:?d3:KjKQMesmJPa/l4D`tao6d]b298B/BlN-/6[qC7d#ZqPm8)gsZ"8k$2.gh2(#],,\%19C4j"e>K"aZU3:~>endstream
-endobj
-11 0 obj
-<<
-/Filter [ /ASCII85Decode /FlateDecode ] /Length 2694
->>
-stream
-Gau0F?$G&5&UjDWR(&?i2GN[>g-0AdagOA#3JjMS?h=D`O911Z1-fU+rUl]^.>h(U$_m"_7&34iE,dVB(gt.p`BRruP8rMu*,[qp?lmOY^]Gm6q&OjQ?T_Vu[UdH!57Do]in/<=]Z'X7Z,9g)M\nFt$\K='@WPPM$T,u:>!eV>=G$k&2`4:Nrks$=F2eSY"m!=p6m6V#MQ2?;&f\KG)n[a;I$\!(Mb<M0E=)5,R/]k4^>RmAq#'C@p_^`o5\)RD>@PEVr4k0c9+V8_%"s)07Eu4D(2>'-=i/dD(Qu\).h3)t(>=>O;M2p]W"%)BG$U"?hrg'.Y.2pPmV:_$?3*W#Uh$84)JsBH2C[6EnO,#-a=gpU;0BkN'dR%dp_=F)D9BhoA&H6fVtpRKYV"cD]/!u<'ZAo4E=a&.=;VpU$@L*ZYSZ-2#p]B8g2fOd=T47;l#0cQ3*=1g"UrY",s;WOY,sR"HJFs5)#q=X_l_Qo4,e[Hg>Q(Sf%=F/He+QQ0/2]u?l$GkXF%dX'<M)HV@-]`Z;ia5N+MG_4e&1TinKIY]B7.^;=L)N[\g/R0V\qqXosM!\/.-3F]BJ&MVa:P5nl_"e9-\d-rZ]YXM^[T*&bdakL>W7e=#e$ic;5kcHq)$caG%+=4+4.OHhMG?WO#/i,*R9^3bi7FD!n/FVXe\Z-[JrpL"G$PWKZZ-^du7,bk(UP`;i1=cd33r+*+Gl'Z(aQ-?e%L:*i$EA"ET6ZtFukSP7GZNXk4`_U4u3g29,1,-:C9XLJV-,k4O\5ge'd".Nc)dU&bCY$L$B?aU,?Q#(@B:H$<=\pue9$`*hdB\7lWmU+D8!Oi]?)3csNNUdNYMN(A^!XFgn);uu<cTW&1E7)+74nEk>h1DElJ>J9m>[`3*?-TG+,cED\>!/`!gcRuC)MH/d]`2+=q"#Mj/8)`Y3OL.a<+s//NA&PNOLj\cV`aEj60a-J*t9].4SHJY/W%A)dP=R^Hl6@Z.`9!3cX=4I\/SG.]uZX&[RM$Q:RKKOZ$D=O-=a)R#f^+(O`!`=n)*U6>pf?A>[W]n\<r;j0JR6oKuY`Yk4MqrFgUDb0anE]q[jOWKsNGpn\TlWK36"\iPaPnGNK=[)f[;&C7Rs-UYEYaAa@/-7mdf?*>?e*D2S#C#d*Vmhfj'mb;ib-2`laECBdKD7j\t^<[4+2Y$&/nMV0\/^NLqDC6M4gFW8QAXba@)Iq<T5Lh`,RC7rRhbhVST"0@0s$np/\=l!RJhrDU?OZ\D?T8)afd.$sh%hVkc/<B(*U#`YHB6k?,Brm<Z2hR.oX0#[%3J$P7me,"%u*#riUpT'6Ps,?"rkEe4W%u@KCrWV+UlqS_1jXG%gEui?p,>o'Km!p$p=k`"FV?bg=e\,r8.ALj\R]>qtI5@L4KH/+CSYak+YC$H9.W-oAY4.E)9=A2(mbHr-CrMK/d;fk5>\k8Jp1&=*K#!n5Q/Nf(kbTS@XH_.bFGb;6$.pgKOc(^O<td#!];D`ME\:Pr^?OmJ*HQDn&QCC7:T?fsZsoBYdE1qo<j+%)3kG$'`g9[OW9qEUCM;ZHGX:,,_5H<@_kjMRk2ciP9q"=.gj';r(2*2+j5$;W5=15k/;p!fjtub2:?J@V#%hl\\X2[3@4#9BKeIGrY;]18jcLWqeIAP%54$8W6PV0XJ:%U)-s'D)EJWL8GTJ<oaN91-um_!:n*kCWUW!%s=ANm4^)tZJpA3S?&g?KVH'_;RmC6NPDgr6-4d<A2I&*D$dj#6HcYggWOHKAL1fiaMN8a>]8ZtT`_c[?9D+`=V3qk,np,A'I(n]BA"g$XW8`H,):Y-8%rAN$m2h,l[QNX*`3fJ;Z,Q2FUO3@6s*;s8rR6"2_"3]8M-1FDkCrs^U_+IS+d\i(B`dE<L[IHk]6nY9q,]P9UA\=MH)5CAa(uhP,i37[HS]Up0s&p/&5cUku7i,Qmue!jeCFfBkYEC,K9\m@H])ud#B$cq5L'>MH;QK3dNAUD!R*!nJ>!bb'Uj=d<%9nq09]X!6+DFlm6!bq<:@rUW#i'B-gNU25hoO(Ncqa=*RfFOAKO.*8dWYkUNT<o:\4p9(9eGN_L`Q=9?`aUXE$hU"=C`_C.Z9C!GU7@e)[k@4#GRQjMc]G)H0&F+-[#i&0hu[#g#R08"n!OON8I3&E5bP1m!NOAn!Eijt@rG,:&J)r9;BP]8Nk_aY1W@Da0A[D1#,>p_J,pK-PpgHE`EmnV[qkAdq:PL9ppEmr"\7dHPk6M^4@iiUUlh>F%q$^%8tf3L>uN3&PeMiZ6$?7sSF]8;t9`,GFFZO`0;:P8)H4TdG)*H3,*blNTKM#QZ?#CJ4R+k6%N5_h4J%S$(;bjh/tEr9ShU"gbeD\b#?kPR-6\XmEO?b6#@g-cI'-M=3/^2`_H]&9feoh<Grh7r@"]%`d*TX.UfqG%f!MLr8eUG_;j6\Z8XEV2d4gY'D:-dP%De3N`2EF@h<aMmlN$'X?DZ&2AZc.%P?bc.\p*/9JB)l"\r=?Y1I`MGSq79C"h.iM/UM>/!]Ti52E/=k'=-G.0$F=_3em4e(a'd.CQO*^+Pf:Zp>#R$!,6A^pu]V^$JphIH]"jbuB?L;G^1P"".JBN1iH<'DLS1'+91$PHf=XmAeK_6WUDq8`"gq!QV:-Ci.Y-`9YgSGiQm]R=:Y:U$g5J+OJ]b3Pu3OjSFUYVmEEWI!V#9quXA,~>endstream
-endobj
-12 0 obj
-<<
-/Filter [ /ASCII85Decode /FlateDecode ] /Length 252
->>
-stream
-GaqcpbA+p[$q9piMS![,SOW5?f\8[INAi/ibXTP2eA7``p@SA0Rh>u.4g/r=@4t*>5>T'<i4U:q7d*-==bIP4U%g5'?g1*!B8qK:Q#`&1SrAs)g=[CePZ=]r7&OfnQnO0KU^+mhLG3QV^S^tLC-h_heTt5K%PPk2a`1d3&YF'b_o\,iX]7161?50acn^WO18f]Pg+#7SiV^s1`"ZkP(dC,=rg'$)NlX>CEIL?d,4+gm`01G@`),4iCD0$[~>endstream
-endobj
-xref
-0 13
-0000000000 65535 f 
-0000000061 00000 n 
-0000000102 00000 n 
-0000000209 00000 n 
-0000000321 00000 n 
-0000000525 00000 n 
-0000000729 00000 n 
-0000000933 00000 n 
-0000001001 00000 n 
-0000001281 00000 n 
-0000001352 00000 n 
-0000003556 00000 n 
-0000006342 00000 n 
-trailer
-<<
-/ID 
-[<15bc0a6c1834f6cbc7d1cf216fc40c0c><15bc0a6c1834f6cbc7d1cf216fc40c0c>]
-% ReportLab generated PDF document -- digest (opensource)
 
-/Info 8 0 R
-/Root 7 0 R
-/Size 13
->>
-startxref
-6685
-%%EOF
+# ─── Mapeo de marca/carrocería → plan de mantenimiento ────────────────────────
+
+def detectar_plan(marca, carroceria, año, tipo):
+    """Devuelve el nombre del plan que corresponde a un vehículo."""
+    m = (marca or "").upper().strip()
+    c = (carroceria or "").upper().strip()
+    t = (tipo or "").upper().strip()
+
+    # SCANIA
+    if "SCANIA" in m:
+        if "K380" in c or "1800DD-K380" in c:
+            return "Scania K380 / DC12 380 HP"
+        if "K 410" in c or "K410" in c:
+            return "Scania K410 / DC13 410 HP"
+        if "K124" in c:
+            return "Scania K124 / DC11 360 HP"
+        if "MARCOPOLO" in c or "ANDARE" in c or "IRIZAR" in c:
+            return ("Scania K380 / DC12 380 HP" if año and año >= 2010
+                    else "Scania K124 / DC11 360 HP")
+        return "Scania K380 / DC12 380 HP"
+
+    # MERCEDES-BENZ
+    if "M.BENZ" in m or "MERCEDES" in m:
+        if "SPRINTER" in c:
+            return "Mercedes-Benz Sprinter / OM651 / OM642"
+        if "K380" in c or "1800DD" in c or "MARCOPOLO" in c:
+            return "Mercedes-Benz O500 RSD / OM457 360 HP"
+        return "Mercedes-Benz O500 RS / OM457 354 HP"
+
+    # VOLVO
+    if "VOLVO" in m:
+        if "B430R" in c or "B 430" in c or "IRIZAR" in c:
+            return "Volvo B430R / D11A 430 HP"
+        return "Volvo B430R / D11A 430 HP"
+
+    # VOLKSWAGEN (Senior)
+    if "VOLKSWAGEN" in m:
+        return "Volkswagen 9.150 / 9.160 OD (Senior)"
+
+    # AGRALE / MARCOPOLO VOLARE
+    if "AGRALE" in m or ("MARCOPOLO" in m and "VOLARE" in c):
+        return "Agrale Volare W / WL"
+
+    # HYUNDAI
+    if "HYUNDAI" in m:
+        return "Hyundai H350 / H1 (minibús)"
+
+    # SENIOR (chasis MB)
+    if m == "SENIOR":
+        return "Mercedes-Benz Sprinter / OM651 / OM642"
+
+    # Camionetas y otros - sin plan
+    return None
+
+
+def normalizar_marca(marca):
+    """Convierte 'M.BENZ' → 'Mercedes-Benz', etc."""
+    m = (marca or "").upper().strip()
+    if "M.BENZ" in m: return "Mercedes-Benz"
+    if "SCANIA" in m: return "Scania"
+    if "VOLVO" in m: return "Volvo"
+    if "VOLKSWAGEN" in m: return "Volkswagen"
+    if "HYUNDAI" in m: return "Hyundai"
+    if "AGRALE" in m: return "Agrale"
+    if "TOYOTA" in m or "HILUX" in m: return "Toyota"
+    if "MITSUBISHI" in m or "L200" in m: return "Mitsubishi"
+    return marca.title() if marca else ""
+
+
+def cargar_flota_desde_xlsx(ruta_xlsx, verbose=True):
+    """Carga todos los vehículos de la hoja 'GENERAL 2026' al sistema."""
+    if not os.path.exists(ruta_xlsx):
+        print(f"❌ No se encontró el archivo: {ruta_xlsx}")
+        return
+
+    df = pd.read_excel(ruta_xlsx, sheet_name="GENERAL 2026", header=1)
+    cols = ["TIPO ", "MARCA", "CARROCERIA", "CHASIS", "AÑO", "PATENTE ", "COCHE ", "EJES", "ASIENTOS"]
+    df = df[cols].copy()
+    df.columns = ["tipo", "marca", "carroceria", "chasis", "año",
+                  "patente", "coche", "ejes", "asientos"]
+    df = df.dropna(subset=["patente"])
+
+    # Patentes existentes
+    existentes = {v["patente"] for v in obtener_vehiculos(solo_activos=False)}
+    planes = {p["nombre"]: p["id"] for p in obtener_planes()}
+
+    creados = 0
+    saltados = 0
+    sin_plan = []
+
+    for _, row in df.iterrows():
+        patente = str(row["patente"]).strip().replace(" ", "").upper()
+        if patente in existentes:
+            saltados += 1
+            continue
+
+        marca = normalizar_marca(row["marca"])
+        modelo_carroceria = str(row["carroceria"]).strip().title()
+        año = int(row["año"]) if pd.notna(row["año"]) else None
+        chasis = str(row["chasis"]).strip().upper() if pd.notna(row["chasis"]) else ""
+        n_interno = str(row["coche"]).strip() if pd.notna(row["coche"]) else ""
+        asientos = int(row["asientos"]) if pd.notna(row["asientos"]) else 0
+        ejes = int(row["ejes"]) if pd.notna(row["ejes"]) else 0
+        tipo_v = str(row["tipo"]).strip().title() if pd.notna(row["tipo"]) else ""
+
+        ok, msg = agregar_vehiculo(
+            patente, marca, modelo_carroceria, año,
+            chasis=chasis, n_interno=n_interno,
+            asientos=asientos, ejes=ejes, tipo=tipo_v
+        )
+        if not ok:
+            print(f"  ✗ {patente}: {msg}")
+            continue
+
+        v = next((x for x in obtener_vehiculos(solo_activos=False)
+                  if x["patente"] == patente), None)
+        if not v:
+            continue
+
+        nombre_plan = detectar_plan(row["marca"], row["carroceria"], año, row["tipo"])
+        if nombre_plan and nombre_plan in planes:
+            asignar_plan(v["id"], planes[nombre_plan], km_inicial=0)
+            if verbose:
+                print(f"  ✓ {patente} → {marca} {modelo_carroceria} ({nombre_plan})")
+        else:
+            sin_plan.append(patente)
+            if verbose:
+                print(f"  ⚠ {patente} → {marca} (sin plan asignado)")
+
+        creados += 1
+
+    print()
+    print(f"═══ RESUMEN ═══")
+    print(f"  Vehículos creados:  {creados}")
+    print(f"  Saltados (ya existían): {saltados}")
+    print(f"  Sin plan (camionetas/otros): {len(sin_plan)}")
+    if sin_plan:
+        print(f"  Patentes sin plan: {', '.join(sin_plan)}")
+
+
+def normalizar_patente(p):
+    """Normaliza la patente: sin espacios, mayúsculas."""
+    return str(p).strip().replace(" ", "").upper()
+
+
+def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
+    """
+    Carga los documentos de toda la flota:
+
+    SEGUROS (del Excel):
+      - Seguro Pasajeros (col "Seguro" + "Vigencia")
+      - Responsabilidad Civil (col "Seguro.1" + "Vigencia.1")
+
+    HABILITACIÓN MUNICIPAL:
+      - Vence el 30/06/2026 para TODA la flota.
+
+    HABILITACIÓN DINATRAN (según regla operativa de la empresa):
+      - Vehículos ≤ 10 años (año 2016 a 2026) → vencen el 21/11/2026.
+      - Vehículos > 10 años (año < 2016) → vencieron el 21/05/2026,
+        se renovaron y vuelven a vencer el 21/11/2026 (renovación 6 meses).
+      - Todos vencen el mismo día (21/11/2026), pero queda el dato del
+        ciclo corto en las observaciones de los vehículos viejos.
+    """
+    print()
+    print("=" * 60)
+    print("Cargando documentos (seguros + habilitaciones)...")
+    print("=" * 60)
+
+    from datetime import date
+
+    # Fechas fijas según jefa
+    FECHA_MUN = "2026-06-30"          # Habilitación Municipal (toda la flota)
+    FECHA_DINATRAN = "2026-11-21"     # DINATRAN (todos al final)
+    ANIO_ACTUAL = date.today().year   # para calcular antigüedad
+
+    # Mapa patente → id de vehículo + año
+    vehiculos = obtener_vehiculos(solo_activos=False)
+    veh_por_patente = {v["patente"]: v for v in vehiculos}
+
+    # ─── 1. SEGUROS desde GENERAL 2026 ─────────────────────────────────
+    df = pd.read_excel(ruta_xlsx, sheet_name="GENERAL 2026", header=1)
+    df = df[['PATENTE ', 'Seguro', 'Vigencia ', 'Seguro.1', 'Vigencia .1']].copy()
+    df.columns = ['patente', 'seg_pas', 'venc_pas', 'seg_rc', 'venc_rc']
+    df = df.dropna(subset=['patente'])
+
+    seg_creados = 0
+    for _, row in df.iterrows():
+        patente = normalizar_patente(row['patente'])
+        veh = veh_por_patente.get(patente)
+        if not veh:
+            continue
+        vid = veh["id"]
+
+        # Seguro Pasajeros
+        if pd.notna(row['venc_pas']):
+            try:
+                fecha = pd.to_datetime(row['venc_pas']).strftime('%Y-%m-%d')
+                proveedor = str(row['seg_pas']).strip() if pd.notna(row['seg_pas']) else ''
+                agregar_documento(vehiculo_id=vid, tipo='Seguro',
+                    nombre='Seguro Pasajeros',
+                    fecha_vencimiento=fecha, proveedor=proveedor)
+                seg_creados += 1
+            except Exception as e:
+                if verbose: print(f"  ✗ {patente} seg pasajeros: {e}")
+
+        # Seguro RC
+        if pd.notna(row['venc_rc']):
+            try:
+                fecha = pd.to_datetime(row['venc_rc']).strftime('%Y-%m-%d')
+                proveedor = str(row['seg_rc']).strip() if pd.notna(row['seg_rc']) else ''
+                agregar_documento(vehiculo_id=vid, tipo='Seguro',
+                    nombre='Responsabilidad Civil (RC)',
+                    fecha_vencimiento=fecha, proveedor=proveedor)
+                seg_creados += 1
+            except Exception as e:
+                if verbose: print(f"  ✗ {patente} seg RC: {e}")
+
+    print(f"  ✓ Seguros cargados: {seg_creados}")
+
+    # ─── 2. HABILITACIÓN MUNICIPAL — toda la flota, vence 30/06/2026 ────
+    hab_mun = 0
+    for v in vehiculos:
+        try:
+            agregar_documento(
+                vehiculo_id=v["id"], tipo='Habilitación Municipal',
+                nombre='Habilitación Municipal 2026',
+                fecha_vencimiento=FECHA_MUN,
+                proveedor='Municipalidad',
+                observaciones='Vence 30/06/2026 (toda la flota)'
+            )
+            hab_mun += 1
+        except Exception as e:
+            if verbose: print(f"  ✗ {v['patente']} hab municipal: {e}")
+    print(f"  ✓ Habilitaciones Municipales cargadas: {hab_mun}")
+
+    # ─── 3. HABILITACIÓN DINATRAN ──────────────────────────────────────
+    # Todos vencen el 21/11/2026, pero los > 10 años están en ciclo de
+    # renovación cada 6 meses (lo anotamos en observaciones).
+    hab_din = 0
+    for v in vehiculos:
+        try:
+            año = v.get("año") or 0
+            antiguedad = ANIO_ACTUAL - año if año else 0
+            if antiguedad > 10:
+                obs = f"Vehículo > 10 años ({año}). Renovación cada 6 meses. Última: 21/05/2026 → vence 21/11/2026."
+            else:
+                obs = f"Vehículo ≤ 10 años ({año}). Vigencia anual."
+            agregar_documento(
+                vehiculo_id=v["id"], tipo='Habilitación DINATRAN',
+                nombre='Habilitación DINATRAN',
+                fecha_vencimiento=FECHA_DINATRAN,
+                proveedor='DINATRAN',
+                observaciones=obs
+            )
+            hab_din += 1
+        except Exception as e:
+            if verbose: print(f"  ✗ {v['patente']} hab DINATRAN: {e}")
+    print(f"  ✓ Habilitaciones DINATRAN cargadas: {hab_din}")
+
+    print()
+    print(f"═══ RESUMEN DOCUMENTOS ═══")
+    print(f"  Seguros (Pasajeros + RC):     {seg_creados}")
+    print(f"  Habilitaciones Municipales:   {hab_mun}  (vencen 30/06/2026)")
+    print(f"  Habilitaciones DINATRAN:      {hab_din}  (vencen 21/11/2026)")
+    print(f"  TOTAL documentos:             {seg_creados + hab_mun + hab_din}")
+
+
+if __name__ == "__main__":
+    import sys
+    # Buscar el XLSX
+    rutas_candidatas = [
+        "FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx",
+        "FLOTA SANTANIANA GENERAL LS- HABILITACIONES V.E 2026 .xlsx",
+        os.path.join(os.path.dirname(__file__),
+                     "FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx"),
+    ]
+    if len(sys.argv) > 1:
+        rutas_candidatas.insert(0, sys.argv[1])
+    ruta = next((r for r in rutas_candidatas if os.path.exists(r)), None)
+
+    if ruta and os.path.exists(ruta):
+        inicializar_db()
+        cargar_planes_default()
+        print()
+        print("=" * 60)
+        print("Cargando vehículos de la flota...")
+        print("=" * 60)
+        cargar_flota_desde_xlsx(ruta)
+        cargar_documentos_desde_xlsx(ruta)
+    else:
+        print("Poné el XLSX 'FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx'")
+        print("en la misma carpeta que este script, o ejecutalo así:")
+        print("  python flota_seed.py ruta/al/archivo.xlsx")

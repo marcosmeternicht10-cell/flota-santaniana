@@ -1,114 +1,676 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gestión de Flota — La Santaniana</title>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <div class="app">
+"""
+app.py — Servidor Flask + ventana de escritorio (PyWebView)
+Sistema de Gestión de Flota - La Santaniana  ·  v4.0 Web
+Moneda: Guaraní (₲)
+"""
 
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-logo"><img src="/static/logo.png" alt="La Santaniana"></div>
-        <div>
-          <div class="brand-name">La Santaniana</div>
-          <div class="brand-sub">Gestión de Flota</div>
-        </div>
-      </div>
+import os
+import threading
+import datetime
+from flask import Flask, render_template, request, jsonify, send_file
 
-      <div class="coche-card" id="cocheBox">
-        <div class="coche-label">Coche seleccionado</div>
-        <div class="coche-name" id="cocheName">Ninguno</div>
-        <div class="coche-info" id="cocheInfo">Hacé clic en un vehículo</div>
-      </div>
+from database import (
+    inicializar_db, agregar_vehiculo, actualizar_vehiculo, obtener_vehiculos, eliminar_vehiculo,
+    agregar_servicio, eliminar_servicio, obtener_servicios_vehiculo,
+    agregar_costo, eliminar_costo, obtener_costos,
+    meses_con_servicios, resumen_por_mes,
+    # Mantenimiento:
+    crear_plan, obtener_planes, obtener_plan, eliminar_plan,
+    agregar_tarea, obtener_tareas_plan, eliminar_tarea,
+    asignar_plan, obtener_plan_vehiculo, desasignar_plan,
+    km_actual_vehiculo, registrar_mantenimiento, eliminar_mantenimiento,
+    obtener_historial_mantenimiento, estado_mantenimiento,
+    # Correctivos:
+    agregar_correctivo, obtener_correctivos, actualizar_correctivo, eliminar_correctivo,
+    # Documentos:
+    agregar_documento, obtener_documentos, actualizar_documento, eliminar_documento,
+    documentos_proximos_a_vencer,
+    # Neumáticos:
+    crear_config_neumaticos, obtener_config_neumaticos_plan, obtener_config_neumaticos_vehiculo,
+    agregar_neumatico, obtener_neumaticos, obtener_neumatico, eliminar_neumatico,
+    actualizar_neumatico, instalar_neumatico, retirar_neumatico,
+    obtener_neumaticos_vehiculo, historial_neumatico, estado_neumaticos_vehiculo,
+    POSICIONES_POR_CONFIG, NOMBRE_POSICIONES,
+    # Dashboard:
+    dashboard_resumen,
+    # Órdenes de trabajo:
+    crear_ot, obtener_ot, obtener_ots, agregar_item_ot, actualizar_item_ot,
+    eliminar_item_ot, actualizar_ot, cerrar_ot, eliminar_ot,
+    # Cubiertas auxiliares (trucky):
+    asignar_trucky, obtener_truckies_vehiculo, usar_trucky, retirar_trucky,
+    # Reporte gerencial:
+    reporte_gerencial,
+)
+from models import kpis_mes, kpis_produccion
+from pdf_export import generar_pdf, generar_reporte_gerencial_pdf
 
-      <nav class="nav">
-        <div class="nav-section">General</div>
-        <button class="nav-item active" data-sec="dashboard">
-          <i class="ti ti-layout-dashboard"></i> Dashboard
-        </button>
-        <button class="nav-item" data-sec="vehiculos">
-          <i class="ti ti-bus"></i> Vehículos
-        </button>
-        <button class="nav-item" data-sec="documentos">
-          <i class="ti ti-file-text"></i> Documentos
-        </button>
+app = Flask(__name__)
 
-        <div class="nav-section">Vehículo</div>
-        <button class="nav-item" data-sec="servicios" data-needs-coche>
-          <i class="ti ti-clipboard-list"></i> Servicios
-        </button>
-        <button class="nav-item" data-sec="costos" data-needs-coche>
-          <i class="ti ti-coin"></i> Costos
-        </button>
-        <button class="nav-item" data-sec="kpis" data-needs-coche>
-          <i class="ti ti-chart-bar"></i> KPIs
-        </button>
 
-        <div class="nav-section">Taller</div>
-        <button class="nav-item" data-sec="ots">
-          <i class="ti ti-clipboard-check"></i> Órdenes de Trabajo
-        </button>
-        <button class="nav-item" data-sec="mantenimiento" data-needs-coche>
-          <i class="ti ti-tool"></i> Preventivo
-        </button>
-        <button class="nav-item" data-sec="neumaticos" data-needs-coche>
-          <i class="ti ti-disc"></i> Neumáticos
-        </button>
-        <button class="nav-item" data-sec="correctivos">
-          <i class="ti ti-alert-triangle"></i> Correctivos
-        </button>
-        <button class="nav-item" data-sec="planes">
-          <i class="ti ti-clipboard-text"></i> Planes
-        </button>
-        <button class="nav-item" data-sec="inventario_neu">
-          <i class="ti ti-box"></i> Inventario neumáticos
-        </button>
+# ─── Páginas ──────────────────────────────────────────────────────────────────
 
-        <div class="nav-section">Reportes</div>
-        <button class="nav-item" data-sec="gerencial">
-          <i class="ti ti-report"></i> Reporte gerencial
-        </button>
-      </nav>
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-      <div class="user-box">
-        <div class="user-info">
-          <div class="user-avatar"><i class="ti ti-user"></i></div>
-          <div class="user-details">
-            <div class="user-name" id="user-name">{{ usuario }}</div>
-            <div class="user-role" id="user-role">{{ rol }}</div>
-          </div>
-        </div>
-        <div class="user-actions">
-          {% if rol == 'admin' %}
-          <button class="user-btn" onclick="renderUsuarios()" title="Gestionar usuarios"><i class="ti ti-users"></i></button>
-          {% endif %}
-          <button class="user-btn" onclick="cerrarSesion()" title="Cerrar sesión"><i class="ti ti-logout"></i></button>
-        </div>
-      </div>
-      <div class="version">v9.2 · Paraguay Gs.</div>
-    </aside>
 
-    <main class="main">
-      <div id="content"></div>
-      <div class="statusbar" id="statusbar">
-        <i class="ti ti-info-circle" style="vertical-align:-2px"></i>
-        Bienvenido al sistema de gestión
-      </div>
-    </main>
+# ─── API: Vehículos ───────────────────────────────────────────────────────────
 
-  </div>
+@app.route("/api/vehiculos", methods=["GET"])
+def api_vehiculos():
+    return jsonify(obtener_vehiculos())
 
-  <div class="toast" id="toast"></div>
 
-  <script>
-    window.USUARIO_ROL = "{{ rol }}";
-    window.USUARIO_NOMBRE = "{{ usuario }}";
-  </script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-  <script src="/static/app.js"></script>
-</body>
-</html>
+@app.route("/api/vehiculos", methods=["POST"])
+def api_agregar_vehiculo():
+    d = request.json
+    año = d.get("año")
+    ok, msg = agregar_vehiculo(
+        d.get("patente", ""),
+        d.get("marca", ""),
+        d.get("modelo", ""),
+        int(año) if año and str(año).isdigit() else None,
+        chasis=d.get("chasis", ""),
+        n_interno=d.get("n_interno", ""),
+        asientos=int(d.get("asientos") or 0),
+        ejes=int(d.get("ejes") or 0),
+        tipo=d.get("tipo", ""),
+    )
+    # Si se creó y vino un plan, asignar automáticamente
+    if ok and d.get("plan_id"):
+        try:
+            from database import obtener_vehiculos as _ov
+            v = next((x for x in _ov() if x["patente"] == d.get("patente", "").upper().strip()), None)
+            if v:
+                km_inicial = float(d.get("km_inicial", 0) or 0)
+                asignar_plan(v["id"], int(d["plan_id"]), km_inicial)
+        except Exception as e:
+            print(f"Aviso: no se pudo asignar plan: {e}")
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/vehiculos/<int:vid>", methods=["PATCH"])
+def api_actualizar_vehiculo(vid):
+    d = request.json or {}
+    # Solo campos válidos
+    permitidos = {"patente", "marca", "modelo", "año", "chasis",
+                  "n_interno", "asientos", "ejes", "tipo"}
+    campos = {k: v for k, v in d.items() if k in permitidos}
+    if not campos:
+        return jsonify({"ok": False, "msg": "Sin campos para actualizar"}), 400
+    try:
+        # Convertir tipos numéricos
+        if "año" in campos and campos["año"]:
+            campos["año"] = int(campos["año"])
+        if "asientos" in campos:
+            campos["asientos"] = int(campos["asientos"] or 0)
+        if "ejes" in campos:
+            campos["ejes"] = int(campos["ejes"] or 0)
+        actualizar_vehiculo(vid, **campos)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/vehiculos/<int:vid>", methods=["DELETE"])
+def api_eliminar_vehiculo(vid):
+    eliminar_vehiculo(vid)
+    return jsonify({"ok": True})
+
+
+# ─── API: Servicios ───────────────────────────────────────────────────────────
+
+@app.route("/api/servicios/<int:vid>", methods=["GET"])
+def api_servicios(vid):
+    mes = request.args.get("mes")  # None o "2024-06"
+    mes = None if mes in (None, "", "todos") else mes
+    return jsonify(obtener_servicios_vehiculo(vid, mes))
+
+
+@app.route("/api/servicios", methods=["POST"])
+def api_agregar_servicio():
+    d = request.json
+    try:
+        agregar_servicio(
+            int(d["vehiculo_id"]), d["fecha"],
+            float(d.get("km", 0) or 0), float(d.get("horas", 0) or 0),
+            float(d.get("ingreso", 0) or 0), d.get("descripcion", "")
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/servicios/<int:sid>", methods=["DELETE"])
+def api_eliminar_servicio(sid):
+    eliminar_servicio(sid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/meses/<int:vid>", methods=["GET"])
+def api_meses(vid):
+    return jsonify(meses_con_servicios(vid))
+
+
+# ─── API: Costos ──────────────────────────────────────────────────────────────
+
+@app.route("/api/costos/<int:vid>", methods=["GET"])
+def api_costos(vid):
+    return jsonify(obtener_costos(vid))
+
+
+@app.route("/api/costos", methods=["POST"])
+def api_agregar_costo():
+    d = request.json
+    try:
+        agregar_costo(
+            int(d["vehiculo_id"]), d["mes"], d["tipo"],
+            d.get("concepto", ""), float(d.get("monto", 0) or 0)
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/costos/<int:cid>", methods=["DELETE"])
+def api_eliminar_costo(cid):
+    eliminar_costo(cid)
+    return jsonify({"ok": True})
+
+
+# ─── API: KPIs ────────────────────────────────────────────────────────────────
+
+@app.route("/api/kpis/<int:vid>", methods=["GET"])
+def api_kpis(vid):
+    modo = request.args.get("modo", "mes")
+    if modo == "produccion":
+        k = kpis_produccion(vid)
+    else:
+        mes = request.args.get("mes")
+        if not mes:
+            meses = meses_con_servicios(vid)
+            mes = meses[0] if meses else None
+        k = kpis_mes(vid, mes) if mes else None
+    return jsonify(k or {})
+
+
+@app.route("/api/resumen_mensual/<int:vid>", methods=["GET"])
+def api_resumen_mensual(vid):
+    return jsonify(resumen_por_mes(vid))
+
+
+# ─── API: Mantenimiento ───────────────────────────────────────────────────────
+
+@app.route("/api/planes", methods=["GET"])
+def api_planes():
+    return jsonify(obtener_planes())
+
+
+@app.route("/api/planes", methods=["POST"])
+def api_crear_plan():
+    d = request.json
+    ok, res = crear_plan(d.get("nombre", ""), d.get("descripcion", ""))
+    return jsonify({"ok": ok, "id" if ok else "msg": res})
+
+
+@app.route("/api/planes/<int:pid>", methods=["DELETE"])
+def api_eliminar_plan(pid):
+    ok, msg = eliminar_plan(pid)
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/planes/<int:pid>/tareas", methods=["GET"])
+def api_tareas_plan(pid):
+    return jsonify(obtener_tareas_plan(pid))
+
+
+@app.route("/api/planes/<int:pid>/tareas", methods=["POST"])
+def api_agregar_tarea(pid):
+    d = request.json
+    try:
+        agregar_tarea(pid, d.get("tarea", ""), int(d.get("intervalo_km", 0)),
+                      d.get("categoria", ""))
+        return jsonify({"ok": True})
+    except (ValueError, KeyError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/tareas/<int:tid>", methods=["DELETE"])
+def api_eliminar_tarea(tid):
+    eliminar_tarea(tid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vehiculos/<int:vid>/plan", methods=["GET"])
+def api_plan_vehiculo(vid):
+    plan = obtener_plan_vehiculo(vid)
+    return jsonify({
+        "plan": plan,
+        "km_actual": km_actual_vehiculo(vid)
+    })
+
+
+@app.route("/api/vehiculos/<int:vid>/plan", methods=["POST"])
+def api_asignar_plan(vid):
+    d = request.json
+    asignar_plan(vid, int(d["plan_id"]), float(d.get("km_inicial", 0)))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vehiculos/<int:vid>/plan", methods=["DELETE"])
+def api_desasignar_plan(vid):
+    desasignar_plan(vid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vehiculos/<int:vid>/mantenimientos", methods=["GET"])
+def api_historial(vid):
+    return jsonify(obtener_historial_mantenimiento(vid))
+
+
+@app.route("/api/mantenimientos", methods=["POST"])
+def api_registrar_mantenimiento():
+    d = request.json
+    try:
+        registrar_mantenimiento(
+            int(d["vehiculo_id"]), int(d["tarea_plan_id"]),
+            d["fecha"], float(d["km"]),
+            float(d.get("costo", 0) or 0),
+            d.get("observaciones", "")
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/mantenimientos/<int:mid>", methods=["DELETE"])
+def api_eliminar_mantenimiento(mid):
+    eliminar_mantenimiento(mid)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/vehiculos/<int:vid>/estado_mantenimiento", methods=["GET"])
+def api_estado_mantenimiento(vid):
+    estado = estado_mantenimiento(vid)
+    return jsonify({"estado": estado, "km_actual": km_actual_vehiculo(vid)})
+
+
+# ─── API: Dashboard ───────────────────────────────────────────────────────────
+
+@app.route("/api/dashboard", methods=["GET"])
+def api_dashboard():
+    return jsonify(dashboard_resumen())
+
+
+# ─── API: Correctivos ────────────────────────────────────────────────────────
+
+@app.route("/api/correctivos", methods=["GET"])
+def api_correctivos_todos():
+    estado = request.args.get("estado")
+    vid = request.args.get("vehiculo_id", type=int)
+    return jsonify(obtener_correctivos(vehiculo_id=vid, estado=estado))
+
+
+@app.route("/api/correctivos", methods=["POST"])
+def api_agregar_correctivo():
+    d = request.json
+    try:
+        agregar_correctivo(
+            int(d["vehiculo_id"]), d["fecha"], float(d.get("km", 0) or 0),
+            d["tipo_falla"], d["descripcion"],
+            d.get("reparacion", ""), float(d.get("costo", 0) or 0),
+            d.get("taller", ""), d.get("estado", "pendiente")
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/correctivos/<int:cid>", methods=["PATCH"])
+def api_actualizar_correctivo(cid):
+    d = request.json or {}
+    actualizar_correctivo(cid, **d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/correctivos/<int:cid>", methods=["DELETE"])
+def api_eliminar_correctivo(cid):
+    eliminar_correctivo(cid)
+    return jsonify({"ok": True})
+
+
+# ─── API: Documentos ─────────────────────────────────────────────────────────
+
+@app.route("/api/documentos", methods=["GET"])
+def api_documentos_todos():
+    vid = request.args.get("vehiculo_id", type=int)
+    return jsonify(obtener_documentos(vehiculo_id=vid))
+
+
+@app.route("/api/documentos", methods=["POST"])
+def api_agregar_documento():
+    d = request.json
+    try:
+        agregar_documento(
+            int(d["vehiculo_id"]), d["tipo"], d["fecha_vencimiento"],
+            d.get("nombre", ""), d.get("fecha_emision"),
+            d.get("proveedor", ""), float(d.get("costo", 0) or 0),
+            d.get("observaciones", "")
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/documentos/<int:did>", methods=["PATCH"])
+def api_actualizar_documento(did):
+    d = request.json or {}
+    actualizar_documento(did, **d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/documentos/<int:did>", methods=["DELETE"])
+def api_eliminar_documento(did):
+    eliminar_documento(did)
+    return jsonify({"ok": True})
+
+
+# ─── API: Neumáticos ──────────────────────────────────────────────────────────
+
+@app.route("/api/neumaticos", methods=["GET"])
+def api_neumaticos():
+    estado = request.args.get("estado")
+    return jsonify(obtener_neumaticos(estado=estado))
+
+
+@app.route("/api/neumaticos", methods=["POST"])
+def api_agregar_neumatico():
+    d = request.json
+    try:
+        ok, res = agregar_neumatico(
+            d.get("codigo", ""), d.get("marca", ""), d.get("modelo", ""),
+            d.get("medida", ""), d.get("dot", ""),
+            d.get("fecha_compra"), float(d.get("costo_compra", 0) or 0),
+            float(d.get("profundidad_mm", 0) or 0), d.get("observaciones", "")
+        )
+        return jsonify({"ok": ok, "id" if ok else "msg": res})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/neumaticos/<int:nid>", methods=["GET"])
+def api_obtener_neumatico(nid):
+    n = obtener_neumatico(nid)
+    if not n:
+        return jsonify({"error": "no encontrado"}), 404
+    n["historial"] = historial_neumatico(nid)
+    return jsonify(n)
+
+
+@app.route("/api/neumaticos/<int:nid>", methods=["DELETE"])
+def api_eliminar_neumatico(nid):
+    ok, msg = eliminar_neumatico(nid)
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/neumaticos/<int:nid>/instalar", methods=["POST"])
+def api_instalar(nid):
+    d = request.json
+    try:
+        ok, msg = instalar_neumatico(
+            nid, int(d["vehiculo_id"]), d["posicion"],
+            d["fecha"], float(d.get("km_instalacion", 0) or 0)
+        )
+        return jsonify({"ok": ok, "msg": msg})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/neumaticos/<int:nid>/retirar", methods=["POST"])
+def api_retirar(nid):
+    d = request.json
+    try:
+        ok, msg = retirar_neumatico(
+            nid, d["fecha_retiro"], float(d["km_retiro"]),
+            d.get("motivo", ""), d.get("nuevo_estado", "disponible")
+        )
+        return jsonify({"ok": ok, "msg": msg})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/vehiculos/<int:vid>/neumaticos", methods=["GET"])
+def api_neumaticos_vehiculo(vid):
+    """Devuelve estado completo de neumáticos del vehículo + configuración."""
+    return jsonify(estado_neumaticos_vehiculo(vid) or {})
+
+
+@app.route("/api/planes/<int:pid>/config_neumaticos", methods=["GET"])
+def api_get_config_neu(pid):
+    return jsonify(obtener_config_neumaticos_plan(pid) or {})
+
+
+@app.route("/api/planes/<int:pid>/config_neumaticos", methods=["POST"])
+def api_set_config_neu(pid):
+    d = request.json
+    try:
+        crear_config_neumaticos(
+            pid, d.get("configuracion", "6x2"), d.get("medida", ""),
+            float(d.get("presion_dir", 110) or 110),
+            float(d.get("presion_trac", 120) or 120),
+            int(d.get("vida_util_km", 100000) or 100000)
+        )
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+# ─── API: Órdenes de Trabajo ──────────────────────────────────────────────────
+
+@app.route("/api/ots", methods=["GET"])
+def api_ots():
+    estado = request.args.get("estado")
+    vid = request.args.get("vehiculo_id", type=int)
+    desde = request.args.get("desde")
+    hasta = request.args.get("hasta")
+    return jsonify(obtener_ots(estado=estado, vehiculo_id=vid, desde=desde, hasta=hasta))
+
+
+@app.route("/api/ots/<int:ot_id>", methods=["GET"])
+def api_ot(ot_id):
+    ot = obtener_ot(ot_id)
+    if not ot:
+        return jsonify({"error": "no encontrada"}), 404
+    return jsonify(ot)
+
+
+@app.route("/api/ots", methods=["POST"])
+def api_crear_ot():
+    d = request.json
+    try:
+        ot_id = crear_ot(
+            int(d["vehiculo_id"]), d["fecha_apertura"],
+            km=float(d.get("km", 0) or 0),
+            conductor=d.get("conductor", ""),
+            procedencia=d.get("procedencia", ""),
+            observaciones=d.get("observaciones", ""),
+            items=d.get("items", [])
+        )
+        return jsonify({"ok": True, "ot_id": ot_id})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/ots/<int:ot_id>", methods=["PATCH"])
+def api_actualizar_ot(ot_id):
+    d = request.json or {}
+    actualizar_ot(ot_id, **d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ots/<int:ot_id>/cerrar", methods=["POST"])
+def api_cerrar_ot(ot_id):
+    d = request.json or {}
+    cerrar_ot(ot_id, fecha_cierre=d.get("fecha_cierre"))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ots/<int:ot_id>", methods=["DELETE"])
+def api_eliminar_ot(ot_id):
+    eliminar_ot(ot_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ots/<int:ot_id>/items", methods=["POST"])
+def api_agregar_item_ot(ot_id):
+    d = request.json
+    try:
+        agregar_item_ot(ot_id, d["descripcion"], d.get("tipo", "control"),
+                        float(d.get("costo", 0) or 0), d.get("observaciones", ""))
+        return jsonify({"ok": True})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/ot_items/<int:item_id>", methods=["PATCH"])
+def api_actualizar_item(item_id):
+    d = request.json or {}
+    # Convertir costo si viene
+    if "costo" in d:
+        try: d["costo"] = float(d["costo"] or 0)
+        except: d["costo"] = 0
+    actualizar_item_ot(item_id, **d)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/ot_items/<int:item_id>", methods=["DELETE"])
+def api_eliminar_item(item_id):
+    eliminar_item_ot(item_id)
+    return jsonify({"ok": True})
+
+
+# ─── API: Cubiertas auxiliares (Trucky) ──────────────────────────────────────
+
+@app.route("/api/vehiculos/<int:vid>/truckies", methods=["GET"])
+def api_truckies_vehiculo(vid):
+    return jsonify(obtener_truckies_vehiculo(vid))
+
+
+@app.route("/api/vehiculos/<int:vid>/truckies", methods=["POST"])
+def api_asignar_trucky(vid):
+    d = request.json
+    try:
+        ok, msg = asignar_trucky(
+            vid, int(d["neumatico_id"]), d["fecha_asignacion"],
+            float(d.get("km_asignacion", 0) or 0), d.get("observaciones", "")
+        )
+        return jsonify({"ok": ok, "msg": msg})
+    except (KeyError, ValueError) as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/truckies/<int:tid>/usar", methods=["POST"])
+def api_usar_trucky(tid):
+    d = request.json
+    ok, msg = usar_trucky(tid, d.get("fecha_uso", ""),
+                          float(d.get("km_uso", 0) or 0), d.get("motivo", ""))
+    return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/truckies/<int:tid>/retirar", methods=["POST"])
+def api_retirar_trucky(tid):
+    ok, msg = retirar_trucky(tid)
+    return jsonify({"ok": ok, "msg": msg})
+
+
+# ─── API: Reporte gerencial ──────────────────────────────────────────────────
+
+@app.route("/api/reporte_gerencial", methods=["GET"])
+def api_reporte_gerencial():
+    desde = request.args.get("desde")
+    hasta = request.args.get("hasta")
+    if not desde or not hasta:
+        return jsonify({"error": "Faltan parámetros desde/hasta"}), 400
+    return jsonify(reporte_gerencial(desde, hasta))
+
+
+# ─── API: Exportar PDF ────────────────────────────────────────────────────────
+
+@app.route("/api/exportar_pdf/<int:vid>", methods=["GET"])
+def api_exportar_pdf(vid):
+    modo = request.args.get("modo", "mes")
+    mes = request.args.get("mes")
+    vehiculo = next((v for v in obtener_vehiculos(solo_activos=False) if v["id"] == vid), None)
+    if not vehiculo:
+        return jsonify({"ok": False, "msg": "Vehículo no encontrado"}), 404
+
+    if modo == "produccion":
+        k = kpis_produccion(vid)
+        titulo_periodo = "Producción total"
+    else:
+        if not mes:
+            meses = meses_con_servicios(vid)
+            mes = meses[0] if meses else None
+        k = kpis_mes(vid, mes) if mes else None
+        titulo_periodo = mes or "—"
+
+    if not k:
+        return jsonify({"ok": False, "msg": "Sin datos para exportar"}), 400
+
+    servicios = obtener_servicios_vehiculo(vid, mes if modo != "produccion" else None)
+    ruta = generar_pdf(vehiculo, k, servicios, titulo_periodo, modo)
+    return send_file(ruta, as_attachment=True,
+                     download_name=f"Reporte_{vehiculo['patente']}_{titulo_periodo}.pdf")
+
+
+@app.route("/api/exportar_reporte_gerencial", methods=["GET"])
+def api_exportar_reporte_gerencial():
+    desde = request.args.get("desde")
+    hasta = request.args.get("hasta")
+    if not desde or not hasta:
+        return jsonify({"ok": False, "msg": "Faltan parámetros desde/hasta"}), 400
+    reporte = reporte_gerencial(desde, hasta)
+    os.makedirs("reportes", exist_ok=True)
+    ruta = f"reportes/Reporte_Gerencial_{desde}_a_{hasta}.pdf"
+    generar_reporte_gerencial_pdf(reporte, ruta)
+    return send_file(ruta, as_attachment=True,
+                     download_name=f"Reporte_Gerencial_{desde}_a_{hasta}.pdf")
+
+
+# ─── Arranque ─────────────────────────────────────────────────────────────────
+
+def iniciar_servidor():
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+
+
+def main():
+    inicializar_db()
+    # Cargar planes de mantenimiento predefinidos (si no existen)
+    try:
+        from mantenimiento_seed import cargar_planes_default
+        cargar_planes_default()
+    except Exception as e:
+        print(f"Aviso: no se pudieron cargar planes default: {e}")
+
+    # Lanzar Flask en un hilo y abrir la ventana de escritorio
+    threading.Thread(target=iniciar_servidor, daemon=True).start()
+
+    try:
+        import webview
+        webview.create_window(
+            "Gestión de Flota — La Santaniana",
+            "http://127.0.0.1:5000",
+            width=1280, height=820, min_size=(1000, 700)
+        )
+        webview.start()
+    except ImportError:
+        # Si no está pywebview, abrir en el navegador
+        import webbrowser
+        print("PyWebView no instalado. Abriendo en el navegador...")
+        print("App corriendo en http://127.0.0.1:5000")
+        webbrowser.open("http://127.0.0.1:5000")
+        iniciar_servidor()
+
+
+if __name__ == "__main__":
+    main()
