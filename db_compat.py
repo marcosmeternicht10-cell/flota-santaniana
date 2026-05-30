@@ -88,13 +88,28 @@ class _CursorWrapper:
 
     def execute(self, sql, params=()):
         sql_t = _traducir_sql(sql)
-        # Para INSERT en PostgreSQL, capturar el id con RETURNING
-        if USE_POSTGRES and sql_t.strip().upper().startswith("INSERT"):
-            if "RETURNING" not in sql_t.upper():
-                sql_t = sql_t.rstrip().rstrip(";") + " RETURNING id"
-            # Ejecutar (si falla, dejar que la excepción suba para hacer rollback)
-            self._cur.execute(sql_t, params)
-            # Capturar el id devuelto por RETURNING
+        upper = sql_t.strip().upper()
+        # Para INSERT en PostgreSQL, capturar el id con RETURNING (cuando aplica)
+        if USE_POSTGRES and upper.startswith("INSERT"):
+            ya_tiene_returning = "RETURNING" in upper
+            # No agregar RETURNING si:
+            #  - ya lo tiene
+            #  - es un upsert con ON CONFLICT (la tabla puede no tener columna id,
+            #    o el id no es lo que interesa)
+            tiene_on_conflict = "ON CONFLICT" in upper
+            if ya_tiene_returning or tiene_on_conflict:
+                self._cur.execute(sql_t, params)
+                if ya_tiene_returning:
+                    try:
+                        row = self._cur.fetchone()
+                        if row:
+                            self.lastrowid = row[0] if not isinstance(row, dict) else row.get("id")
+                    except Exception:
+                        self.lastrowid = None
+                return self
+            # INSERT normal: agregar RETURNING id para emular lastrowid
+            sql_ret = sql_t.rstrip().rstrip(";") + " RETURNING id"
+            self._cur.execute(sql_ret, params)
             try:
                 row = self._cur.fetchone()
                 if row:
@@ -104,7 +119,6 @@ class _CursorWrapper:
             return self
         else:
             self._cur.execute(sql_t, params)
-            # En SQLite, propagar el lastrowid del cursor real
             if not USE_POSTGRES:
                 self.lastrowid = self._cur.lastrowid
             return self
