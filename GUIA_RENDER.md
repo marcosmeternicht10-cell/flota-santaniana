@@ -1,186 +1,327 @@
-# Guía paso a paso: Subir La Santaniana a Render con GitHub + PostgreSQL
+"""
+flota_seed.py — Carga masiva de la flota oficial de La Santaniana
+desde el archivo Excel "FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx"
 
-Esta guía te lleva de la mano para tener el sistema funcionando en internet,
-con base de datos PostgreSQL (los datos NO se borran nunca) y acceso para
-2-3 personas desde cualquier lugar.
+Mapea cada vehículo a su plan de mantenimiento según marca/carrocería/año.
+También carga seguros (Pasajeros + RC) y habilitaciones municipales/Senatran.
 
-**Tiempo estimado:** 30-40 minutos la primera vez.
+pandas se importa solo al cargar la flota (ahorra ~44 MB de RAM al arrancar).
+"""
 
----
+import os
+from database import (
+    inicializar_db, agregar_vehiculo, obtener_vehiculos,
+    asignar_plan, obtener_planes, agregar_documento,
+)
+from mantenimiento_seed import cargar_planes_default
 
-## RESUMEN DE LO QUE VAMOS A HACER
 
-1. Subir el código a GitHub (un repositorio)
-2. Crear una base de datos PostgreSQL en Render (gratis)
-3. Crear el servicio web en Render (gratis)
-4. Conectar todo y entrar al sistema
-5. Cargar la flota y crear los usuarios
+# ─── Mapeo de marca/carrocería → plan de mantenimiento ────────────────────────
 
----
+def detectar_plan(marca, carroceria, año, tipo):
+    """Devuelve el nombre del plan que corresponde a un vehículo."""
+    m = (marca or "").upper().strip()
+    c = (carroceria or "").upper().strip()
+    t = (tipo or "").upper().strip()
 
-## PARTE 1 — Subir el código a GitHub
+    # SCANIA
+    if "SCANIA" in m:
+        if "K380" in c or "1800DD-K380" in c:
+            return "Scania K380 / DC12 380 HP"
+        if "K 410" in c or "K410" in c:
+            return "Scania K410 / DC13 410 HP"
+        if "K124" in c:
+            return "Scania K124 / DC11 360 HP"
+        if "MARCOPOLO" in c or "ANDARE" in c or "IRIZAR" in c:
+            return ("Scania K380 / DC12 380 HP" if año and año >= 2010
+                    else "Scania K124 / DC11 360 HP")
+        return "Scania K380 / DC12 380 HP"
 
-### 1.1 Crear cuenta en GitHub
-- Entrá a https://github.com y creá una cuenta gratis (si ya tenés, saltá esto).
+    # MERCEDES-BENZ
+    if "M.BENZ" in m or "MERCEDES" in m:
+        if "SPRINTER" in c:
+            return "Mercedes-Benz Sprinter / OM651 / OM642"
+        if "K380" in c or "1800DD" in c or "MARCOPOLO" in c:
+            return "Mercedes-Benz O500 RSD / OM457 360 HP"
+        return "Mercedes-Benz O500 RS / OM457 354 HP"
 
-### 1.2 Crear el repositorio
-1. Tocá el botón **"+"** arriba a la derecha → **"New repository"**.
-2. Nombre: `flota-santaniana` (o el que quieras).
-3. Dejalo en **Private** (privado) para que nadie más vea tu código.
-4. NO marques ninguna opción de "Initialize". 
-5. Tocá **"Create repository"**.
+    # VOLVO
+    if "VOLVO" in m:
+        if "B430R" in c or "B 430" in c or "IRIZAR" in c:
+            return "Volvo B430R / D11A 430 HP"
+        return "Volvo B430R / D11A 430 HP"
 
-### 1.3 Subir los archivos
-La forma más fácil sin instalar nada:
+    # VOLKSWAGEN (Senior)
+    if "VOLKSWAGEN" in m:
+        return "Volkswagen 9.150 / 9.160 OD (Senior)"
 
-1. En la página del repo recién creado, tocá el link **"uploading an existing file"**.
-2. Arrastrá TODOS los archivos de la carpeta `flota_web`:
-   - `app.py`, `database.py`, `db_compat.py`, `models.py`, `pdf_export.py`
-   - `mantenimiento_seed.py`, `flota_seed.py`
-   - `requirements-nube.txt`, `Procfile`, `.gitignore`
-   - La carpeta `static/` (con `app.js`, `style.css`, `logo.png`)
-   - La carpeta `templates/` (con `index.html`, `login.html`)
-   - **El archivo Excel** `FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx.xlsx`
-     (este es importante para cargar la flota después)
-3. Abajo tocá **"Commit changes"**.
+    # AGRALE / MARCOPOLO VOLARE
+    if "AGRALE" in m or ("MARCOPOLO" in m and "VOLARE" in c):
+        return "Agrale Volare W / WL"
 
-> **Nota:** NO subas `flota_santaniana.db` (el `.gitignore` ya lo evita).
-> En la nube se usa PostgreSQL, no ese archivo.
+    # HYUNDAI
+    if "HYUNDAI" in m:
+        return "Hyundai H350 / H1 (minibús)"
 
----
+    # SENIOR (chasis MB)
+    if m == "SENIOR":
+        return "Mercedes-Benz Sprinter / OM651 / OM642"
 
-## PARTE 2 — Crear la base de datos PostgreSQL en Render
+    # Camionetas y otros - sin plan
+    return None
 
-### 2.1 Crear cuenta en Render
-- Entrá a https://render.com
-- Tocá **"Get Started"** y registrate (lo más fácil: **"Sign in with GitHub"**,
-  así ya queda conectado a tu repositorio).
 
-### 2.2 Crear la base PostgreSQL
-1. En el panel de Render, tocá **"New +"** → **"Postgres"**.
-2. Completá:
-   - **Name**: `flota-db` (o el que quieras)
-   - **Database**: dejá lo que sugiere
-   - **User**: dejá lo que sugiere
-   - **Region**: elegí **Oregon (US West)** o la más cercana
-   - **Plan**: **Free** (gratis)
-3. Tocá **"Create Database"**.
-4. Esperá 1-2 minutos hasta que diga **"Available"**.
-5. **IMPORTANTE:** Una vez creada, buscá la sección **"Connections"** y copiá
-   el valor de **"Internal Database URL"** (empieza con `postgresql://...`).
-   Lo vas a necesitar en el próximo paso. Guardalo en un bloc de notas.
+def normalizar_marca(marca):
+    """Convierte 'M.BENZ' → 'Mercedes-Benz', etc."""
+    m = (marca or "").upper().strip()
+    if "M.BENZ" in m: return "Mercedes-Benz"
+    if "SCANIA" in m: return "Scania"
+    if "VOLVO" in m: return "Volvo"
+    if "VOLKSWAGEN" in m: return "Volkswagen"
+    if "HYUNDAI" in m: return "Hyundai"
+    if "AGRALE" in m: return "Agrale"
+    if "TOYOTA" in m or "HILUX" in m: return "Toyota"
+    if "MITSUBISHI" in m or "L200" in m: return "Mitsubishi"
+    return marca.title() if marca else ""
 
----
 
-## PARTE 3 — Crear el servicio web
+def cargar_flota_desde_xlsx(ruta_xlsx, verbose=True):
+    """Carga todos los vehículos de la hoja 'GENERAL 2026' al sistema.
+    Optimizado: usa una sola conexión y evita re-consultas (rápido en la nube)."""
+    if not os.path.exists(ruta_xlsx):
+        print(f"❌ No se encontró el archivo: {ruta_xlsx}")
+        return
 
-### 3.1 Crear el Web Service
-1. En Render, tocá **"New +"** → **"Web Service"**.
-2. Conectá tu repositorio `flota-santaniana` (si no aparece, tocá
-   "Configure account" para darle permiso a Render de ver tus repos).
-3. Completá la configuración:
-   - **Name**: `flota-santaniana`
-   - **Region**: **la misma que la base de datos** (ej: Oregon)
-   - **Branch**: `main`
-   - **Runtime**: `Python 3`
-   - **Build Command**: 
-     ```
-     pip install -r requirements-nube.txt
-     ```
-   - **Start Command**: 
-     ```
-     gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
-     ```
-   - **Plan**: **Free** (gratis)
+    import pandas as pd
+    from db_compat import get_connection
 
-### 3.2 Configurar las variables de entorno
-Antes de crear, bajá hasta **"Environment Variables"** y agregá estas tres:
+    df = pd.read_excel(ruta_xlsx, sheet_name="GENERAL 2026", header=1)
+    cols = ["TIPO ", "MARCA", "CARROCERIA", "CHASIS", "AÑO", "PATENTE ", "COCHE ", "EJES", "ASIENTOS"]
+    df = df[cols].copy()
+    df.columns = ["tipo", "marca", "carroceria", "chasis", "año",
+                  "patente", "coche", "ejes", "asientos"]
+    df = df.dropna(subset=["patente"])
 
-| Key (nombre) | Value (valor) |
-|--------------|---------------|
-| `DATABASE_URL` | (pegá la Internal Database URL que copiaste antes) |
-| `SECRET_KEY` | una clave larga inventada, ej: `santaniana-2026-xyz-clave-secreta-larga` |
-| `MODO_SERVIDOR` | `1` |
+    # Patentes existentes y planes (una sola consulta cada uno)
+    existentes = {v["patente"] for v in obtener_vehiculos(solo_activos=False)}
+    planes = {p["nombre"]: p["id"] for p in obtener_planes()}
 
-> La `DATABASE_URL` es lo que conecta tu app con la base PostgreSQL.
-> Sin ella, no funciona.
+    creados = 0
+    saltados = 0
+    sin_plan = []
 
-### 3.3 Crear
-1. Tocá **"Create Web Service"**.
-2. Render va a instalar todo y arrancar la app. Mirá los logs (tarda 3-5 minutos).
-3. Cuando veas **"Your service is live"**, está listo.
-4. Arriba tenés la dirección, algo como:
-   ```
-   https://flota-santaniana.onrender.com
-   ```
+    # Una sola conexión para toda la carga
+    conn = get_connection()
+    cur = conn.cursor()
 
----
+    for _, row in df.iterrows():
+        patente = str(row["patente"]).strip().replace(" ", "").upper()
+        if patente in existentes:
+            saltados += 1
+            continue
 
-## PARTE 4 — Entrar y configurar
+        marca = normalizar_marca(row["marca"])
+        modelo_carroceria = str(row["carroceria"]).strip().title()
+        año = int(row["año"]) if pd.notna(row["año"]) else None
+        chasis = str(row["chasis"]).strip().upper() if pd.notna(row["chasis"]) else ""
+        n_interno = str(row["coche"]).strip() if pd.notna(row["coche"]) else ""
+        asientos = int(row["asientos"]) if pd.notna(row["asientos"]) else 0
+        ejes = int(row["ejes"]) if pd.notna(row["ejes"]) else 0
+        tipo_v = str(row["tipo"]).strip().title() if pd.notna(row["tipo"]) else ""
 
-### 4.1 Primer ingreso
-1. Abrí la dirección que te dio Render en el navegador.
-2. Te aparece la pantalla de login.
-3. Entrá con:
-   - Usuario: `admin`
-   - Contraseña: `santaniana2026`
+        # Insertar vehículo y obtener su id en el acto (sin re-consultar)
+        try:
+            cur.execute(
+                """INSERT INTO vehiculos
+                   (patente, marca, modelo, año, chasis, n_interno, asientos, ejes, tipo)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (patente, marca, modelo_carroceria, año, chasis,
+                 str(n_interno), asientos, ejes, tipo_v)
+            )
+            vid = cur.lastrowid
+        except Exception as e:
+            print(f"  ✗ {patente}: {e}")
+            continue
 
-> Si tarda ~30 segundos la primera vez, es normal (el plan gratis "duerme"
-> la app cuando no se usa).
+        existentes.add(patente)  # para no duplicar en la misma corrida
 
-### 4.2 Cambiar la contraseña del admin
-1. En el menú lateral, tocá el ícono de **usuarios** (arriba a la derecha del menú).
-2. Buscá el usuario `admin` y tocá la **llave** (cambiar contraseña).
-3. Poné una contraseña nueva y segura.
+        # Asignar plan en la misma conexión
+        nombre_plan = detectar_plan(row["marca"], row["carroceria"], año, row["tipo"])
+        if nombre_plan and nombre_plan in planes and vid:
+            cur.execute(
+                """INSERT INTO vehiculo_plan (vehiculo_id, plan_id, km_inicial)
+                   VALUES (?,?,?)
+                   ON CONFLICT(vehiculo_id) DO UPDATE SET
+                       plan_id=excluded.plan_id, km_inicial=excluded.km_inicial""",
+                (vid, planes[nombre_plan], 0)
+            )
+        else:
+            sin_plan.append(patente)
 
-### 4.3 Cargar la flota completa
-1. Andá al **Dashboard**.
-2. Como está vacío, vas a ver un botón **"Cargar flota completa desde Excel"**.
-3. Tocalo y esperá unos segundos.
-4. Listo: 89 vehículos + 333 documentos cargados automáticamente.
+        creados += 1
 
-### 4.4 Crear los usuarios de las otras personas
-1. Volvé a la pantalla de **usuarios**.
-2. Creá un usuario para cada persona, eligiendo su rol:
-   - **Administrador**: acceso total (vos)
-   - **Operador**: el del taller que carga las OT y mantenimientos
-   - **Solo consulta**: la jefa/gerencia que solo quiere ver reportes
+    conn.commit()
+    conn.close()
 
----
+    print()
+    print(f"═══ RESUMEN ═══")
+    print(f"  Vehículos creados:  {creados}")
+    print(f"  Saltados (ya existían): {saltados}")
+    print(f"  Sin plan (camionetas/otros): {len(sin_plan)}")
+    if sin_plan:
+        print(f"  Patentes sin plan: {', '.join(sin_plan)}")
 
-## LISTO ✓
 
-Ya tenés el sistema en internet. Compartí la dirección
-(`https://flota-santaniana.onrender.com`) con tu equipo y cada uno entra con
-su usuario.
+def normalizar_patente(p):
+    """Normaliza la patente: sin espacios, mayúsculas."""
+    return str(p).strip().replace(" ", "").upper()
 
----
 
-## PREGUNTAS FRECUENTES
+def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
+    """
+    Carga los documentos de toda la flota:
 
-**¿Los datos se borran?**
-No. Al usar PostgreSQL, los datos quedan guardados permanentemente, aunque la
-app se reinicie o se actualice.
+    SEGUROS (del Excel):
+      - Seguro Pasajeros (col "Seguro" + "Vigencia")
+      - Responsabilidad Civil (col "Seguro.1" + "Vigencia.1")
 
-**¿Por qué tarda al entrar después de un rato?**
-El plan gratis de Render "duerme" la app tras 15 minutos sin uso. La primera
-visita la despierta (~30 seg). Si querés que esté siempre activa, el plan
-pago de Render cuesta unos USD 7/mes.
+    HABILITACIÓN MUNICIPAL:
+      - Vence el 30/06/2026 para TODA la flota.
 
-**¿Cómo actualizo el sistema si hacemos cambios?**
-Subís los archivos nuevos a GitHub y Render se actualiza solo (detecta el
-cambio y vuelve a desplegar). Los datos NO se pierden.
+    HABILITACIÓN DINATRAN (según regla operativa de la empresa):
+      - Vehículos ≤ 10 años (año 2016 a 2026) → vencen el 21/11/2026.
+      - Vehículos > 10 años (año < 2016) → vencieron el 21/05/2026,
+        se renovaron y vuelven a vencer el 21/11/2026 (renovación 6 meses).
+      - Todos vencen el mismo día (21/11/2026), pero queda el dato del
+        ciclo corto en las observaciones de los vehículos viejos.
+    """
+    print()
+    print("=" * 60)
+    print("Cargando documentos (seguros + habilitaciones)...")
+    print("=" * 60)
 
-**¿Cómo hago backup de los datos?**
-En Render, la base PostgreSQL tiene opción de backups. En el plan gratis
-podés exportar manualmente. Te puedo ayudar con esto cuando lo necesites.
+    from datetime import date
+    from db_compat import get_connection
+    import pandas as pd
 
-**Subí el código pero Render da error.**
-Mirá los "Logs" en Render, copiá el error y pedí ayuda. Lo más común:
-- Olvidarse de poner la variable `DATABASE_URL`
-- Olvidarse de `MODO_SERVIDOR=1`
-- Que la base de datos y el web service estén en regiones distintas
+    # Fechas fijas según jefa
+    FECHA_MUN = "2026-06-30"          # Habilitación Municipal (toda la flota)
+    FECHA_DINATRAN = "2026-11-21"     # DINATRAN (todos al final)
+    ANIO_ACTUAL = date.today().year   # para calcular antigüedad
 
-**¿Puedo seguir usándolo en mi PC sin internet?**
-Sí. En tu PC, sin la variable DATABASE_URL, sigue usando SQLite y se abre como
-ventana de escritorio con `python app.py`. Los dos modos conviven.
+    # Mapa patente → id de vehículo + año
+    vehiculos = obtener_vehiculos(solo_activos=False)
+    veh_por_patente = {v["patente"]: v for v in vehiculos}
+
+    # Una sola conexión para TODOS los documentos (rápido en la nube)
+    conn = get_connection()
+    cur = conn.cursor()
+
+    def _insert_doc(vid, tipo, nombre, fecha, proveedor="", obs=""):
+        cur.execute("""
+            INSERT INTO documentos
+                (vehiculo_id, tipo, nombre, fecha_emision, fecha_vencimiento,
+                 proveedor, costo, observaciones)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (vid, tipo, nombre, None, fecha, proveedor, 0, obs))
+
+    # ─── 1. SEGUROS desde GENERAL 2026 ─────────────────────────────────
+    df = pd.read_excel(ruta_xlsx, sheet_name="GENERAL 2026", header=1)
+    df = df[['PATENTE ', 'Seguro', 'Vigencia ', 'Seguro.1', 'Vigencia .1']].copy()
+    df.columns = ['patente', 'seg_pas', 'venc_pas', 'seg_rc', 'venc_rc']
+    df = df.dropna(subset=['patente'])
+
+    seg_creados = 0
+    for _, row in df.iterrows():
+        patente = normalizar_patente(row['patente'])
+        veh = veh_por_patente.get(patente)
+        if not veh:
+            continue
+        vid = veh["id"]
+
+        if pd.notna(row['venc_pas']):
+            try:
+                fecha = pd.to_datetime(row['venc_pas']).strftime('%Y-%m-%d')
+                proveedor = str(row['seg_pas']).strip() if pd.notna(row['seg_pas']) else ''
+                _insert_doc(vid, 'Seguro', 'Seguro Pasajeros', fecha, proveedor)
+                seg_creados += 1
+            except Exception as e:
+                if verbose: print(f"  ✗ {patente} seg pasajeros: {e}")
+
+        if pd.notna(row['venc_rc']):
+            try:
+                fecha = pd.to_datetime(row['venc_rc']).strftime('%Y-%m-%d')
+                proveedor = str(row['seg_rc']).strip() if pd.notna(row['seg_rc']) else ''
+                _insert_doc(vid, 'Seguro', 'Responsabilidad Civil (RC)', fecha, proveedor)
+                seg_creados += 1
+            except Exception as e:
+                if verbose: print(f"  ✗ {patente} seg RC: {e}")
+
+    print(f"  ✓ Seguros cargados: {seg_creados}")
+
+    # ─── 2. HABILITACIÓN MUNICIPAL — toda la flota, vence 30/06/2026 ────
+    hab_mun = 0
+    for v in vehiculos:
+        try:
+            _insert_doc(v["id"], 'Habilitación Municipal', 'Habilitación Municipal 2026',
+                        FECHA_MUN, 'Municipalidad', 'Vence 30/06/2026 (toda la flota)')
+            hab_mun += 1
+        except Exception as e:
+            if verbose: print(f"  ✗ {v['patente']} hab municipal: {e}")
+    print(f"  ✓ Habilitaciones Municipales cargadas: {hab_mun}")
+
+    # ─── 3. HABILITACIÓN DINATRAN ──────────────────────────────────────
+    hab_din = 0
+    for v in vehiculos:
+        try:
+            año = v.get("año") or 0
+            antiguedad = ANIO_ACTUAL - año if año else 0
+            if antiguedad > 10:
+                obs = f"Vehículo > 10 años ({año}). Renovación cada 6 meses. Última: 21/05/2026 → vence 21/11/2026."
+            else:
+                obs = f"Vehículo ≤ 10 años ({año}). Vigencia anual."
+            _insert_doc(v["id"], 'Habilitación DINATRAN', 'Habilitación DINATRAN',
+                        FECHA_DINATRAN, 'DINATRAN', obs)
+            hab_din += 1
+        except Exception as e:
+            if verbose: print(f"  ✗ {v['patente']} hab DINATRAN: {e}")
+    print(f"  ✓ Habilitaciones DINATRAN cargadas: {hab_din}")
+
+    # Guardar todo de una sola vez
+    conn.commit()
+    conn.close()
+
+    print()
+    print(f"═══ RESUMEN DOCUMENTOS ═══")
+    print(f"  Seguros (Pasajeros + RC):     {seg_creados}")
+    print(f"  Habilitaciones Municipales:   {hab_mun}  (vencen 30/06/2026)")
+    print(f"  Habilitaciones DINATRAN:      {hab_din}  (vencen 21/11/2026)")
+    print(f"  TOTAL documentos:             {seg_creados + hab_mun + hab_din}")
+
+
+if __name__ == "__main__":
+    import sys
+    # Buscar el XLSX
+    rutas_candidatas = [
+        "FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx",
+        "FLOTA SANTANIANA GENERAL LS- HABILITACIONES V.E 2026 .xlsx",
+        os.path.join(os.path.dirname(__file__),
+                     "FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx"),
+    ]
+    if len(sys.argv) > 1:
+        rutas_candidatas.insert(0, sys.argv[1])
+    ruta = next((r for r in rutas_candidatas if os.path.exists(r)), None)
+
+    if ruta and os.path.exists(ruta):
+        inicializar_db()
+        cargar_planes_default()
+        print()
+        print("=" * 60)
+        print("Cargando vehículos de la flota...")
+        print("=" * 60)
+        cargar_flota_desde_xlsx(ruta)
+        cargar_documentos_desde_xlsx(ruta)
+    else:
+        print("Poné el XLSX 'FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx'")
+        print("en la misma carpeta que este script, o ejecutalo así:")
+        print("  python flota_seed.py ruta/al/archivo.xlsx")

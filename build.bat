@@ -1,35 +1,22 @@
-@echo off
-:: build.bat — Genera el ejecutable .exe (ventana de escritorio)
-:: Sistema de Gestion de Flota - La Santaniana v4.0
+# Base de datos local (NO subir, en la nube se usa PostgreSQL)
+*.db
+flota_santaniana.db
 
-echo ============================================================
-echo   Generando GestionFlota_Santaniana.exe
-echo ============================================================
-echo.
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
 
-python --version
-if errorlevel 1 (
-    echo ERROR: Python no encontrado. Instala Python 3.9+ desde python.org
-    pause
-    exit /b 1
-)
+# Reportes generados
+reportes/
 
-echo Instalando dependencias...
-pip install -r requirements.txt
+# Sistema
+.DS_Store
+Thumbs.db
 
-echo.
-echo Compilando (esto puede tardar unos minutos)...
-pyinstaller ^
-    --onefile ^
-    --windowed ^
-    --name "GestionFlota_Santaniana" ^
-    --add-data "templates;templates" ^
-    --add-data "static;static" ^
-    --hidden-import "webview.platforms.winforms" ^
-    app.py
-
-echo.
-echo ============================================================
-echo   Listo! El .exe esta en la carpeta dist\
-echo ============================================================
-pause
+# IMPORTANTE: el Excel de la flota SÍ se sube para poder cargar la flota inicial
+# Si no querés subirlo, descomentá la línea de abajo:
+# *.xlsx

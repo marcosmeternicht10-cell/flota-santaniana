@@ -1,329 +1,165 @@
-"""
-mantenimiento_seed.py — Carga planes de mantenimiento predefinidos
-basados en las fichas técnicas de motores comunes.
+# Guía para poner La Santaniana en la nube (multiusuario)
 
-Se ejecuta una sola vez al instalar o se puede llamar manualmente.
-"""
+Esta guía te explica cómo subir el sistema a internet para que **2-3 personas
+puedan usarlo desde distintos lugares** (taller, oficina, casa), cada una con
+su usuario y contraseña.
 
-from database import get_connection, crear_plan, agregar_tarea
+---
 
+## ¿Qué cambió en el sistema?
 
-# ──────────────────────────────────────────────────────────────────────────
-# PLANES SCANIA — Buses
-# ──────────────────────────────────────────────────────────────────────────
-# Todos los chasis Scania serie K (motor trasero) usan el mismo motor base
-# (DC9 / DC11 / DC12 / DC13) con distintas potencias. Por eso los intervalos
-# de mantenimiento son IGUALES en toda la gama. Cambia solo la designación
-# del motor y los datos de torque/potencia.
+Ahora el sistema tiene **dos modos de funcionar**:
 
-# Tareas de mantenimiento Scania (sirven para toda la serie K)
-TAREAS_SCANIA_K = [
-    # Cada 15.000 km — Servicio básico
-    ("Aceite de motor",                     15000, "Lubricación"),
-    ("Filtro de aceite de motor",           15000, "Filtros"),
-    ("Filtro primario de combustible",      15000, "Filtros"),
-    ("Filtro racor (separador de agua)",    15000, "Filtros"),
-    ("Filtro de aire primario (x2)",        15000, "Filtros"),
-    ("Filtro de aire secundario",           15000, "Filtros"),
-    ("Mantenimiento purificador centrífugo",15000, "Lubricación"),
-    ("Engrase general",                     15000, "Lubricación"),
+1. **Modo escritorio** (como hasta ahora): corrés `python app.py` y se abre la
+   ventana en tu PC. Sirve para uso local de una sola persona.
 
-    # Cada 60.000 km — Servicio intermedio
-    ("Filtro de cabina",                    60000, "Filtros"),
-    ("Filtro y aceite de dirección",        60000, "Lubricación"),
-    ("Filtro y aceite de retarder",         60000, "Lubricación"),
-    ("Filtro secador de aire",              60000, "Sistema de aire"),
-    ("Filtro SCR / AdBlue",                 60000, "Emisiones"),
-    ("Líquido de frenos",                   60000, "Frenos"),
+2. **Modo servidor/nube** (nuevo): el sistema corre en internet y todos entran
+   desde el navegador con su usuario y contraseña.
 
-    # Cada 120.000 km — Servicio mayor
-    ("Aceite y filtro de diferenciales",    120000, "Transmisión"),
-    ("Aceite y filtro de caja de cambios",  120000, "Transmisión"),
-    ("Calibración de válvulas (taqués)",    120000, "Motor"),
-]
+Además ahora hay **login de usuarios** con 3 roles:
+- **Administrador**: acceso total + puede crear/borrar usuarios
+- **Operador**: carga y edita datos (vehículos, OTs, mantenimientos, etc.)
+- **Solo consulta**: únicamente puede ver, no puede modificar nada
 
-PLAN_SCANIA_K310 = {
-    "nombre": "Scania K310 / DC9 310 HP",
-    "descripcion": "Plan para chasis Scania K310 con motor DC9 de 9 litros, 310 HP. Bus mediano/regional.",
-    "tareas": TAREAS_SCANIA_K,
-}
+**Usuario inicial** (se crea solo la primera vez):
+- Usuario: `admin`
+- Contraseña: `santaniana2026`
+- ⚠️ **Cambiá esta contraseña apenas entres** (desde el ícono de usuarios)
 
-PLAN_SCANIA_K340 = {
-    "nombre": "Scania K340 / DC11 340 HP",
-    "descripcion": "Plan para chasis Scania K340 con motor DC11 de 10,6 litros, 340 HP.",
-    "tareas": TAREAS_SCANIA_K,
-}
+---
 
-PLAN_SCANIA_K360 = {
-    "nombre": "Scania K360 / DC9 360 HP",
-    "descripcion": "Plan para chasis Scania K360 con motor DC9, 360 HP. Bus de media/larga distancia.",
-    "tareas": TAREAS_SCANIA_K,
-}
+## OPCIÓN A — Probar en red local primero (gratis)
 
-PLAN_SCANIA_K380 = {
-    "nombre": "Scania K380 / DC12 380 HP",
-    "descripcion": "Plan para chasis Scania K380 con motor DC12 16 de 11,7 litros, 380 HP. Coche cama / doble piso.",
-    "tareas": TAREAS_SCANIA_K,
-}
+Antes de pagar la nube, podés probarlo en la oficina:
 
-PLAN_SCANIA_K410 = {
-    "nombre": "Scania K410 / DC13 410 HP",
-    "descripcion": "Plan para chasis Scania K410 con motor DC13 de 12,7 litros, 410 HP. Larga distancia, doble piso.",
-    "tareas": TAREAS_SCANIA_K,
-}
+1. En la PC que va a hacer de servidor, abrí la terminal en la carpeta del proyecto.
+2. Activá el modo servidor y arrancá:
 
-PLAN_SCANIA_K420 = {
-    "nombre": "Scania K420 / DC12 420 HP",
-    "descripcion": "Plan para chasis Scania K420 con motor DC12 06 de 11,7 litros, 420 HP. Doble piso premium.",
-    "tareas": TAREAS_SCANIA_K,
-}
+   **Windows (PowerShell):**
+   ```
+   $env:MODO_SERVIDOR="1"
+   python app.py
+   ```
 
-PLAN_SCANIA_K124 = {
-    "nombre": "Scania K124 / DC11 360 HP",
-    "descripcion": "Plan para chasis Scania K124 (Serie 4) con motor DC11. Buses antiguos años 2000s.",
-    "tareas": TAREAS_SCANIA_K,
-}
+3. Anotá la dirección IP de esa PC. Para verla, en otra terminal escribí:
+   ```
+   ipconfig
+   ```
+   Buscá "Dirección IPv4", algo como `192.168.1.50`.
 
-# ──────────────────────────────────────────────────────────────────────────
-# PLANES MERCEDES-BENZ
-# ──────────────────────────────────────────────────────────────────────────
-# El motor Mercedes-Benz OM 457 LA es el que va en los chasis O 500 RS/RSD/RSDH.
-# Es un 12.0 L, 6 cilindros en línea, con potencias entre 354 y 422 HP.
-# Plan de mantenimiento similar al Scania por ser bus interurbano.
+4. Desde las otras computadoras de la oficina, abrí Chrome y entrá a:
+   ```
+   http://192.168.1.50:5000
+   ```
+   (reemplazá por la IP real de tu PC servidor)
 
-TAREAS_MERCEDES_OM457 = [
-    # Cada 20.000 km (intervalo Mercedes para buses interurbanos con aceite mineral)
-    ("Aceite de motor",                     20000, "Lubricación"),
-    ("Filtro de aceite de motor",           20000, "Filtros"),
-    ("Filtro primario de combustible",      20000, "Filtros"),
-    ("Filtro de combustible (separador)",   20000, "Filtros"),
-    ("Filtro de aire",                      20000, "Filtros"),
-    ("Engrase general",                     20000, "Lubricación"),
+5. Te va a pedir usuario y contraseña. Entrás con `admin` / `santaniana2026`.
 
-    # Cada 60.000 km
-    ("Filtro de cabina",                    60000, "Filtros"),
-    ("Aceite y filtro de dirección",        60000, "Lubricación"),
-    ("Filtro secador de aire",              60000, "Sistema de aire"),
-    ("Filtro AdBlue/SCR (si Euro V)",       60000, "Emisiones"),
-    ("Líquido de frenos",                   60000, "Frenos"),
+**Limitación**: solo funciona dentro de la misma red (oficina). Si necesitás
+acceso desde casa, seguí con la Opción B.
 
-    # Cada 120.000 km
-    ("Aceite y filtro de diferencial",      120000, "Transmisión"),
-    ("Aceite y filtro caja MB GO 210-6",    120000, "Transmisión"),
-    ("Calibración de válvulas",             120000, "Motor"),
-]
+---
 
-PLAN_MB_O500RS = {
-    "nombre": "Mercedes-Benz O500 RS / OM457 354 HP",
-    "descripcion": "Plan para chasis Mercedes O500 RS 4x2 con motor OM 457 LA de 354 HP. Bus interurbano.",
-    "tareas": TAREAS_MERCEDES_OM457,
-}
+## OPCIÓN B — Subir a la nube (acceso desde cualquier lugar)
 
-PLAN_MB_O500RSD_360 = {
-    "nombre": "Mercedes-Benz O500 RSD / OM457 360 HP",
-    "descripcion": "Plan para chasis Mercedes O500 RSD 6x2 con motor OM 457 LA de 360 HP (RSD/2036 y RSD/2436). Doble piso.",
-    "tareas": TAREAS_MERCEDES_OM457,
-}
+Recomiendo **Render.com** porque tiene un plan gratis para empezar y es simple.
+También sirve Railway.app o PythonAnywhere.
 
-PLAN_MB_O500RSD_410 = {
-    "nombre": "Mercedes-Benz O500 RSD / OM457 410 HP",
-    "descripcion": "Plan para chasis Mercedes O500 RSD 6x2 con motor OM 457 LA de 410 HP (RSD/2441) Euro V. Doble piso.",
-    "tareas": TAREAS_MERCEDES_OM457,
-}
+### Paso 1: Preparar los archivos
 
-PLAN_MB_O500RSD_422 = {
-    "nombre": "Mercedes-Benz O500 RSD / OM457 422 HP",
-    "descripcion": "Plan para chasis Mercedes O500 RSD 6x2 (adaptable 8x2) con motor OM 457 LA de 422 HP (RSD/2442). Doble piso premium.",
-    "tareas": TAREAS_MERCEDES_OM457,
-}
+En la carpeta del proyecto ya están estos archivos nuevos:
+- `requirements-nube.txt` — las librerías que necesita el servidor
+- `Procfile` — le dice al servidor cómo arrancar la app
 
-PLAN_MB_SPRINTER = {
-    "nombre": "Mercedes-Benz Sprinter / OM651 / OM642",
-    "descripcion": "Plan para minibuses Mercedes-Benz Sprinter (modelos 415/515/516). Motores OM651 2.1L o OM642 3.0L V6.",
-    "tareas": [
-        ("Aceite de motor (Mercedes 229.51)",   20000, "Lubricación"),
-        ("Filtro de aceite",                    20000, "Filtros"),
-        ("Filtro de combustible",               20000, "Filtros"),
-        ("Filtro de aire",                      40000, "Filtros"),
-        ("Filtro de cabina",                    40000, "Filtros"),
-        ("Líquido de frenos",                   60000, "Frenos"),
-        ("Filtro de AdBlue (si aplica)",        60000, "Emisiones"),
-        ("Aceite caja de cambios",              80000, "Transmisión"),
-        ("Aceite diferencial",                  80000, "Transmisión"),
-    ],
-}
+### Paso 2: Subir el código a GitHub
 
-# ──────────────────────────────────────────────────────────────────────────
-# PLANES VOLVO
-# ──────────────────────────────────────────────────────────────────────────
-# Motor Volvo D11A (10.8 L, 6 cil, 430 HP) - usado en B430R 6x2 y 8x2.
-# Caja I-Shift de 12 marchas.
+1. Creá una cuenta gratis en https://github.com
+2. Creá un repositorio nuevo (botón verde "New", ponele un nombre como `flota-santaniana`)
+3. Subí todos los archivos de la carpeta `flota_web`. Podés hacerlo:
+   - Arrastrando los archivos en la web de GitHub (botón "uploading an existing file")
+   - O con Git si sabés usarlo
 
-TAREAS_VOLVO_D11A = [
-    # Cada 30.000 km - Volvo permite intervalos largos con aceite VDS-3/VDS-4
-    ("Aceite de motor (Volvo VDS-4)",       30000, "Lubricación"),
-    ("Filtro de aceite",                    30000, "Filtros"),
-    ("Filtro primario de combustible",      30000, "Filtros"),
-    ("Filtro racor (separador agua)",       30000, "Filtros"),
-    ("Filtro de aire",                      30000, "Filtros"),
-    ("Engrase general",                     30000, "Lubricación"),
+   **Importante**: NO subas el archivo `flota_santaniana.db` (la base de datos).
+   En la nube se crea una nueva. Tampoco subas el Excel.
 
-    # Cada 60.000 km
-    ("Filtro de cabina",                    60000, "Filtros"),
-    ("Filtro secador de aire",              60000, "Sistema de aire"),
-    ("Líquido de frenos",                   60000, "Frenos"),
+### Paso 3: Crear el servicio en Render
 
-    # Cada 120.000 km
-    ("Aceite y filtro de diferencial",      120000, "Transmisión"),
-    ("Aceite caja I-Shift AT2612D",         120000, "Transmisión"),
-    ("Calibración de válvulas",             120000, "Motor"),
-    ("Inspección freno motor VEB",          120000, "Frenos"),
-]
+1. Creá una cuenta gratis en https://render.com (podés entrar con tu cuenta de GitHub)
+2. Tocá "New +" → "Web Service"
+3. Conectá tu repositorio de GitHub (`flota-santaniana`)
+4. Completá la configuración:
+   - **Name**: `flota-santaniana` (o el que quieras)
+   - **Region**: la más cercana (por ejemplo, Ohio para Sudamérica funciona bien)
+   - **Branch**: `main`
+   - **Runtime**: `Python 3`
+   - **Build Command**: `pip install -r requirements-nube.txt`
+   - **Start Command**: `gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120`
+   - **Instance Type**: Free (gratis) para empezar
 
-PLAN_VOLVO_B430R = {
-    "nombre": "Volvo B430R / D11A 430 HP",
-    "descripcion": "Plan para chasis Volvo B430R 6x2/8x2 con motor D11A de 10,8 L, 430 HP. Caja I-Shift 12 marchas.",
-    "tareas": TAREAS_VOLVO_D11A,
-}
+5. En "Environment Variables" (variables de entorno) agregá:
+   - `SECRET_KEY` = (una clave larga al azar, ej: `santaniana-clave-secreta-2026-xyz789`)
+   - `MODO_SERVIDOR` = `1`
 
-PLAN_VOLVO_B420R = {
-    "nombre": "Volvo B420R / D11A 410 HP",
-    "descripcion": "Plan para chasis Volvo B420R 6x2/8x2 con motor D11A Euro V de 410 HP, 1.989 Nm.",
-    "tareas": TAREAS_VOLVO_D11A,
-}
+6. Tocá "Create Web Service" y esperá unos minutos.
 
-# ──────────────────────────────────────────────────────────────────────────
-# OTROS - Volkswagen Senior, Agrale Volare, Hyundai
-# ──────────────────────────────────────────────────────────────────────────
+7. Cuando termine, Render te da una dirección como:
+   ```
+   https://flota-santaniana.onrender.com
+   ```
+   Esa es la dirección que comparten todos. Cada uno entra con su usuario.
 
-PLAN_VW_SENIOR = {
-    "nombre": "Volkswagen 9.150 / 9.160 OD (Senior)",
-    "descripcion": "Plan para minibuses VW carrozados como Senior. Motor MWM 4.12 TCA Euro III.",
-    "tareas": [
-        ("Aceite de motor",                     15000, "Lubricación"),
-        ("Filtro de aceite",                    15000, "Filtros"),
-        ("Filtro de combustible",               15000, "Filtros"),
-        ("Filtro de aire",                      30000, "Filtros"),
-        ("Filtro de cabina",                    30000, "Filtros"),
-        ("Líquido de frenos",                   60000, "Frenos"),
-        ("Aceite caja de cambios",              80000, "Transmisión"),
-        ("Aceite diferencial",                  80000, "Transmisión"),
-        ("Engrase general",                     15000, "Lubricación"),
-    ],
-}
+### Paso 4: Configurar los usuarios
 
-PLAN_AGRALE_VOLARE = {
-    "nombre": "Agrale Volare W / WL",
-    "descripcion": "Plan para microbuses Agrale Volare W/WL/W9. Motor Cummins ISF 3.8 Euro V.",
-    "tareas": [
-        ("Aceite de motor",                     15000, "Lubricación"),
-        ("Filtro de aceite",                    15000, "Filtros"),
-        ("Filtro de combustible",               15000, "Filtros"),
-        ("Filtro de aire",                      30000, "Filtros"),
-        ("Filtro de cabina",                    30000, "Filtros"),
-        ("Filtro AdBlue/SCR",                   60000, "Emisiones"),
-        ("Líquido de frenos",                   60000, "Frenos"),
-        ("Aceite caja de cambios",              80000, "Transmisión"),
-        ("Aceite diferencial",                  80000, "Transmisión"),
-    ],
-}
+1. Entrá a la dirección que te dio Render.
+2. Iniciá sesión con `admin` / `santaniana2026`.
+3. **Cambiá la contraseña del admin** (ícono de usuarios arriba a la derecha del menú).
+4. Creá los usuarios de las otras personas con su rol correspondiente.
 
-PLAN_HYUNDAI_H350 = {
-    "nombre": "Hyundai H350 / H1 (minibús)",
-    "descripcion": "Plan para minibuses Hyundai H350 (motor D4CB 2.5 CRDi) y H1 (D4CB 2.5).",
-    "tareas": [
-        ("Aceite de motor (5W-30 ACEA C3)",     15000, "Lubricación"),
-        ("Filtro de aceite",                    15000, "Filtros"),
-        ("Filtro de combustible",               20000, "Filtros"),
-        ("Filtro de aire",                      30000, "Filtros"),
-        ("Filtro de cabina",                    30000, "Filtros"),
-        ("Líquido de frenos",                   40000, "Frenos"),
-        ("Aceite caja de cambios",              60000, "Transmisión"),
-        ("Correa de distribución",              90000, "Motor"),
-    ],
-}
+### Paso 5: Cargar la flota
 
+La base de datos en la nube arranca vacía. Para cargar los 89 vehículos:
+- **Opción simple**: cargalos a mano desde la pantalla Vehículos (son varios pero
+  queda más controlado).
+- **Opción técnica**: si sabés usar la consola de Render, podés correr
+  `python flota_seed.py` con el Excel subido. Pedí ayuda para esto si lo necesitás.
 
-PLANES_PREDEFINIDOS = [
-    PLAN_SCANIA_K310, PLAN_SCANIA_K340, PLAN_SCANIA_K360,
-    PLAN_SCANIA_K380, PLAN_SCANIA_K410, PLAN_SCANIA_K420,
-    PLAN_SCANIA_K124,
-    PLAN_MB_O500RS, PLAN_MB_O500RSD_360, PLAN_MB_O500RSD_410, PLAN_MB_O500RSD_422,
-    PLAN_MB_SPRINTER,
-    PLAN_VOLVO_B430R, PLAN_VOLVO_B420R,
-    PLAN_VW_SENIOR, PLAN_AGRALE_VOLARE, PLAN_HYUNDAI_H350,
-]
+---
 
+## ⚠️ Cosas importantes sobre el plan gratis de Render
 
-def cargar_plan(plan_def):
-    """Carga un plan en la base de datos. Si ya existe, no hace nada."""
-    conn = get_connection()
-    existe = conn.execute(
-        "SELECT id FROM planes_mantenimiento WHERE nombre=?", (plan_def["nombre"],)
-    ).fetchone()
-    conn.close()
-    if existe:
-        return False, existe["id"]
+1. **La app se "duerme" tras 15 minutos sin uso.** La primera vez que entrás
+   después de un rato, tarda ~30 segundos en despertar. Es normal en el plan gratis.
+   Si molesta, el plan pago (USD 7/mes) la mantiene siempre despierta.
 
-    ok, plan_id = crear_plan(plan_def["nombre"], plan_def["descripcion"])
-    if not ok:
-        return False, plan_id
+2. **La base de datos en el plan gratis se puede borrar** cuando el servicio se
+   reinicia. Para uso real conviene:
+   - Usar un disco persistente (Render lo ofrece en plan pago), o
+   - Migrar a PostgreSQL (Render tiene una base gratis que NO se borra).
 
-    for tarea, intervalo, categoria in plan_def["tareas"]:
-        agregar_tarea(plan_id, tarea, intervalo, categoria)
+   **Para 2-3 personas con datos importantes, recomiendo el PostgreSQL gratis de
+   Render.** Avisame y te preparo esa versión (es un cambio menor en el código).
 
-    return True, plan_id
+3. **Hacé backups.** Bajá la base de datos de vez en cuando para no perder datos.
 
+---
 
-def cargar_planes_default():
-    """Carga todos los planes predefinidos + sus configs de neumáticos."""
-    from database import crear_config_neumaticos
+## Resumen de costos
 
-    print("Cargando planes de mantenimiento predefinidos...")
+| Opción | Costo | Acceso | Datos seguros |
+|--------|-------|--------|---------------|
+| Red local | Gratis | Solo en la oficina | Sí (en tu PC) |
+| Render gratis | Gratis | Desde cualquier lado | Riesgo (se puede borrar) |
+| Render + PostgreSQL gratis | Gratis | Desde cualquier lado | Sí |
+| Render pago | ~USD 7/mes | Desde cualquier lado, siempre activo | Sí |
 
-    # Config de neumáticos por modelo (datos típicos por chasis)
-    configs_neumaticos = {
-        # Scania serie K
-        "Scania K310 / DC9 310 HP":  {"config": "4x2", "medida": "275/80 R22.5", "vida_km": 120000, "presion_dir": 110, "presion_trac": 120},
-        "Scania K340 / DC11 340 HP": {"config": "6x2", "medida": "295/80 R22.5", "vida_km": 130000, "presion_dir": 110, "presion_trac": 120},
-        "Scania K360 / DC9 360 HP":  {"config": "6x2", "medida": "295/80 R22.5", "vida_km": 130000, "presion_dir": 110, "presion_trac": 120},
-        "Scania K380 / DC12 380 HP": {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 130000, "presion_dir": 115, "presion_trac": 113},
-        "Scania K410 / DC13 410 HP": {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 140000, "presion_dir": 115, "presion_trac": 113},
-        "Scania K420 / DC12 420 HP": {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 140000, "presion_dir": 115, "presion_trac": 113},
-        "Scania K124 / DC11 360 HP": {"config": "4x2", "medida": "295/80 R22.5", "vida_km": 110000, "presion_dir": 110, "presion_trac": 120},
+**Mi recomendación para ustedes**: Render con PostgreSQL gratis. Acceso remoto,
+sin costo, y los datos quedan seguros. Si después crece el uso, pasan al plan pago.
 
-        # Mercedes
-        "Mercedes-Benz O500 RS / OM457 354 HP":   {"config": "4x2", "medida": "295/80 R22.5", "vida_km": 120000, "presion_dir": 110, "presion_trac": 120},
-        "Mercedes-Benz O500 RSD / OM457 360 HP":  {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 130000, "presion_dir": 115, "presion_trac": 113},
-        "Mercedes-Benz O500 RSD / OM457 410 HP":  {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 140000, "presion_dir": 115, "presion_trac": 113},
-        "Mercedes-Benz O500 RSD / OM457 422 HP":  {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 140000, "presion_dir": 115, "presion_trac": 113},
-        "Mercedes-Benz Sprinter / OM651 / OM642": {"config": "4x2", "medida": "225/75 R16", "vida_km": 80000, "presion_dir": 65, "presion_trac": 80},
+---
 
-        # Volvo
-        "Volvo B430R / D11A 430 HP": {"config": "4patas", "medida": "295/80 R22.5", "vida_km": 150000, "presion_dir": 115, "presion_trac": 113},
-        "Volvo B420R / D11A 410 HP": {"config": "6x2", "medida": "295/80 R22.5", "vida_km": 140000, "presion_dir": 115, "presion_trac": 125},
+## ¿Necesitás ayuda?
 
-        # Otros
-        "Volkswagen 9.150 / 9.160 OD (Senior)": {"config": "4x2", "medida": "215/75 R17.5", "vida_km": 100000, "presion_dir": 90, "presion_trac": 100},
-        "Agrale Volare W / WL":                 {"config": "4x2", "medida": "215/75 R17.5", "vida_km": 90000, "presion_dir": 90, "presion_trac": 100},
-        "Hyundai H350 / H1 (minibús)":          {"config": "4x2", "medida": "195/75 R16", "vida_km": 70000, "presion_dir": 50, "presion_trac": 65},
-    }
-
-    for plan in PLANES_PREDEFINIDOS:
-        nuevo, plan_id = cargar_plan(plan)
-        estado = "creado" if nuevo else "ya existía"
-        print(f"  · {plan['nombre']} → {estado} (id={plan_id})")
-
-        # Configurar neumáticos para este plan
-        nc = configs_neumaticos.get(plan["nombre"])
-        if nc:
-            crear_config_neumaticos(
-                plan_id, nc["config"], nc["medida"],
-                nc["presion_dir"], nc["presion_trac"], nc["vida_km"]
-            )
-
-
-if __name__ == "__main__":
-    from database import inicializar_db
-    inicializar_db()
-    cargar_planes_default()
+Si te trabás en algún paso, sacá captura del error y pedí ayuda. Lo más común:
+- El nombre del archivo Excel (acordate que tenía `.xlsx.xlsx`)
+- Las variables de entorno mal escritas
+- Olvidarse de poner `MODO_SERVIDOR=1`

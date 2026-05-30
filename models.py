@@ -1,144 +1,186 @@
-"""
-models.py — Lógica de negocio y KPIs v3.0
-Sistema de Gestión de Flota - La Santaniana
+# Guía paso a paso: Subir La Santaniana a Render con GitHub + PostgreSQL
 
-Dos vistas de KPIs:
-  • POR MES        → toma servicios + costos de un mes concreto (YYYY-MM)
-  • POR PRODUCCIÓN → acumula TODOS los servicios + costos del vehículo
+Esta guía te lleva de la mano para tener el sistema funcionando en internet,
+con base de datos PostgreSQL (los datos NO se borran nunca) y acceso para
+2-3 personas desde cualquier lugar.
 
-Estructura de costos:
-    INGRESO
-    - COSTOS VARIABLES
-    = MARGEN DE CONTRIBUCIÓN
-    - COSTOS FIJOS DIRECTOS
-    - COSTOS FIJOS INDIRECTOS
-    = UTILIDAD OPERATIVA
-"""
+**Tiempo estimado:** 30-40 minutos la primera vez.
 
-from database import (
-    get_connection, obtener_costos, obtener_servicios_vehiculo,
-    obtener_vehiculos, resumen_produccion,
-)
+---
 
+## RESUMEN DE LO QUE VAMOS A HACER
 
-def _sumar_costos(costos):
-    """Separa una lista de costos por tipo y suma."""
-    variables = sum(c["monto"] for c in costos if c["tipo"] == "variable")
-    directos  = sum(c["monto"] for c in costos if c["tipo"] == "fijo_directo")
-    indirectos= sum(c["monto"] for c in costos if c["tipo"] == "fijo_indirecto")
-    return variables, directos, indirectos
+1. Subir el código a GitHub (un repositorio)
+2. Crear una base de datos PostgreSQL en Render (gratis)
+3. Crear el servicio web en Render (gratis)
+4. Conectar todo y entrar al sistema
+5. Cargar la flota y crear los usuarios
 
+---
 
-def _calcular_kpis(servicios, costos):
-    """Calcula KPIs dados una lista de servicios y otra de costos."""
-    if not servicios:
-        return None
+## PARTE 1 — Subir el código a GitHub
 
-    cantidad     = len(servicios)
-    total_km     = sum(s["km"] for s in servicios)
-    total_horas  = sum(s["horas"] for s in servicios)
-    ingreso      = sum(s["ingreso"] for s in servicios)
+### 1.1 Crear cuenta en GitHub
+- Entrá a https://github.com y creá una cuenta gratis (si ya tenés, saltá esto).
 
-    c_var, c_dir, c_ind = _sumar_costos(costos)
+### 1.2 Crear el repositorio
+1. Tocá el botón **"+"** arriba a la derecha → **"New repository"**.
+2. Nombre: `flota-santaniana` (o el que quieras).
+3. Dejalo en **Private** (privado) para que nadie más vea tu código.
+4. NO marques ninguna opción de "Initialize". 
+5. Tocá **"Create repository"**.
 
-    margen_contribucion = ingreso - c_var
-    utilidad_operativa  = margen_contribucion - c_dir - c_ind
+### 1.3 Subir los archivos
+La forma más fácil sin instalar nada:
 
-    def safe_div(a, b):
-        return a / b if b else 0
+1. En la página del repo recién creado, tocá el link **"uploading an existing file"**.
+2. Arrastrá TODOS los archivos de la carpeta `flota_web`:
+   - `app.py`, `database.py`, `db_compat.py`, `models.py`, `pdf_export.py`
+   - `mantenimiento_seed.py`, `flota_seed.py`
+   - `requirements-nube.txt`, `Procfile`, `.gitignore`
+   - La carpeta `static/` (con `app.js`, `style.css`, `logo.png`)
+   - La carpeta `templates/` (con `index.html`, `login.html`)
+   - **El archivo Excel** `FLOTA_SANTANIANA_GENERAL_LS-_HABILITACIONES_V_E_2026_.xlsx.xlsx`
+     (este es importante para cargar la flota después)
+3. Abajo tocá **"Commit changes"**.
 
-    return {
-        # Operativos
-        "cantidad_servicios": cantidad,
-        "total_km": round(total_km, 1),
-        "total_horas": round(total_horas, 1),
-        "km_promedio": round(safe_div(total_km, cantidad), 1),
-        "horas_promedio": round(safe_div(total_horas, cantidad), 1),
-        "ingreso_promedio_servicio": round(safe_div(ingreso, cantidad), 0),
-        # Estructura de costos
-        "ingreso": round(ingreso, 0),
-        "costos_variables": round(c_var, 0),
-        "margen_contribucion": round(margen_contribucion, 0),
-        "costos_fijos_directos": round(c_dir, 0),
-        "costos_fijos_indirectos": round(c_ind, 0),
-        "utilidad_operativa": round(utilidad_operativa, 0),
-        # Ratios
-        "ingreso_por_km": round(safe_div(ingreso, total_km), 0),
-        "ingreso_por_hora": round(safe_div(ingreso, total_horas), 0),
-        "costo_variable_por_km": round(safe_div(c_var, total_km), 0),
-        "margen_pct": round(safe_div(margen_contribucion, ingreso) * 100, 1),
-        "rentabilidad_pct": round(safe_div(utilidad_operativa, ingreso) * 100, 1),
-    }
+> **Nota:** NO subas `flota_santaniana.db` (el `.gitignore` ya lo evita).
+> En la nube se usa PostgreSQL, no ese archivo.
 
+---
 
-def kpis_mes(vehiculo_id, mes):
-    """KPIs de un vehículo en un mes concreto (YYYY-MM)."""
-    servicios = obtener_servicios_vehiculo(vehiculo_id, mes)
-    costos    = obtener_costos(vehiculo_id, mes)
-    return _calcular_kpis(servicios, costos)
+## PARTE 2 — Crear la base de datos PostgreSQL en Render
 
+### 2.1 Crear cuenta en Render
+- Entrá a https://render.com
+- Tocá **"Get Started"** y registrate (lo más fácil: **"Sign in with GitHub"**,
+  así ya queda conectado a tu repositorio).
 
-def kpis_produccion(vehiculo_id):
-    """KPIs acumulados de toda la producción del vehículo."""
-    servicios = obtener_servicios_vehiculo(vehiculo_id)  # todos
-    costos    = obtener_costos(vehiculo_id)              # todos
-    k = _calcular_kpis(servicios, costos)
-    if k:
-        prod = resumen_produccion(vehiculo_id)
-        k["fecha_inicio"] = prod.get("fecha_inicio")
-        k["fecha_fin"] = prod.get("fecha_fin")
-    return k
+### 2.2 Crear la base PostgreSQL
+1. En el panel de Render, tocá **"New +"** → **"Postgres"**.
+2. Completá:
+   - **Name**: `flota-db` (o el que quieras)
+   - **Database**: dejá lo que sugiere
+   - **User**: dejá lo que sugiere
+   - **Region**: elegí **Oregon (US West)** o la más cercana
+   - **Plan**: **Free** (gratis)
+3. Tocá **"Create Database"**.
+4. Esperá 1-2 minutos hasta que diga **"Available"**.
+5. **IMPORTANTE:** Una vez creada, buscá la sección **"Connections"** y copiá
+   el valor de **"Internal Database URL"** (empieza con `postgresql://...`).
+   Lo vas a necesitar en el próximo paso. Guardalo en un bloc de notas.
 
+---
 
-# ── Datos de ejemplo ──────────────────────────────────────────────────────────
+## PARTE 3 — Crear el servicio web
 
-def cargar_datos_ejemplo():
-    """Carga servicios individuales basados en la clase 1, en guaraníes."""
-    from database import (
-        inicializar_db, agregar_vehiculo, agregar_servicio, agregar_costo
-    )
-    import os
+### 3.1 Crear el Web Service
+1. En Render, tocá **"New +"** → **"Web Service"**.
+2. Conectá tu repositorio `flota-santaniana` (si no aparece, tocá
+   "Configure account" para darle permiso a Render de ver tus repos).
+3. Completá la configuración:
+   - **Name**: `flota-santaniana`
+   - **Region**: **la misma que la base de datos** (ej: Oregon)
+   - **Branch**: `main`
+   - **Runtime**: `Python 3`
+   - **Build Command**: 
+     ```
+     pip install -r requirements-nube.txt
+     ```
+   - **Start Command**: 
+     ```
+     gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120
+     ```
+   - **Plan**: **Free** (gratis)
 
-    if os.path.exists("flota_santaniana.db"):
-        os.remove("flota_santaniana.db")
-    inicializar_db()
+### 3.2 Configurar las variables de entorno
+Antes de crear, bajá hasta **"Environment Variables"** y agregá estas tres:
 
-    print("Cargando datos de ejemplo...")
-    agregar_vehiculo("AAA-001", "Mercedes-Benz", "OF 1721", 2018)
+| Key (nombre) | Value (valor) |
+|--------------|---------------|
+| `DATABASE_URL` | (pegá la Internal Database URL que copiaste antes) |
+| `SECRET_KEY` | una clave larga inventada, ej: `santaniana-2026-xyz-clave-secreta-larga` |
+| `MODO_SERVIDOR` | `1` |
 
-    conn = get_connection()
-    vid = conn.execute("SELECT id FROM vehiculos WHERE patente='AAA-001'").fetchone()["id"]
-    conn.close()
+> La `DATABASE_URL` es lo que conecta tu app con la base PostgreSQL.
+> Sin ella, no funciona.
 
-    # 12 servicios en junio 2024 — uno por uno (₲ 7.000.000 c/u, 900 km, 48 hs)
-    import datetime
-    for i in range(12):
-        fecha = (datetime.date(2024, 6, 1) + datetime.timedelta(days=i*2)).isoformat()
-        agregar_servicio(vid, fecha, km=900, horas=48,
-                         ingreso=7_000_000, descripcion=f"Recorrido {i+1}")
-    print("  12 servicios cargados (junio 2024): ₲ 84.000.000")
+### 3.3 Crear
+1. Tocá **"Create Web Service"**.
+2. Render va a instalar todo y arrancar la app. Mirá los logs (tarda 3-5 minutos).
+3. Cuando veas **"Your service is live"**, está listo.
+4. Arriba tenés la dirección, algo como:
+   ```
+   https://flota-santaniana.onrender.com
+   ```
 
-    # Costos del mes 2024-06
-    agregar_costo(vid, "2024-06", "variable", "Combustible",      22_000_000)
-    agregar_costo(vid, "2024-06", "variable", "Neumáticos",        5_700_000)
-    agregar_costo(vid, "2024-06", "variable", "Lubricantes",       3_100_000)
-    agregar_costo(vid, "2024-06", "variable", "Peajes y viáticos", 9_200_000)
-    agregar_costo(vid, "2024-06", "fijo_directo", "Seguro",        3_800_000)
-    agregar_costo(vid, "2024-06", "fijo_directo", "Patente",       2_400_000)
-    agregar_costo(vid, "2024-06", "fijo_indirecto", "Administración",      3_200_000)
-    agregar_costo(vid, "2024-06", "fijo_indirecto", "Servicios generales", 2_500_000)
-    print("  Costos de junio 2024 cargados.")
+---
 
-    k = kpis_mes(vid, "2024-06")
-    print("\nKPIs junio 2024:")
-    print(f"  Ingreso:             ₲ {k['ingreso']:>14,.0f}".replace(",", "."))
-    print(f"  Costos variables:    ₲ {k['costos_variables']:>14,.0f}".replace(",", "."))
-    print(f"  Margen contribución: ₲ {k['margen_contribucion']:>14,.0f}".replace(",", "."))
-    print(f"  Costos fijos dir:    ₲ {k['costos_fijos_directos']:>14,.0f}".replace(",", "."))
-    print(f"  Costos fijos indir:  ₲ {k['costos_fijos_indirectos']:>14,.0f}".replace(",", "."))
-    print(f"  Utilidad operativa:  ₲ {k['utilidad_operativa']:>14,.0f}".replace(",", "."))
-    print(f"  Rentabilidad:        {k['rentabilidad_pct']}%")
+## PARTE 4 — Entrar y configurar
 
+### 4.1 Primer ingreso
+1. Abrí la dirección que te dio Render en el navegador.
+2. Te aparece la pantalla de login.
+3. Entrá con:
+   - Usuario: `admin`
+   - Contraseña: `santaniana2026`
 
-if __name__ == "__main__":
-    cargar_datos_ejemplo()
+> Si tarda ~30 segundos la primera vez, es normal (el plan gratis "duerme"
+> la app cuando no se usa).
+
+### 4.2 Cambiar la contraseña del admin
+1. En el menú lateral, tocá el ícono de **usuarios** (arriba a la derecha del menú).
+2. Buscá el usuario `admin` y tocá la **llave** (cambiar contraseña).
+3. Poné una contraseña nueva y segura.
+
+### 4.3 Cargar la flota completa
+1. Andá al **Dashboard**.
+2. Como está vacío, vas a ver un botón **"Cargar flota completa desde Excel"**.
+3. Tocalo y esperá unos segundos.
+4. Listo: 89 vehículos + 333 documentos cargados automáticamente.
+
+### 4.4 Crear los usuarios de las otras personas
+1. Volvé a la pantalla de **usuarios**.
+2. Creá un usuario para cada persona, eligiendo su rol:
+   - **Administrador**: acceso total (vos)
+   - **Operador**: el del taller que carga las OT y mantenimientos
+   - **Solo consulta**: la jefa/gerencia que solo quiere ver reportes
+
+---
+
+## LISTO ✓
+
+Ya tenés el sistema en internet. Compartí la dirección
+(`https://flota-santaniana.onrender.com`) con tu equipo y cada uno entra con
+su usuario.
+
+---
+
+## PREGUNTAS FRECUENTES
+
+**¿Los datos se borran?**
+No. Al usar PostgreSQL, los datos quedan guardados permanentemente, aunque la
+app se reinicie o se actualice.
+
+**¿Por qué tarda al entrar después de un rato?**
+El plan gratis de Render "duerme" la app tras 15 minutos sin uso. La primera
+visita la despierta (~30 seg). Si querés que esté siempre activa, el plan
+pago de Render cuesta unos USD 7/mes.
+
+**¿Cómo actualizo el sistema si hacemos cambios?**
+Subís los archivos nuevos a GitHub y Render se actualiza solo (detecta el
+cambio y vuelve a desplegar). Los datos NO se pierden.
+
+**¿Cómo hago backup de los datos?**
+En Render, la base PostgreSQL tiene opción de backups. En el plan gratis
+podés exportar manualmente. Te puedo ayudar con esto cuando lo necesites.
+
+**Subí el código pero Render da error.**
+Mirá los "Logs" en Render, copiá el error y pedí ayuda. Lo más común:
+- Olvidarse de poner la variable `DATABASE_URL`
+- Olvidarse de `MODO_SERVIDOR=1`
+- Que la base de datos y el web service estén en regiones distintas
+
+**¿Puedo seguir usándolo en mi PC sin internet?**
+Sí. En tu PC, sin la variable DATABASE_URL, sigue usando SQLite y se abre como
+ventana de escritorio con `python app.py`. Los dos modos conviven.
