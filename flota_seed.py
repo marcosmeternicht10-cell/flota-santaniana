@@ -85,10 +85,13 @@ def normalizar_marca(marca):
 
 
 def cargar_flota_desde_xlsx(ruta_xlsx, verbose=True):
-    """Carga todos los vehículos de la hoja 'GENERAL 2026' al sistema."""
+    """Carga todos los vehículos de la hoja 'GENERAL 2026' al sistema.
+    Optimizado: usa una sola conexión y evita re-consultas (rápido en la nube)."""
     if not os.path.exists(ruta_xlsx):
         print(f"❌ No se encontró el archivo: {ruta_xlsx}")
         return
+
+    from db_compat import get_connection
 
     df = pd.read_excel(ruta_xlsx, sheet_name="GENERAL 2026", header=1)
     cols = ["TIPO ", "MARCA", "CARROCERIA", "CHASIS", "AÑO", "PATENTE ", "COCHE ", "EJES", "ASIENTOS"]
@@ -97,13 +100,17 @@ def cargar_flota_desde_xlsx(ruta_xlsx, verbose=True):
                   "patente", "coche", "ejes", "asientos"]
     df = df.dropna(subset=["patente"])
 
-    # Patentes existentes
+    # Patentes existentes y planes (una sola consulta cada uno)
     existentes = {v["patente"] for v in obtener_vehiculos(solo_activos=False)}
     planes = {p["nombre"]: p["id"] for p in obtener_planes()}
 
     creados = 0
     saltados = 0
     sin_plan = []
+
+    # Una sola conexión para toda la carga
+    conn = get_connection()
+    cur = conn.cursor()
 
     for _, row in df.iterrows():
         patente = str(row["patente"]).strip().replace(" ", "").upper()
@@ -120,31 +127,39 @@ def cargar_flota_desde_xlsx(ruta_xlsx, verbose=True):
         ejes = int(row["ejes"]) if pd.notna(row["ejes"]) else 0
         tipo_v = str(row["tipo"]).strip().title() if pd.notna(row["tipo"]) else ""
 
-        ok, msg = agregar_vehiculo(
-            patente, marca, modelo_carroceria, año,
-            chasis=chasis, n_interno=n_interno,
-            asientos=asientos, ejes=ejes, tipo=tipo_v
-        )
-        if not ok:
-            print(f"  ✗ {patente}: {msg}")
+        # Insertar vehículo y obtener su id en el acto (sin re-consultar)
+        try:
+            cur.execute(
+                """INSERT INTO vehiculos
+                   (patente, marca, modelo, año, chasis, n_interno, asientos, ejes, tipo)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (patente, marca, modelo_carroceria, año, chasis,
+                 str(n_interno), asientos, ejes, tipo_v)
+            )
+            vid = cur.lastrowid
+        except Exception as e:
+            print(f"  ✗ {patente}: {e}")
             continue
 
-        v = next((x for x in obtener_vehiculos(solo_activos=False)
-                  if x["patente"] == patente), None)
-        if not v:
-            continue
+        existentes.add(patente)  # para no duplicar en la misma corrida
 
+        # Asignar plan en la misma conexión
         nombre_plan = detectar_plan(row["marca"], row["carroceria"], año, row["tipo"])
-        if nombre_plan and nombre_plan in planes:
-            asignar_plan(v["id"], planes[nombre_plan], km_inicial=0)
-            if verbose:
-                print(f"  ✓ {patente} → {marca} {modelo_carroceria} ({nombre_plan})")
+        if nombre_plan and nombre_plan in planes and vid:
+            cur.execute(
+                """INSERT INTO vehiculo_plan (vehiculo_id, plan_id, km_inicial)
+                   VALUES (?,?,?)
+                   ON CONFLICT(vehiculo_id) DO UPDATE SET
+                       plan_id=excluded.plan_id, km_inicial=excluded.km_inicial""",
+                (vid, planes[nombre_plan], 0)
+            )
         else:
             sin_plan.append(patente)
-            if verbose:
-                print(f"  ⚠ {patente} → {marca} (sin plan asignado)")
 
         creados += 1
+
+    conn.commit()
+    conn.close()
 
     print()
     print(f"═══ RESUMEN ═══")
@@ -184,6 +199,7 @@ def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
     print("=" * 60)
 
     from datetime import date
+    from db_compat import get_connection
 
     # Fechas fijas según jefa
     FECHA_MUN = "2026-06-30"          # Habilitación Municipal (toda la flota)
@@ -193,6 +209,18 @@ def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
     # Mapa patente → id de vehículo + año
     vehiculos = obtener_vehiculos(solo_activos=False)
     veh_por_patente = {v["patente"]: v for v in vehiculos}
+
+    # Una sola conexión para TODOS los documentos (rápido en la nube)
+    conn = get_connection()
+    cur = conn.cursor()
+
+    def _insert_doc(vid, tipo, nombre, fecha, proveedor="", obs=""):
+        cur.execute("""
+            INSERT INTO documentos
+                (vehiculo_id, tipo, nombre, fecha_emision, fecha_vencimiento,
+                 proveedor, costo, observaciones)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, (vid, tipo, nombre, None, fecha, proveedor, 0, obs))
 
     # ─── 1. SEGUROS desde GENERAL 2026 ─────────────────────────────────
     df = pd.read_excel(ruta_xlsx, sheet_name="GENERAL 2026", header=1)
@@ -208,26 +236,20 @@ def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
             continue
         vid = veh["id"]
 
-        # Seguro Pasajeros
         if pd.notna(row['venc_pas']):
             try:
                 fecha = pd.to_datetime(row['venc_pas']).strftime('%Y-%m-%d')
                 proveedor = str(row['seg_pas']).strip() if pd.notna(row['seg_pas']) else ''
-                agregar_documento(vehiculo_id=vid, tipo='Seguro',
-                    nombre='Seguro Pasajeros',
-                    fecha_vencimiento=fecha, proveedor=proveedor)
+                _insert_doc(vid, 'Seguro', 'Seguro Pasajeros', fecha, proveedor)
                 seg_creados += 1
             except Exception as e:
                 if verbose: print(f"  ✗ {patente} seg pasajeros: {e}")
 
-        # Seguro RC
         if pd.notna(row['venc_rc']):
             try:
                 fecha = pd.to_datetime(row['venc_rc']).strftime('%Y-%m-%d')
                 proveedor = str(row['seg_rc']).strip() if pd.notna(row['seg_rc']) else ''
-                agregar_documento(vehiculo_id=vid, tipo='Seguro',
-                    nombre='Responsabilidad Civil (RC)',
-                    fecha_vencimiento=fecha, proveedor=proveedor)
+                _insert_doc(vid, 'Seguro', 'Responsabilidad Civil (RC)', fecha, proveedor)
                 seg_creados += 1
             except Exception as e:
                 if verbose: print(f"  ✗ {patente} seg RC: {e}")
@@ -238,21 +260,14 @@ def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
     hab_mun = 0
     for v in vehiculos:
         try:
-            agregar_documento(
-                vehiculo_id=v["id"], tipo='Habilitación Municipal',
-                nombre='Habilitación Municipal 2026',
-                fecha_vencimiento=FECHA_MUN,
-                proveedor='Municipalidad',
-                observaciones='Vence 30/06/2026 (toda la flota)'
-            )
+            _insert_doc(v["id"], 'Habilitación Municipal', 'Habilitación Municipal 2026',
+                        FECHA_MUN, 'Municipalidad', 'Vence 30/06/2026 (toda la flota)')
             hab_mun += 1
         except Exception as e:
             if verbose: print(f"  ✗ {v['patente']} hab municipal: {e}")
     print(f"  ✓ Habilitaciones Municipales cargadas: {hab_mun}")
 
     # ─── 3. HABILITACIÓN DINATRAN ──────────────────────────────────────
-    # Todos vencen el 21/11/2026, pero los > 10 años están en ciclo de
-    # renovación cada 6 meses (lo anotamos en observaciones).
     hab_din = 0
     for v in vehiculos:
         try:
@@ -262,17 +277,16 @@ def cargar_documentos_desde_xlsx(ruta_xlsx, verbose=True):
                 obs = f"Vehículo > 10 años ({año}). Renovación cada 6 meses. Última: 21/05/2026 → vence 21/11/2026."
             else:
                 obs = f"Vehículo ≤ 10 años ({año}). Vigencia anual."
-            agregar_documento(
-                vehiculo_id=v["id"], tipo='Habilitación DINATRAN',
-                nombre='Habilitación DINATRAN',
-                fecha_vencimiento=FECHA_DINATRAN,
-                proveedor='DINATRAN',
-                observaciones=obs
-            )
+            _insert_doc(v["id"], 'Habilitación DINATRAN', 'Habilitación DINATRAN',
+                        FECHA_DINATRAN, 'DINATRAN', obs)
             hab_din += 1
         except Exception as e:
             if verbose: print(f"  ✗ {v['patente']} hab DINATRAN: {e}")
     print(f"  ✓ Habilitaciones DINATRAN cargadas: {hab_din}")
+
+    # Guardar todo de una sola vez
+    conn.commit()
+    conn.close()
 
     print()
     print(f"═══ RESUMEN DOCUMENTOS ═══")

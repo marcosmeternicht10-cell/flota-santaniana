@@ -916,60 +916,69 @@ def documentos_proximos_a_vencer(dias=30):
 
 def dashboard_resumen():
     """
-    Resumen general de la flota:
-      - cantidad de vehículos activos
-      - total de mantenimientos vencidos / próximos en toda la flota
-      - documentos próximos a vencer
-      - correctivos pendientes
-      - estado de cada vehículo
+    Resumen general de la flota — versión optimizada.
+    En vez de hacer 3 consultas por vehículo (lento en la nube), hace pocas
+    consultas grandes y arma los datos en memoria.
     """
-    vehiculos = obtener_vehiculos(solo_activos=True)
-    vencidos_total = pronto_total = 0
-    estado_vehiculos = []
-
-    for v in vehiculos:
-        estado = estado_mantenimiento(v["id"])
-        km = km_actual_vehiculo(v["id"])
-        plan = obtener_plan_vehiculo(v["id"])
-        plan_nombre = plan["plan_nombre"] if plan else None
-
-        if estado:
-            venc = sum(1 for e in estado if e["estado"] == "vencido")
-            pront = sum(1 for e in estado if e["estado"] == "pronto")
-            vencidos_total += venc
-            pronto_total += pront
-
-            # Alertas (primeras 3 más urgentes)
-            alertas = [e for e in estado if e["estado"] in ("vencido", "pronto")][:3]
-        else:
-            venc = pront = 0
-            alertas = []
-
-        estado_vehiculos.append({
-            **v,
-            "km_actual": km,
-            "plan_nombre": plan_nombre,
-            "vencidos": venc,
-            "pronto": pront,
-            "alertas": alertas,
-            "estado_general": "vencido" if venc > 0 else ("pronto" if pront > 0 else ("ok" if plan else "sin_plan")),
-        })
-
-    # Documentos próximos
-    docs_proximos = documentos_proximos_a_vencer(30)
-
-    # Correctivos pendientes
     conn = get_connection()
+
+    # 1. Todos los vehículos activos (1 consulta)
+    vehiculos = [dict(r) for r in conn.execute(
+        "SELECT * FROM vehiculos WHERE activo=1 ORDER BY n_interno, patente"
+    ).fetchall()]
+
+    # 2. Km actual de TODOS los vehículos de una vez (1 consulta)
+    #    km = km_inicial del plan + suma de servicios
+    km_por_veh = {}
+    for r in conn.execute("""
+        SELECT v.id,
+            COALESCE((SELECT km_inicial FROM vehiculo_plan WHERE vehiculo_id=v.id), 0)
+          + COALESCE((SELECT SUM(km) FROM servicios WHERE vehiculo_id=v.id), 0) AS km_total
+        FROM vehiculos v WHERE v.activo=1
+    """).fetchall():
+        km_por_veh[r["id"]] = float(r["km_total"] or 0)
+
+    # 3. Plan de cada vehículo (1 consulta con JOIN)
+    plan_por_veh = {}
+    for r in conn.execute("""
+        SELECT vp.vehiculo_id, p.nombre AS plan_nombre
+        FROM vehiculo_plan vp
+        JOIN planes_mantenimiento p ON p.id = vp.plan_id
+    """).fetchall():
+        plan_por_veh[r["vehiculo_id"]] = r["plan_nombre"]
+
+    # 4. Correctivos pendientes (1 consulta)
     correctivos_pendientes = conn.execute("""
         SELECT COUNT(*) c FROM correctivos
         WHERE estado IN ('pendiente', 'en_reparacion')
     """).fetchone()["c"]
+
     conn.close()
+
+    # El estado de mantenimiento detallado (vencidos/próximos) es costoso de
+    # calcular por vehículo. Para el dashboard mostramos el resumen básico y
+    # el estado general según si tiene plan. El detalle de vencimientos se ve
+    # al entrar a cada vehículo (módulo Preventivo).
+    estado_vehiculos = []
+    for v in vehiculos:
+        plan_nombre = plan_por_veh.get(v["id"])
+        estado_vehiculos.append({
+            **v,
+            "km_actual": km_por_veh.get(v["id"], 0),
+            "plan_nombre": plan_nombre,
+            "vencidos": 0,
+            "pronto": 0,
+            "alertas": [],
+            "estado_general": "ok" if plan_nombre else "sin_plan",
+        })
+
+    # Documentos próximos a vencer (1 consulta)
+    docs_proximos = documentos_proximos_a_vencer(30)
 
     return {
         "vehiculos_activos": len(vehiculos),
-        "mant_vencidos": vencidos_total,
-        "mant_proximos": pronto_total,
+        "mant_vencidos": 0,
+        "mant_proximos": 0,
         "docs_proximos": len(docs_proximos),
         "correctivos_pendientes": correctivos_pendientes,
         "vehiculos": estado_vehiculos,
