@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestión de Flota — La Santaniana</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/style.css?v=100">
+</head>
+<body>
+  <!-- Botón hamburguesa (solo visible en celular) -->
+  <button class="menu-toggle" id="menuToggle" onclick="toggleSidebar()" aria-label="Menú">
+    <i class="ti ti-menu-2"></i>
+  </button>
+  <!-- Fondo oscuro cuando el menú está abierto en celular -->
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="cerrarSidebar()"></div>
+
+  <div class="app">
+
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-logo"><img src="/static/logo.png" alt="La Santaniana"></div>
+        <div>
+          <div class="brand-name">La Santaniana</div>
+          <div class="brand-sub">Gestión de Flota</div>
+        </div>
+      </div>
+
+      <div class="coche-card" id="cocheBox">
+        <div class="coche-label">Coche seleccionado</div>
+        <div class="coche-name" id="cocheName">Ninguno</div>
+        <div class="coche-info" id="cocheInfo">Hacé clic en un vehículo</div>
+      </div>
+
+      <nav class="nav">
+        <div class="nav-section">General</div>
+        <button class="nav-item active" data-sec="dashboard">
+          <i class="ti ti-layout-dashboard"></i> Dashboard
+        </button>
+        <button class="nav-item" data-sec="vehiculos">
+          <i class="ti ti-bus"></i> Vehículos
+        </button>
+        <button class="nav-item" data-sec="documentos">
+          <i class="ti ti-file-text"></i> Documentos
+        </button>
+
+        <div class="nav-section">Vehículo</div>
+        <button class="nav-item" data-sec="servicios" data-needs-coche>
+          <i class="ti ti-clipboard-list"></i> Servicios
+        </button>
+        <button class="nav-item" data-sec="costos" data-needs-coche>
+          <i class="ti ti-coin"></i> Costos
+        </button>
+        <button class="nav-item" data-sec="kpis" data-needs-coche>
+          <i class="ti ti-chart-bar"></i> KPIs
+        </button>
+
+        <div class="nav-section">Taller</div>
+        <button class="nav-item" data-sec="ots">
+          <i class="ti ti-clipboard-check"></i> Órdenes de Trabajo
+        </button>
+        <button class="nav-item" data-sec="mantenimiento" data-needs-coche>
+          <i class="ti ti-tool"></i> Preventivo
+        </button>
+        <button class="nav-item" data-sec="neumaticos" data-needs-coche>
+          <i class="ti ti-disc"></i> Neumáticos
+        </button>
+        <button class="nav-item" data-sec="correctivos">
+          <i class="ti ti-alert-triangle"></i> Correctivos
+        </button>
+        <button class="nav-item" data-sec="planes">
+          <i class="ti ti-clipboard-text"></i> Planes
+        </button>
+        <button class="nav-item" data-sec="inventario_neu">
+          <i class="ti ti-box"></i> Inventario neumáticos
+        </button>
+
+        <div class="nav-section">Reportes</div>
+        <button class="nav-item" data-sec="gerencial">
+          <i class="ti ti-report"></i> Reporte gerencial
+        </button>
+      </nav>
+
+      <div class="user-box">
+        <div class="user-box-top">
+          <div class="user-avatar">{{ usuario[0]|upper if usuario else 'U' }}</div>
+          <div class="user-details">
+            <div class="user-name" id="user-name">{{ usuario }}</div>
+            <div class="user-role-badge {{ rol }}" id="user-role">
+              {% if rol == 'admin' %}Administración{% elif rol == 'chofer' %}Chofer{% else %}Taller{% endif %}
+            </div>
+          </div>
+        </div>
+        <div class="user-actions">
+          {% if rol == 'admin' %}
+          <button class="user-btn" onclick="renderUsuarios()" title="Gestionar usuarios"><i class="ti ti-users"></i><span class="btn-txt">Usuarios</span></button>
+          {% endif %}
+          <button class="user-btn logout" onclick="cerrarSesion()" title="Cerrar sesión"><i class="ti ti-logout"></i><span class="btn-txt">Salir</span></button>
+        </div>
+      </div>
+      <div class="version">v9.5 · Paraguay Gs.</div>
+    </aside>
+
+    <main class="main">
+      <div id="content"></div>
+      <div class="statusbar" id="statusbar">
+        <i class="ti ti-info-circle" style="vertical-align:-2px"></i>
+        Bienvenido al sistema de gestión
+      </div>
+    </main>
+
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    window.USUARIO_ROL = "{{ rol }}";
+    window.USUARIO_NOMBRE = "{{ usuario }}";
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="/static/app.js?v=100"></script>
+</body>
+</html>
