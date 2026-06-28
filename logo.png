@@ -63,7 +63,7 @@ body {
   background: var(--bg); -webkit-font-smoothing: antialiased;
 }
 
-.app { display: flex; min-height: 100vh; }
+.app { display: flex; height: 100vh; overflow: hidden; }
 
 /* ────────────────────────────────────────────────────────────────────────
    SIDEBAR
@@ -71,8 +71,13 @@ body {
 .sidebar {
   width: 240px; background: var(--sb-bg); color: white;
   display: flex; flex-direction: column; flex-shrink: 0;
-  position: sticky; top: 0; height: 100vh;
+  height: 100vh; overflow-y: auto; overflow-x: hidden;
 }
+/* Scrollbar fina y discreta para la barra lateral */
+.sidebar::-webkit-scrollbar { width: 7px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+.sidebar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
 .brand {
   padding: 22px 20px 16px; display: flex; align-items: center; gap: 12px;
   border-bottom: 1px solid rgba(255,255,255,0.06);
@@ -135,16 +140,20 @@ body {
 }
 
 .version {
-  margin-top: auto; padding: 14px 20px;
+  padding: 10px 20px 14px;
   font-size: 11px; color: var(--sb-text-muted);
-  border-top: 1px solid rgba(255,255,255,0.06);
 }
 
 /* ────────────────────────────────────────────────────────────────────────
    MAIN
    ──────────────────────────────────────────────────────────────────────── */
-.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
 #content { flex: 1; overflow-y: auto; padding-bottom: 40px; }
+/* Scrollbar fina para el contenido */
+#content::-webkit-scrollbar { width: 9px; }
+#content::-webkit-scrollbar-track { background: transparent; }
+#content::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); border-radius: 5px; }
+#content::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.30); }
 .statusbar {
   padding: 8px 28px; background: var(--surface);
   color: var(--muted); font-size: 12px;
@@ -515,9 +524,96 @@ td.center, th.center { text-align: center; }
    RESPONSIVE
    ──────────────────────────────────────────────────────────────────────── */
 @media (max-width: 1000px) {
-  .sidebar { width: 200px; }
+  .sidebar { width: 210px; }
   .charts-row { grid-template-columns: 1fr; }
   .section, .page-header { padding-left: 20px; padding-right: 20px; }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   CELULAR — interfaz adaptada (responsive)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Botón hamburguesa y overlay: ocultos en PC */
+.menu-toggle { display: none; }
+.sidebar-overlay { display: none; }
+
+@media (max-width: 768px) {
+  /* El menú lateral se oculta y se desliza desde la izquierda */
+  .sidebar {
+    position: fixed; top: 0; left: 0; z-index: 200;
+    width: 270px; max-width: 85vw; height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.28s ease;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.3);
+  }
+  .sidebar.abierto { transform: translateX(0); }
+
+  /* Botón hamburguesa flotante arriba a la izquierda */
+  .menu-toggle {
+    display: grid; place-items: center;
+    position: fixed; top: 12px; left: 12px; z-index: 150;
+    width: 46px; height: 46px; border-radius: 11px; border: none;
+    background: var(--sb-bg); color: white; font-size: 24px;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.25); cursor: pointer;
+  }
+  .menu-toggle:active { transform: scale(0.95); }
+
+  /* Fondo oscuro detrás del menú abierto */
+  .sidebar-overlay.visible {
+    display: block; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5); z-index: 199;
+  }
+
+  /* El contenido ocupa todo el ancho */
+  .main { width: 100%; height: 100vh; }
+
+  /* Dejar espacio arriba para el botón hamburguesa */
+  .page-header { padding: 64px 16px 18px; }
+  .page-header h1 { font-size: 19px; }
+  .page-header p { font-size: 12.5px; }
+  .section { padding: 16px; }
+
+  /* Métricas del dashboard: una o dos por fila */
+  .metrics-row, .metrics { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+  .metric { padding: 14px !important; }
+  .metric-value { font-size: 22px !important; }
+
+  /* Tablas: scroll horizontal para no romper el diseño */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { min-width: 540px; }
+
+  /* Formularios: campos a ancho completo, apilados */
+  .form-row { flex-direction: column; align-items: stretch; gap: 12px; }
+  .field { width: 100%; }
+  .field input, .field select, .field textarea { width: 100% !important; }
+
+  /* Botones más cómodos para tocar */
+  .btn { padding: 11px 16px; }
+  .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .toolbar .btn, .toolbar input, .toolbar select { width: 100%; }
+
+  /* Modales ocupan casi toda la pantalla */
+  #modal-ot-detalle > div,
+  .modal > div { max-width: 96vw !important; max-height: 94vh !important; }
+
+  /* Cards y secciones con menos padding */
+  .card-body { padding: 14px; }
+  .section-title { font-size: 14px; }
+
+  /* El cuadro de coche seleccionado y usuario, más compactos */
+  .coche-card { margin: 10px 12px; }
+
+  /* Charts a ancho completo */
+  .charts-row { grid-template-columns: 1fr; }
+
+  /* Lista de neumáticos: 1 columna en celular */
+  .tire-list { grid-template-columns: 1fr !important; }
+}
+
+/* Celulares muy chicos */
+@media (max-width: 400px) {
+  .metrics-row, .metrics { grid-template-columns: 1fr !important; }
+  .page-header h1 { font-size: 17px; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -700,41 +796,46 @@ td.center, th.center { text-align: center; }
    USUARIO EN SIDEBAR + LOGOUT
    ════════════════════════════════════════════════════════════════════════ */
 .user-box {
-  margin: 8px 12px 4px;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.06);
-  display: flex; align-items: center; gap: 10px;
+  margin: auto 12px 6px;
+  padding: 14px;
+  border-radius: 14px;
+  background: #141B2D;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.user-box-top {
+  display: flex; align-items: center; gap: 11px; margin-bottom: 12px;
 }
 .user-avatar {
-  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+  width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
   background: linear-gradient(135deg, var(--brand-blue) 0%, var(--brand-red) 100%);
   display: grid; place-items: center; color: white;
-  font-size: 16px; font-weight: 700; text-transform: uppercase;
+  font-size: 17px; font-weight: 700; text-transform: uppercase;
 }
 .user-details { min-width: 0; flex: 1; }
 .user-name {
-  font-size: 13px; font-weight: 600; color: var(--sb-text-active);
+  font-size: 13.5px; font-weight: 600; color: #ffffff;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  text-transform: capitalize; line-height: 1.3;
+  text-transform: capitalize; line-height: 1.3; margin-bottom: 4px;
 }
 .user-role-badge {
-  display: inline-block; margin-top: 3px;
-  font-size: 10px; font-weight: 700; letter-spacing: 0.3px;
-  padding: 2px 8px; border-radius: 6px; text-transform: uppercase;
+  display: inline-block;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.4px;
+  padding: 3px 9px; border-radius: 20px; text-transform: uppercase;
 }
-.user-role-badge.admin { background: rgba(226,75,74,0.18); color: #ff8a89; }
-.user-role-badge.taller { background: rgba(55,138,221,0.18); color: #7db8f0; }
-.user-actions { display: flex; gap: 5px; flex-shrink: 0; }
+.user-role-badge.admin { background: rgba(226,75,74,0.22); color: #ff9b9a; }
+.user-role-badge.taller { background: rgba(55,138,221,0.22); color: #8fc3f5; }
+.user-role-badge.chofer { background: rgba(29,158,117,0.22); color: #6fd6ab; }
+.user-actions { display: flex; gap: 8px; }
 .user-btn {
-  width: 32px; height: 32px; border-radius: 8px; border: none;
-  background: rgba(255,255,255,0.06); color: var(--sb-text);
-  cursor: pointer; display: grid; place-items: center; font-size: 16px;
-  transition: all 0.15s;
+  flex: 1; height: 36px; border-radius: 9px; border: none;
+  background: rgba(255,255,255,0.08); color: #c9d2e0;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  gap: 7px; transition: all 0.15s;
 }
-.user-btn:hover { background: rgba(255,255,255,0.14); color: white; }
-.user-btn.logout:hover { background: rgba(226,75,74,0.25); color: #ff8a89; }
+.user-btn .ti { font-size: 16px; }
+.user-btn .btn-txt { font-size: 12px; font-weight: 600; }
+.user-btn:hover { background: rgba(255,255,255,0.18); color: #ffffff; }
+.user-btn.logout:hover { background: rgba(226,75,74,0.30); color: #ffb0af; }
 
 /* Badges de rol (en tabla de usuarios) */
 .rol-badge {
@@ -743,3 +844,37 @@ td.center, th.center { text-align: center; }
 }
 .rol-badge.admin { background: var(--danger-bg); color: var(--danger); }
 .rol-badge.taller { background: var(--info-bg); color: var(--info); }
+.rol-badge.compras { background: #fef0e6; color: #d97706; }
+.rol-badge.chofer { background: #e8f6ee; color: #1d9e75; }
+
+/* ─── Historial de auditoría ─── */
+.timeline-hist { display: flex; flex-direction: column; gap: 2px; }
+.hist-row {
+  display: flex; gap: 14px; padding: 12px 14px; border-radius: 10px;
+  transition: background 0.15s;
+}
+.hist-row:hover { background: var(--bg-soft, #f8fafc); }
+.hist-icon {
+  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 20px;
+}
+.hist-body { flex: 1; min-width: 0; }
+.hist-top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 3px; }
+.hist-accion { font-weight: 600; font-size: 14.5px; color: var(--text, #1e293b); }
+.hist-fecha { font-size: 12.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hist-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 13px; }
+.hist-user { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.hist-cat { font-weight: 600; }
+.hist-detalle { color: var(--muted); font-style: italic; }
+
+/* Botón "Ver evidencia" en el historial */
+.hist-evidencia {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: #eef2ff; color: #4f46e5; border: 1px solid #c7d2fe;
+  padding: 3px 10px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: background 0.15s;
+}
+.hist-evidencia:hover { background: #e0e7ff; }
+
+/* Badge del rol auditor */
+.rol-badge.auditor { background: #f0fdfa; color: #0d9488; }

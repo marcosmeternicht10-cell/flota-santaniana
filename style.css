@@ -88,8 +88,23 @@ document.querySelectorAll(".nav-item").forEach(btn => {
     document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     irA(btn.dataset.sec);
+    cerrarSidebar();  // en el celular, cerrar el menú al elegir una opción
   });
 });
+
+// ─── Menú lateral en celular (hamburguesa) ───
+function toggleSidebar() {
+  const sb = document.getElementById("sidebar");
+  const ov = document.getElementById("sidebarOverlay");
+  if (sb) sb.classList.toggle("abierto");
+  if (ov) ov.classList.toggle("visible");
+}
+function cerrarSidebar() {
+  const sb = document.getElementById("sidebar");
+  const ov = document.getElementById("sidebarOverlay");
+  if (sb) sb.classList.remove("abierto");
+  if (ov) ov.classList.remove("visible");
+}
 
 function irA(sec) {
   if (["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(sec) && !cocheActual) {
@@ -104,6 +119,10 @@ function irA(sec) {
     servicios: renderServicios,
     costos: renderCostos,
     kpis: renderKpis,
+    oee: renderOEE,
+    turismo: renderTurismo,
+    historial: renderHistorial,
+    combustible: renderCombustible,
     mantenimiento: renderMantenimiento,
     planes: renderPlanes,
     correctivos: renderCorrectivos,
@@ -111,6 +130,7 @@ function irA(sec) {
     neumaticos: renderNeumaticos,
     inventario_neu: renderInventarioNeu,
     ots: renderOts,
+    compras: renderCompras,
     gerencial: renderGerencial,
   };
   map[sec]();
@@ -226,6 +246,20 @@ async function renderDashboard() {
       `}
 
       <div class="section-title"><i class="ti ti-list"></i> Estado por vehículo</div>
+      ${window.USUARIO_ROL === 'admin' && data.vehiculos.length > 0 && data.vehiculos.length < 89 ? `
+        <div class="card" style="border-color:var(--warning-bd);background:var(--warning-bg);margin-bottom:14px">
+          <div class="card-body" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <i class="ti ti-alert-triangle" style="font-size:24px;color:var(--warning)"></i>
+            <div style="flex:1;min-width:200px">
+              <div style="font-weight:600;font-size:14px">La carga quedó incompleta (${data.vehiculos.length} de 89 vehículos)</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:2px">Tocá el botón para continuar la carga desde donde quedó. No duplica los que ya están.</div>
+            </div>
+            <button class="btn btn-primary" onclick="cargarFlotaInicial()">
+              <i class="ti ti-database-import"></i> Continuar carga
+            </button>
+          </div>
+        </div>
+      ` : ''}
       ${data.vehiculos.length === 0 ? `
         <div class="empty">
           <i class="ti ti-bus"></i>
@@ -247,7 +281,7 @@ async function renderDashboard() {
           <table>
             <thead>
               <tr>
-                <th>Patente</th><th>Marca / Modelo</th><th>Motor / Plan</th>
+                <th>Patente</th><th>N° interno</th><th>Marca / Modelo</th><th>Motor / Plan</th>
                 <th class="num">KM actual</th><th class="center">Estado</th>
               </tr>
             </thead>
@@ -255,6 +289,7 @@ async function renderDashboard() {
               ${data.vehiculos.map(v => `
                 <tr class="clickable" onclick="seleccionarYIr(${v.id}, 'mantenimiento')">
                   <td><b>${v.patente}</b></td>
+                  <td>${v.n_interno ? `<span class="badge cat">${v.n_interno}</span>` : "—"}</td>
                   <td>${v.marca || "—"} ${v.modelo || ""}</td>
                   <td>${v.plan_nombre ? `<span class="badge cat">${v.plan_nombre}</span>` : `<span class="badge">Sin plan</span>`}</td>
                   <td class="num">${fmtNum(v.km_actual)}</td>
@@ -460,6 +495,16 @@ function abrirModalEditarVehiculo(v) {
           <div class="field"><label>Asientos</label><input id="ev-asi" value="${v.asientos || ''}" style="width:100px"></div>
           <div class="field"><label>Ejes</label><input id="ev-eje" value="${v.ejes || ''}" style="width:80px"></div>
         </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label><i class="ti ti-clock"></i> Horario de salida</label>
+            <input id="ev-horario" type="time" value="${v.horario_salida || ''}" style="width:140px">
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Hora fija de salida del coche. Sirve para priorizar las OTs.</div>
+          </div>
+          <div class="field"><label><i class="ti ti-gas-station"></i> Consumo (km/litro)</label>
+            <input id="ev-consumo" type="number" step="0.1" value="${v.consumo_km_litro || ''}" placeholder="2.5" style="width:140px">
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Rendimiento de combustible. Sirve para presupuestos de turismo.</div>
+          </div>
+        </div>
         <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
           <button class="btn btn-ghost" onclick="cerrarModalEditarVehiculo()">Cancelar</button>
           <button class="btn btn-primary" onclick="guardarEdicionVehiculo(${v.id})"><i class="ti ti-device-floppy"></i> Guardar cambios</button>
@@ -492,6 +537,18 @@ async function guardarEdicionVehiculo(vid) {
     })
   });
   if (r.ok) {
+    // Guardar también el horario de salida (campo aparte)
+    const horario = $("#ev-horario").value;
+    await api(`/api/vehiculos/${vid}/horario_salida`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ horario })
+    });
+    // Guardar el consumo (km/litro)
+    const consumo = $("#ev-consumo").value;
+    await api(`/api/vehiculos/${vid}/consumo`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ consumo_km_litro: consumo })
+    });
     toast("Vehículo actualizado", "success");
     cerrarModalEditarVehiculo();
     cargarVehiculos();
@@ -681,6 +738,694 @@ async function borrarCosto(id) {
 // ════════════════════════════════════════════════════════════════════════
 //  KPIs
 // ════════════════════════════════════════════════════════════════════════
+// ─── OEE de Flota ───
+function _colorOEE(pct) {
+  if (pct >= 70) return "var(--success)";
+  if (pct >= 50) return "var(--warning)";
+  return "var(--danger)";
+}
+
+// ═══════════════ PRESUPUESTOS DE TURISMO ═══════════════
+let turismoTab = "nuevo";
+
+// ═══════════════ HISTORIAL DE AUDITORÍA (solo admin) ═══════════════
+let histFiltros = { desde: "", hasta: "", categoria: "", usuario: "" };
+
+const ICONO_CAT = {
+  "Acceso": "ti-login", "Órdenes de Trabajo": "ti-clipboard-check", "Compras": "ti-shopping-cart",
+  "Turismo": "ti-bus-stop", "Usuarios": "ti-users", "Vehículos": "ti-car",
+  "Reportes de chofer": "ti-message-report",
+};
+const COLOR_CAT = {
+  "Acceso": "#6366f1", "Órdenes de Trabajo": "#2563eb", "Compras": "#d97706",
+  "Turismo": "#0891b2", "Usuarios": "#dc2626", "Vehículos": "#059669",
+  "Reportes de chofer": "#7c3aed",
+};
+
+// ═══════════════ COMBUSTIBLE (cargas + rendimiento) ═══════════════
+let combTab = "cargar";
+
+async function renderCombustible() {
+  status("Control de combustible");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-gas-station"></i> Combustible</h1>
+      <p>Registro de cargas y rendimiento real de la flota</p>
+    </div>
+    <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${combTab==='cargar'?'active':''}" onclick="setCombTab('cargar')"><i class="ti ti-plus"></i> Cargar / Historial</button>
+          <button class="tab-btn ${combTab==='rendimiento'?'active':''}" onclick="setCombTab('rendimiento')"><i class="ti ti-gauge"></i> Rendimiento por bus</button>
+        </div>
+      </div>
+      <div id="comb-contenido"></div>
+    </div>`;
+  if (combTab === "cargar") await renderCombCargar();
+  else await renderCombRendimiento();
+}
+
+function setCombTab(t) { combTab = t; renderCombustible(); }
+
+async function renderCombCargar() {
+  const cont = document.getElementById("comb-contenido");
+  const vehiculos = await api("/api/vehiculos");
+  const data = await api("/api/combustible");
+  const cargas = data.cargas || [];
+  const stats = data.stats || {};
+
+  cont.innerHTML = `
+    <!-- Resumen -->
+    <div class="metrics" style="margin-bottom:18px">
+      <div class="metric"><div class="metric-content"><div class="metric-label">Total de cargas</div>
+        <div class="metric-value">${stats.total_cargas || 0}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Litros cargados</div>
+        <div class="metric-value" style="color:var(--brand-blue)">${fmtNum(stats.total_litros || 0)}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Gasto total</div>
+        <div class="metric-value" style="color:#d97706">${gs(stats.total_gasto || 0)}</div></div></div>
+    </div>
+
+    <!-- Formulario de carga -->
+    <div class="card">
+      <div class="card-head"><i class="ti ti-plus"></i> Registrar carga de combustible</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="field" style="min-width:220px"><label>Vehículo *</label>
+            <select id="cm-veh">
+              <option value="">Elegir bus...</option>
+              ${vehiculos.map(v => `<option value="${v.id}">${v.patente} — ${v.marca} ${v.modelo}${v.n_interno ? ' (Coche ' + v.n_interno + ')' : ''}</option>`).join("")}
+            </select>
+          </div>
+          <div class="field"><label>Fecha *</label><input id="cm-fecha" type="date" value="${hoy()}"></div>
+          <div class="field"><label>Odómetro (km) *</label><input id="cm-odo" type="number" placeholder="458200"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Litros *</label><input id="cm-litros" type="number" step="0.1" placeholder="400" oninput="calcCostoComb()"></div>
+          <div class="field"><label>Precio por litro</label><input id="cm-precio" type="number" placeholder="7500" oninput="calcCostoComb()"></div>
+          <div class="field"><label>Costo total</label><input id="cm-costo" type="number" placeholder="(se calcula solo)"></div>
+          <div class="field"><label>Surtidor / Estación</label><input id="cm-estacion" placeholder="Petropar Ruta 2"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Chofer</label><input id="cm-chofer" placeholder="Nombre del chofer"></div>
+          <div class="field" style="flex:1"><label>Observaciones</label><input id="cm-obs" placeholder="Opcional"></div>
+          <button class="btn btn-primary" style="align-self:flex-end" onclick="guardarCargaComb()"><i class="ti ti-device-floppy"></i> Registrar carga</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lista de cargas -->
+    <div class="section-title"><i class="ti ti-list"></i> Cargas registradas (${cargas.length})</div>
+    ${cargas.length === 0 ? `
+      <div class="empty"><i class="ti ti-gas-station-off"></i>No hay cargas registradas todavía.</div>
+    ` : `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Fecha</th><th>Vehículo</th><th class="num">Odómetro</th><th class="num">Litros</th>
+          <th class="num">Precio/L</th><th class="num">Costo</th><th class="num">Rendimiento</th><th class="td-action"></th>
+        </tr></thead>
+        <tbody>
+          ${cargas.map(c => {
+            const coche = c.n_interno ? `${c.patente} (${c.n_interno})` : c.patente;
+            const rend = c.rendimiento != null
+              ? `<span style="font-weight:700;color:${c.rendimiento >= 2.5 ? '#059669' : c.rendimiento >= 2 ? '#d97706' : '#dc2626'}">${c.rendimiento} km/l</span>`
+              : `<span style="color:var(--muted);font-size:12px">primera carga</span>`;
+            return `<tr>
+              <td>${c.fecha}</td>
+              <td><b>${coche}</b></td>
+              <td class="num">${fmtNum(c.odometro)}</td>
+              <td class="num">${c.litros} L</td>
+              <td class="num">${gs(c.precio_litro)}</td>
+              <td class="num">${gs(c.costo_total)}</td>
+              <td class="num">${rend}</td>
+              <td class="td-action"><button class="icon-btn" onclick="borrarCargaComb(${c.id})"><i class="ti ti-trash"></i></button></td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>
+    `}`;
+}
+
+// Calcula el costo total en vivo (litros x precio)
+function calcCostoComb() {
+  const litros = parseFloat($("#cm-litros").value) || 0;
+  const precio = parseFloat($("#cm-precio").value) || 0;
+  if (litros > 0 && precio > 0) {
+    $("#cm-costo").value = Math.round(litros * precio);
+  }
+}
+
+async function guardarCargaComb() {
+  const datos = {
+    vehiculo_id: $("#cm-veh").value,
+    fecha: $("#cm-fecha").value,
+    odometro: $("#cm-odo").value,
+    litros: $("#cm-litros").value,
+    precio_litro: $("#cm-precio").value,
+    costo_total: $("#cm-costo").value,
+    estacion: $("#cm-estacion").value,
+    chofer: $("#cm-chofer").value,
+    observaciones: $("#cm-obs").value,
+  };
+  if (!datos.vehiculo_id) { toast("Elegí el vehículo", "error"); return; }
+  if (!datos.litros || parseFloat(datos.litros) <= 0) { toast("Cargá los litros", "error"); return; }
+  if (!datos.odometro || parseFloat(datos.odometro) <= 0) { toast("Cargá el odómetro", "error"); return; }
+  const r = await api("/api/combustible", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos)
+  });
+  if (r.ok) { toast("Carga registrada", "success"); renderCombustible(); }
+  else toast(r.msg || "Error", "error");
+}
+
+async function borrarCargaComb(id) {
+  if (!confirm("¿Eliminar esta carga de combustible?")) return;
+  await api(`/api/combustible/${id}`, { method: "DELETE" });
+  toast("Carga eliminada");
+  renderCombustible();
+}
+
+// Ranking de rendimiento por bus
+async function renderCombRendimiento() {
+  const cont = document.getElementById("comb-contenido");
+  const data = await api("/api/combustible");
+  const ranking = (data.stats && data.stats.ranking) || [];
+  const conRend = ranking.filter(v => v.rendimiento_prom != null);
+
+  cont.innerHTML = `
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
+      Rendimiento promedio de cada bus (km por litro), ordenado del que <b>más gasta</b> (⚠️ arriba) al <b>más eficiente</b> (🥇 abajo). Revisá los que tienen rendimiento bajo.
+    </p>
+    ${conRend.length === 0 ? `
+      <div class="empty"><i class="ti ti-gauge"></i>Todavía no hay suficientes cargas para calcular el rendimiento.<br>
+      Hacen falta al menos 2 cargas por vehículo.</div>
+    ` : `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>#</th><th>Vehículo</th><th class="num">Rendimiento</th><th class="num">Litros totales</th>
+          <th class="num">Gasto total</th><th class="center">Cargas</th>
+        </tr></thead>
+        <tbody>
+          ${conRend.map((v, i) => {
+            const coche = v.n_interno ? `${v.patente} (Coche ${v.n_interno})` : v.patente;
+            const color = v.rendimiento_prom >= 2.5 ? '#059669' : v.rendimiento_prom >= 2 ? '#d97706' : '#dc2626';
+            // El ranking va de menor a mayor rendimiento: el ÚLTIMO es el más eficiente (oro),
+            // el PRIMERO es el que más gasta (alerta).
+            const medalla = i === conRend.length - 1 ? '🥇' : i === 0 ? '⚠️' : `${i + 1}`;
+            return `<tr>
+              <td><b>${medalla}</b></td>
+              <td><b>${coche}</b></td>
+              <td class="num"><span style="font-weight:700;color:${color};font-size:15px">${v.rendimiento_prom} km/l</span></td>
+              <td class="num">${fmtNum(v.litros)} L</td>
+              <td class="num">${gs(v.gasto)}</td>
+              <td class="center">${v.cargas}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>
+      <div style="margin-top:14px;padding:12px;background:#f0fdf4;border-radius:9px;font-size:13px;color:#166534">
+        <i class="ti ti-bulb"></i> El rendimiento de cada bus se usa automáticamente en los presupuestos de Turismo.
+      </div>
+    `}`;
+}
+
+async function renderHistorial() {
+  status("Historial de actividad");
+  const params = new URLSearchParams();
+  if (histFiltros.desde) params.set("desde", histFiltros.desde);
+  if (histFiltros.hasta) params.set("hasta", histFiltros.hasta);
+  if (histFiltros.categoria) params.set("categoria", histFiltros.categoria);
+  if (histFiltros.usuario) params.set("usuario", histFiltros.usuario);
+  const data = await api("/api/auditoria?" + params.toString());
+  const registros = data.registros || [];
+  const stats = data.stats || {};
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-history"></i> Historial de actividad</h1>
+      <p>Todo lo que pasa en el sistema — solo visible para administración</p>
+    </div>
+    <div class="section">
+      <!-- Resumen -->
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric"><div class="metric-content"><div class="metric-label">Total de acciones</div>
+          <div class="metric-value">${stats.total || 0}</div></div></div>
+        ${(stats.por_categoria || []).slice(0, 3).map(c => `
+          <div class="metric"><div class="metric-content"><div class="metric-label">${c.categoria || "Sin categoría"}</div>
+          <div class="metric-value" style="color:${COLOR_CAT[c.categoria]||'#64748b'}">${c.n}</div></div></div>
+        `).join("")}
+      </div>
+
+      <!-- Filtros -->
+      <div class="toolbar" style="gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="field" style="margin:0"><label style="font-size:11px">Desde</label>
+          <input type="date" id="hist-desde" value="${histFiltros.desde}" onchange="aplicarFiltrosHist()" style="width:150px"></div>
+        <div class="field" style="margin:0"><label style="font-size:11px">Hasta</label>
+          <input type="date" id="hist-hasta" value="${histFiltros.hasta}" onchange="aplicarFiltrosHist()" style="width:150px"></div>
+        <div class="field" style="margin:0"><label style="font-size:11px">Categoría</label>
+          <select id="hist-cat" onchange="aplicarFiltrosHist()" style="width:180px">
+            <option value="">Todas</option>
+            ${Object.keys(ICONO_CAT).map(c => `<option value="${c}" ${histFiltros.categoria===c?'selected':''}>${c}</option>`).join("")}
+          </select></div>
+        ${histFiltros.desde || histFiltros.hasta || histFiltros.categoria || histFiltros.usuario ?
+          `<button class="btn btn-ghost" style="align-self:flex-end" onclick="limpiarFiltrosHist()"><i class="ti ti-x"></i> Limpiar</button>` : ""}
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> Actividad (${registros.length})</div>
+      ${registros.length === 0 ? `
+        <div class="empty"><i class="ti ti-history-off"></i>No hay actividad registrada en este período.</div>
+      ` : `
+        <div class="timeline-hist">
+          ${registros.map(r => {
+            const fecha = (r.fecha_hora || "").slice(0, 10);
+            const hora = (r.fecha_hora || "").slice(11, 19);
+            const color = COLOR_CAT[r.categoria] || "#64748b";
+            const icono = ICONO_CAT[r.categoria] || "ti-point";
+            return `
+              <div class="hist-row">
+                <div class="hist-icon" style="background:${color}1a;color:${color}"><i class="ti ${icono}"></i></div>
+                <div class="hist-body">
+                  <div class="hist-top">
+                    <span class="hist-accion">${r.accion}</span>
+                    <span class="hist-fecha">${fecha} · ${hora}</span>
+                  </div>
+                  <div class="hist-meta">
+                    <span class="hist-user"><i class="ti ti-user"></i> ${r.usuario || "?"}${r.rol ? ` (${LABEL_ROL[r.rol] || r.rol})` : ""}</span>
+                    ${r.categoria ? `<span class="hist-cat" style="color:${color}">${r.categoria}</span>` : ""}
+                    ${r.detalle ? `<span class="hist-detalle">${r.detalle}</span>` : ""}
+                    ${r.referencia ? `<button class="hist-evidencia" onclick="verEvidenciaHist('${r.referencia}')"><i class="ti ti-photo"></i> Ver evidencia</button>` : ""}
+                  </div>
+                </div>
+              </div>`;
+          }).join("")}
+        </div>
+        ${registros.length >= 500 ? `<div style="text-align:center;color:var(--muted);font-size:13px;margin-top:14px">Mostrando las 500 acciones más recientes. Usá los filtros para ver más.</div>` : ""}
+      `}
+    </div>`;
+}
+
+function aplicarFiltrosHist() {
+  histFiltros.desde = $("#hist-desde").value;
+  histFiltros.hasta = $("#hist-hasta").value;
+  histFiltros.categoria = $("#hist-cat").value;
+  renderHistorial();
+}
+
+function limpiarFiltrosHist() {
+  histFiltros = { desde: "", hasta: "", categoria: "", usuario: "" };
+  renderHistorial();
+}
+
+// Trae y muestra la(s) foto(s) de evidencia de un registro del historial
+async function verEvidenciaHist(referencia) {
+  const data = await api("/api/auditoria/evidencia?ref=" + encodeURIComponent(referencia));
+  const fotos = data.fotos || [];
+  if (!fotos.length) { toast("No se encontró la evidencia", "error"); return; }
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.8);z-index:2000;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="max-width:90vw;max-height:90vh;text-align:center">
+      <div style="color:#fff;font-size:15px;margin-bottom:12px;font-weight:600">
+        <i class="ti ti-photo"></i> ${fotos[0].tipo || "Evidencia"} ${fotos.length > 1 ? `(${fotos.length} fotos)` : ""}
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;max-height:75vh;overflow:auto">
+        ${fotos.map(f => `<img src="${f.datos}" style="max-width:${fotos.length>1?'42vw':'85vw'};max-height:70vh;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.5)">`).join("")}
+      </div>
+      <button class="btn btn-ghost" style="margin-top:14px;background:rgba(255,255,255,0.15);color:#fff;border:none" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i> Cerrar</button>
+    </div>`;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function renderTurismo() {
+  status("Presupuestos de Turismo");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-bus-stop"></i> Presupuestos de Turismo</h1>
+      <p>Calculá el costo y precio de un servicio de turismo o charter</p>
+    </div>
+    <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${turismoTab==='nuevo'?'active':''}" onclick="setTurismoTab('nuevo')"><i class="ti ti-calculator"></i> Nuevo presupuesto</button>
+          <button class="tab-btn ${turismoTab==='guardados'?'active':''}" onclick="setTurismoTab('guardados')"><i class="ti ti-folder"></i> Guardados</button>
+          <button class="tab-btn ${turismoTab==='config'?'active':''}" onclick="setTurismoTab('config')"><i class="ti ti-settings"></i> Configuración</button>
+        </div>
+      </div>
+      <div id="turismo-contenido"></div>
+    </div>`;
+  if (turismoTab === "nuevo") await renderTurismoNuevo();
+  else if (turismoTab === "guardados") await renderTurismoGuardados();
+  else await renderTurismoConfig();
+}
+
+function setTurismoTab(t) { turismoTab = t; renderTurismo(); }
+
+// ─── Nuevo presupuesto con cálculo en vivo ───
+async function renderTurismoNuevo() {
+  const cont = document.getElementById("turismo-contenido");
+  const vehiculos = await api("/api/vehiculos");
+  const cfg = await api("/api/turismo/config");
+  cont.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <!-- Columna de datos -->
+      <div>
+        <div class="card">
+          <div class="card-head"><i class="ti ti-map-pin"></i> Datos del viaje</div>
+          <div class="card-body">
+            <div class="field" style="margin-bottom:12px"><label>Destino *</label><input id="tu-destino" placeholder="Buenos Aires" oninput="calcularTurismoVivo()"></div>
+            <div class="field" style="margin-bottom:12px"><label>Descripción</label><input id="tu-desc" placeholder="Charter 3 días" oninput="calcularTurismoVivo()"></div>
+            <div class="field" style="margin-bottom:12px"><label>Cliente</label><input id="tu-cliente" placeholder="Nombre del cliente"></div>
+            <div class="field" style="margin-bottom:12px"><label>Vehículo</label>
+              <select id="tu-vehiculo" onchange="autoConsumo()">
+                <option value="">Elegir bus...</option>
+                ${vehiculos.map(v => `<option value="${v.id}" data-consumo="${v.consumo_km_litro || 0}" data-patente="${v.patente}">${v.patente} — ${v.marca} ${v.modelo}${v.n_interno ? ' (Coche ' + v.n_interno + ')' : ''}</option>`).join("")}
+              </select>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div class="field"><label>Km totales *</label><input id="tu-km" type="number" placeholder="2400" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Días</label><input id="tu-dias" type="number" value="1" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Noches</label><input id="tu-noches" type="number" value="0" oninput="calcularTurismoVivo()"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+              <div class="field"><label>Pasajeros</label><input id="tu-pax" type="number" placeholder="45" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Consumo (km/l)</label><input id="tu-consumo" type="number" step="0.1" placeholder="2.5" oninput="calcularTurismoVivo()"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-head"><i class="ti ti-cash"></i> Valores (editables por viaje)</div>
+          <div class="card-body">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field"><label>Precio gasoil (Gs/l)</label><input id="tu-gasoil" type="number" value="${cfg.precio_gasoil||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Jornal chofer/día</label><input id="tu-jornal" type="number" value="${cfg.jornal_chofer||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Viático/día</label><input id="tu-viatico" type="number" value="${cfg.viatico_dia||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Comida/día</label><input id="tu-comida" type="number" value="${cfg.comida_dia||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Hospedaje/noche</label><input id="tu-hospedaje" type="number" value="${cfg.hospedaje_noche||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>CPK cubiertas</label><input id="tu-cpk" type="number" value="${cfg.cpk_cubiertas||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Mant./km</label><input id="tu-mant" type="number" value="${cfg.costo_mant_km||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Peajes (local)</label><input id="tu-peajes" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Margen (%)</label><input id="tu-margen" type="number" value="${cfg.margen_sugerido||30}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>IVA (%)</label><input id="tu-iva" type="number" value="${cfg.iva_porcentaje||10}" oninput="calcularTurismoVivo()"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;border:2px solid #fef0e6">
+          <div class="card-head" style="background:#fff8f3"><i class="ti ti-world"></i> Viajes largos / internacionales (opcional)</div>
+          <div class="card-body">
+            <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border-radius:9px;cursor:pointer;margin-bottom:14px">
+              <input type="checkbox" id="tu-2chofer" onchange="calcularTurismoVivo()" style="width:18px;height:18px">
+              <div>
+                <b style="font-size:14px">Segundo chofer</b>
+                <div style="font-size:12px;color:var(--muted)">Obligatorio en viajes largos. Duplica chofer, viáticos y comidas.</div>
+              </div>
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field"><label>Peajes en el exterior</label><input id="tu-peajes-ext" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Seguro del viaje</label><input id="tu-seguro" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Trámites / habilitaciones</label><input id="tu-tramites" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Otros gastos</label><input id="tu-otros" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>% Imprevistos (colchón)</label><input id="tu-imprevistos" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Columna de resultado en vivo -->
+      <div>
+        <div class="card" style="position:sticky;top:20px">
+          <div class="card-head"><i class="ti ti-receipt"></i> Presupuesto</div>
+          <div class="card-body" id="tu-resultado">
+            <div class="empty" style="padding:40px"><i class="ti ti-calculator"></i>Cargá los datos del viaje para ver el cálculo.</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  calcularTurismoVivo();
+}
+
+// Auto-completar el consumo cuando se elige un vehículo
+function autoConsumo() {
+  const sel = document.getElementById("tu-vehiculo");
+  const opt = sel.options[sel.selectedIndex];
+  const consumo = opt ? opt.dataset.consumo : 0;
+  if (consumo && parseFloat(consumo) > 0) {
+    document.getElementById("tu-consumo").value = consumo;
+  }
+  calcularTurismoVivo();
+}
+
+// Junta los datos del formulario
+function datosTurismo() {
+  const sel = document.getElementById("tu-vehiculo");
+  const opt = sel.options[sel.selectedIndex];
+  return {
+    destino: $("#tu-destino").value, descripcion: $("#tu-desc").value, cliente: $("#tu-cliente").value,
+    vehiculo_id: sel.value || null, patente: opt ? (opt.dataset.patente || "") : "",
+    km_total: $("#tu-km").value, dias: $("#tu-dias").value, noches: $("#tu-noches").value,
+    pasajeros: $("#tu-pax").value, consumo_km_litro: $("#tu-consumo").value,
+    precio_gasoil: $("#tu-gasoil").value, jornal_chofer: $("#tu-jornal").value,
+    viatico_dia: $("#tu-viatico").value, comida_dia: $("#tu-comida").value,
+    hospedaje_noche: $("#tu-hospedaje").value, cpk_cubiertas: $("#tu-cpk").value,
+    costo_mant_km: $("#tu-mant").value, peajes: $("#tu-peajes").value, otros: $("#tu-otros").value,
+    margen: $("#tu-margen").value, iva: $("#tu-iva").value,
+    // Viajes largos / internacionales
+    segundo_chofer: $("#tu-2chofer").checked,
+    peajes_exterior: $("#tu-peajes-ext").value, seguro_viaje: $("#tu-seguro").value,
+    tramites: $("#tu-tramites").value, imprevistos_pct: $("#tu-imprevistos").value,
+  };
+}
+
+let turismoTimer = null;
+function calcularTurismoVivo() {
+  clearTimeout(turismoTimer);
+  turismoTimer = setTimeout(async () => {
+    const datos = datosTurismo();
+    if (!datos.km_total || parseFloat(datos.km_total) <= 0) {
+      document.getElementById("tu-resultado").innerHTML = `<div class="empty" style="padding:40px"><i class="ti ti-calculator"></i>Ingresá los km del viaje para ver el cálculo.</div>`;
+      return;
+    }
+    const r = await api("/api/turismo/calcular", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(datos)
+    });
+    mostrarResultadoTurismo(r, datos);
+  }, 300);
+}
+
+function mostrarResultadoTurismo(r, datos) {
+  const cont = document.getElementById("tu-resultado");
+  const linea = (concepto, monto, sub) => monto > 0 ?
+    `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)${sub?';color:var(--muted);font-size:13px':''}">
+      <span>${concepto}</span><span style="font-weight:600">${gs(monto)}</span></div>` : "";
+  cont.innerHTML = `
+    <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+      ${r.litros_estimados} litros · ${r.consumo_km_litro} km/l · ${datos.km_total} km${r.segundo_chofer ? ' · 2 choferes' : ''}
+    </div>
+    ${linea("Combustible", r.costo_combustible)}
+    ${linea("Cubiertas", r.costo_cubiertas)}
+    ${linea("Mantenimiento", r.costo_mantenimiento)}
+    ${linea(r.segundo_chofer ? "Chofer (×2)" : "Chofer", r.costo_chofer)}
+    ${linea(r.segundo_chofer ? "Viáticos (×2)" : "Viáticos", r.costo_viaticos)}
+    ${linea(r.segundo_chofer ? "Comidas (×2)" : "Comidas", r.costo_comidas)}
+    ${linea("Hospedaje", r.costo_hospedaje)}
+    ${linea("Peajes (local)", r.peajes)}
+    ${linea("Peajes exterior", r.peajes_exterior)}
+    ${linea("Seguro del viaje", r.seguro_viaje)}
+    ${linea("Trámites", r.tramites)}
+    ${linea("Otros", r.otros)}
+    <div style="display:flex;justify-content:space-between;padding:10px 0;margin-top:6px;border-top:2px solid var(--border);font-weight:700">
+      <span>Subtotal</span><span>${gs(r.subtotal)}</span></div>
+    ${r.monto_imprevistos > 0 ? `<div style="display:flex;justify-content:space-between;padding:5px 0;color:var(--muted)">
+      <span>Imprevistos (${r.imprevistos_pct}%)</span><span>${gs(r.monto_imprevistos)}</span></div>` : ""}
+    <div style="display:flex;justify-content:space-between;padding:5px 0;color:var(--muted)">
+      <span>Margen (${r.margen_pct}%)</span><span>${gs(r.monto_margen)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:5px 0;color:var(--muted)">
+      <span>IVA (${r.iva_pct}%)</span><span>${gs(r.monto_iva)}</span></div>
+    <div style="background:var(--brand-red);color:#fff;padding:14px;border-radius:10px;margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:15px;font-weight:700">PRECIO TOTAL</span>
+      <span style="font-size:22px;font-weight:800">${gs(r.precio_final)}</span>
+    </div>
+    ${r.precio_por_pasajero > 0 ? `
+      <div style="text-align:center;margin-top:10px;color:var(--brand-blue);font-weight:700;font-size:15px">
+        ${gs(r.precio_por_pasajero)} por pasajero (${r.pasajeros})
+      </div>` : ""}
+    <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="guardarPresupuestoTurismo()"><i class="ti ti-device-floppy"></i> Guardar presupuesto</button>`;
+}
+
+async function guardarPresupuestoTurismo() {
+  const datos = datosTurismo();
+  if (!datos.destino) { toast("Poné un destino", "error"); return; }
+  if (!datos.km_total) { toast("Poné los km", "error"); return; }
+  const r = await api("/api/turismo/presupuestos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ datos })
+  });
+  if (r.ok) {
+    toast("Presupuesto guardado", "success");
+    turismoTab = "guardados";
+    renderTurismo();
+  } else toast("Error al guardar", "error");
+}
+
+// ─── Presupuestos guardados ───
+async function renderTurismoGuardados() {
+  const cont = document.getElementById("turismo-contenido");
+  const lista = await api("/api/turismo/presupuestos");
+  if (!lista.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-folder-open"></i>No hay presupuestos guardados todavía.</div>`;
+    return;
+  }
+  cont.innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Fecha</th><th>Destino</th><th>Cliente</th><th>Vehículo</th>
+        <th class="center">Días</th><th class="center">Pax</th><th class="num">Precio</th><th class="td-action"></th>
+      </tr></thead>
+      <tbody>
+        ${lista.map(p => `<tr>
+          <td>${(p.fecha_creacion||"").slice(0,10)}</td>
+          <td><b>${p.destino}</b>${p.descripcion ? `<br><span style="font-size:12px;color:var(--muted)">${p.descripcion}</span>` : ""}</td>
+          <td>${p.cliente || "—"}</td>
+          <td>${p.patente || "—"}</td>
+          <td class="center">${p.dias}</td>
+          <td class="center">${p.pasajeros || "—"}</td>
+          <td class="num"><b>${gs(p.precio_final)}</b></td>
+          <td class="td-action" style="white-space:nowrap">
+            <button class="icon-btn" title="Imprimir PDF" onclick="window.open('/api/turismo/presupuestos/${p.id}/pdf','_blank')"><i class="ti ti-printer"></i></button>
+            <button class="icon-btn" title="Eliminar" onclick="borrarPresupuestoTurismo(${p.id})"><i class="ti ti-trash"></i></button>
+          </td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>`;
+}
+
+async function borrarPresupuestoTurismo(pid) {
+  if (!confirm("¿Eliminar este presupuesto?")) return;
+  await api(`/api/turismo/presupuestos/${pid}`, { method: "DELETE" });
+  toast("Eliminado");
+  renderTurismo();
+}
+
+// ─── Configuración de valores por defecto ───
+async function renderTurismoConfig() {
+  const cont = document.getElementById("turismo-contenido");
+  const cfg = await api("/api/turismo/config");
+  cont.innerHTML = `
+    <div class="card" style="max-width:640px">
+      <div class="card-head"><i class="ti ti-settings"></i> Valores por defecto para presupuestos</div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Estos valores se usan como punto de partida en cada presupuesto. Podés ajustarlos por viaje.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="field"><label>Precio gasoil (Gs/litro)</label><input id="cfg-gasoil" type="number" value="${cfg.precio_gasoil||''}"></div>
+          <div class="field"><label>Jornal chofer por día</label><input id="cfg-jornal" type="number" value="${cfg.jornal_chofer||''}"></div>
+          <div class="field"><label>Viático por día</label><input id="cfg-viatico" type="number" value="${cfg.viatico_dia||''}"></div>
+          <div class="field"><label>Comida por día</label><input id="cfg-comida" type="number" value="${cfg.comida_dia||''}"></div>
+          <div class="field"><label>Hospedaje por noche</label><input id="cfg-hospedaje" type="number" value="${cfg.hospedaje_noche||''}"></div>
+          <div class="field"><label>CPK cubiertas (Gs/km)</label><input id="cfg-cpk" type="number" value="${cfg.cpk_cubiertas||''}"></div>
+          <div class="field"><label>Mantenimiento (Gs/km)</label><input id="cfg-mant" type="number" value="${cfg.costo_mant_km||''}"></div>
+          <div class="field"><label>Consumo por defecto (km/l)</label><input id="cfg-consumo" type="number" step="0.1" value="${cfg.consumo_defecto||2.5}"></div>
+          <div class="field"><label>Margen sugerido (%)</label><input id="cfg-margen" type="number" value="${cfg.margen_sugerido||30}"></div>
+          <div class="field"><label>IVA (%)</label><input id="cfg-iva" type="number" value="${cfg.iva_porcentaje||10}"></div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:18px" onclick="guardarConfigTurismo()"><i class="ti ti-device-floppy"></i> Guardar configuración</button>
+      </div>
+    </div>`;
+}
+
+async function guardarConfigTurismo() {
+  const datos = {
+    precio_gasoil: $("#cfg-gasoil").value, jornal_chofer: $("#cfg-jornal").value,
+    viatico_dia: $("#cfg-viatico").value, comida_dia: $("#cfg-comida").value,
+    hospedaje_noche: $("#cfg-hospedaje").value, cpk_cubiertas: $("#cfg-cpk").value,
+    costo_mant_km: $("#cfg-mant").value, consumo_defecto: $("#cfg-consumo").value,
+    margen_sugerido: $("#cfg-margen").value, iva_porcentaje: $("#cfg-iva").value,
+  };
+  const r = await api("/api/turismo/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos)
+  });
+  if (r.ok) toast("Configuración guardada", "success");
+  else toast("Error", "error");
+}
+
+async function renderOEE() {
+  status("OEE — Eficiencia General de la Flota");
+  const hoy = new Date().toISOString().slice(0, 10);
+  const ini = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-gauge"></i> OEE — Eficiencia de Flota</h1>
+      <p>Disponibilidad × Rendimiento × Calidad — qué tan bien se aprovecha cada bus</p>
+    </div>
+    <div class="section">
+      <div style="background:#eaf2fb;border-radius:11px;padding:13px 16px;margin-bottom:18px;font-size:13px;color:var(--text)">
+        <b><i class="ti ti-info-circle"></i> Cómo se calcula:</b>
+        <b>Disponibilidad</b> = días operativo ÷ días del período ·
+        <b>Rendimiento</b> = km recorridos ÷ meta de km ·
+        <b>Calidad</b> = días sin fallas ÷ días operativo.
+        El OEE es el producto de los tres.
+      </div>
+      <div class="toolbar">
+        <div class="field"><label style="font-size:12px">Desde</label>
+          <input type="date" id="oee-desde" value="${ini}" style="padding:9px;border-radius:9px;border:1.5px solid var(--border)"></div>
+        <div class="field"><label style="font-size:12px">Hasta</label>
+          <input type="date" id="oee-hasta" value="${hoy}" style="padding:9px;border-radius:9px;border:1.5px solid var(--border)"></div>
+        <button class="btn btn-primary" style="align-self:flex-end" onclick="calcularOEEFlota()"><i class="ti ti-calculator"></i> Calcular</button>
+      </div>
+      <div id="oee-result"><div class="empty"><i class="ti ti-gauge"></i>Elegí un período y tocá Calcular.</div></div>
+    </div>`;
+}
+
+async function calcularOEEFlota() {
+  const desde = document.getElementById("oee-desde").value;
+  const hasta = document.getElementById("oee-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  const cont = document.getElementById("oee-result");
+  cont.innerHTML = `<div class="empty"><i class="ti ti-loader"></i> Calculando...</div>`;
+  const data = await api(`/api/oee_flota?desde=${desde}&hasta=${hasta}`);
+  if (!data.ok || !data.vehiculos.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-gauge-off"></i>No hay datos para calcular en ese período.</div>`;
+    return;
+  }
+  const p = data.promedio;
+  cont.innerHTML = `
+    <div class="metrics" style="margin-bottom:20px">
+      <div class="metric"><div class="metric-content">
+        <div class="metric-label">Disponibilidad</div>
+        <div class="metric-value" style="color:${_colorOEE(p.disponibilidad)}">${p.disponibilidad}%</div></div></div>
+      <div class="metric"><div class="metric-content">
+        <div class="metric-label">Rendimiento</div>
+        <div class="metric-value" style="color:${_colorOEE(p.rendimiento)}">${p.rendimiento}%</div></div></div>
+      <div class="metric"><div class="metric-content">
+        <div class="metric-label">Calidad</div>
+        <div class="metric-value" style="color:${_colorOEE(p.calidad)}">${p.calidad}%</div></div></div>
+      <div class="metric" style="border:2px solid ${_colorOEE(p.oee)}"><div class="metric-content">
+        <div class="metric-label">OEE de Flota</div>
+        <div class="metric-value" style="color:${_colorOEE(p.oee)}">${p.oee}%</div></div></div>
+    </div>
+    <div class="section-title"><i class="ti ti-list"></i> Detalle por vehículo (peores primero)</div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Vehículo</th><th class="center">Disponib.</th><th class="center">Rendim.</th>
+        <th class="center">Calidad</th><th class="center">OEE</th><th>Observación</th>
+      </tr></thead>
+      <tbody>
+        ${data.vehiculos.map(v => `<tr>
+          <td><b>${v.patente}</b>${v.n_interno ? ` <span class="badge cat">${v.n_interno}</span>` : ""}</td>
+          <td class="center" style="color:${_colorOEE(v.disponibilidad)}">${v.disponibilidad}%</td>
+          <td class="center" style="color:${_colorOEE(v.rendimiento)}">${v.rendimiento}%</td>
+          <td class="center" style="color:${_colorOEE(v.calidad)}">${v.calidad}%</td>
+          <td class="center"><b style="color:${_colorOEE(v.oee)}">${v.oee}%</b></td>
+          <td style="font-size:12px;color:var(--muted)">${v.faltantes && v.faltantes.length ? "⚠ Falta: " + v.faltantes.join(", ") : "—"}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>`;
+}
+
 async function renderKpis() {
   const v = cocheActual;
   status(`KPIs del coche ${v.patente}`);
@@ -838,6 +1583,9 @@ async function renderMantenimiento() {
       <p>${v.marca} ${v.modelo} — control preventivo por kilometraje</p>
     </div>
     <div class="section">
+      ${planVeh.plan ? `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+        <button class="btn btn-ghost" onclick="window.open('/api/vehiculos/${v.id}/plan_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir plan</button>
+      </div>` : ""}
       ${planVeh.plan ? renderOdometro(planVeh) : renderSinPlan(planes, v)}
       ${planVeh.plan ? `
         <div class="tabs">
@@ -851,14 +1599,33 @@ async function renderMantenimiento() {
   if (planVeh.plan) cargarMantTab(planVeh);
 }
 function renderOdometro(p) {
+  const v = cocheActual;
+  const coche = v && v.n_interno ? v.n_interno : "—";
   return `<div class="odometer-card">
     <div>
       <div class="odo-label">Odómetro estimado</div>
-      <div class="odo-value">${fmtNum(p.km_actual)} km</div>
-      <div class="odo-plan"><i class="ti ti-engine"></i> Plan: <b>${p.plan.plan_nombre}</b></div>
+      <div class="odo-value">${fmtNum(p.km_actual)} km
+        <button class="icon-btn" title="Corregir km a mano" onclick="corregirKm(${v.id}, ${p.km_actual})" style="vertical-align:middle;margin-left:6px"><i class="ti ti-edit"></i></button>
+      </div>
+      <div class="odo-plan"><i class="ti ti-bus"></i> Coche: <b>${coche}</b></div>
     </div>
     <div id="odo-resumen" class="odo-resumen"></div>
   </div>`;
+}
+
+// Corregir manualmente el odómetro de un vehículo
+function corregirKm(vid, kmActual) {
+  const nuevo = prompt(`Odómetro actual: ${fmtNum(kmActual)} km\n\nIngresá el km correcto del tablero:`, Math.round(kmActual));
+  if (nuevo === null) return;
+  const km = parseFloat(String(nuevo).replace(/\./g, "").replace(/,/g, "."));
+  if (isNaN(km) || km < 0) { toast("Km inválido", "error"); return; }
+  api(`/api/vehiculos/${vid}/km_manual`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ km })
+  }).then(r => {
+    if (r.ok) { toast("Odómetro corregido", "success"); renderMantenimiento(); }
+    else toast(r.msg || "Error", "error");
+  });
 }
 function renderSinPlan(planes, v) {
   return `<div class="card">
@@ -1169,16 +1936,93 @@ async function borrarTarea(id) {
 const TIPOS_FALLA = ["Motor", "Frenos", "Eléctrico", "Transmisión", "Suspensión", "Carrocería", "Neumáticos", "Aire acondicionado", "Otro"];
 const ESTADOS_CORR = { pendiente: "Pendiente", en_reparacion: "En reparación", completado: "Completado" };
 
+let correctivosTab = "por_ot";  // 'por_ot' o 'manual'
+
 async function renderCorrectivos() {
   status("Mantenimientos correctivos / averías");
-  const correctivos = await api("/api/correctivos");
-  const vehiculos = await api("/api/vehiculos");
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-alert-triangle"></i> Correctivos</h1>
-      <p>Registro de averías y reparaciones no planificadas</p>
+      <p>Averías y reparaciones — agrupadas por orden de trabajo</p>
     </div>
     <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${correctivosTab==='por_ot'?'active':''}" onclick="setCorrectivosTab('por_ot')"><i class="ti ti-clipboard-list"></i> Por orden de trabajo</button>
+          <button class="tab-btn ${correctivosTab==='manual'?'active':''}" onclick="setCorrectivosTab('manual')"><i class="ti ti-plus"></i> Registro manual</button>
+        </div>
+        <button class="btn btn-ghost" style="margin-left:auto" onclick="abrirReporteCorrectivos()"><i class="ti ti-printer"></i> Imprimir por fechas</button>
+      </div>
+      <div id="correctivos-contenido"></div>
+    </div>`;
+  if (correctivosTab === "por_ot") {
+    await renderCorrectivosPorOT();
+  } else {
+    await renderCorrectivosManual();
+  }
+}
+
+function setCorrectivosTab(t) { correctivosTab = t; renderCorrectivos(); }
+
+// Vista NUEVA: correctivos agrupados por su orden de trabajo
+async function renderCorrectivosPorOT() {
+  const cont = document.getElementById("correctivos-contenido");
+  const grupos = await api("/api/correctivos_por_ot");
+  if (!grupos.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-mood-smile"></i>No hay correctivos en ninguna orden de trabajo.<br>¡Buena señal!</div>`;
+    return;
+  }
+  // Total de items correctivos
+  const totalItems = grupos.reduce((s, g) => s + g.items.length, 0);
+  cont.innerHTML = `
+    <div style="margin-bottom:16px;color:var(--muted);font-size:14px">
+      <b>${totalItems}</b> trabajos correctivos en <b>${grupos.length}</b> órdenes de trabajo
+    </div>
+    ${grupos.map(g => {
+      const coche = g.n_interno ? `Coche ${g.n_interno}` : g.patente;
+      const completados = g.items.filter(i => i.estado === "completado").length;
+      const colorEstado = g.estado === "cerrada" ? "success" : g.estado === "en_proceso" ? "warning" : "danger";
+      return `
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="abrirOT(${g.ot_id})">
+            <span><i class="ti ti-clipboard-check"></i> OT #${g.ot_id} · ${coche} · ${g.patente}</span>
+            <span style="display:flex;gap:8px;align-items:center">
+              <span class="badge ${colorEstado}"><span class="dot"></span> ${LABEL_ESTADO_OT[g.estado]}</span>
+              <span style="font-size:12px;color:var(--muted)">${g.fecha_apertura}</span>
+            </span>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div class="table-wrap"><table>
+              <thead><tr>
+                <th>Falla / Trabajo</th><th>Técnico</th><th>Material necesario</th><th class="center">Estado</th>
+              </tr></thead>
+              <tbody>
+                ${g.items.map(it => `<tr>
+                  <td><b>${it.descripcion}</b></td>
+                  <td style="color:var(--muted)">${it.tecnico || "—"}</td>
+                  <td>${it.material_pedido || "—"}</td>
+                  <td class="center">
+                    <span class="badge ${it.estado === 'completado' ? 'success' : 'warning'}">
+                      <span class="dot"></span> ${it.estado === 'completado' ? 'Completado' : 'Pendiente'}
+                    </span>
+                  </td>
+                </tr>`).join("")}
+              </tbody>
+            </table></div>
+            <div style="padding:10px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)">
+              ${completados}/${g.items.length} completados · ${g.km ? fmtNum(g.km) + ' km' : 'sin km'} · Tocá el encabezado para abrir la OT
+            </div>
+          </div>
+        </div>`;
+    }).join("")}`;
+}
+
+// Vista vieja: registro manual de correctivos (se mantiene por si se necesita)
+async function renderCorrectivosManual() {
+  const cont = document.getElementById("correctivos-contenido");
+  const correctivos = await api("/api/correctivos");
+  const vehiculos = await api("/api/vehiculos");
+  cont.innerHTML = `
       <div class="card">
         <div class="card-head"><i class="ti ti-plus"></i> Registrar avería / reparación</div>
         <div class="card-body">
@@ -1217,9 +2061,9 @@ async function renderCorrectivos() {
         </div>
       </div>
 
-      <div class="section-title"><i class="ti ti-list"></i> Historial de correctivos (${correctivos.length})</div>
+      <div class="section-title"><i class="ti ti-list"></i> Historial manual (${correctivos.length})</div>
       ${correctivos.length === 0 ? `
-        <div class="empty"><i class="ti ti-mood-smile"></i>Sin correctivos registrados.<br>¡Buena señal!</div>
+        <div class="empty"><i class="ti ti-mood-smile"></i>Sin correctivos manuales registrados.</div>
       ` : `
         <div class="table-wrap">
           <table>
@@ -1247,8 +2091,7 @@ async function renderCorrectivos() {
             </tbody>
           </table>
         </div>
-      `}
-    </div>`;
+      `}`;
 }
 async function guardarCorrectivo() {
   const desc = $("#co-desc").value.trim();
@@ -1284,12 +2127,43 @@ async function renderDocumentos() {
   status("Documentos y vencimientos de la flota");
   const docs = await api("/api/documentos");
   const vehiculos = await api("/api/vehiculos");
+  // Calcular días hasta vencimiento y ordenar por urgencia (lo más urgente arriba)
+  docs.forEach(d => d._dias = diasHasta(d.fecha_vencimiento));
+  docs.sort((a, b) => a._dias - b._dias);
+  // Contadores para el resumen
+  const nVencidos = docs.filter(d => d._dias < 0).length;
+  const nPorVencer = docs.filter(d => d._dias >= 0 && d._dias <= 30).length;
+  const nAlDia = docs.filter(d => d._dias > 30).length;
+  // Guardar para los filtros
+  window._todosDocs = docs;
+  window._vehiculosDocs = vehiculos;
+
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-file-text"></i> Documentos</h1>
-      <p>Control de VTV, seguros, habilitaciones y otros vencimientos</p>
+      <p>Control de habilitaciones, seguros y otros vencimientos</p>
     </div>
     <div class="section">
+      <!-- Resumen de un vistazo -->
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('vencidos')">
+          <div class="metric-content"><div class="metric-label">Vencidos</div>
+          <div class="metric-value" style="color:var(--danger)">${nVencidos}</div></div>
+        </div>
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('porvencer')">
+          <div class="metric-content"><div class="metric-label">Por vencer (30 días)</div>
+          <div class="metric-value" style="color:var(--warning)">${nPorVencer}</div></div>
+        </div>
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('aldia')">
+          <div class="metric-content"><div class="metric-label">Al día</div>
+          <div class="metric-value" style="color:var(--success)">${nAlDia}</div></div>
+        </div>
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('')">
+          <div class="metric-content"><div class="metric-label">Total</div>
+          <div class="metric-value">${docs.length}</div></div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-head"><i class="ti ti-plus"></i> Registrar documento</div>
         <div class="card-body">
@@ -1315,38 +2189,136 @@ async function renderDocumentos() {
         </div>
       </div>
 
-      <div class="section-title"><i class="ti ti-calendar"></i> Documentos registrados (${docs.length})</div>
-      ${docs.length === 0 ? `<div class="empty"><i class="ti ti-file-off"></i>Sin documentos registrados</div>` : `
-        <div class="table-wrap">
-          <table>
-            <thead><tr>
-              <th>Vehículo</th><th>Tipo</th><th>Nombre</th>
-              <th>Vencimiento</th><th class="center">Estado</th>
-              <th>Proveedor</th><th class="num">Costo</th><th class="td-action"></th>
-            </tr></thead>
-            <tbody>
-              ${docs.map(d => {
-                const dias = diasHasta(d.fecha_vencimiento);
-                let estadoBadge, icono;
-                if (dias < 0) { estadoBadge = `<span class="badge danger"><span class="dot"></span> Vencido hace ${Math.abs(dias)} días</span>`; }
-                else if (dias <= 30) { estadoBadge = `<span class="badge warning"><span class="dot"></span> En ${dias} días</span>`; }
-                else { estadoBadge = `<span class="badge success"><span class="dot"></span> ${dias} días</span>`; }
-                return `<tr>
-                  <td><b>${d.patente}</b></td>
-                  <td><span class="badge cat">${d.tipo}</span></td>
-                  <td>${d.nombre || "—"}</td>
-                  <td>${d.fecha_vencimiento}</td>
-                  <td class="center">${estadoBadge}</td>
-                  <td style="color:var(--muted)">${d.proveedor || "—"}</td>
-                  <td class="num">${gs(d.costo)}</td>
-                  <td class="td-action"><button class="icon-btn" onclick="borrarDocumento(${d.id})"><i class="ti ti-trash"></i></button></td>
-                </tr>`;
-              }).join("")}
-            </tbody>
-          </table>
-        </div>
-      `}
+      <!-- Barra de filtros y búsqueda -->
+      <div class="toolbar" style="margin-top:6px">
+        <button class="btn btn-ghost" onclick="abrirReporteDocumentos()"><i class="ti ti-printer"></i> Imprimir por vencer</button>
+        <button class="btn ${docVista==='lista'?'btn-primary':'btn-ghost'}" onclick="setDocVista('lista')"><i class="ti ti-list"></i> Lista</button>
+        <button class="btn ${docVista==='vehiculo'?'btn-primary':'btn-ghost'}" onclick="setDocVista('vehiculo')"><i class="ti ti-bus"></i> Por vehículo</button>
+        <select id="doc-filtro-tipo" onchange="renderDocsTabla()" style="padding:9px;border-radius:9px;border:1.5px solid var(--border)">
+          <option value="">Todos los tipos</option>
+          ${TIPOS_DOC.map(t => `<option value="${t}">${t}</option>`).join("")}
+        </select>
+        <input id="doc-buscar" oninput="renderDocsTabla()" placeholder="Buscar por patente..." style="padding:9px;border-radius:9px;border:1.5px solid var(--border);flex:1;min-width:160px">
+      </div>
+
+      <div id="docs-contenido"></div>
     </div>`;
+  renderDocsTabla();
+}
+
+// Estado de la vista de documentos
+let docVista = "lista";
+let docFiltroEstado = "";
+function setDocVista(v) { docVista = v; renderDocumentos(); }
+function filtrarDocs(estado) { docFiltroEstado = estado; renderDocsTabla(); }
+
+// Renderiza la tabla/agrupación según filtros activos
+function renderDocsTabla() {
+  const cont = document.getElementById("docs-contenido");
+  if (!cont) return;
+  let docs = (window._todosDocs || []).slice();
+  const filtroTipo = (document.getElementById("doc-filtro-tipo") || {}).value || "";
+  const buscar = ((document.getElementById("doc-buscar") || {}).value || "").toLowerCase().trim();
+
+  // Aplicar filtros
+  if (docFiltroEstado === "vencidos") docs = docs.filter(d => d._dias < 0);
+  else if (docFiltroEstado === "porvencer") docs = docs.filter(d => d._dias >= 0 && d._dias <= 30);
+  else if (docFiltroEstado === "aldia") docs = docs.filter(d => d._dias > 30);
+  if (filtroTipo) docs = docs.filter(d => d.tipo === filtroTipo);
+  if (buscar) docs = docs.filter(d => (d.patente || "").toLowerCase().includes(buscar));
+
+  const filtroLabel = { vencidos: "Vencidos", porvencer: "Por vencer", aldia: "Al día" }[docFiltroEstado] || "Todos";
+
+  if (docs.length === 0) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-file-off"></i>No hay documentos ${docFiltroEstado || filtroTipo || buscar ? "con ese filtro" : "registrados"}.</div>`;
+    return;
+  }
+
+  if (docVista === "vehiculo") {
+    cont.innerHTML = renderDocsPorVehiculo(docs, filtroLabel);
+  } else {
+    cont.innerHTML = renderDocsLista(docs, filtroLabel);
+  }
+}
+
+function _badgeDoc(dias) {
+  if (dias < 0) return `<span class="badge danger"><span class="dot"></span> Vencido hace ${Math.abs(dias)} días</span>`;
+  if (dias <= 30) return `<span class="badge warning"><span class="dot"></span> En ${dias} días</span>`;
+  return `<span class="badge success"><span class="dot"></span> ${dias} días</span>`;
+}
+
+function _filaDoc(d) {
+  return `<tr>
+    <td><b>${d.patente}</b></td>
+    <td><span class="badge cat">${d.tipo}</span></td>
+    <td>${d.nombre || "—"}</td>
+    <td>${d.fecha_vencimiento}</td>
+    <td class="center">${_badgeDoc(d._dias)}</td>
+    <td style="color:var(--muted)">${d.proveedor || "—"}</td>
+    <td class="num">${gs(d.costo)}</td>
+    <td class="td-action" style="white-space:nowrap">
+      <button class="icon-btn" title="Renovar" onclick="renovarDocumento(${d.id})"><i class="ti ti-refresh"></i></button>
+      <button class="icon-btn" title="Eliminar" onclick="borrarDocumento(${d.id})"><i class="ti ti-trash"></i></button>
+    </td>
+  </tr>`;
+}
+
+function renderDocsLista(docs, filtroLabel) {
+  return `
+    <div class="section-title"><i class="ti ti-calendar"></i> Documentos — ${filtroLabel} (${docs.length})</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Vehículo</th><th>Tipo</th><th>Nombre</th>
+          <th>Vencimiento</th><th class="center">Estado</th>
+          <th>Proveedor</th><th class="num">Costo</th><th class="td-action"></th>
+        </tr></thead>
+        <tbody>${docs.map(_filaDoc).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderDocsPorVehiculo(docs, filtroLabel) {
+  // Agrupar por patente
+  const grupos = {};
+  docs.forEach(d => {
+    const key = d.patente || "Sin patente";
+    (grupos[key] = grupos[key] || []).push(d);
+  });
+  // Ordenar vehículos: los que tienen algo más urgente primero
+  const patentes = Object.keys(grupos).sort((a, b) => {
+    const minA = Math.min(...grupos[a].map(d => d._dias));
+    const minB = Math.min(...grupos[b].map(d => d._dias));
+    return minA - minB;
+  });
+  let html = `<div class="section-title"><i class="ti ti-bus"></i> Por vehículo — ${filtroLabel} (${docs.length})</div>`;
+  patentes.forEach(pat => {
+    const lista = grupos[pat];
+    const masUrgente = Math.min(...lista.map(d => d._dias));
+    const colorBorde = masUrgente < 0 ? "var(--danger)" : masUrgente <= 30 ? "var(--warning)" : "var(--success)";
+    html += `
+      <div class="card" style="margin-bottom:12px;border-left:4px solid ${colorBorde}">
+        <div class="card-head"><i class="ti ti-bus"></i> ${pat} <span style="color:var(--muted);font-weight:400;font-size:13px">(${lista.length} documento${lista.length>1?"s":""})</span></div>
+        <div class="card-body" style="padding:0">
+          <div class="table-wrap"><table>
+            <tbody>
+              ${lista.map(d => `<tr>
+                <td><span class="badge cat">${d.tipo}</span></td>
+                <td>${d.nombre || "—"}</td>
+                <td>${d.fecha_vencimiento}</td>
+                <td class="center">${_badgeDoc(d._dias)}</td>
+                <td style="color:var(--muted)">${d.proveedor || "—"}</td>
+                <td class="td-action" style="white-space:nowrap">
+                  <button class="icon-btn" title="Renovar" onclick="renovarDocumento(${d.id})"><i class="ti ti-refresh"></i></button>
+                  <button class="icon-btn" title="Eliminar" onclick="borrarDocumento(${d.id})"><i class="ti ti-trash"></i></button>
+                </td>
+              </tr>`).join("")}
+            </tbody>
+          </table></div>
+        </div>
+      </div>`;
+  });
+  return html;
 }
 async function guardarDocumento() {
   const venc = $("#d-venc").value;
@@ -1373,9 +2345,122 @@ async function borrarDocumento(id) {
   toast("Eliminado"); renderDocumentos();
 }
 
+// Renovar un documento: copia los datos y solo pide la nueva fecha de vencimiento
+function renovarDocumento(id) {
+  const doc = (window._todosDocs || []).find(d => d.id === id);
+  if (!doc) return;
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  const hoy = new Date().toISOString().slice(0, 10);
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-refresh"></i> Renovar documento</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 4px">${doc.patente} · ${doc.tipo}${doc.nombre ? " · " + doc.nombre : ""}</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 18px">Vencimiento actual: ${doc.fecha_vencimiento}. Se crea un documento nuevo con los mismos datos y la nueva fecha.</p>
+      <div style="display:flex;gap:12px;margin-bottom:14px">
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Nueva emisión</label>
+          <input type="date" id="ren-emi" value="${hoy}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Nuevo vencimiento *</label>
+          <input type="date" id="ren-venc" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+      </div>
+      <div style="margin-bottom:18px">
+        <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Costo de la renovación (Gs.)</label>
+        <input id="ren-costo" placeholder="0" value="${doc.costo || ''}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarRenovar(${id}, this)"><i class="ti ti-check"></i> Renovar</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+async function confirmarRenovar(id, btn) {
+  const doc = (window._todosDocs || []).find(d => d.id === id);
+  if (!doc) return;
+  const venc = document.getElementById("ren-venc").value;
+  const emi = document.getElementById("ren-emi").value;
+  if (!venc) { toast("Poné la nueva fecha de vencimiento", "error"); return; }
+  const costo = (document.getElementById("ren-costo").value || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/documentos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: doc.vehiculo_id, tipo: doc.tipo, nombre: doc.nombre,
+      fecha_emision: emi || null, fecha_vencimiento: venc,
+      proveedor: doc.proveedor, costo: costo || 0,
+      observaciones: doc.observaciones || ""
+    })
+  });
+  if (r.ok) {
+    toast("Documento renovado", "success");
+    btn.closest(".modal-overlay").remove();
+    renderDocumentos();
+  } else toast("Error al renovar", "error");
+}
+
+// Modal de fechas para el PDF de documentos por vencer
+function abrirReporteDocumentos() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const en60 = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-printer"></i> Documentos por vencer</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Genera un PDF con los documentos que vencen hasta la fecha que elijas (incluye los ya vencidos).</p>
+      <div style="margin-bottom:18px">
+        <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Mostrar vencimientos hasta:</label>
+        <input type="date" id="doc-hasta" value="${en60}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="generarReporteDocumentos(this)"><i class="ti ti-download"></i> Generar PDF</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function generarReporteDocumentos(btn) {
+  const hasta = document.getElementById("doc-hasta").value;
+  if (!hasta) { toast("Elegí una fecha", "error"); return; }
+  window.open(`/api/documentos_pdf?hasta=${hasta}`, "_blank");
+  btn.closest(".modal-overlay").remove();
+}
+
 // ─── Arranque ───────────────────────────────────────────────────────────
 setCoche(null);
-renderDashboard();
+if (window.USUARIO_ROL === "compras") {
+  // El sector Compras solo ve su sección: ocultar el resto del menú
+  document.querySelectorAll(".nav-item").forEach(b => {
+    if (b.dataset.sec !== "compras") b.style.display = "none";
+  });
+  document.querySelectorAll(".nav-section").forEach(s => {
+    if (s.textContent.trim() !== "Compras") s.style.display = "none";
+  });
+  document.querySelector('.nav-item[data-sec="compras"]')?.classList.add("active");
+  renderCompras();
+} else if (window.USUARIO_ROL === "auditor") {
+  // El auditor solo ve la sección de Auditoría (historial + combustible)
+  const seccionesAuditor = ["historial", "combustible"];
+  document.querySelectorAll(".nav-item").forEach(b => {
+    if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
+  });
+  document.querySelectorAll(".nav-section").forEach(s => {
+    if (s.textContent.trim() !== "Auditoría") s.style.display = "none";
+  });
+  document.querySelector('.nav-item[data-sec="combustible"]')?.classList.add("active");
+  renderCombustible();
+} else {
+  renderDashboard();
+}
 
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1386,6 +2471,62 @@ const ESTADO_GRAD_LABEL = {
   optimo: "Óptimo", bueno: "Bueno", regular: "Regular",
   atencion: "Atención", vencido: "Vencido"
 };
+
+// Confirmar que la config automática es correcta (saca el aviso)
+async function confirmarConfig(vid) {
+  const data = await api(`/api/vehiculos/${vid}/neumaticos`);
+  const r = await api(`/api/vehiculos/${vid}/config_neumaticos`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ configuracion: data.configuracion })
+  });
+  if (r.ok) { toast("Configuración confirmada", "success"); renderNeumaticos(); }
+}
+
+// Abrir selector para cambiar la configuración de ruedas del vehículo
+async function cambiarConfigNeumaticos(vid, actual) {
+  const configs = await api("/api/configs_neumaticos");
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-settings"></i> Configuración de ruedas</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Elegí cómo es este vehículo. El cambio afecta solo a esta unidad. Recordá: adelante 1 rueda por lado, atrás gemelas.</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px">
+        ${configs.map(c => `
+          <label style="display:flex;align-items:center;gap:12px;padding:13px 14px;border:1.5px solid ${c.valor===actual?'var(--brand-blue)':'var(--border)'};border-radius:11px;cursor:pointer;background:${c.valor===actual?'#eaf2fb':'#fff'}">
+            <input type="radio" name="cfg-neu" value="${c.valor}" ${c.valor===actual?'checked':''} style="width:18px;height:18px">
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px">${c.label.split('—')[0].trim()}</div>
+              <div style="font-size:12px;color:var(--muted)">${c.ruedas} ruedas en total</div>
+            </div>
+            <span class="badge cat">${c.ruedas}</span>
+          </label>
+        `).join("")}
+      </div>
+      <p style="font-size:11.5px;color:var(--muted);margin:0 0 16px"><i class="ti ti-info-circle"></i> Si cambiás la cantidad de ruedas, las posiciones se rearman. Las cubiertas instaladas en posiciones que ya no existan quedarán libres.</p>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarCambioConfig(${vid}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+async function guardarCambioConfig(vid, btn) {
+  const sel = document.querySelector('input[name="cfg-neu"]:checked');
+  if (!sel) { toast("Elegí una configuración", "error"); return; }
+  const r = await api(`/api/vehiculos/${vid}/config_neumaticos`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ configuracion: sel.value })
+  });
+  if (r.ok) {
+    toast("Configuración actualizada", "success");
+    btn.closest(".modal-overlay").remove();
+    renderNeumaticos();
+  } else toast("Error al guardar", "error");
+}
 
 async function renderNeumaticos() {
   const v = cocheActual;
@@ -1414,12 +2555,28 @@ async function renderNeumaticos() {
   // Generar SVG del bus
   const svg = generarSvgBus(data);
 
+  // Aviso de verificación si la config fue asignada automáticamente
+  const avisoVerificar = (data.verificado === 0) ? `
+    <div style="background:var(--warning-bg);border:1px solid var(--warning);border-radius:11px;padding:12px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
+      <i class="ti ti-alert-triangle" style="color:var(--warning);font-size:22px"></i>
+      <div style="flex:1">
+        <b style="font-size:13.5px">Verificá esta configuración</b>
+        <p style="font-size:12.5px;color:var(--muted);margin:2px 0 0">El sistema asignó <b>${data.configuracion}</b> según los ejes. Confirmá si es correcta o cambiala con el botón de la derecha.</p>
+      </div>
+      <button class="btn btn-primary" style="white-space:nowrap" onclick="confirmarConfig(${v.id})"><i class="ti ti-check"></i> Es correcta</button>
+    </div>` : "";
+
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-disc"></i> Neumáticos · ${v.patente}</h1>
       <p>${v.marca} ${v.modelo} — control individual de cada cubierta</p>
     </div>
     <div class="section">
+      ${avisoVerificar}
+
+      <div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+        <button class="btn btn-ghost" onclick="cambiarConfigNeumaticos(${v.id}, '${data.configuracion}')"><i class="ti ti-settings"></i> Cambiar configuración de ruedas</button>
+      </div>
 
       <div class="bus-layout">
         <div class="bus-config-badges">
@@ -1700,6 +2857,59 @@ function generarSvgBus(data) {
         "RD":     { x: 550, y: 170, label: "RD" },
       }
     },
+    // ── Configuraciones nuevas (regla: adelante 1 p/lado, atrás gemelas) ──
+    "camioneta": {
+      width: 320, height: 200,
+      bus: { x: 50, y: 55, w: 220, h: 90 },
+      posiciones: {
+        "DI":     { x: 85,  y: 42,  label: "Del. Izq" },
+        "DD":     { x: 85,  y: 158, label: "Del. Der" },
+        "TI-Ext": { x: 235, y: 42,  label: "Tra. Izq" },
+        "TD-Ext": { x: 235, y: 158, label: "Tra. Der" },
+      }
+    },
+    "2ejes": {
+      width: 360, height: 200,
+      bus: { x: 50, y: 50, w: 260, h: 100 },
+      posiciones: {
+        "DI":     { x: 90,  y: 38,  label: "Dir. Izq" },
+        "DD":     { x: 90,  y: 162, label: "Dir. Der" },
+        "TI-Ext": { x: 270, y: 26,  label: "Tra I-Ext" },
+        "TI-Int": { x: 270, y: 70,  label: "Tra I-Int" },
+        "TD-Ext": { x: 270, y: 174, label: "Tra D-Ext" },
+        "TD-Int": { x: 270, y: 130, label: "Tra D-Int" },
+      }
+    },
+    "3ejes": {
+      width: 500, height: 200,
+      bus: { x: 50, y: 50, w: 400, h: 100 },
+      posiciones: {
+        "DI":     { x: 90,  y: 38,  label: "Dir. Izq" },
+        "DD":     { x: 90,  y: 162, label: "Dir. Der" },
+        "MI-Ext": { x: 300, y: 26,  label: "Med I-Ext" },
+        "MI-Int": { x: 300, y: 70,  label: "Med I-Int" },
+        "MD-Ext": { x: 300, y: 174, label: "Med D-Ext" },
+        "MD-Int": { x: 300, y: 130, label: "Med D-Int" },
+        "TI-Ext": { x: 410, y: 38,  label: "Tra. Izq" },
+        "TD-Ext": { x: 410, y: 162, label: "Tra. Der" },
+      }
+    },
+    "4ejes": {
+      width: 600, height: 200,
+      bus: { x: 50, y: 50, w: 500, h: 100 },
+      posiciones: {
+        "D1I":    { x: 95,  y: 38,  label: "Dir1 Izq" },
+        "D1D":    { x: 95,  y: 162, label: "Dir1 Der" },
+        "D2I":    { x: 185, y: 38,  label: "Dir2 Izq" },
+        "D2D":    { x: 185, y: 162, label: "Dir2 Der" },
+        "MI-Ext": { x: 400, y: 26,  label: "Pen I-Ext" },
+        "MI-Int": { x: 400, y: 70,  label: "Pen I-Int" },
+        "MD-Ext": { x: 400, y: 174, label: "Pen D-Ext" },
+        "MD-Int": { x: 400, y: 130, label: "Pen D-Int" },
+        "TI-Ext": { x: 510, y: 38,  label: "Tra. Izq" },
+        "TD-Ext": { x: 510, y: 162, label: "Tra. Der" },
+      }
+    },
   };
 
   const layout = layouts[config] || layouts["6x2"];
@@ -1972,12 +3182,289 @@ const LABEL_ESTADO_OT = {
 
 let otFiltroEstado = "";
 
+// ═══════════════ PANTALLA DE COMPRAS / DEPÓSITO ═══════════════
+let comprasTab = "en_espera";
+const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestadas", en_camino: "En camino", entregado: "Entregadas" };
+
+async function renderCompras() {
+  status("Compras / Depósito");
+  const todas = await api("/api/compras/ots");
+  const enEspera = todas.filter(o => o.estado_compras === "en_espera");
+  const presup = todas.filter(o => o.estado_compras === "presupuestado");
+  const enCamino = todas.filter(o => o.estado_compras === "en_camino");
+  const entreg = todas.filter(o => o.estado_compras === "entregado");
+  const lista = comprasTab === "en_espera" ? enEspera
+    : comprasTab === "presupuestado" ? presup
+    : comprasTab === "en_camino" ? enCamino : entreg;
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-shopping-cart"></i> Compras / Depósito</h1>
+      <p>Pedidos del taller — presupuestar, autorizar y entregar</p>
+    </div>
+    <div class="section">
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric" style="cursor:pointer;${comprasTab==='en_espera'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('en_espera')">
+          <div class="metric-content"><div class="metric-label">En espera</div>
+          <div class="metric-value" style="color:var(--warning)">${enEspera.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='presupuestado'?'border:2px solid var(--brand-blue)':''}" onclick="setComprasTab('presupuestado')">
+          <div class="metric-content"><div class="metric-label">Presupuestadas</div>
+          <div class="metric-value" style="color:var(--brand-blue)">${presup.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='en_camino'?'border:2px solid #d97706':''}" onclick="setComprasTab('en_camino')">
+          <div class="metric-content"><div class="metric-label">En camino</div>
+          <div class="metric-value" style="color:#d97706">${enCamino.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='entregado'?'border:2px solid var(--success)':''}" onclick="setComprasTab('entregado')">
+          <div class="metric-content"><div class="metric-label">Entregadas</div>
+          <div class="metric-value" style="color:var(--success)">${entreg.length}</div></div></div>
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab]} (${lista.length})</div>
+      ${lista.length === 0
+        ? `<div class="empty"><i class="ti ti-shopping-cart-off"></i>No hay pedidos en esta etapa.</div>`
+        : lista.map(o => tarjetaCompra(o)).join("")}
+    </div>`;
+}
+
+function setComprasTab(t) { comprasTab = t; renderCompras(); }
+
+function tarjetaCompra(o) {
+  const coche = o.n_interno ? `Coche ${o.n_interno}` : o.patente;
+  const totalPresup = o.items.reduce((s, i) => s + (i.precio_compras || 0), 0);
+  let acciones = "";
+  if (o.estado_compras === "en_espera") {
+    acciones = `<button class="btn btn-primary" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-cash"></i> Cargar presupuesto</button>`;
+  } else if (o.estado_compras === "presupuestado") {
+    acciones = `
+      <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir para Tesorería</button>
+      <button class="btn btn-ghost" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-edit"></i> Editar precios</button>
+      <button class="btn btn-primary" onclick="marcarEnCamino(${o.id})"><i class="ti ti-truck-delivery"></i> Marcar en camino</button>`;
+  } else if (o.estado_compras === "en_camino") {
+    acciones = `
+      <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
+      <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package"></i> Registrar entrega</button>`;
+  } else {
+    acciones = `
+      <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
+      <button class="btn btn-ghost" onclick="verEvidencia(${o.id})"><i class="ti ti-photo"></i> Ver evidencia</button>`;
+  }
+
+  return `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
+        <span><i class="ti ti-clipboard-check"></i> OT #${o.id} · ${coche} · ${o.patente}</span>
+        <span style="font-size:12px;color:var(--muted)">${o.fecha_envio_compras ? "Enviada: " + o.fecha_envio_compras.slice(0,10) : ""}</span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Trabajo</th><th>Material necesario</th><th>Mecánico</th>
+            ${o.estado_compras !== "en_espera" ? '<th class="num">Precio</th>' : ''}
+          </tr></thead>
+          <tbody>
+            ${o.items.map(it => `<tr>
+              <td>${it.descripcion}</td>
+              <td><b>${it.material_pedido || "—"}</b></td>
+              <td style="color:var(--muted)">${it.tecnico || "—"}</td>
+              ${o.estado_compras !== "en_espera" ? `<td class="num">${gs(it.precio_compras || 0)}</td>` : ''}
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+        ${o.estado_compras !== "en_espera" ? `<div style="text-align:right;margin-top:8px;font-weight:700;color:var(--brand-blue)">Total: ${gs(totalPresup)}</div>` : ''}
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">${acciones}</div>
+      </div>
+    </div>`;
+}
+
+// Modal para cargar/editar precios del presupuesto
+async function abrirPresupuesto(otId) {
+  const ots = await api("/api/compras/ots");
+  const o = ots.find(x => x.id === otId);
+  if (!o) return;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:640px;width:100%;max-height:90vh;overflow:auto;padding:24px">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Poné el precio de cada material. ${o.patente} · ${o.n_interno ? "Coche " + o.n_interno : ""}</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Trabajo</th><th>Material</th><th>Mecánico</th><th class="num">Precio (Gs.)</th></tr></thead>
+        <tbody>
+          ${o.items.map(it => `<tr>
+            <td style="font-size:13px">${it.descripcion}</td>
+            <td style="font-size:13px"><b>${it.material_pedido || "—"}</b></td>
+            <td style="font-size:13px;color:var(--muted)">${it.tecnico || "—"}</td>
+            <td><input type="number" id="precio-${it.id}" value="${it.precio_compras || ''}" placeholder="0"
+                 style="width:120px;padding:8px;border:1.5px solid var(--border);border-radius:8px;text-align:right"></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarPresupuesto(${o.id}, this)"><i class="ti ti-check"></i> Guardar presupuesto</button>
+      </div>
+    </div>`;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function guardarPresupuesto(otId, btn) {
+  const ots = await api("/api/compras/ots");
+  const o = ots.find(x => x.id === otId);
+  const precios = {};
+  let alguno = false;
+  o.items.forEach(it => {
+    const val = document.getElementById(`precio-${it.id}`).value;
+    if (val !== "" && val !== null) { precios[it.id] = parseFloat(val) || 0; alguno = true; }
+  });
+  if (!alguno) { toast("Cargá al menos un precio", "error"); return; }
+  const r = await api(`/api/compras/${otId}/presupuesto`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ precios })
+  });
+  if (r.ok) {
+    toast("Presupuesto guardado", "success");
+    btn.closest(".modal-overlay").remove();
+    renderCompras();
+  } else toast(r.msg || "Error", "error");
+}
+
+// Modal para registrar la entrega con foto obligatoria
+// Comprime una foto antes de subirla (de ~3MB a ~150KB)
+function comprimirFoto(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const maxLado = 1000;
+        let { width, height } = img;
+        if (width > height && width > maxLado) {
+          height = height * maxLado / width; width = maxLado;
+        } else if (height > maxLado) {
+          width = width * maxLado / height; height = maxLado;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.6));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function abrirEntrega(otId) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:24px">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-package"></i> Registrar entrega — OT #${otId}</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Sacá o elegí una foto del material entregado. <b>La foto es obligatoria</b> como evidencia.</p>
+      <input type="file" id="ev-camara" accept="image/*" capture="environment" style="display:none">
+      <input type="file" id="ev-galeria" accept="image/*" style="display:none">
+      <div style="display:flex;gap:10px;margin-bottom:14px">
+        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-camara').click()"><i class="ti ti-camera"></i> Sacar foto</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-galeria').click()"><i class="ti ti-photo"></i> Elegir foto</button>
+      </div>
+      <div id="ev-preview" style="margin-bottom:16px"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-success" id="ev-confirmar" onclick="confirmarEntrega(${otId}, this)" disabled><i class="ti ti-check"></i> Confirmar entrega</button>
+      </div>
+    </div>`;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+
+  let fotoEvidencia = null;
+  async function procesarEv(file) {
+    fotoEvidencia = await comprimirFoto(file);
+    document.getElementById("ev-preview").innerHTML = `<img src="${fotoEvidencia}" style="width:140px;height:140px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">`;
+    document.getElementById("ev-confirmar").disabled = false;
+  }
+  document.getElementById("ev-camara").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
+  document.getElementById("ev-galeria").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
+  window._fotoEvidenciaGetter = () => fotoEvidencia;
+}
+
+async function confirmarEntrega(otId, btn) {
+  const foto = window._fotoEvidenciaGetter ? window._fotoEvidenciaGetter() : null;
+  if (!foto) { toast("Sacá una foto de evidencia primero", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/compras/${otId}/entregar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ foto })
+  });
+  if (r.ok) {
+    toast("Entrega registrada", "success");
+    btn.closest(".modal-overlay").remove();
+    renderCompras();
+  } else { toast(r.msg || "Error", "error"); btn.disabled = false; }
+}
+
+async function verEvidencia(otId) {
+  const fotos = await api(`/api/compras/${otId}/evidencia`);
+  if (!fotos.length) { toast("Sin evidencia", "error"); return; }
+  verFotoGrande(fotos[0].datos);
+}
+
+// Compras marca que fue a buscar los repuestos
+async function marcarEnCamino(otId) {
+  if (!confirm("¿Marcar que ya fueron a buscar los repuestos?")) return;
+  const r = await api(`/api/compras/${otId}/en_camino`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+  });
+  if (r.ok) { toast("Marcado en camino", "success"); renderCompras(); }
+  else toast(r.msg || "Error", "error");
+}
+
+// Convierte 'HH:MM' a minutos del día. Sin horario → muy alto (va al final).
+function minutosHorario(h) {
+  if (!h || !h.includes(":")) return 99999;
+  const [hh, mm] = h.split(":");
+  return parseInt(hh) * 60 + parseInt(mm);
+}
+
+// Badge del horario de salida con color de urgencia
+function badgeSalida(horario) {
+  if (!horario || !horario.includes(":")) return `<span style="color:var(--muted);font-size:12px">—</span>`;
+  // Calcular urgencia según la hora actual
+  const ahora = new Date();
+  const minAhora = ahora.getHours() * 60 + ahora.getMinutes();
+  const minSalida = minutosHorario(horario);
+  const faltan = minSalida - minAhora;
+  let color, bg;
+  if (faltan < 0) { color = "#6b7280"; bg = "#f3f4f6"; }           // ya salió
+  else if (faltan <= 60) { color = "#dc2626"; bg = "#fee2e2"; }     // menos de 1h: urgente
+  else if (faltan <= 180) { color = "#d97706"; bg = "#fef3c7"; }    // menos de 3h: pronto
+  else { color = "#059669"; bg = "#d1fae5"; }                       // tranquilo
+  return `<span style="display:inline-flex;align-items:center;gap:4px;background:${bg};color:${color};padding:3px 9px;border-radius:8px;font-size:13px;font-weight:700"><i class="ti ti-clock"></i> ${horario}</span>`;
+}
+
 async function renderOts() {
   status("Órdenes de Trabajo");
   const filtro = otFiltroEstado ? `?estado=${otFiltroEstado}` : "";
   const ots = await api("/api/ots" + filtro);
   const counts = { abierta: 0, en_proceso: 0, cerrada: 0 };
   (await api("/api/ots")).forEach(o => counts[o.estado] = (counts[o.estado] || 0) + 1);
+
+  // Ordenar las OTs activas por urgencia de horario de salida (el que sale antes, primero).
+  // Las cerradas se dejan por fecha. Las sin horario van al final.
+  if (otFiltroEstado !== "cerrada") {
+    ots.sort((a, b) => {
+      const cerrA = a.estado === "cerrada" ? 1 : 0;
+      const cerrB = b.estado === "cerrada" ? 1 : 0;
+      if (cerrA !== cerrB) return cerrA - cerrB;  // activas arriba
+      const ua = minutosHorario(a.horario_salida);
+      const ub = minutosHorario(b.horario_salida);
+      return ua - ub;  // más temprano = más urgente
+    });
+  }
 
   content.innerHTML = `
     <div class="page-header">
@@ -2007,6 +3494,7 @@ async function renderOts() {
 
       <div class="toolbar">
         <button class="btn btn-primary" onclick="abrirNuevaOT()"><i class="ti ti-plus"></i> Nueva OT</button>
+        <button class="btn btn-ghost" onclick="abrirReporteFechas()"><i class="ti ti-file-text"></i> Reporte por fechas</button>
         <div class="tabs">
           <button class="tab-btn ${otFiltroEstado===''?'active':''}" onclick="filtrarOTs('')"><i class="ti ti-list"></i> Todas</button>
           <button class="tab-btn ${otFiltroEstado==='abierta'?'active':''}" onclick="filtrarOTs('abierta')"><i class="ti ti-progress"></i> Abiertas</button>
@@ -2019,7 +3507,7 @@ async function renderOts() {
         <div class="table-wrap">
           <table>
             <thead><tr>
-              <th>OT #</th><th>Fecha</th><th>Vehículo</th><th>Conductor</th>
+              <th>OT #</th><th class="center">Salida</th><th>Fecha</th><th>Vehículo</th><th>Conductor</th>
               <th>Procedencia</th><th class="num">KM</th>
               <th class="center">Items</th><th class="num">Costo</th>
               <th class="center">Estado</th><th class="td-action"></th>
@@ -2029,6 +3517,7 @@ async function renderOts() {
                 const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
                 return `<tr class="clickable" onclick="abrirOT(${o.id})">
                   <td><b>#${o.id}</b></td>
+                  <td class="center">${badgeSalida(o.horario_salida)}</td>
                   <td>${o.fecha_apertura}</td>
                   <td><b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}</td>
                   <td>${o.conductor || "—"}</td>
@@ -2166,6 +3655,107 @@ async function guardarNuevaOT() {
   } else toast(r.msg || "Error", "error");
 }
 
+// Modal para elegir fechas y generar el reporte de trabajos en PDF
+function abrirReporteFechas() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const hace7 = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-file-text"></i> Reporte de trabajos</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Elegí el rango de fechas. Se genera un PDF con todas las órdenes de ese período (diario, semanal, lo que necesites).</p>
+      <div style="display:flex;gap:12px;margin-bottom:18px">
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Desde</label>
+          <input type="date" id="rep-desde" value="${hace7}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Hasta</label>
+          <input type="date" id="rep-hasta" value="${hoy}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="generarReporteFechas(this)"><i class="ti ti-download"></i> Generar PDF</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function generarReporteFechas(btn) {
+  const desde = document.getElementById("rep-desde").value;
+  const hasta = document.getElementById("rep-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  if (desde > hasta) { toast("La fecha 'desde' no puede ser mayor que 'hasta'", "error"); return; }
+  window.open(`/api/reporte_trabajos_pdf?desde=${desde}&hasta=${hasta}`, "_blank");
+  btn.closest(".modal-overlay").remove();
+}
+
+// Modal de fechas para el PDF de correctivos
+function abrirReporteCorrectivos() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const hace30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-printer"></i> Reporte de correctivos</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Elegí el rango de fechas. Se genera un PDF con todas las averías y reparaciones de ese período.</p>
+      <div style="display:flex;gap:12px;margin-bottom:18px">
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Desde</label>
+          <input type="date" id="corr-desde" value="${hace30}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Hasta</label>
+          <input type="date" id="corr-hasta" value="${hoy}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="generarReporteCorrectivos(this)"><i class="ti ti-download"></i> Generar PDF</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function generarReporteCorrectivos(btn) {
+  const desde = document.getElementById("corr-desde").value;
+  const hasta = document.getElementById("corr-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  if (desde > hasta) { toast("La fecha 'desde' no puede ser mayor que 'hasta'", "error"); return; }
+  window.open(`/api/correctivos_pdf?desde=${desde}&hasta=${hasta}`, "_blank");
+  btn.closest(".modal-overlay").remove();
+}
+
+// Enviar una OT al sector Compras
+async function enviarACompras(otId) {
+  if (!confirm("¿Enviar esta OT a Compras? Quedará en espera de presupuesto.")) return;
+  const r = await api(`/api/ots/${otId}/enviar_compras`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nota: "" })
+  });
+  if (r.ok) {
+    toast("OT enviada a Compras", "success");
+    cerrarModalOTDetalle();
+    renderOts();
+  } else toast(r.msg || "Error", "error");
+}
+
+// Ver una foto en grande (toca para cerrar)
+function verFotoGrande(src) {
+  const o = document.createElement("div");
+  o.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:2000;display:grid;place-items:center;padding:20px;cursor:pointer";
+  o.onclick = () => o.remove();
+  o.innerHTML = `<img src="${src}" style="max-width:100%;max-height:100%;border-radius:8px">`;
+  document.body.appendChild(o);
+}
+
 async function abrirOT(otId) {
   const ot = await api(`/api/ots/${otId}`);
   if (!ot) return;
@@ -2174,8 +3764,9 @@ async function abrirOT(otId) {
   overlay.id = "modal-ot-detalle";
   overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:999;display:grid;place-items:center;padding:20px";
 
-  const totalCosto = ot.items.reduce((s, i) => s + (i.costo || 0), 0);
   const compl = ot.items.filter(i => i.estado === "completado").length;
+  const LABEL_COMPRAS = { en_espera: "En espera (Compras)", presupuestado: "Presupuestado", en_camino: "En camino 🚚", entregado: "Entregado ✓" };
+  const COLOR_COMPRAS = { en_espera: "warning", presupuestado: "cat", en_camino: "warning", entregado: "success" };
 
   overlay.innerHTML = `
     <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:880px;width:100%;max-height:92vh;overflow:auto">
@@ -2198,15 +3789,29 @@ async function abrirOT(otId) {
             <span class="dot"></span> ${LABEL_ESTADO_OT[ot.estado]}
           </span>
           <span class="badge">${compl}/${ot.items.length} completados</span>
-          <span class="badge cat">${gs(totalCosto)}</span>
+          ${ot.estado_compras ? `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>` : ''}
+          ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
         </div>
+
+        ${ot.fotos && ot.fotos.length ? `
+          <div style="margin-bottom:18px">
+            <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px"><i class="ti ti-camera"></i> Fotos del chofer</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              ${ot.fotos.map(f => `
+                <img src="${f.datos}" alt="${f.nombre}" style="width:120px;height:120px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer"
+                     onclick="verFotoGrande('${f.datos}')">
+              `).join("")}
+            </div>
+            <p style="font-size:11.5px;color:var(--muted);margin-top:6px"><i class="ti ti-info-circle"></i> Las fotos se borran al cerrar la OT.</p>
+          </div>
+        ` : ''}
 
         ${ot.items.length === 0 ? `<div class="empty"><i class="ti ti-list"></i>Sin items en esta OT</div>` : `
           <div class="table-wrap">
             <table>
               <thead><tr>
                 <th class="center">#</th><th>Descripción</th><th class="center">Tipo</th>
-                <th class="center">Estado</th><th>Técnico</th><th class="num">Costo</th><th class="td-action"></th>
+                <th class="center">Estado</th><th>Técnico</th><th>Material necesario</th><th class="td-action"></th>
               </tr></thead>
               <tbody>
                 ${ot.items.map((it, idx) => `
@@ -2230,10 +3835,10 @@ async function abrirOT(otId) {
                         onblur="actualizarItem(${it.id},'tecnico',this.value)"
                         style="width:110px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
                     </td>
-                    <td class="num">
-                      <input type="text" value="${it.costo || ''}" placeholder="0"
-                        onblur="actualizarItem(${it.id},'costo',this.value)"
-                        style="width:100px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;text-align:right">
+                    <td>
+                      <input type="text" value="${it.material_pedido || ''}" placeholder="ej: WD40, repuesto X"
+                        onblur="actualizarItem(${it.id},'material_pedido',this.value)"
+                        style="width:160px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
                     </td>
                     <td class="td-action">
                       <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
@@ -2251,6 +3856,11 @@ async function abrirOT(otId) {
         </div>
 
         <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+          <button class="btn btn-ghost" onclick="window.open('/api/ots/${ot.id}/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir PDF</button>
+          ${!ot.estado_compras ?
+            `<button class="btn btn-primary" onclick="enviarACompras(${ot.id})"><i class="ti ti-shopping-cart"></i> Enviar a Compras</button>` :
+            `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}" style="align-self:center"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>`
+          }
           ${ot.estado !== 'cerrada' ?
             `<button class="btn btn-success" onclick="cerrarOT(${ot.id})"><i class="ti ti-circle-check"></i> Cerrar OT</button>` :
             `<button class="btn btn-ghost" onclick="reabrirOT(${ot.id})"><i class="ti ti-arrow-back"></i> Reabrir</button>`
@@ -2505,7 +4115,7 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administración", taller: "Taller" };
+const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer" };
 
 async function renderUsuarios() {
   status("Gestión de usuarios");
@@ -2532,16 +4142,19 @@ async function renderUsuarios() {
             <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez"></div>
             <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" style="width:140px"></div>
             <div class="field"><label>Rol</label>
-              <select id="u-rol" style="width:180px">
+              <select id="u-rol" style="width:200px">
                 <option value="taller">Taller (operación)</option>
                 <option value="admin">Administración (todo)</option>
+                <option value="compras">Compras / Depósito</option>
+                <option value="auditor">Auditor (combustible e historial)</option>
+                <option value="chofer">Chofer (solo reportar)</option>
               </select>
             </div>
             <button class="btn btn-primary" onclick="guardarUsuario()"><i class="ti ti-plus"></i> Crear</button>
           </div>
           <p class="hint" style="margin-top:14px">
             <i class="ti ti-info-circle"></i>
-            <b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios.
+            <b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios. <b>Chofer</b>: solo ve una pantalla simple para cargar sus reportes desde el celular.
           </p>
         </div>
       </div>
@@ -2609,13 +4222,32 @@ async function borrarUsuario(uid, usuario) {
 
 
 async function cargarFlotaInicial() {
-  if (!confirm("¿Cargar la flota completa desde el Excel del servidor?\n\nEsto agrega los 89 vehículos con sus planes, neumáticos y documentos. Solo hacelo una vez.")) return;
-  toast("Cargando flota... esto puede tardar unos segundos", "success");
-  const r = await api("/api/cargar_flota_inicial", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-  if (r.ok) {
-    toast(r.msg, "success");
-    setTimeout(() => renderDashboard(), 1000);
-  } else {
-    toast(r.msg || "Error al cargar", "error");
+  if (!confirm("¿Cargar la flota completa desde el Excel?\n\nSe hace en 2 pasos: primero los 89 vehículos, después los documentos. Puede tardar un minuto.")) return;
+
+  // Paso 1: vehículos
+  status("Cargando vehículos... (paso 1 de 2)");
+  toast("Cargando vehículos, aguardá...", "success");
+  let r = await api("/api/cargar_flota_inicial", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paso: "vehiculos" })
+  });
+  if (!r.ok) {
+    toast(r.msg || "Error al cargar vehículos", "error");
+    return;
   }
+  toast(r.msg, "success");
+
+  // Paso 2: documentos
+  status("Cargando documentos... (paso 2 de 2)");
+  toast("Ahora los documentos, un momento más...", "success");
+  r = await api("/api/cargar_flota_inicial", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paso: "documentos" })
+  });
+  if (r.ok) {
+    toast("¡Flota cargada completa! " + r.msg, "success");
+  } else {
+    toast("Vehículos cargados. Documentos: " + (r.msg || "error"), "error");
+  }
+  setTimeout(() => renderDashboard(), 1200);
 }
