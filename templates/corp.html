@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>Rendición — La Santaniana</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.30.0/tabler-icons.min.css">
+  <style>
+    :root {
+      --rojo: #DC2641; --azul: #1E5A96; --oscuro: #131312;
+      --texto: #1A1A18; --muted: #6E6D66; --borde: #ECEAE5;
+      --ok-bg: #E9F3EC; --ok: #2F7C46;
+      --warn-bg: #FAF1DE; --warn: #B97D0A; --rojo-bg: #FCEBED;
+      --bg: #F7F6F3;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: var(--bg); color: var(--texto);
+      min-height: 100vh; padding-bottom: 40px; -webkit-font-smoothing: antialiased;
+    }
+    .topbar {
+      background: var(--oscuro); color: white;
+      padding: 16px 18px; display: flex; align-items: center; gap: 12px;
+      position: sticky; top: 0; z-index: 10;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+    }
+    .topbar .logo {
+      width: 40px; height: 40px; border-radius: 10px; background: var(--rojo);
+      display: grid; place-items: center; flex-shrink: 0;
+      font-weight: 700; font-size: 15px; color: white;
+    }
+    .topbar .titulo { flex: 1; }
+    .topbar .titulo b { font-size: 16px; display: block; }
+    .topbar .titulo span { font-size: 12px; color: #9C9B94; }
+    .topbar .salir {
+      background: rgba(255,255,255,0.12); color: white; border: none;
+      width: 38px; height: 38px; border-radius: 10px; font-size: 18px;
+      display: grid; place-items: center; cursor: pointer;
+    }
+    .topbar .salir:active { background: rgba(220,38,65,0.4); }
+
+    .wrap { max-width: 560px; margin: 0 auto; padding: 18px 16px; }
+    .saludo { font-size: 15px; color: var(--muted); margin-bottom: 16px; }
+    .saludo b { color: var(--texto); }
+
+    .card {
+      background: white; border-radius: 16px; padding: 20px 18px;
+      box-shadow: 0 1px 2px rgba(26,26,24,0.04), 0 4px 12px rgba(26,26,24,0.04);
+      border: 1px solid var(--borde); margin-bottom: 18px;
+    }
+    .card h2 {
+      font-size: 15px; font-weight: 600; margin-bottom: 16px;
+      display: flex; align-items: center; gap: 8px; color: var(--azul);
+    }
+
+    label { display: block; font-size: 13.5px; font-weight: 600; margin-bottom: 7px; color: var(--texto); }
+    .campo { margin-bottom: 16px; }
+    input, select, textarea {
+      width: 100%; padding: 13px 14px; font-size: 16px; font-family: inherit;
+      border: 1.5px solid var(--borde); border-radius: 11px; background: white;
+      color: var(--texto); -webkit-appearance: none;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: var(--azul);
+      box-shadow: 0 0 0 3.5px rgba(30,90,150,0.13);
+    }
+    select:disabled { background: var(--bg); color: var(--muted); }
+    .fila { display: flex; gap: 12px; }
+    .fila .campo { flex: 1; }
+
+    /* Buscador de bus */
+    .bus-box { position: relative; }
+    .bus-result {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+      background: white; border: 1.5px solid var(--borde); border-top: none;
+      border-radius: 0 0 11px 11px; max-height: 220px; overflow-y: auto;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+    }
+    .bus-item {
+      padding: 12px 14px; cursor: pointer; font-size: 15px;
+      border-bottom: 1px solid var(--bg); display: flex; align-items: center; gap: 10px;
+    }
+    .bus-item:active, .bus-item.sel { background: var(--azul); color: white; }
+    .bus-item .num { font-weight: 700; }
+    .bus-item .pat { font-size: 12px; color: var(--muted); }
+    .bus-item.sel .pat { color: rgba(255,255,255,0.8); }
+
+    /* Estado: botones grandes */
+    .estado-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .estado-btn {
+      padding: 13px 10px; border: 2px solid var(--borde); background: white;
+      border-radius: 12px; font-size: 14px; font-weight: 600; cursor: pointer;
+      font-family: inherit; color: var(--muted); display: flex; align-items: center;
+      justify-content: center; gap: 6px; text-align: center; line-height: 1.25;
+    }
+    .estado-btn small { display: block; font-size: 11px; font-weight: 500; opacity: 0.85; }
+    .estado-btn.on-ok { border-color: var(--ok); background: var(--ok-bg); color: var(--ok); }
+    .estado-btn.on-medio { border-color: var(--azul); background: #EAF1F8; color: var(--azul); }
+    .estado-btn.on-susp { border-color: var(--rojo); background: var(--rojo-bg); color: var(--rojo); }
+    .estado-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Aviso de tramo ya reportado */
+    .aviso {
+      border-radius: 11px; padding: 12px 14px; font-size: 13px;
+      margin-bottom: 16px; display: flex; align-items: flex-start; gap: 9px; line-height: 1.45;
+    }
+    .aviso i { font-size: 18px; flex-shrink: 0; margin-top: 1px; }
+    .aviso.libre { background: var(--ok-bg); color: var(--ok); }
+    .aviso.parcial { background: #EAF1F8; color: var(--azul); }
+    .aviso.tomado { background: var(--rojo-bg); color: var(--rojo); }
+
+
+    .btn-guardar {
+      width: 100%; padding: 16px; background: var(--azul); color: white; border: none;
+      border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer;
+      font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-guardar:active { transform: scale(0.99); }
+    .btn-guardar:disabled { opacity: 0.5; }
+
+    .toast {
+      position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(100px);
+      background: var(--oscuro); color: white; padding: 14px 22px; border-radius: 12px;
+      font-size: 14px; z-index: 3000; transition: transform 0.3s; max-width: 90%;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    }
+    .toast.show { transform: translateX(-50%) translateY(0); }
+    .toast.ok { background: var(--ok); }
+    .toast.err { background: var(--rojo); }
+
+    /* Mis rendiciones */
+    .acum-box {
+      background: linear-gradient(135deg, var(--azul) 0%, #16456f 100%);
+      color: white; border-radius: 14px; padding: 18px 20px; margin-bottom: 16px;
+      box-shadow: 0 4px 14px rgba(30,90,150,0.25);
+    }
+    .acum-lbl { font-size: 12.5px; opacity: 0.85; }
+    .acum-val { font-size: 30px; font-weight: 700; letter-spacing: -0.5px; margin: 3px 0; }
+    .acum-sub { font-size: 12px; opacity: 0.8; }
+    .rend-monto {
+      margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--borde);
+      text-align: right; font-size: 15px; font-weight: 700; color: var(--ok);
+    }
+    .rend-item {
+      background: white; border: 1px solid var(--borde); border-radius: 12px;
+      padding: 13px 15px; margin-bottom: 10px;
+    }
+    .rend-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .rend-cliente { font-weight: 600; font-size: 14px; }
+    .rend-fecha { font-size: 12px; color: var(--muted); }
+    .rend-tramo { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    .rend-datos { display: flex; gap: 14px; font-size: 12.5px; color: var(--texto); flex-wrap: wrap; }
+    .rend-datos span { display: inline-flex; align-items: center; gap: 4px; }
+    .rend-badge { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 8px; }
+    .rend-badge.ok { background: var(--ok-bg); color: var(--ok); }
+    .rend-badge.susp { background: var(--rojo-bg); color: var(--rojo); }
+    .rend-badge.medio { background: #EAF1F8; color: var(--azul); }
+    .rend-obs { font-size: 12px; color: var(--rojo); margin-top: 6px; font-style: italic; }
+    .vacio { text-align: center; color: var(--muted); padding: 24px; font-size: 14px; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+    .tab {
+      flex: 1; padding: 11px; text-align: center; border-radius: 10px; font-size: 14px;
+      font-weight: 600; cursor: pointer; background: white; border: 1px solid var(--borde); color: var(--muted);
+    }
+    .tab.on { background: var(--azul); color: white; border-color: var(--azul); }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="logo">LS</div>
+    <div class="titulo"><b>La Santaniana</b><span>Rendición de servicios</span></div>
+    <button class="salir" onclick="salir()"><i class="ti ti-logout"></i></button>
+  </div>
+
+  <div class="wrap">
+    <div class="saludo">Hola, <b>{{ usuario }}</b> 👋</div>
+
+    <div class="tabs">
+      <div class="tab on" id="tab-cargar" onclick="verTab('cargar')">Cargar servicio</div>
+      <div class="tab" id="tab-mis" onclick="verTab('mis')">Mis rendiciones</div>
+    </div>
+
+    <!-- CARGAR -->
+    <div id="vista-cargar">
+      <div class="card">
+        <h2><i class="ti ti-clipboard-plus"></i> Nuevo servicio</h2>
+
+        <div class="campo">
+          <label>Cliente</label>
+          <select id="f-cliente" onchange="cargarTramos()">
+            <option value="">— Elegí el cliente —</option>
+          </select>
+        </div>
+
+        <div class="campo">
+          <label>Tramo</label>
+          <select id="f-tramo" disabled>
+            <option value="">— Primero elegí el cliente —</option>
+          </select>
+        </div>
+
+        <div class="campo">
+          <label>Fecha del servicio</label>
+          <input type="date" id="f-fecha">
+        </div>
+
+        <div class="campo">
+          <label>Bus (Nº interno)</label>
+          <div class="bus-box">
+            <input type="text" id="f-bus" placeholder="Escribí el número, ej: 21061" autocomplete="off"
+                   inputmode="numeric" oninput="buscarBus(this.value)" onblur="cerrarBusResult()">
+            <div class="bus-result" id="bus-result" style="display:none"></div>
+          </div>
+        </div>
+
+        <div class="fila">
+          <div class="campo"><label>Hora inicio</label><input type="time" id="f-hini"></div>
+          <div class="campo"><label>Hora fin</label><input type="time" id="f-hfin"></div>
+        </div>
+
+        <div class="fila">
+          <div class="campo"><label>Km inicial</label><input type="text" id="f-kmini" inputmode="numeric" placeholder="0"></div>
+          <div class="campo"><label>Km final</label><input type="text" id="f-kmfin" inputmode="numeric" placeholder="0"></div>
+        </div>
+
+        <div class="campo">
+          <label>Cantidad de pasajeros</label>
+          <input type="text" id="f-pasaj" inputmode="numeric" placeholder="0">
+        </div>
+
+        <div id="aviso-tramo"></div>
+
+        <div class="campo">
+          <label>¿Qué hiciste en este tramo?</label>
+          <div class="estado-btns">
+            <button type="button" class="estado-btn on-ok" id="est-completado" onclick="setEstado('completado')">
+              <span><i class="ti ti-circle-check"></i> Completado<small>entrante y saliente</small></span>
+            </button>
+            <button type="button" class="estado-btn" id="est-entrante" onclick="setEstado('entrante')">
+              <span><i class="ti ti-arrow-down-left"></i> Solo entrante<small>media jornada</small></span>
+            </button>
+            <button type="button" class="estado-btn" id="est-saliente" onclick="setEstado('saliente')">
+              <span><i class="ti ti-arrow-up-right"></i> Solo saliente<small>media jornada</small></span>
+            </button>
+            <button type="button" class="estado-btn" id="est-suspendido" onclick="setEstado('suspendido')">
+              <span><i class="ti ti-alert-triangle"></i> Suspendido<small>no se prestó</small></span>
+            </button>
+          </div>
+        </div>
+
+        <div class="campo" id="obs-campo" style="display:none">
+          <label>¿Qué pasó? (obligatorio)</label>
+          <textarea id="f-obs" rows="3" placeholder="Ej: el bus tuvo una avería en el motor y no salió el servicio"></textarea>
+        </div>
+
+        <button class="btn-guardar" id="btn-guardar" onclick="guardar()">
+          <i class="ti ti-device-floppy"></i> Guardar rendición
+        </button>
+      </div>
+    </div>
+
+    <!-- MIS RENDICIONES -->
+    <div id="vista-mis" style="display:none">
+      <div id="mis-lista"><div class="vacio">Cargando...</div></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    let CLIENTES_TRAMOS = {};
+    let estadoSel = "completado";
+    let busSeleccionado = "";
+
+    function $(id){ return document.getElementById(id); }
+    function toast(msg, tipo){
+      const t = $("toast"); t.textContent = msg;
+      t.className = "toast show" + (tipo ? " " + tipo : "");
+      setTimeout(() => t.className = "toast" + (tipo ? " " + tipo : ""), 2600);
+    }
+    function salir(){ if(confirm("¿Cerrar sesión?")) fetch("/api/logout",{method:"POST"}).then(()=>location.href="/"); }
+
+    function verTab(cual){
+      $("tab-cargar").classList.toggle("on", cual==="cargar");
+      $("tab-mis").classList.toggle("on", cual==="mis");
+      $("vista-cargar").style.display = cual==="cargar" ? "" : "none";
+      $("vista-mis").style.display = cual==="mis" ? "" : "none";
+      if(cual==="mis") cargarMisRendiciones();
+    }
+
+    // Cargar clientes al inicio
+    async function init(){
+      $("f-fecha").value = new Date().toISOString().slice(0,10);
+      const r = await fetch("/api/corp/config");
+      const cfg = await r.json();
+      CLIENTES_TRAMOS = cfg.clientes_tramos;
+      $("f-fecha").onchange = chequearDisponibilidad;
+      const sel = $("f-cliente");
+      Object.keys(CLIENTES_TRAMOS).forEach(c => {
+        const o = document.createElement("option"); o.value = c; o.textContent = c;
+        sel.appendChild(o);
+      });
+    }
+
+    function cargarTramos(){
+      const cliente = $("f-cliente").value;
+      const selT = $("f-tramo");
+      selT.innerHTML = "";
+      if(!cliente){
+        selT.disabled = true;
+        selT.innerHTML = '<option value="">— Primero elegí el cliente —</option>';
+        return;
+      }
+      selT.disabled = false;
+      selT.innerHTML = '<option value="">— Elegí el tramo —</option>';
+      (CLIENTES_TRAMOS[cliente] || []).forEach(t => {
+        const o = document.createElement("option"); o.value = t; o.textContent = t;
+        selT.appendChild(o);
+      });
+      selT.onchange = chequearDisponibilidad;
+      $("aviso-tramo").innerHTML = "";
+    }
+
+    // Buscador de bus por Nº interno
+    let busTimer = null;
+    async function buscarBus(q){
+      busSeleccionado = q.trim();
+      clearTimeout(busTimer);
+      if(!q.trim()){ cerrarBusResult(); return; }
+      busTimer = setTimeout(async () => {
+        const r = await fetch("/api/vehiculos");
+        const buses = await r.json();
+        const term = q.trim().toLowerCase();
+        const matches = buses.filter(b =>
+          String(b.n_interno||"").toLowerCase().includes(term)
+        ).slice(0, 8);
+        const cont = $("bus-result");
+        if(matches.length === 0){ cont.style.display = "none"; return; }
+        cont.innerHTML = matches.map(b =>
+          `<div class="bus-item" onmousedown="elegirBus('${b.n_interno}')">
+            <span class="num">#${b.n_interno}</span>
+            <span class="pat">${b.patente||""} ${b.marca||""}</span>
+          </div>`).join("");
+        cont.style.display = "block";
+      }, 200);
+    }
+    function elegirBus(interno){
+      $("f-bus").value = interno;
+      busSeleccionado = interno;
+      cerrarBusResult();
+    }
+    function cerrarBusResult(){ setTimeout(()=> $("bus-result").style.display = "none", 150); }
+
+    function setEstado(e){
+      estadoSel = e;
+      const clases = {completado:"on-ok", entrante:"on-medio", saliente:"on-medio", suspendido:"on-susp"};
+      ["completado","entrante","saliente","suspendido"].forEach(k => {
+        const btn = $("est-" + k);
+        if(btn) btn.className = "estado-btn" + (k===e ? " " + clases[k] : "");
+      });
+      $("obs-campo").style.display = e==="suspendido" ? "" : "none";
+    }
+
+    // Avisa si el tramo ya fue reportado, antes de llenar todo el formulario
+    let dispTimer = null;
+    function chequearDisponibilidad(){
+      clearTimeout(dispTimer);
+      const cliente = $("f-cliente").value, tramo = $("f-tramo").value, fecha = $("f-fecha").value;
+      const cont = $("aviso-tramo");
+      if(!cliente || !tramo || !fecha){ cont.innerHTML = ""; habilitarEstados([]); return; }
+      dispTimer = setTimeout(async () => {
+        const r = await fetch(`/api/corp/disponibilidad?cliente=${encodeURIComponent(cliente)}&tramo=${encodeURIComponent(tramo)}&fecha=${fecha}`);
+        const d = await r.json();
+        if(d.libre){
+          cont.innerHTML = '<div class="aviso libre"><i class="ti ti-circle-check"></i><span>Tramo libre — nadie lo reportó todavía.</span></div>';
+          habilitarEstados([]);
+          return;
+        }
+        const completo = d.tomados.find(t => t.estado === "completado");
+        if(completo){
+          cont.innerHTML = `<div class="aviso tomado"><i class="ti ti-lock"></i><span><b>${completo.chofer_nombre}</b> ya reportó este tramo completo. No se puede volver a cargar — revisá el tramo o la fecha.</span></div>`;
+          habilitarEstados(["completado","entrante","saliente"]);
+          return;
+        }
+        const estados = d.tomados.map(t => t.estado);
+        const quien = d.tomados.map(t => `<b>${t.chofer_nombre}</b> hizo el ${t.estado}`).join(", ");
+        const falta = estados.includes("entrante") ? "saliente" : "entrante";
+        cont.innerHTML = `<div class="aviso parcial"><i class="ti ti-users"></i><span>${quien}. Si vos hiciste la otra mitad, marcá «solo el ${falta}».</span></div>`;
+        habilitarEstados(estados.concat(["completado"]));
+      }, 250);
+    }
+
+    function habilitarEstados(bloqueados){
+      ["completado","entrante","saliente"].forEach(k => {
+        const btn = $("est-" + k);
+        if(!btn) return;
+        const bloq = bloqueados.includes(k);
+        btn.disabled = bloq;
+        if(bloq && estadoSel === k) setEstado("suspendido" === estadoSel ? "suspendido" : "entrante");
+      });
+    }
+
+    async function guardar(){
+      const cliente = $("f-cliente").value;
+      const tramo = $("f-tramo").value;
+      const fecha = $("f-fecha").value;
+      const bus = $("f-bus").value.trim();
+      if(!cliente){ toast("Elegí el cliente", "err"); return; }
+      if(!tramo){ toast("Elegí el tramo", "err"); return; }
+      if(!fecha){ toast("Poné la fecha", "err"); return; }
+      if(!bus){ toast("Escribí el Nº de bus", "err"); return; }
+      if(estadoSel==="suspendido" && !$("f-obs").value.trim()){
+        toast("Explicá por qué se suspendió", "err"); $("f-obs").focus(); return;
+      }
+      const btn = $("btn-guardar"); btn.disabled = true;
+      const r = await fetch("/api/corp/rendicion", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          cliente, tramo, fecha_servicio: fecha, bus_interno: bus,
+          hora_inicio: $("f-hini").value, hora_fin: $("f-hfin").value,
+          km_inicial: $("f-kmini").value, km_final: $("f-kmfin").value,
+          pasajeros: $("f-pasaj").value, estado: estadoSel,
+          observacion: $("f-obs").value
+        })
+      });
+      const d = await r.json();
+      btn.disabled = false;
+      if(d.ok){
+        toast("✓ Rendición guardada", "ok");
+        // Limpiar para el próximo servicio (mantener fecha y cliente)
+        $("f-tramo").value = ""; $("f-bus").value = ""; busSeleccionado = "";
+        $("f-hini").value = ""; $("f-hfin").value = "";
+        $("f-kmini").value = ""; $("f-kmfin").value = ""; $("f-pasaj").value = "";
+        $("f-obs").value = ""; setEstado("completado");
+        chequearDisponibilidad();
+      } else {
+        toast(d.msg || "Error al guardar", "err");
+      }
+    }
+
+    async function cargarMisRendiciones(){
+      const cont = $("mis-lista");
+      const r = await fetch("/api/corp/mis_rendiciones");
+      const data = await r.json();
+      const rends = data.rendiciones || [];
+      const resumen = data.resumen || {total_acumulado:0, servicios:0};
+      if(!rends.length){
+        cont.innerHTML = '<div class="vacio"><i class="ti ti-clipboard-off" style="font-size:32px;display:block;margin-bottom:8px"></i>No tenés rendiciones pendientes.<br><span style="font-size:12px">Lo ya liquidado no aparece más acá.</span></div>';
+        return;
+      }
+      const fmt = v => "Gs. " + (v||0).toLocaleString("es-PY").replace(/,/g,".");
+      const LBL = {completado:"Completado", entrante:"Solo entrante", saliente:"Solo saliente", suspendido:"Suspendido"};
+      const cabecera = `
+        <div class="acum-box">
+          <div class="acum-lbl">Acumulado sin liquidar</div>
+          <div class="acum-val">${fmt(resumen.total_acumulado)}</div>
+          <div class="acum-sub">${resumen.servicios} servicio(s) pendiente(s)</div>
+        </div>`;
+      cont.innerHTML = cabecera + rends.map(r => `
+        <div class="rend-item">
+          <div class="rend-top">
+            <span class="rend-cliente">${r.cliente}</span>
+            <span class="rend-badge ${r.estado==='suspendido'?'susp':(r.estado==='completado'?'ok':'medio')}">${LBL[r.estado]||r.estado}</span>
+          </div>
+          <div class="rend-tramo">${r.tramo}</div>
+          <div class="rend-datos">
+            <span class="rend-fecha"><i class="ti ti-calendar"></i> ${r.fecha_servicio}</span>
+            <span><i class="ti ti-bus"></i> #${r.bus_interno}</span>
+            ${r.hora_inicio ? `<span><i class="ti ti-clock"></i> ${r.hora_inicio}${r.hora_fin?'–'+r.hora_fin:''}</span>` : ''}
+            ${r.pasajeros ? `<span><i class="ti ti-users"></i> ${r.pasajeros}</span>` : ''}
+          </div>
+          ${r.estado==='suspendido' && r.observacion ? `<div class="rend-obs"><i class="ti ti-info-circle"></i> ${r.observacion}</div>` : ''}
+          <div class="rend-monto">${r.estado==='suspendido' ? '<span style="color:var(--muted)">Sin pago</span>' : fmt(r.monto)}</div>
+        </div>
+      `).join("");
+    }
+
+    init();
+  </script>
+</body>
+</html>
