@@ -1,0 +1,176 @@
+<!--
+  Panel de tarifas — pegar dentro de la pantalla "Corporativos → Resumen de rendiciones".
+  El botón va junto a los otros de la barra (Liquidar, Accesos, PDF).
+  Usa las variables CSS del sistema, así que hereda el tema claro/oscuro.
+-->
+
+<button class="btn-secundario" id="btnTarifas" onclick="abrirTarifas()">
+  Tarifas
+</button>
+
+
+<div id="panelTarifas" class="tarifas-panel" hidden>
+  <div class="tarifas-cab">
+    <h3>Tarifas por tramo</h3>
+    <p>Poné el monto del viaje completo. La mitad (entrante o saliente) se calcula sola.</p>
+  </div>
+
+  <div id="tarifasCuerpo" class="tarifas-cuerpo">
+    <p class="tarifas-vacio">Cargando tramos…</p>
+  </div>
+
+  <div class="tarifas-pie">
+    <span id="tarifasEstado" class="tarifas-estado"></span>
+    <button class="btn-primario" id="btnListo" onclick="guardarTarifas()">Listo</button>
+  </div>
+</div>
+
+
+<style>
+.tarifas-panel {
+  margin: 1.25rem 0;
+  padding: 1.25rem;
+  background: var(--superficie, #fff);
+  border: 1px solid var(--borde, #e2e5ea);
+  border-radius: var(--radio, 12px);
+  box-shadow: var(--sombra-media, 0 4px 16px rgba(20, 30, 55, .08));
+}
+.tarifas-cab h3 { margin: 0 0 .25rem; font-size: 1.05rem; }
+.tarifas-cab p  { margin: 0 0 1rem; font-size: .85rem; color: var(--texto-tenue, #6b7280); }
+
+.tarifas-grupo { margin-bottom: 1.25rem; }
+.tarifas-grupo > h4 {
+  margin: 0 0 .5rem;
+  font-size: .72rem;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--texto-tenue, #6b7280);
+  border-bottom: 1px solid var(--borde, #e2e5ea);
+  padding-bottom: .35rem;
+}
+
+.tarifas-fila {
+  display: grid;
+  grid-template-columns: 1fr 150px 110px;
+  align-items: center;
+  gap: .75rem;
+  padding: .4rem 0;
+}
+.tarifas-fila > span { font-size: .9rem; }
+.tarifas-fila input {
+  padding: .45rem .6rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--borde, #e2e5ea);
+  border-radius: 8px;
+  background: var(--fondo, #fafaf8);
+}
+.tarifas-fila input:focus-visible { outline: 2px solid var(--acento, #2563eb); outline-offset: 1px; }
+.tarifas-fila input.cambiado { border-color: var(--acento, #2563eb); background: var(--acento-suave, #eef4ff); }
+.tarifas-mitad {
+  font-size: .82rem;
+  color: var(--texto-tenue, #6b7280);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.tarifas-pie {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 1rem;
+  border-top: 1px solid var(--borde, #e2e5ea);
+  padding-top: 1rem;
+}
+.tarifas-estado { font-size: .85rem; color: var(--texto-tenue, #6b7280); }
+
+@media (max-width: 640px) {
+  .tarifas-fila { grid-template-columns: 1fr 110px; }
+  .tarifas-mitad { grid-column: 2; text-align: right; }
+}
+</style>
+
+
+<script>
+const gs = n => Number(n || 0).toLocaleString('es-PY');
+
+async function abrirTarifas() {
+  const panel = document.getElementById('panelTarifas');
+  panel.hidden = false;
+  document.getElementById('btnTarifas').hidden = true;
+  document.getElementById('tarifasEstado').textContent = '';
+
+  const cuerpo = document.getElementById('tarifasCuerpo');
+  cuerpo.innerHTML = '<p class="tarifas-vacio">Cargando tramos…</p>';
+
+  try {
+    const r = await fetch('/api/corp/tarifas');
+    if (!r.ok) throw new Error('No se pudieron leer las tarifas');
+    const { clientes } = await r.json();
+
+    cuerpo.innerHTML = Object.entries(clientes).map(([cliente, tramos]) => `
+      <div class="tarifas-grupo">
+        <h4>${cliente}</h4>
+        ${tramos.map(t => `
+          <div class="tarifas-fila">
+            <span>${t.tramo}</span>
+            <input type="number" step="500" min="0"
+                   value="${t.monto_completo}"
+                   data-cliente="${cliente}"
+                   data-tramo="${t.tramo.replace(/"/g, '&quot;')}"
+                   data-original="${t.monto_completo}"
+                   oninput="marcarCambio(this)">
+            <span class="tarifas-mitad">mitad ${gs(t.monto_mitad)}</span>
+          </div>`).join('')}
+      </div>`).join('');
+
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (e) {
+    cuerpo.innerHTML = `<p class="tarifas-vacio">${e.message}. Probá de nuevo en un momento.</p>`;
+  }
+}
+
+function marcarCambio(input) {
+  const cambio = input.value !== input.dataset.original;
+  input.classList.toggle('cambiado', cambio);
+  const mitad = input.closest('.tarifas-fila').querySelector('.tarifas-mitad');
+  mitad.textContent = 'mitad ' + gs(Math.floor(Number(input.value || 0) / 2));
+}
+
+async function guardarTarifas() {
+  const btn = document.getElementById('btnListo');
+  const estado = document.getElementById('tarifasEstado');
+
+  const cambios = [...document.querySelectorAll('#tarifasCuerpo input.cambiado')]
+    .map(i => ({
+      cliente: i.dataset.cliente,
+      tramo: i.dataset.tramo,
+      monto_completo: parseInt(i.value, 10),
+    }))
+    .filter(c => Number.isFinite(c.monto_completo) && c.monto_completo >= 0);
+
+  btn.disabled = true;
+  estado.textContent = cambios.length ? 'Guardando…' : '';
+
+  try {
+    if (cambios.length) {
+      const r = await fetch('/api/corp/tarifas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cambios }),
+      });
+      if (!r.ok) throw new Error('No se pudo guardar');
+    }
+    cerrarTarifas();
+  } catch (e) {
+    estado.textContent = e.message + '. Los cambios siguen acá, probá otra vez.';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function cerrarTarifas() {
+  document.getElementById('panelTarifas').hidden = true;
+  document.getElementById('btnTarifas').hidden = false;
+}
+</script>
