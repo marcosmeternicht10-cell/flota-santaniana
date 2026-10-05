@@ -168,6 +168,16 @@
     .tab.on { background: var(--azul); color: white; border-color: var(--azul); }
     .ayuda{display:block;font-size:11.5px;color:#6E6D66;margin-top:5px;line-height:1.4;}
     .opcional{font-weight:400;color:#A5A49E;font-size:12px;}
+    .lugar-ops{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .lugar-op{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px;
+      border:1.5px solid #ECEAE5;border-radius:14px;background:#fff;font-family:inherit;
+      font-size:14px;color:#1A1A18;cursor:pointer;transition:all .15s}
+    .lugar-op .lugar-ico{font-size:24px;line-height:1}
+    .lugar-op.sel{border-color:#1E5A96;background:#EAF1F8;color:#1E5A96;box-shadow:0 0 0 3px rgba(30,90,150,.12)}
+    .emblemas{display:flex;flex-wrap:wrap;gap:8px}
+    .emblema{padding:9px 14px;border:1.5px solid #ECEAE5;border-radius:999px;background:#fff;
+      font-family:inherit;font-size:13.5px;font-weight:600;color:#1A1A18;cursor:pointer}
+    .emblema.sel{border-color:#1E5A96;background:#1E5A96;color:#fff}
     .justif-overlay{position:fixed;inset:0;background:rgba(20,20,18,.55);z-index:200;
       display:flex;align-items:flex-end;justify-content:center;animation:jfade .18s ease}
     .justif-hoja{background:#fff;width:100%;max-width:520px;border-radius:20px 20px 0 0;
@@ -319,6 +329,23 @@
           <div id="aviso-litros"></div>
         </div>
 
+        <div class="campo">
+          <label>¿Dónde cargaste?</label>
+          <div class="lugar-ops">
+            <button type="button" class="lugar-op" data-lugar="taller" onclick="elegirLugar('taller')">
+              <span class="lugar-ico">🔧</span><b>En el taller</b>
+            </button>
+            <button type="button" class="lugar-op" data-lugar="tercerizado" onclick="elegirLugar('tercerizado')">
+              <span class="lugar-ico">⛽</span><b>En una estación</b>
+            </button>
+          </div>
+          <div id="emblema-wrap" style="display:none">
+            <label style="margin-top:12px">¿Qué emblema?</label>
+            <div class="emblemas" id="emblemas"></div>
+            <input type="text" id="emblema-otro" placeholder="Escribí el emblema" style="display:none;margin-top:8px">
+          </div>
+        </div>
+
         <button class="btn-guardar" id="cb-btn" onclick="guardarCarga()">
           <i class="ti ti-device-floppy"></i> Guardar carga
         </button>
@@ -365,6 +392,7 @@
       const r = await fetch("/api/corp/config");
       const cfg = await r.json();
       CLIENTES_TRAMOS = cfg.clientes_tramos;
+      EMBLEMAS = cfg.emblemas || [];
       $("f-fecha").onchange = chequearDisponibilidad;
       $("cb-litros").addEventListener("input", chequearLitros);
       const sel = $("f-cliente");
@@ -660,6 +688,29 @@
       }
     }
 
+    // Dónde cargó: el taller o una estación de afuera, y en ese caso de qué
+    // emblema. Así se distingue lo que sale del tanque propio y lo de afuera.
+    let LUGAR = "", EMBLEMA = "";
+    let EMBLEMAS = [];
+    function dibujarEmblemas(){
+      $("emblemas").innerHTML = EMBLEMAS.concat(["OTRO"]).map(e =>
+        `<button type="button" class="emblema ${EMBLEMA === e ? "sel" : ""}" onclick="elegirEmblema('${e}')">${
+          e === "OTRO" ? "Otro" : e.charAt(0) + e.slice(1).toLowerCase()}</button>`).join("");
+    }
+    function elegirLugar(l){
+      LUGAR = l;
+      document.querySelectorAll(".lugar-op").forEach(b => b.classList.toggle("sel", b.dataset.lugar === l));
+      $("emblema-wrap").style.display = l === "tercerizado" ? "" : "none";
+      if(l !== "tercerizado"){ EMBLEMA = ""; $("emblema-otro").value = ""; }
+      dibujarEmblemas();
+    }
+    function elegirEmblema(e){
+      EMBLEMA = e;
+      $("emblema-otro").style.display = e === "OTRO" ? "" : "none";
+      if(e === "OTRO") setTimeout(() => $("emblema-otro").focus(), 50);
+      dibujarEmblemas();
+    }
+
     async function guardarCarga(){
       const bus = $("cb-bus-id").value;
       const odo = ($("cb-odo").value||"").replace(/\./g,"");
@@ -670,13 +721,22 @@
         toast("600 litros es el máximo por carga — revisá el número", "err");
         $("cb-litros").focus(); return;
       }
+      if(!LUGAR){ toast("Marcá si cargaste en el taller o en una estación", "err"); return; }
+      const emblema = LUGAR !== "tercerizado" ? ""
+        : (EMBLEMA === "OTRO" ? ($("emblema-otro").value || "").trim() : EMBLEMA);
+      if(LUGAR === "tercerizado" && emblema.length < 2){
+        toast("Elegí el emblema de la estación", "err");
+        if(EMBLEMA === "OTRO") $("emblema-otro").focus();
+        return;
+      }
 
       const btn = $("cb-btn"); btn.disabled = true;
       const r = await fetch("/api/corp/combustible", {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
           vehiculo_id: bus, fecha: $("cb-fecha").value,
-          odometro: odo, litros: litros
+          odometro: odo, litros: litros,
+          lugar_carga: LUGAR, emblema: emblema
         })
       });
       const d = await r.json();
@@ -685,6 +745,9 @@
         toast("✓ Carga registrada", "ok");
         $("cb-bus").value=""; $("cb-bus-id").value="";
         $("cb-odo").value=""; $("cb-litros").value="";
+        LUGAR = ""; EMBLEMA = ""; $("emblema-otro").value = ""; $("emblema-otro").style.display = "none";
+        document.querySelectorAll(".lugar-op").forEach(b => b.classList.remove("sel"));
+        $("emblema-wrap").style.display = "none";
       } else {
         toast(d.msg || "No se pudo guardar", "err");
       }
