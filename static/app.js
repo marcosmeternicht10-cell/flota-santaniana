@@ -173,6 +173,7 @@ function irA(sec) {
     corp_resumen: renderCorpResumen,
     corp_historial: renderCorpHistorial,
     corp_empresas: renderCorpEmpresas,
+    corp_cargas: renderCorpCargas,
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
@@ -2601,7 +2602,7 @@ if (window.USUARIO_ROL === "compras") {
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible",
                             "corp_resumen", "corp_historial", "corp_empresas",
-                            "corp_combustible"];
+                            "corp_combustible", "corp_cargas"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
   });
@@ -8611,11 +8612,15 @@ async function borrarSospechosas(ids, btn) {
 // flota en sus propias rutas es mejor dato que cualquier ficha técnica, así
 // que se pueden corregir acá.
 
-async function abrirReferencias() {
-  const refs = await api("/api/consumo/referencias");
+async function abrirReferencias(opts = {}) {
+  const [refs, coches] = await Promise.all([
+    api("/api/consumo/referencias"), api("/api/consumo/referencias_coche")]);
+  window._refCoches = coches;
   const puede = window.USUARIO_ROL === "admin";
   const conBuses = refs.filter(r => r.vehiculos > 0);
   const sinBuses = refs.filter(r => !r.vehiculos);
+  const nPropios = coches.filter(x => x.propia).length;
+  const fmt2 = v => (v || 0).toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const fila = r => `
     <div class="ref-fila ${r.vehiculos ? "" : "vacia"}">
@@ -8637,25 +8642,40 @@ async function abrirReferencias() {
   const o = document.createElement("div");
   o.className = "modal-overlay firma-overlay";
   o.innerHTML = `
-    <div class="firma-modal" style="max-width:600px">
+    <div class="firma-modal" style="max-width:660px">
       <div class="firma-head">
         <div>
           <h2><i class="ti ti-adjustments"></i> Consumos de referencia</h2>
-          <p>Cuánto debería consumir cada modelo. Es contra esto que se compara cada bus.</p>
+          <p>Cuánto debería consumir cada coche. Es contra esto que se compara en el control.</p>
         </div>
         <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
       </div>
 
-      <div class="firma-items" style="max-height:60vh;overflow-y:auto">
-        <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i>
-          ${puede
-            ? "Los valores de fábrica son aproximados. Corregilos con lo que mida tu flota en sus rutas: ese dato es mejor que cualquier ficha técnica."
-            : "Solo un administrador puede modificar estos valores."}</p>
+      <div class="ref-tabs">
+        <button class="ref-tab" data-t="modelo" onclick="refTab('modelo')"><i class="ti ti-engine"></i> Por modelo</button>
+        <button class="ref-tab" data-t="coche" onclick="refTab('coche')"><i class="ti ti-bus"></i> Por coche
+          ${nPropios ? `<span class="emp-tab-n">${nPropios}</span>` : ""}</button>
+      </div>
 
-        ${conBuses.length ? `<div class="ref-titulo">Modelos en uso</div>${conBuses.map(fila).join("")}` : ""}
-        ${sinBuses.length ? `
-          <div class="ref-titulo" style="margin-top:16px">Sin coches asignados</div>
-          ${sinBuses.map(fila).join("")}` : ""}
+      <div class="firma-items" style="max-height:58vh;overflow-y:auto">
+        <div id="ref-tab-modelo">
+          <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i>
+            <span>${puede
+              ? "Vale para todos los coches de ese modelo. Los valores de fábrica son aproximados: corregilos con lo que mida tu flota en sus rutas."
+              : "Solo un administrador puede modificar estos valores."}</span></p>
+          ${conBuses.length ? `<div class="ref-titulo">Modelos en uso</div>${conBuses.map(fila).join("")}` : ""}
+          ${sinBuses.length ? `
+            <div class="ref-titulo" style="margin-top:16px">Sin coches asignados</div>
+            ${sinBuses.map(fila).join("")}` : ""}
+        </div>
+
+        <div id="ref-tab-coche" style="display:none">
+          <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i>
+            <span>Si un coche anda distinto que sus hermanos —por la ruta que hace, los años o su estado— ponele su propio valor:
+            <b>manda sobre el de su modelo</b>. Vacío, usa el del modelo.</span></p>
+          <input id="ref-buscar" class="ref-buscar" placeholder="Buscar por número o patente..." oninput="refFiltrar()">
+          <div id="ref-lista-coches">${coches.map(x => filaRefCoche(x, puede)).join("")}</div>
+        </div>
       </div>
 
       <div class="firma-acciones">
@@ -8665,6 +8685,81 @@ async function abrirReferencias() {
     </div>`;
   o.onclick = e => { if (e.target === o) o.remove(); };
   document.body.appendChild(o);
+
+  // Desde el control se llega directo al coche que hay que ajustar
+  if (opts.coche) {
+    refTab("coche");
+    const b = document.getElementById("ref-buscar");
+    b.value = String(opts.coche);
+    refFiltrar();
+    setTimeout(() => document.querySelector("#ref-lista-coches .ref-fila:not([style*='none']) input")?.focus(), 150);
+  } else {
+    refTab("modelo");
+  }
+}
+
+function filaRefCoche(x, puede) {
+  const fmt2 = v => (v || 0).toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const busca = `${x.n_interno || ""} ${x.patente || ""} ${x.plan || ""}`.toLowerCase();
+  return `
+    <div class="ref-fila ${x.propia ? "propia" : ""}" id="refc-fila-${x.id}" data-busca="${busca}">
+      <div class="ref-nombre">
+        <div class="ref-modelo">#${x.n_interno || "—"} <span style="font-weight:400;color:var(--muted)">${x.patente || ""}</span>
+          ${x.propia ? '<span class="ref-chip-propia">propio</span>' : ""}</div>
+        <div class="ref-buses">${x.plan
+          ? `Su modelo: ${x.ref_modelo ? fmt2(x.ref_modelo) + " L/100km" : "sin valor"}`
+          : "Sin plan asignado"}</div>
+      </div>
+      <div class="ref-campo">
+        <input id="ref-c-${x.id}" value="${x.propia ? String(x.propia).replace(".", ",") : ""}" inputmode="decimal"
+               placeholder="${x.ref_modelo ? fmt2(x.ref_modelo) : "—"}" ${puede ? "" : "disabled"}
+               oninput="refEquivalencia('c-${x.id}')"
+               onkeydown="if(event.key==='Enter') guardarReferenciaCoche(${x.id}, this.closest('.ref-fila').querySelector('.ref-guardar'))">
+        <span class="ref-unidad">L/100km</span>
+      </div>
+      <div class="ref-equiv" id="ref-eq-c-${x.id}">${x.propia ? (100 / x.propia).toFixed(2) + " km/L" : ""}</div>
+      ${puede ? `<button class="btn btn-ghost ref-guardar" title="Guardar" onclick="guardarReferenciaCoche(${x.id}, this)"><i class="ti ti-check"></i></button>
+        <button class="btn btn-ghost ref-quitar" title="Sacarle el valor propio: vuelve a usar el del modelo"
+          style="${x.propia ? "" : "visibility:hidden"}" onclick="quitarReferenciaCoche(${x.id}, this)"><i class="ti ti-arrow-back-up"></i></button>` : ""}
+    </div>`;
+}
+
+function refTab(t) {
+  document.querySelectorAll(".ref-tab").forEach(b => b.classList.toggle("activa", b.dataset.t === t));
+  document.getElementById("ref-tab-modelo").style.display = t === "modelo" ? "" : "none";
+  document.getElementById("ref-tab-coche").style.display = t === "coche" ? "" : "none";
+}
+
+function refFiltrar() {
+  const q = (document.getElementById("ref-buscar").value || "").trim().toLowerCase();
+  document.querySelectorAll("#ref-lista-coches .ref-fila").forEach(f => {
+    f.style.display = !q || f.dataset.busca.includes(q) ? "" : "none";
+  });
+}
+
+async function guardarReferenciaCoche(vid, btn, valor) {
+  const input = document.getElementById("ref-c-" + vid);
+  const v = valor !== undefined ? valor : input.value.trim();
+  if (btn) btn.disabled = true;
+  const r = await api(`/api/consumo/referencias_coche/${vid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ litros_100km: v })
+  });
+  if (btn) btn.disabled = false;
+  if (!(r && r.ok)) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast(r.msg, "success");
+  // Actualizar la fila en el lugar
+  const x = (window._refCoches || []).find(c => c.id === vid);
+  if (x) {
+    x.propia = parseFloat(String(v).replace(",", ".")) || null;
+    document.getElementById("refc-fila-" + vid).outerHTML = filaRefCoche(x, true);
+  }
+  // Lo que esté abierto se recalcula contra el valor nuevo
+  if (typeof cargarCombCorp === "function" && document.getElementById("cbc-panel")) cargarCombCorp();
+}
+
+function quitarReferenciaCoche(vid, btn) {
+  guardarReferenciaCoche(vid, btn, "");
 }
 
 // Se muestra la equivalencia mientras escribe, porque mucha gente piensa en
@@ -8917,7 +9012,7 @@ function panelControl(d) {
             <span style="color:var(--muted);font-size:12px">${g.patente}</span>
             <span class="ctrl-nivel ${g.nivel}">${g.nivel === "alerta" ? "muy fuera" : "fuera"}</span>
             <span style="flex:1"></span>
-            <span class="ctrl-nota">su normal: <b style="color:var(--text)">${fmt2(g.normal)}</b> L/100km${g.estandar === "motor" ? " (según su motor)" : ""}</span>
+            <span class="ctrl-nota">su normal: <b style="color:var(--text)">${fmt2(g.normal)}</b> L/100km${g.estandar === "motor" ? " (según su referencia)" : ""}</span>
           </div>
           ${g.tanques.map(t => filaTanque(t)).join("")}
         </div>`).join("")
@@ -8932,7 +9027,7 @@ function panelControl(d) {
       <div class="card-head"><i class="ti ti-adjustments" style="color:var(--warning)"></i> Coches que consumen siempre más que su motor
         <span class="hint" style="margin-left:auto;font-weight:400">no es un robo: la referencia no les corresponde</span></div>
       <div class="table-wrap"><table>
-        <thead><tr><th>Coche</th><th class="center">Consume siempre</th><th class="center">Su motor dice</th>
+        <thead><tr><th>Coche</th><th class="center">Consume siempre</th><th class="center">Su referencia</th>
           <th class="center">Diferencia</th><th class="center">Tanques</th><th></th></tr></thead>
         <tbody>${parejos.map(g => `<tr>
           <td><a class="ctrl-link" onclick="verGraficoControl(${g.vehiculo_id})"><b>#${g.bus}</b></a> <span style="color:var(--muted);font-size:12px">${g.patente}</span></td>
@@ -8940,7 +9035,7 @@ function panelControl(d) {
           <td class="center" style="color:var(--muted)">${fmt2(g.normal)}</td>
           <td class="center"><span class="desvio atencion">+${Math.round((g.consumo_real - g.normal) / g.normal * 100)}%</span></td>
           <td class="center">${g.medidos}</td>
-          <td class="center"><button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="abrirReferencias()">
+          <td class="center"><button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="abrirReferencias({coche: '${g.bus}'})">
             <i class="ti ti-adjustments"></i> Ajustar</button></td>
         </tr>`).join("")}</tbody></table></div>
       <p class="hint" style="padding:10px 16px"><i class="ti ti-bulb"></i>
@@ -9120,4 +9215,170 @@ function verGraficoControl(vid) {
     </div>`;
   o.onclick = e => { if (e.target === o) o.remove(); };
   document.body.appendChild(o);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  CARGAS — dónde cargan combustible los choferes
+// ════════════════════════════════════════════════════════════════════════
+// En el taller (tanque propio) o en una estación de afuera, y en ese caso de
+// qué emblema. Sirve para ver cuánto sale del tanque propio y cuánto se
+// compra afuera, y dónde.
+
+const COLOR_TALLER = "#1E5A96";
+const COLORES_EMBLEMA = ["#B97D0A", "#0F8A7E", "#6D4BB0", "#DC2641", "#2F7C46", "#5B6B7F", "#C2410C", "#0E7490"];
+const COLOR_SIN_DATO = "#C8C7C1";
+
+async function renderCorpCargas() {
+  status("Cargas");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-map-pin"></i> Cargas</h1>
+      <p>Dónde cargan combustible los choferes: en el taller o en estaciones de afuera</p>
+    </div>
+    <div class="section">
+      <div class="emp-filtros">
+        <div class="emp-rapidos">
+          <span class="emp-rapidos-lbl">Período</span>
+          <button class="chip" onclick="cargasPeriodo(7, this)">Últimos 7 días</button>
+          <button class="chip activo" onclick="cargasPeriodo(30, this)">Últimos 30 días</button>
+          <button class="chip" onclick="cargasPeriodo('mes', this)">Este mes</button>
+          <button class="chip" onclick="cargasPeriodo(90, this)">3 meses</button>
+        </div>
+        <div class="emp-detalle-filtros">
+          <div class="emp-campo"><label>Desde</label><input id="cg-desde" type="date" value="${fmt(new Date(hoy.getTime() - 30 * 86400000))}" onchange="cargarCargas()"></div>
+          <div class="emp-campo"><label>Hasta</label><input id="cg-hasta" type="date" value="${fmt(hoy)}" onchange="cargarCargas()"></div>
+          <div style="flex:1"></div>
+          <button class="btn btn-primary" onclick="cargarCargas()"><i class="ti ti-refresh"></i> Actualizar</button>
+        </div>
+      </div>
+      <div id="cg-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  cargarCargas();
+}
+
+function cargasPeriodo(cual, btn) {
+  document.querySelectorAll(".emp-rapidos .chip").forEach(c => c.classList.remove("activo"));
+  if (btn) btn.classList.add("activo");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  const desde = cual === "mes" ? new Date(hoy.getFullYear(), hoy.getMonth(), 1)
+                               : new Date(hoy.getTime() - cual * 86400000);
+  $("#cg-desde").value = fmt(desde);
+  $("#cg-hasta").value = fmt(hoy);
+  cargarCargas();
+}
+
+async function cargarCargas() {
+  const cont = $("#cg-resultado");
+  const p = new URLSearchParams({ desde: $("#cg-desde").value, hasta: $("#cg-hasta").value });
+  const d = await api(`/api/corp/cargas?${p.toString()}`);
+  if (!d || d.error) { cont.innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>No se pudieron traer las cargas</div>`; return; }
+  if (!d.total.cargas) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-gas-station-off"></i>No hay cargas de combustible en este período.</div>`;
+    return;
+  }
+  const fmtL = v => (v || 0).toLocaleString("es-PY", { maximumFractionDigits: 1 });
+  const r = d.resumen;
+  // Cada lugar con su color: el taller siempre azul, cada emblema el suyo
+  let i = 0;
+  const colorDe = {};
+  d.lugares.forEach(l => {
+    colorDe[l.lugar] = l.tipo === "taller" ? COLOR_TALLER
+      : l.tipo === "sin_dato" ? COLOR_SIN_DATO
+      : COLORES_EMBLEMA[i++ % COLORES_EMBLEMA.length];
+  });
+  const nombreLugar = n => n === "TALLER" ? "Taller" : n === "SIN DATO" ? "Sin dato"
+    : n.charAt(0) + n.slice(1).toLowerCase();
+
+  cont.innerHTML = `
+    <div class="cg-kpis">
+      <div class="cg-kpi">
+        <div class="cg-kpi-lbl">Total del período</div>
+        <div class="cg-kpi-num">${fmtL(d.total.litros)} L</div>
+        <div class="cg-kpi-sub">${d.total.cargas} cargas</div>
+      </div>
+      <div class="cg-kpi" style="--c:${COLOR_TALLER}">
+        <div class="cg-kpi-lbl"><span class="cg-punto"></span>En el taller</div>
+        <div class="cg-kpi-num">${fmtL(r.taller.litros)} L</div>
+        <div class="cg-kpi-sub">${r.taller.cargas} cargas · <b>${r.taller.pct}%</b> de los litros</div>
+      </div>
+      <div class="cg-kpi" style="--c:#B97D0A">
+        <div class="cg-kpi-lbl"><span class="cg-punto"></span>En estaciones</div>
+        <div class="cg-kpi-num">${fmtL(r.tercerizado.litros)} L</div>
+        <div class="cg-kpi-sub">${r.tercerizado.cargas} cargas · <b>${r.tercerizado.pct}%</b> de los litros</div>
+      </div>
+    </div>
+
+    <div class="cg-graficos">
+      <div class="card cg-card">
+        <div class="cg-tit">Taller o afuera</div>
+        ${donaCargas(r)}
+      </div>
+      <div class="card cg-card">
+        <div class="cg-tit">Dónde más se carga</div>
+        <div class="cg-ranking">
+          ${d.lugares.map((l, k) => `
+            <div class="cg-fila" style="--c:${colorDe[l.lugar]};--d:${k * 70}ms">
+              <div class="cg-fila-cab">
+                <span class="cg-pos">${k + 1}</span>
+                <span class="cg-nombre">${nombreLugar(l.lugar)}</span>
+                <span class="cg-litros"><b>${fmtL(l.litros)} L</b> · ${l.pct}%</span>
+              </div>
+              <div class="cg-barra"><div class="cg-barra-fill" style="width:${Math.max(2, l.litros / d.lugares[0].litros * 100)}%"></div></div>
+              <div class="cg-fila-sub">${l.cargas} carga${l.cargas === 1 ? "" : "s"}</div>
+            </div>`).join("")}
+        </div>
+      </div>
+    </div>
+
+    ${r.sin_dato.cargas ? `<p class="hint" style="margin:0 0 14px"><i class="ti ti-info-circle"></i>
+      <span>${r.sin_dato.cargas} carga(s) son de antes de que se preguntara dónde se cargó, por eso figuran "sin dato".</span></p>` : ""}
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-list"></i> Detalle <span class="emp-tab-n">${d.cargas.length}</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Fecha</th><th>Bus</th><th>Chofer</th><th class="num">Litros</th><th>Dónde</th></tr></thead>
+        <tbody>${d.cargas.map(x => {
+          const n = x.lugar === "taller" ? "TALLER" : x.lugar === "tercerizado" ? (x.emblema || "SIN EMBLEMA") : "SIN DATO";
+          return `<tr>
+            <td style="white-space:nowrap">${x.fecha}</td>
+            <td><b>#${x.bus}</b> <span style="color:var(--muted);font-size:12px">${x.patente}</span></td>
+            <td>${x.chofer || "—"}</td>
+            <td class="num">${fmtL(x.litros)}</td>
+            <td><span class="cg-chip" style="--c:${colorDe[n] || COLOR_SIN_DATO}">${nombreLugar(n)}</span></td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+}
+
+// Dona taller / estaciones / sin dato, con el porcentaje del taller al centro
+function donaCargas(r) {
+  const partes = [
+    { n: "Taller", v: r.taller.litros, c: COLOR_TALLER },
+    { n: "Estaciones", v: r.tercerizado.litros, c: "#B97D0A" },
+    { n: "Sin dato", v: r.sin_dato.litros, c: COLOR_SIN_DATO },
+  ].filter(p => p.v > 0);
+  const total = partes.reduce((s, p) => s + p.v, 0) || 1;
+  const R = 70, C = 2 * Math.PI * R;
+  let acum = 0;
+  const arcos = partes.map(p => {
+    const largo = p.v / total * C;
+    const a = `<circle r="${R}" cx="90" cy="90" fill="none" stroke="${p.c}" stroke-width="26"
+      stroke-dasharray="${largo} ${C - largo}" stroke-dashoffset="${-acum}" class="cg-arco">
+      <title>${p.n}: ${Math.round(p.v / total * 100)}%</title></circle>`;
+    acum += largo;
+    return a;
+  }).join("");
+  return `<div class="cg-dona">
+    <svg viewBox="0 0 180 180" width="190" height="190" style="transform:rotate(-90deg)">
+      <circle r="${R}" cx="90" cy="90" fill="none" stroke="var(--surface3)" stroke-width="26"/>
+      ${arcos}
+    </svg>
+    <div class="cg-dona-centro"><b>${r.taller.pct}%</b><span>en el taller</span></div>
+  </div>
+  <div class="cg-leyenda">${partes.map(p => `<span><i style="background:${p.c}"></i>${p.n} · ${Math.round(p.v / total * 100)}%</span>`).join("")}</div>`;
 }

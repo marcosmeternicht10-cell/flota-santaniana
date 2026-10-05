@@ -2468,3 +2468,75 @@ td.center, th.center { text-align: center; }
   color: var(--text); padding: 4px 0; cursor: pointer;
 }
 .secc-gtit input, .secc-item input { accent-color: var(--brand-blue); width: 15px; height: 15px; }
+
+/* Consumos de referencia: pestañas y fila por coche */
+.ref-tabs { display: flex; gap: 4px; padding: 10px 24px 0; border-bottom: 1px solid var(--border); }
+.ref-tab {
+  border: none; background: none; padding: 9px 14px; font-size: 13px; font-weight: 600;
+  color: var(--muted); cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 6px;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.ref-tab.activa { color: var(--brand-blue); border-bottom-color: var(--brand-blue); }
+.ref-buscar {
+  width: 100%; box-sizing: border-box; padding: 9px 12px; margin-bottom: 10px;
+  border: 1.5px solid var(--border); border-radius: 9px; font-size: 13px; font-family: inherit;
+}
+.ref-buscar:focus { outline: none; border-color: var(--brand-blue); }
+.ref-fila.propia { border-color: rgba(30,90,150,.35); background: rgba(30,90,150,.04); }
+.ref-chip-propia {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  background: var(--brand-blue); color: #fff; padding: 2px 7px; border-radius: 5px; margin-left: 4px;
+  vertical-align: 1px;
+}
+.ref-quitar { padding: 7px 9px; color: var(--muted); }
+.ref-campo input::placeholder { color: var(--lighter); font-weight: 400; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   CARGAS — dónde cargan combustible
+   ═══════════════════════════════════════════════════════════════════ */
+.cg-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.cg-kpi {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px; box-shadow: var(--shadow-sm); border-top: 3px solid var(--c, var(--text));
+}
+.cg-kpi-lbl { font-size: 12px; color: var(--muted); font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.cg-punto { width: 9px; height: 9px; border-radius: 50%; background: var(--c); display: inline-block; }
+.cg-kpi-num { font-size: 26px; font-weight: 700; color: var(--text); margin-top: 4px; letter-spacing: -.4px; font-variant-numeric: tabular-nums; }
+.cg-kpi-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.cg-kpi-sub b { color: var(--c, var(--text)); }
+
+.cg-graficos { display: grid; grid-template-columns: minmax(260px, 1fr) 2fr; gap: 14px; margin-bottom: 14px; }
+@media (max-width: 900px) { .cg-graficos { grid-template-columns: 1fr; } }
+.cg-card { padding: 18px 20px; }
+.cg-tit { font-size: 11px; font-weight: 700; color: var(--light); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 12px; }
+
+.cg-dona { position: relative; width: 190px; height: 190px; margin: 4px auto 10px; }
+.cg-dona-centro { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.cg-dona-centro b { font-size: 30px; color: var(--text); letter-spacing: -.5px; }
+.cg-dona-centro span { font-size: 11.5px; color: var(--muted); }
+.cg-arco { animation: cgDona 1s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes cgDona { from { stroke-dasharray: 0 999; } }
+.cg-leyenda { display: flex; flex-wrap: wrap; gap: 6px 14px; justify-content: center; font-size: 12px; color: var(--muted); }
+.cg-leyenda i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+
+.cg-ranking { display: flex; flex-direction: column; gap: 12px; }
+.cg-fila { animation: cgEntra .5s ease both; animation-delay: var(--d); }
+@keyframes cgEntra { from { opacity: 0; transform: translateY(6px); } }
+.cg-fila-cab { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.cg-pos {
+  width: 22px; height: 22px; border-radius: 7px; background: var(--c); color: #fff;
+  font-size: 11.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.cg-nombre { font-weight: 600; color: var(--text); flex: 1; }
+.cg-litros { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.cg-litros b { color: var(--text); }
+.cg-barra { height: 10px; background: var(--surface3); border-radius: 6px; margin: 6px 0 3px 32px; overflow: hidden; }
+.cg-barra-fill { height: 100%; background: var(--c); border-radius: 6px; animation: cgBarra .9s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--d); }
+@keyframes cgBarra { from { width: 0 !important; } }
+.cg-fila-sub { font-size: 11.5px; color: var(--light); margin-left: 32px; }
+.cg-chip {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  padding: 3px 10px 3px 8px; border-radius: 999px; color: var(--text);
+  background: color-mix(in srgb, var(--c) 12%, transparent);
+}
+.cg-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
