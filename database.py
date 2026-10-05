@@ -47,6 +47,11 @@ def inicializar_db():
         ("km_manual", "REAL DEFAULT 0"),   # corrección manual del odómetro (si > 0, tiene prioridad como piso)
         ("horario_salida", "TEXT DEFAULT ''"),   # hora fija de salida del coche (ej: '06:00')
         ("consumo_km_litro", "REAL DEFAULT 0"),  # rendimiento de combustible (km por litro) para turismo
+        # Consumo esperado propio de ESTE coche, en litros cada 100 km. Si es
+        # mayor a cero manda sobre el de su modelo: un coche puede andar
+        # distinto que sus hermanos por la ruta que hace, los años o el estado.
+        # Va aparte del de Turismo para no mover los presupuestos sin querer.
+        ("consumo_referencia_propia", "REAL DEFAULT 0"),
     ]:
         if col not in columnas_existentes:
             try:
@@ -3224,7 +3229,11 @@ def _migrar_combustible(conn):
                          # Momento exacto de la carga, en hora de Paraguay. Se
                          # guarda solo, sin pedirle nada a nadie: permite ver
                          # dos cargas del mismo coche con pocas horas de diferencia.
-                         ("cargado_el", "TEXT")):
+                         ("cargado_el", "TEXT"),
+                         # Dónde se cargó: en el taller (tanque propio) o en una
+                         # estación de afuera, y en ese caso de qué emblema
+                         ("lugar_carga", "TEXT DEFAULT ''"),
+                         ("emblema", "TEXT DEFAULT ''")):
             if col not in cols:
                 conn.execute(f"ALTER TABLE combustible ADD COLUMN {col} {ddl}")
         conn.commit()
@@ -3254,8 +3263,8 @@ def registrar_carga_combustible(datos):
         INSERT INTO combustible
         (vehiculo_id, fecha, odometro, litros, precio_litro, costo_total,
          estacion, chofer, tanque_lleno, observaciones, registrado_por,
-         origen, cliente, cargado_el)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         origen, cliente, cargado_el, lugar_carga, emblema)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (
         int(datos["vehiculo_id"]), datos.get("fecha", ""),
         float(datos.get("odometro", 0) or 0), litros, precio, costo,
@@ -3264,6 +3273,7 @@ def registrar_carga_combustible(datos):
         datos.get("observaciones", ""), datos.get("registrado_por", ""),
         datos.get("origen", "taller"), datos.get("cliente", ""),
         _momento_carga(),
+        datos.get("lugar_carga", ""), datos.get("emblema", ""),
     ))
     conn.commit()
     cid = cur.lastrowid
@@ -3642,26 +3652,47 @@ def sembrar_referencias_consumo():
 
 
 def referencia_de_vehiculo(vehiculo_id):
-    """El consumo esperado de ese bus según su modelo y motor.
-    Devuelve None si el vehículo no tiene plan asignado todavía."""
+    """El consumo esperado de ese bus.
+
+    Si al coche se le cargó un consumo propio, manda ese; si no, el de su
+    modelo y motor. Devuelve None si no tiene ni uno ni otro (sin plan
+    asignado y sin valor propio).
+    """
     conn = get_connection()
     try:
-        row = conn.execute("""
+        plan = conn.execute("""
             SELECT p.nombre, p.consumo_referencia
             FROM vehiculo_plan vp
             JOIN planes_mantenimiento p ON p.id = vp.plan_id
             WHERE vp.vehiculo_id = ?
         """, (vehiculo_id,)).fetchone()
     except Exception:
-        row = None
+        plan = None
+    try:
+        v = conn.execute("SELECT COALESCE(consumo_referencia_propia, 0) AS p FROM vehiculos WHERE id=?",
+                         (vehiculo_id,)).fetchone()
+        propia = float(v["p"] or 0) if v else 0
+    except Exception:
+        propia = 0
     conn.close()
-    if not row or not row["consumo_referencia"]:
+
+    ref_modelo = float(plan["consumo_referencia"] or 0) if plan else 0
+    if propia > 0:
+        return {
+            "modelo": "este coche (referencia propia)",
+            "litros_100km": round(propia, 2),
+            "km_l": round(100 / propia, 2),
+            "propia": True,
+            "modelo_plan": plan["nombre"] if plan else None,
+            "ref_modelo": round(ref_modelo, 2) if ref_modelo else None,
+        }
+    if not ref_modelo:
         return None
-    ref = float(row["consumo_referencia"])
     return {
-        "modelo": row["nombre"],
-        "litros_100km": round(ref, 2),
-        "km_l": round(100 / ref, 2) if ref else 0,
+        "modelo": plan["nombre"],
+        "litros_100km": round(ref_modelo, 2),
+        "km_l": round(100 / ref_modelo, 2),
+        "propia": False,
     }
 
 
@@ -3751,6 +3782,57 @@ def guardar_referencia_consumo(plan_id, litros_100km):
     conn.commit()
     conn.close()
     return True, f"Consumo de referencia actualizado a {v} L cada 100 km."
+
+
+def referencias_por_coche():
+    """Cada coche con el consumo de su modelo y, si tiene, el propio."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT v.id, v.n_interno, v.patente, v.marca, v.modelo,
+               COALESCE(v.consumo_referencia_propia, 0) AS propia,
+               p.nombre AS plan, COALESCE(p.consumo_referencia, 0) AS ref_modelo
+        FROM vehiculos v
+        LEFT JOIN vehiculo_plan vp ON vp.vehiculo_id = v.id
+        LEFT JOIN planes_mantenimiento p ON p.id = vp.plan_id
+        WHERE COALESCE(v.activo, 1) = 1
+    """).fetchall()
+    conn.close()
+    salida = []
+    for r in rows:
+        d = dict(r)
+        d["propia"] = round(float(d["propia"] or 0), 2) or None
+        d["ref_modelo"] = round(float(d["ref_modelo"] or 0), 2) or None
+        d["vigente"] = d["propia"] or d["ref_modelo"]
+        salida.append(d)
+    # Ordenados por número de coche; los que tienen letras, al final
+    def orden(d):
+        n = str(d.get("n_interno") or "").strip()
+        return (0, int(n), "") if n.isdigit() else (1, 0, n.upper() or "~")
+    return sorted(salida, key=orden)
+
+
+def guardar_referencia_coche(vehiculo_id, litros_100km):
+    """Le pone a un coche su propio consumo esperado. Vacío o cero lo saca y
+    el coche vuelve a usar el de su modelo."""
+    txt = str(litros_100km if litros_100km is not None else "").strip()
+    if not txt:
+        v = 0.0
+    else:
+        try:
+            v = float(txt.replace(",", "."))
+        except Exception:
+            return False, "El valor no es un número."
+        if v < 0 or v > 200:
+            return False, "Ese consumo está fuera de rango."
+    conn = get_connection()
+    conn.execute("UPDATE vehiculos SET consumo_referencia_propia=? WHERE id=?",
+                 (v, vehiculo_id))
+    conn.commit()
+    conn.close()
+    if not v:
+        return True, "Se le sacó el valor propio: vuelve a usar el de su modelo."
+    num = f"{v:g}".replace(".", ",")
+    return True, f"Este coche ahora se compara contra {num} L cada 100 km."
 
 
 # ════════════════════════════════════════════════════════════════════════════

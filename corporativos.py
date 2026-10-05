@@ -65,6 +65,11 @@ CLIENTES_INACTIVOS = ["BIMBO", "PETROPAR", "FPV", "FAPASA", "FAPASA Y LASCA"]
 
 TRAMO_VARIABLE = "VARIABLE"
 
+# Emblemas que se le ofrecen al chofer cuando carga afuera del taller. Si
+# carga en otro, elige "Otro" y lo escribe. Para sumar o sacar uno, se toca
+# esta lista y nada más.
+EMBLEMAS = ["PETROPAR", "COPETROL", "SHELL", "PUMA", "PETROBRAS", "BARCOS Y RODADOS"]
+
 # Tramos a los que se les cambió el nombre (casi siempre porque cambió el
 # horario, que va dentro del nombre). Al arrancar, el sistema pasa al nombre
 # nuevo los servicios ya cargados y la tarifa guardada: si no, quedarían
@@ -2252,6 +2257,7 @@ def api_corp_config():
         "clientes_tramos": activos,
         "tarifas": {"completado": MONTO_COMPLETADO, "medio": MONTO_MEDIO,
                     "variable": MONTO_VARIABLE},
+        "emblemas": EMBLEMAS,
     })
 
 
@@ -2542,6 +2548,13 @@ def api_corp_cargar_combustible():
     # registra igual. Sin él no se puede medir el consumo de ese tramo, pero
     # es preferible tener la carga cargada que no tenerla.
     odo = num(d.get("odometro"))
+    # Dónde cargó: en el taller o en una estación de afuera (con su emblema)
+    lugar = (d.get("lugar_carga") or "").strip().lower()
+    if lugar not in ("taller", "tercerizado"):
+        return jsonify({"ok": False, "msg": "Marcá si cargaste en el taller o en una estación."}), 400
+    emblema = " ".join((d.get("emblema") or "").split()).upper() if lugar == "tercerizado" else ""
+    if lugar == "tercerizado" and len(emblema) < 2:
+        return jsonify({"ok": False, "msg": "Elegí el emblema de la estación."}), 400
 
     # Al chofer solo se le piden kilometraje y litros: el precio se toma del
     # último registrado, así el costo se sigue calculando sin cargarle un dato
@@ -2562,8 +2575,54 @@ def api_corp_cargar_combustible():
         "registrado_por": nombre,
         "origen": "corporativo",
         "cliente": (d.get("cliente") or "").strip(),
+        "lugar_carga": lugar,
+        "emblema": emblema,
     })
     return jsonify({"ok": True, "id": cid, "msg": "Carga registrada."})
+
+
+@bp_corp.route("/api/corp/cargas", methods=["GET"])
+def api_corp_cargas():
+    """Dónde cargan combustible los choferes: en el taller o afuera, y en qué
+    emblema. Con el ranking de lugares para el gráfico."""
+    if _rol_efectivo() not in ("admin", "auditor", "operador_corp"):
+        return jsonify({"error": "Sin permiso"}), 403
+    from database import obtener_cargas_combustible
+    cargas = obtener_cargas_combustible(desde=request.args.get("desde") or None,
+                                        hasta=request.args.get("hasta") or None,
+                                        origen="corporativo", limite=5000)
+    lugares, tipo = {}, {"taller": [0, 0.0], "tercerizado": [0, 0.0], "sin_dato": [0, 0.0]}
+    detalle = []
+    for c in cargas:
+        lugar = (c.get("lugar_carga") or "").strip()
+        litros = float(c.get("litros") or 0)
+        clave = lugar if lugar in ("taller", "tercerizado") else "sin_dato"
+        tipo[clave][0] += 1
+        tipo[clave][1] += litros
+        # El "lugar" del ranking: el taller, o cada emblema por separado
+        nombre = ("TALLER" if lugar == "taller"
+                  else (c.get("emblema") or "SIN EMBLEMA") if lugar == "tercerizado"
+                  else "SIN DATO")
+        l = lugares.setdefault(nombre, {"lugar": nombre, "tipo": clave, "cargas": 0, "litros": 0.0})
+        l["cargas"] += 1
+        l["litros"] += litros
+        detalle.append({"fecha": c.get("fecha"), "bus": c.get("n_interno") or "",
+                        "patente": c.get("patente") or "", "chofer": c.get("chofer") or "",
+                        "litros": round(litros, 2), "lugar": clave,
+                        "emblema": c.get("emblema") or ""})
+    total_l = sum(v[1] for v in tipo.values()) or 1
+    ranking = sorted(lugares.values(), key=lambda x: -x["litros"])
+    for r in ranking:
+        r["litros"] = round(r["litros"], 2)
+        r["pct"] = round(r["litros"] / total_l * 100, 1)
+    detalle.sort(key=lambda x: x["fecha"] or "", reverse=True)
+    return jsonify({
+        "resumen": {k: {"cargas": v[0], "litros": round(v[1], 2),
+                        "pct": round(v[1] / total_l * 100, 1)} for k, v in tipo.items()},
+        "total": {"cargas": len(cargas), "litros": round(sum(v[1] for v in tipo.values()), 2)},
+        "lugares": ranking,
+        "cargas": detalle,
+    })
 
 
 def ultimo_precio_litro():

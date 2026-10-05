@@ -1899,6 +1899,26 @@ def api_guardar_referencia(plan_id):
     return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
 
 
+@app.route("/api/consumo/referencias_coche", methods=["GET"])
+@login_requerido
+def api_referencias_coche():
+    """El consumo esperado de cada coche: el de su modelo y, si tiene, el propio."""
+    from database import referencias_por_coche
+    return jsonify(referencias_por_coche())
+
+
+@app.route("/api/consumo/referencias_coche/<int:vid>", methods=["PATCH"])
+@rol_requerido("admin")
+def api_guardar_referencia_coche(vid):
+    """Le pone a un coche su propio consumo esperado (o se lo saca)."""
+    from database import guardar_referencia_coche
+    d = request.json or {}
+    ok, msg = guardar_referencia_coche(vid, d.get("litros_100km"))
+    if ok:
+        auditar(f"Cambió el consumo de referencia del coche (ID {vid})", "Combustible", msg)
+    return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
+
+
 @app.route("/api/consumo/vehiculo/<int:vid>", methods=["GET"])
 @login_requerido
 def api_consumo_vehiculo(vid):
