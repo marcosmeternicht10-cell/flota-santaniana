@@ -72,11 +72,18 @@ TRAMO_VARIABLE = "VARIABLE"
 # los contaría como otro tramo. Para un cambio futuro alcanza con agregar una
 # línea acá: (cliente, nombre viejo, nombre nuevo).
 RENOMBRES_TRAMOS = [
-    # Octubre 2026: el administrativo de LASCA pasó de 7:30–17:00 a 6:00–16:00
-    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. TACUMBU (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)"),
+    # Octubre 2026: el administrativo de LASCA quedó de 7:00 a 17:00. Antes
+    # era 7:30–17:00 y por unos días figuró 6:00–16:00, así que los dos nombres
+    # viejos van directo al definitivo (cada uno apunta al nombre final, nunca
+    # a otro intermedio, para que no importe el orden en que se apliquen).
+    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. TACUMBU (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. LIMPIO (6:00 A 16:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (6:00 A 16:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:00 HS.)"),
+    ("LASCA", "ADMIN. TACUMBU (6:00 A 16:00 HS.)", "ADMIN. TACUMBU (7:00 A 17:00 HS.)"),
 ]
 
 
@@ -288,8 +295,8 @@ CLIENTES_TRAMOS = {
         "VARIABLE",
     ],
     "LASCA": [
-        "ADMIN. LIMPIO (6:00 A 16:00 HS.)", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",
-        "ADMIN. RUTA 2 (6:00 A 16:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)",
+        "ADMIN. LIMPIO (7:00 A 17:00 HS.)", "ADMIN. RUTA 1 (7:00 A 17:00 HS.)",
+        "ADMIN. RUTA 2 (7:00 A 17:00 HS.)", "ADMIN. TACUMBU (7:00 A 17:00 HS.)",
         "TURNANTE LIMPIO (4:30 HS.)", "TURNANTE RUTA 1 (4:30 HS.)", "TURNANTE RUTA 2 (4:30 HS.)",
         "TURNANTE LIMPIO (13:30 HS.)", "TURNANTE RUTA 1 (13:30 HS.)", "TURNANTE RUTA 2 (13:30 HS.)",
         "TURNANTE LIMPIO (23:50 HS.)", "TURNANTE RUTA 1 (23:50 HS.)", "TURNANTE RUTA 2 (23:50 HS.)",
