@@ -65,6 +65,60 @@ CLIENTES_INACTIVOS = ["BIMBO", "PETROPAR", "FPV", "FAPASA", "FAPASA Y LASCA"]
 
 TRAMO_VARIABLE = "VARIABLE"
 
+# Tramos a los que se les cambió el nombre (casi siempre porque cambió el
+# horario, que va dentro del nombre). Al arrancar, el sistema pasa al nombre
+# nuevo los servicios ya cargados y la tarifa guardada: si no, quedarían
+# huérfanos, la tarifa volvería al valor por defecto y el control de cobertura
+# los contaría como otro tramo. Para un cambio futuro alcanza con agregar una
+# línea acá: (cliente, nombre viejo, nombre nuevo).
+RENOMBRES_TRAMOS = [
+    # Octubre 2026: el administrativo de LASCA pasó de 7:30–17:00 a 6:00–16:00
+    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. TACUMBU (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)"),
+]
+
+
+def aplicar_renombres_tramos():
+    """Pasa al nombre nuevo los servicios y las tarifas de los tramos
+    renombrados. Se puede correr las veces que sea: lo que ya está con el
+    nombre nuevo no se toca."""
+    import json
+    if not RENOMBRES_TRAMOS:
+        return 0
+    conn = get_connection()
+    movidos = 0
+    try:
+        for cliente, viejo, nuevo in RENOMBRES_TRAMOS:
+            n = conn.execute("""SELECT COUNT(*) AS c FROM rendiciones_corp
+                                WHERE cliente=? AND tramo=?""", (cliente, viejo)).fetchone()["c"]
+            if n:
+                conn.execute("UPDATE rendiciones_corp SET tramo=? WHERE cliente=? AND tramo=?",
+                             (nuevo, cliente, viejo))
+                movidos += n
+        # La tarifa guardada se muda al nombre nuevo
+        row = conn.execute("SELECT valor FROM config_corp WHERE clave=?",
+                           ("tarifas_tramos",)).fetchone()
+        if row and row["valor"]:
+            tarifas = json.loads(row["valor"]) or {}
+            cambio = False
+            for cliente, viejo, nuevo in RENOMBRES_TRAMOS:
+                kv, kn = f"{cliente}|{viejo}", f"{cliente}|{nuevo}"
+                if kv in tarifas:
+                    tarifas.setdefault(kn, tarifas[kv])
+                    del tarifas[kv]
+                    cambio = True
+            if cambio:
+                conn.execute("UPDATE config_corp SET valor=? WHERE clave=?",
+                             (json.dumps(tarifas, ensure_ascii=False), "tarifas_tramos"))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        movidos = 0
+    conn.close()
+    return movidos
+
 
 def _tarifa_por_defecto(cliente, tramo):
     """Tarifa inicial de un tramo, la primera vez que arranca el sistema.
@@ -234,8 +288,8 @@ CLIENTES_TRAMOS = {
         "VARIABLE",
     ],
     "LASCA": [
-        "ADMIN. LIMPIO (7:30 A 17:00 HS.)", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",
-        "ADMIN. RUTA 2 (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (7:30 A 17:00 HS.)",
+        "ADMIN. LIMPIO (6:00 A 16:00 HS.)", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",
+        "ADMIN. RUTA 2 (6:00 A 16:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)",
         "TURNANTE LIMPIO (4:30 HS.)", "TURNANTE RUTA 1 (4:30 HS.)", "TURNANTE RUTA 2 (4:30 HS.)",
         "TURNANTE LIMPIO (13:30 HS.)", "TURNANTE RUTA 1 (13:30 HS.)", "TURNANTE RUTA 2 (13:30 HS.)",
         "TURNANTE LIMPIO (23:50 HS.)", "TURNANTE RUTA 1 (23:50 HS.)", "TURNANTE RUTA 2 (23:50 HS.)",
@@ -530,6 +584,11 @@ def init_corporativos_module(app):
     # Registro del plus pagado, para que el histórico no se recalcule
     try:
         inicializar_pagos_plus()
+    except Exception:
+        pass
+    # Tramos que cambiaron de nombre (por ejemplo, porque cambió el horario)
+    try:
+        aplicar_renombres_tramos()
     except Exception:
         pass
     # Pasa a hora de Paraguay lo que quedó guardado en hora del servidor
@@ -3391,7 +3450,7 @@ def _bloque_control_pdf(control, st_sec, st_per, tabla, gs, lt, mm, colors, Para
 
     if parejos:
         e.append(Paragraph("Coches que consumen siempre más que su motor", st_sec))
-        d = [["Coche", "Patente", "Consume siempre", "Su motor dice", "Diferencia", "Tanques"]]
+        d = [["Coche", "Patente", "Consume siempre", "Su referencia", "Diferencia", "Tanques"]]
         for g in parejos:
             dif = round((g["consumo_real"] - g["normal"]) / g["normal"] * 100)
             d.append([f'#{g["bus"]}', g.get("patente", ""), lt(g["consumo_real"]),
