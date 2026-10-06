@@ -181,6 +181,7 @@ function irA(sec) {
     corp_historial: renderCorpHistorial,
     corp_empresas: renderCorpEmpresas,
     corp_cargas: renderCorpCargas,
+    mantenimientos: renderMantenimientos,
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
@@ -9419,4 +9420,312 @@ function donaCargas(r) {
     <div class="cg-dona-centro"><b>${r.taller.pct}%</b><span>en el taller</span></div>
   </div>
   <div class="cg-leyenda">${partes.map(p => `<span><i style="background:${p.c}"></i>${p.n} · ${Math.round(p.v / total * 100)}%</span>`).join("")}</div>`;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  MANTENIMIENTOS — historia de cada coche (libro de a bordo + día a día)
+// ════════════════════════════════════════════════════════════════════════
+// Junta lo del libro de a bordo, los correctivos, los preventivos del plan y
+// las órdenes de trabajo en una sola historia por coche. Liviano a propósito:
+// la lista trae 10 coches por página, el buscador espera a que termines de
+// escribir, y nunca se traen todos los coches de golpe.
+
+const MT_COLOR = { preventivo: "#2F7C46", correctivo: "#DC2641", neumaticos: "#6D4BB0", otros: "#5B6B7F" };
+const MT_NOMBRE = { preventivo: "Preventivo", correctivo: "Correctivo", neumaticos: "Neumáticos", otros: "Otros" };
+const MT_ORIGEN = { historial_eventos: "Libro / día a día", correctivos: "Correctivo", plan: "Plan preventivo", ot: "Orden de trabajo" };
+const MT_CATEGORIAS = ["Cambio de aceite", "Filtros", "Engrase", "Frenos", "Embrague", "Suspensión", "Dirección",
+  "Eléctrico", "Motor", "Caja", "Diferencial", "Refrigeración", "Aire acondicionado", "Carrocería", "Rotación",
+  "Cambio de neumático", "Alineación y balanceo", "Lavado de motor"];
+let mtEstado = { q: "", pagina: 1, coche: null, hpagina: 1, tipo: "" };
+let mtBuscarTimer = null;
+
+async function renderMantenimientos() {
+  status("Mantenimientos");
+  mtEstado = { q: "", pagina: 1, coche: null, hpagina: 1, tipo: "" };
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-book"></i> Mantenimientos</h1>
+      <p>La historia de mantenimiento de cada coche: lo del libro de a bordo y lo que se va haciendo día a día</p>
+    </div>
+    <div class="section">
+      <div id="mt-stats"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      <div id="mt-cuerpo"></div>
+    </div>`;
+  mtCargarStats();
+  mtVerLista();
+}
+
+// ─── Estadísticas ───
+async function mtCargarStats() {
+  const caja = $("#mt-stats");
+  const e = await api("/api/mant/estadisticas");
+  if (!e || e.error) { caja.innerHTML = ""; return; }
+  const max = Math.max(1, ...e.meses.map(m => m.preventivo + m.correctivo + m.neumaticos + m.otros));
+  const nomMes = m => ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"][+m.slice(5) - 1];
+  const totalCorr = e.totales.correctivo;
+  caja.innerHTML = `
+    <div class="mt-kpis">
+      <div class="mt-kpi" style="--c:var(--brand-blue)">
+        <div class="mt-kpi-lbl">Últimos 30 días</div>
+        <div class="mt-kpi-num">${e.ultimos_30.registros}</div>
+        <div class="mt-kpi-sub">mantenimientos${e.ultimos_30.costo ? ` · Gs. ${fmtNum(Math.round(e.ultimos_30.costo))}` : ""}</div>
+      </div>
+      <div class="mt-kpi" style="--c:${MT_COLOR.preventivo}">
+        <div class="mt-kpi-lbl">Preventivo</div>
+        <div class="mt-kpi-num">${e.pct_preventivo === null ? "—" : e.pct_preventivo + "%"}</div>
+        <div class="mt-kpi-barra"><div style="width:${e.pct_preventivo || 0}%"></div></div>
+        <div class="mt-kpi-sub">de los arreglos son preventivos (6 meses)</div>
+      </div>
+      <div class="mt-kpi" style="--c:${MT_COLOR.correctivo}">
+        <div class="mt-kpi-lbl">Correctivos</div>
+        <div class="mt-kpi-num">${totalCorr}</div>
+        <div class="mt-kpi-sub">fallas reparadas en 6 meses</div>
+      </div>
+      <div class="mt-kpi" style="--c:${e.sin_mant_90 ? "#B97D0A" : MT_COLOR.preventivo}">
+        <div class="mt-kpi-lbl">Sin mantenimiento</div>
+        <div class="mt-kpi-num">${e.sin_mant_90}</div>
+        <div class="mt-kpi-sub">de ${e.activos} coches, en los últimos 90 días</div>
+      </div>
+    </div>
+    <div class="mt-graficos">
+      <div class="card mt-card">
+        <div class="mt-tit">Mantenimientos por mes</div>
+        <div class="mt-barras">
+          ${e.meses.map((m, k) => {
+            const tot = m.preventivo + m.correctivo + m.neumaticos + m.otros;
+            return `<div class="mt-col" title="${tot} en total">
+              <div class="mt-pila" style="height:${tot / max * 100}%;--d:${k * 60}ms">
+                ${["otros", "neumaticos", "correctivo", "preventivo"].map(g => m[g]
+                  ? `<div style="flex:${m[g]};background:${MT_COLOR[g]}" title="${MT_NOMBRE[g]}: ${m[g]}"></div>` : "").join("")}
+              </div>
+              <div class="mt-col-n">${tot || ""}</div>
+              <div class="mt-col-mes">${nomMes(m.mes)}</div>
+            </div>`;
+          }).join("")}
+        </div>
+        <div class="mt-leyenda">${Object.keys(MT_COLOR).map(g => `<span><i style="background:${MT_COLOR[g]}"></i>${MT_NOMBRE[g]}</span>`).join("")}</div>
+      </div>
+      <div class="card mt-card">
+        <div class="mt-tit">Más correctivos · 90 días</div>
+        ${e.top_correctivos.length ? e.top_correctivos.map((t, k) => `
+          <div class="mt-top" onclick="mtVerCoche(${t.vehiculo_id})">
+            <span class="mt-top-pos">${k + 1}</span>
+            <span class="mt-top-coche"><b>#${t.n_interno}</b> <span>${t.patente || ""}</span></span>
+            <span class="mt-top-barra"><span style="width:${t.n / e.top_correctivos[0].n * 100}%"></span></span>
+            <span class="mt-top-n">${t.n}</span>
+          </div>`).join("")
+          : `<div class="empty" style="padding:24px 8px"><i class="ti ti-circle-check"></i>Ningún correctivo en 90 días</div>`}
+      </div>
+    </div>`;
+}
+
+// ─── Lista de coches, de a 10 ───
+function mtVerLista() {
+  mtEstado.coche = null;
+  $("#mt-stats").style.display = "";
+  $("#mt-cuerpo").innerHTML = `
+    <div class="card">
+      <div class="mt-buscador">
+        <i class="ti ti-search"></i>
+        <input id="mt-q" placeholder="Buscá por número, patente o marca..." value="${mtEstado.q.replace(/"/g, "&quot;")}"
+               oninput="mtBuscar(this.value)" autocomplete="off">
+        <span id="mt-total" class="mt-total"></span>
+      </div>
+      <div id="mt-lista"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      <div id="mt-pag"></div>
+    </div>`;
+  mtCargarLista();
+}
+
+function mtBuscar(v) {
+  clearTimeout(mtBuscarTimer);
+  mtBuscarTimer = setTimeout(() => { mtEstado.q = v.trim(); mtEstado.pagina = 1; mtCargarLista(); }, 300);
+}
+
+async function mtCargarLista() {
+  const p = new URLSearchParams({ q: mtEstado.q, pagina: mtEstado.pagina });
+  const d = await api(`/api/mant/coches?${p.toString()}`);
+  if (!d || d.error) return;
+  mtEstado.pagina = d.pagina;
+  $("#mt-total").textContent = `${d.total} coche${d.total === 1 ? "" : "s"}`;
+  const estadoDias = x => x.dias_desde === null ? ["nunca", "Sin registros", "var(--light)"]
+    : x.dias_desde > 90 ? ["rojo", `hace ${x.dias_desde} días`, MT_COLOR.correctivo]
+    : x.dias_desde > 60 ? ["ambar", `hace ${x.dias_desde} días`, "#B97D0A"]
+    : ["verde", x.dias_desde === 0 ? "hoy" : `hace ${x.dias_desde} día${x.dias_desde === 1 ? "" : "s"}`, MT_COLOR.preventivo];
+  $("#mt-lista").innerHTML = d.coches.length ? d.coches.map(x => {
+    const [cls, txt, col] = estadoDias(x);
+    return `
+    <div class="mt-fila" onclick="mtVerCoche(${x.id})">
+      <div class="mt-num">#${x.n_interno || "—"}</div>
+      <div class="mt-coche">
+        <b>${x.patente || ""}</b>
+        <span>${[x.marca, x.modelo].filter(Boolean).join(" ")}</span>
+      </div>
+      <div class="mt-ultimo">
+        <span class="mt-punto" style="background:${col}"></span>
+        <div><div class="mt-ultimo-lbl">Último mantenimiento</div><b style="color:${cls === "nunca" ? "var(--light)" : "var(--text)"}">${txt}</b></div>
+      </div>
+      <div class="mt-cifra"><b>${x.registros}</b><span>registros</span></div>
+      <div class="mt-cifra"><b style="color:${x.correctivos ? MT_COLOR.correctivo : "var(--light)"}">${x.correctivos}</b><span>correctivos</span></div>
+      <i class="ti ti-chevron-right mt-flecha"></i>
+    </div>`;
+  }).join("") : `<div class="empty"><i class="ti ti-search"></i>Ningún coche coincide con "${mtEstado.q}"</div>`;
+  $("#mt-pag").innerHTML = paginador(d.pagina, d.paginas, "mtIrPagina");
+}
+
+function mtIrPagina(n) {
+  mtEstado.pagina = n;
+  mtCargarLista();
+  $("#mt-cuerpo").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Paginador reutilizable: ‹ 1 … 4 5 6 … 9 ›
+function paginador(actual, total, fn) {
+  if (total <= 1) return "";
+  const nums = new Set([1, total, actual - 1, actual, actual + 1].filter(n => n >= 1 && n <= total));
+  if (total <= 7) for (let i = 1; i <= total; i++) nums.add(i);
+  const lista = [...nums].sort((a, b) => a - b);
+  let html = `<button class="pg-btn" ${actual === 1 ? "disabled" : ""} onclick="${fn}(${actual - 1})"><i class="ti ti-chevron-left"></i></button>`;
+  let prev = 0;
+  for (const n of lista) {
+    if (n - prev > 1) html += `<span class="pg-sep">…</span>`;
+    html += `<button class="pg-btn ${n === actual ? "activo" : ""}" onclick="${fn}(${n})">${n}</button>`;
+    prev = n;
+  }
+  html += `<button class="pg-btn" ${actual === total ? "disabled" : ""} onclick="${fn}(${actual + 1})"><i class="ti ti-chevron-right"></i></button>`;
+  return `<div class="paginador">${html}</div>`;
+}
+
+// ─── La historia de un coche ───
+async function mtVerCoche(vid) {
+  mtEstado.coche = vid; mtEstado.hpagina = 1; mtEstado.tipo = "";
+  $("#mt-stats").style.display = "none";
+  $("#mt-cuerpo").innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  content.scrollTop = 0;
+  await mtCargarCoche(true);
+}
+
+async function mtCargarCoche(armar = false) {
+  const vid = mtEstado.coche;
+  const p = new URLSearchParams({ pagina: mtEstado.hpagina, tipo: mtEstado.tipo });
+  const d = await api(`/api/mant/coche/${vid}?${p.toString()}`);
+  if (!d || d.error) { toast("No se pudo abrir el coche", "error"); return; }
+  const r = d.resumen, v = d.coche;
+  const fecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) + "/" + f.slice(0, 4) : "—";
+  if (armar || !$("#mt-historia")) {
+    const hoy = new Date().toISOString().slice(0, 10);
+    $("#mt-cuerpo").innerHTML = `
+      <button class="btn btn-ghost" style="margin-bottom:12px" onclick="mtVolver()"><i class="ti ti-arrow-left"></i> Volver a la lista</button>
+      <div class="mt-cab card">
+        <div class="mt-cab-num">#${v.n_interno || "—"}</div>
+        <div class="mt-cab-datos">
+          <h2>${v.patente || ""} <span>${[v.marca, v.modelo].filter(Boolean).join(" ")}</span></h2>
+          <div class="mt-cab-chips" id="mt-resumen"></div>
+        </div>
+      </div>
+
+      <div class="card mt-form">
+        <div class="mt-tit" style="margin-bottom:10px"><i class="ti ti-plus"></i> Agregar mantenimiento</div>
+        <div class="mt-tipos" id="mt-tipos">
+          ${[["preventivo", "Preventivo"], ["correctivo", "Correctivo"], ["neumaticos", "Neumáticos"], ["servicio", "Servicio"], ["otro", "Otro"]]
+            .map(([k, n]) => `<button type="button" class="mt-tipo ${k === "preventivo" ? "sel" : ""}" data-t="${k}"
+              style="--c:${MT_COLOR[k] || MT_COLOR.otros}" onclick="mtElegirTipo('${k}')">${n}</button>`).join("")}
+        </div>
+        <div class="mt-campos">
+          <div class="emp-campo"><label>Fecha</label><input type="date" id="mt-fecha" value="${hoy}" max="${hoy}"></div>
+          <div class="emp-campo" style="flex:1.4"><label>Qué se hizo</label>
+            <input id="mt-cat" list="mt-cats" placeholder="Ej: Cambio de aceite">
+            <datalist id="mt-cats">${MT_CATEGORIAS.map(x => `<option value="${x}">`).join("")}</datalist></div>
+          <div class="emp-campo"><label>Kilometraje</label><input id="mt-km" inputmode="numeric" placeholder="Del tablero"></div>
+          <div class="emp-campo"><label>Costo (Gs.)</label><input id="mt-costo" inputmode="numeric" placeholder="Opcional"></div>
+        </div>
+        <div class="mt-campos">
+          <div class="emp-campo" style="flex:2"><label>Detalle</label><input id="mt-desc" placeholder="Ej: Aceite 15W40, filtro de aceite y de combustible"></div>
+          <div class="emp-campo"><label>Taller o mecánico</label><input id="mt-taller" placeholder="Opcional"></div>
+          <button class="btn btn-primary" id="mt-guardar" onclick="mtGuardar()" style="align-self:flex-end"><i class="ti ti-check"></i> Guardar</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="mt-filtros" id="mt-filtros">
+          ${[["", "Todos"], ["preventivo", "Preventivos"], ["correctivo", "Correctivos"], ["neumaticos", "Neumáticos"], ["otros", "Otros"]]
+            .map(([k, n]) => `<button class="chip ${k === mtEstado.tipo ? "activo" : ""}" data-f="${k}" onclick="mtFiltrar('${k}')">${n}</button>`).join("")}
+        </div>
+        <div id="mt-historia"></div>
+        <div id="mt-hpag"></div>
+      </div>`;
+  }
+  $("#mt-resumen").innerHTML = `
+    <span><b>${r.registros}</b> registros</span>
+    <span style="--c:${MT_COLOR.preventivo}"><b>${r.preventivos}</b> preventivos</span>
+    <span style="--c:${MT_COLOR.correctivo}"><b>${r.correctivos}</b> correctivos</span>
+    ${r.costo ? `<span><b>Gs. ${fmtNum(Math.round(r.costo))}</b> invertidos</span>` : ""}
+    ${r.ultimo ? `<span>Último: <b>${fecha(r.ultimo)}</b></span>` : ""}
+    ${r.primero ? `<span>Desde: <b>${fecha(r.primero)}</b></span>` : ""}`;
+  $("#mt-historia").innerHTML = d.items.length ? d.items.map(x => `
+    <div class="mt-item" style="--c:${MT_COLOR[x.grupo]}">
+      <div class="mt-item-fecha">${fecha(x.fecha)}</div>
+      <div class="mt-item-linea"></div>
+      <div class="mt-item-cuerpo">
+        <div class="mt-item-tit">
+          <span class="mt-item-chip">${MT_NOMBRE[x.grupo]}</span>
+          <b>${x.categoria && x.categoria !== "Orden de trabajo" ? x.categoria : x.descripcion}</b>
+        </div>
+        ${x.categoria && x.categoria !== "Orden de trabajo" && x.descripcion && x.descripcion !== x.categoria
+          ? `<div class="mt-item-desc">${x.descripcion}</div>` : ""}
+        <div class="mt-item-meta">
+          ${x.km ? `<span><i class="ti ti-gauge"></i>${fmtNum(Math.round(x.km))} km</span>` : ""}
+          ${x.costo ? `<span><i class="ti ti-cash"></i>Gs. ${fmtNum(Math.round(x.costo))}</span>` : ""}
+          ${x.taller ? `<span><i class="ti ti-tool"></i>${x.taller}</span>` : ""}
+          <span class="mt-item-origen">${x.borrable ? "Libro / día a día" : (MT_ORIGEN[x.origen] || "")}</span>
+        </div>
+      </div>
+      ${x.borrable ? `<button class="icon-btn mt-borrar" title="Borrar (cargado por error)" onclick="mtBorrar('${x.origen}', ${x.id})"><i class="ti ti-trash"></i></button>` : ""}
+    </div>`).join("")
+    : `<div class="empty"><i class="ti ti-book-off"></i>${mtEstado.tipo ? "Nada de este tipo todavía." : "Este coche no tiene mantenimientos cargados todavía. Empezá por lo del libro de a bordo."}</div>`;
+  $("#mt-hpag").innerHTML = paginador(d.pagina, d.paginas, "mtIrHPagina");
+}
+
+function mtIrHPagina(n) { mtEstado.hpagina = n; mtCargarCoche(); }
+function mtFiltrar(t) {
+  mtEstado.tipo = t; mtEstado.hpagina = 1;
+  document.querySelectorAll("#mt-filtros .chip").forEach(b => b.classList.toggle("activo", b.dataset.f === t));
+  mtCargarCoche();
+}
+function mtElegirTipo(t) {
+  document.querySelectorAll("#mt-tipos .mt-tipo").forEach(b => b.classList.toggle("sel", b.dataset.t === t));
+}
+function mtVolver() {
+  mtVerLista();
+  if (mtEstado.statsViejas) { mtEstado.statsViejas = false; mtCargarStats(); }
+}
+
+async function mtGuardar() {
+  const tipo = document.querySelector("#mt-tipos .mt-tipo.sel")?.dataset.t || "otro";
+  const cat = $("#mt-cat").value.trim(), desc = $("#mt-desc").value.trim();
+  const fecha = $("#mt-fecha").value;
+  if (!fecha) { toast("Poné la fecha", "error"); return; }
+  if (!cat && !desc) { toast("Contá qué se hizo", "error"); $("#mt-cat").focus(); return; }
+  const num = id => parseFloat(($(id).value || "").replace(/\./g, "").replace(",", ".")) || 0;
+  const btn = $("#mt-guardar"); btn.disabled = true;
+  const r = await api("/api/historial_carga", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehiculo_id: mtEstado.coche, fecha, tipo, categoria: cat,
+      descripcion: desc || cat, km: num("#mt-km"), costo: num("#mt-costo"), taller: $("#mt-taller").value.trim() })
+  });
+  btn.disabled = false;
+  if (!(r && r.ok)) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast("Mantenimiento guardado", "success");
+  ["#mt-cat", "#mt-desc", "#mt-km", "#mt-costo"].forEach(id => $(id).value = "");
+  mtEstado.statsViejas = true;
+  mtEstado.hpagina = 1;
+  mtCargarCoche();
+}
+
+async function mtBorrar(origen, id) {
+  if (!confirm("¿Borrar este registro? Usalo solo si se cargó por error.")) return;
+  const r = await api(`/api/historial_carga/${origen}/${id}`, { method: "DELETE" });
+  if (r && r.ok) { toast("Registro borrado", "success"); mtEstado.statsViejas = true; mtCargarCoche(); }
+  else toast((r && r.msg) || "No se pudo borrar", "error");
 }
