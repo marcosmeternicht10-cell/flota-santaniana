@@ -787,6 +787,7 @@ def eliminar_tarea(tarea_id):
 
 def asignar_plan(vehiculo_id, plan_id, km_inicial=0):
     """Asigna o reemplaza el plan de un vehículo."""
+    _olvidar_referencias()
     conn = get_connection()
     conn.execute("""
         INSERT INTO vehiculo_plan (vehiculo_id, plan_id, km_inicial)
@@ -2229,14 +2230,19 @@ def reporte_gerencial(desde, hasta):
     # ─── Datos adicionales para las páginas técnicas del PDF ──────────────
     conn2 = get_connection()
 
-    # 1. Detalle de cada OT con sus items
+    # 1. Detalle de cada OT con sus items. Todos los ítems en una sola
+    #    consulta y se reparten por OT (antes era una consulta por cada OT).
+    items_por_ot = {}
+    ids_ots = [o["id"] for o in ots]
+    if ids_ots:
+        marcas = ",".join("?" * len(ids_ots))
+        for i in conn2.execute(f"SELECT * FROM ot_items WHERE ot_id IN ({marcas}) ORDER BY ot_id, id",
+                               tuple(ids_ots)).fetchall():
+            items_por_ot.setdefault(i["ot_id"], []).append(dict(i))
     ots_detalle = []
     for o in ots:
-        items = conn2.execute("""
-            SELECT * FROM ot_items WHERE ot_id=? ORDER BY id
-        """, (o["id"],)).fetchall()
         d = dict(o)
-        d["items"] = [dict(i) for i in items]
+        d["items"] = items_por_ot.get(o["id"], [])
         ots_detalle.append(d)
 
     # 2. Técnicos involucrados (de los items de OT del período)
@@ -2527,7 +2533,7 @@ def _dias_entre(desde, hasta):
         return 0
 
 
-def _dias_fuera_servicio(vehiculo_id, desde, hasta, conn):
+def _dias_fuera_servicio(vehiculo_id, desde, hasta, conn, regs=None, ots=None):
     """Calcula cuántos días del período [desde, hasta] el vehículo estuvo fuera de servicio.
     Combina: registros manuales de fuera_servicio + OTs abiertas (en taller)."""
     from datetime import date
@@ -2536,9 +2542,10 @@ def _dias_fuera_servicio(vehiculo_id, desde, hasta, conn):
     dias_fuera = set()
 
     # 1) Registros manuales de fuera de servicio
-    regs = conn.execute(
-        "SELECT fecha_desde, fecha_hasta FROM fuera_servicio WHERE vehiculo_id=?",
-        (vehiculo_id,)).fetchall()
+    if regs is None:
+        regs = conn.execute(
+            "SELECT fecha_desde, fecha_hasta FROM fuera_servicio WHERE vehiculo_id=?",
+            (vehiculo_id,)).fetchall()
     for r in regs:
         try:
             fs_ini = date.fromisoformat(r["fecha_desde"])
@@ -2554,9 +2561,10 @@ def _dias_fuera_servicio(vehiculo_id, desde, hasta, conn):
             cur = cur.fromordinal(cur.toordinal() + 1)
 
     # 2) OTs abiertas/en proceso → días en taller (desde apertura hasta cierre o fin del período)
-    ots = conn.execute(
-        "SELECT fecha_apertura, fecha_cierre, estado FROM ordenes_trabajo WHERE vehiculo_id=?",
-        (vehiculo_id,)).fetchall()
+    if ots is None:
+        ots = conn.execute(
+            "SELECT fecha_apertura, fecha_cierre, estado FROM ordenes_trabajo WHERE vehiculo_id=?",
+            (vehiculo_id,)).fetchall()
     for o in ots:
         try:
             ot_ini = date.fromisoformat(o["fecha_apertura"])
@@ -2579,12 +2587,51 @@ def _dias_fuera_servicio(vehiculo_id, desde, hasta, conn):
     return len(dias_fuera)
 
 
-def calcular_oee_vehiculo(vehiculo_id, desde, hasta):
+def cargar_datos_oee(desde, hasta):
+    """Todo lo que necesita el OEE, de toda la flota, en cinco consultas.
+
+    El OEE de la flota antes calculaba coche por coche con cinco consultas
+    cada uno: 445 para 89 coches. Con la base en otra región eso era casi un
+    minuto de espera. Ahora se trae todo junto y se reparte por coche.
+    """
+    conn = get_connection()
+    datos = {}
+    def de(vid):
+        return datos.setdefault(vid, {"regs": [], "ots": [], "kms": None, "corr": []})
+    for r in conn.execute("SELECT * FROM vehiculos").fetchall():
+        de(r["id"])["veh"] = dict(r)
+    for r in conn.execute("SELECT vehiculo_id, fecha_desde, fecha_hasta FROM fuera_servicio").fetchall():
+        de(r["vehiculo_id"])["regs"].append(r)
+    for r in conn.execute("SELECT vehiculo_id, fecha_apertura, fecha_cierre, estado FROM ordenes_trabajo").fetchall():
+        de(r["vehiculo_id"])["ots"].append(r)
+    for r in conn.execute("""
+        SELECT vehiculo_id, MIN(km) mn, MAX(km) mx FROM (
+            SELECT vehiculo_id, km FROM mantenimientos_realizados WHERE fecha BETWEEN ? AND ?
+            UNION ALL
+            SELECT vehiculo_id, km FROM correctivos WHERE fecha BETWEEN ? AND ?
+            UNION ALL
+            SELECT vehiculo_id, km FROM ordenes_trabajo WHERE fecha_apertura BETWEEN ? AND ?
+        ) t WHERE km > 0 GROUP BY vehiculo_id
+    """, (desde, hasta, desde, hasta, desde, hasta)).fetchall():
+        de(r["vehiculo_id"])["kms"] = {"mn": r["mn"], "mx": r["mx"]}
+    for r in conn.execute("SELECT vehiculo_id, fecha FROM correctivos WHERE fecha BETWEEN ? AND ?",
+                          (desde, hasta)).fetchall():
+        de(r["vehiculo_id"])["corr"].append(r)
+    conn.close()
+    return datos
+
+
+def calcular_oee_vehiculo(vehiculo_id, desde, hasta, datos=None):
     """
     Calcula el OEE de un vehículo en un período.
     OEE = Disponibilidad × Rendimiento × Calidad
     Devuelve los 3 factores y el resultado, más los datos que faltan (si los hay).
+
+    Si se le pasan los datos ya traídos (cargar_datos_oee), no consulta la
+    base: es lo que usa el OEE de toda la flota.
     """
+    if datos is not None:
+        return _oee_con_datos(vehiculo_id, desde, hasta, datos)
     conn = get_connection()
     veh = conn.execute("SELECT * FROM vehiculos WHERE id=?", (vehiculo_id,)).fetchone()
     if not veh:
@@ -2644,6 +2691,57 @@ def calcular_oee_vehiculo(vehiculo_id, desde, hasta):
     if km_recorridos == 0:
         faltantes.append("registros de km en el período")
 
+    return {
+        "vehiculo_id": vehiculo_id,
+        "patente": veh.get("patente"),
+        "n_interno": veh.get("n_interno"),
+        "desde": desde, "hasta": hasta,
+        "dias_periodo": dias_periodo,
+        "dias_operativo": dias_operativo,
+        "dias_fuera": dias_fuera,
+        "km_recorridos": km_recorridos,
+        "meta_periodo": round(meta_periodo),
+        "dias_con_falla": dias_con_falla,
+        "disponibilidad": round(disponibilidad * 100, 1),
+        "rendimiento": round(rendimiento * 100, 1),
+        "calidad": round(calidad * 100, 1),
+        "oee": round(oee * 100, 1),
+        "faltantes": faltantes,
+    }
+
+
+def _oee_con_datos(vehiculo_id, desde, hasta, d):
+    """El mismo cálculo de calcular_oee_vehiculo, sin consultar la base."""
+    veh = d.get("veh")
+    if not veh:
+        return None
+    dias_periodo = _dias_entre(desde, hasta)
+    if dias_periodo == 0:
+        return None
+    dias_fuera = _dias_fuera_servicio(vehiculo_id, desde, hasta, None,
+                                      regs=d.get("regs", []), ots=d.get("ots", []))
+    dias_operativo = max(0, dias_periodo - dias_fuera)
+    disponibilidad = dias_operativo / dias_periodo if dias_periodo else 0
+
+    meta_mensual = veh.get("meta_km_mensual") or 0
+    meta_periodo = meta_mensual * (dias_periodo / 30.0) if meta_mensual else 0
+    kms = d.get("kms")
+    km_recorridos = 0
+    if kms and kms["mx"] and kms["mn"]:
+        km_recorridos = max(0, kms["mx"] - kms["mn"])
+    rendimiento = (km_recorridos / meta_periodo) if meta_periodo else 0
+    rendimiento = min(rendimiento, 1.5)
+
+    dias_con_falla = len(set(c["fecha"] for c in d.get("corr", [])))
+    dias_sin_falla = max(0, dias_operativo - dias_con_falla)
+    calidad = dias_sin_falla / dias_operativo if dias_operativo else 0
+    oee = disponibilidad * rendimiento * calidad
+
+    faltantes = []
+    if not meta_mensual:
+        faltantes.append("meta de km mensual")
+    if km_recorridos == 0:
+        faltantes.append("registros de km en el período")
     return {
         "vehiculo_id": vehiculo_id,
         "patente": veh.get("patente"),
@@ -3651,45 +3749,76 @@ def sembrar_referencias_consumo():
         conn.close()
 
 
+def _todas_las_referencias():
+    """La referencia de consumo de todos los coches, en una sola consulta."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT v.id, COALESCE(v.consumo_referencia_propia, 0) AS propia,
+                   p.nombre AS plan, COALESCE(p.consumo_referencia, 0) AS ref_modelo
+            FROM vehiculos v
+            LEFT JOIN vehiculo_plan vp ON vp.vehiculo_id = v.id
+            LEFT JOIN planes_mantenimiento p ON p.id = vp.plan_id
+        """).fetchall()
+    except Exception:
+        rows = []
+    conn.close()
+    return {r["id"]: (float(r["propia"] or 0), r["plan"], float(r["ref_modelo"] or 0))
+            for r in rows}
+
+
+def _olvidar_referencias():
+    """Cuando se cambia una referencia, el pedido en curso deja de usar lo que
+    tenía guardado."""
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            g._refs_consumo = None
+    except Exception:
+        pass
+
+
 def referencia_de_vehiculo(vehiculo_id):
     """El consumo esperado de ese bus.
 
     Si al coche se le cargó un consumo propio, manda ese; si no, el de su
     modelo y motor. Devuelve None si no tiene ni uno ni otro (sin plan
     asignado y sin valor propio).
-    """
-    conn = get_connection()
-    try:
-        plan = conn.execute("""
-            SELECT p.nombre, p.consumo_referencia
-            FROM vehiculo_plan vp
-            JOIN planes_mantenimiento p ON p.id = vp.plan_id
-            WHERE vp.vehiculo_id = ?
-        """, (vehiculo_id,)).fetchone()
-    except Exception:
-        plan = None
-    try:
-        v = conn.execute("SELECT COALESCE(consumo_referencia_propia, 0) AS p FROM vehiculos WHERE id=?",
-                         (vehiculo_id,)).fetchone()
-        propia = float(v["p"] or 0) if v else 0
-    except Exception:
-        propia = 0
-    conn.close()
 
-    ref_modelo = float(plan["consumo_referencia"] or 0) if plan else 0
+    Las pantallas de combustible piden la referencia de cada coche, y antes
+    eso eran dos consultas por coche: 356 consultas para una flota de 89, que
+    con la base en otra región se volvían segundos de espera. Ahora la primera
+    vez que se pide se traen las de todos los coches juntas y el resto del
+    pedido las reusa.
+    """
+    datos = None
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            if getattr(g, "_refs_consumo", None) is None:
+                g._refs_consumo = _todas_las_referencias()
+            datos = g._refs_consumo.get(vehiculo_id)
+        else:
+            datos = _todas_las_referencias().get(vehiculo_id)
+    except Exception:
+        datos = _todas_las_referencias().get(vehiculo_id)
+    if not datos:
+        return None
+    propia, plan, ref_modelo = datos
+
     if propia > 0:
         return {
             "modelo": "este coche (referencia propia)",
             "litros_100km": round(propia, 2),
             "km_l": round(100 / propia, 2),
             "propia": True,
-            "modelo_plan": plan["nombre"] if plan else None,
+            "modelo_plan": plan,
             "ref_modelo": round(ref_modelo, 2) if ref_modelo else None,
         }
     if not ref_modelo:
         return None
     return {
-        "modelo": plan["nombre"],
+        "modelo": plan,
         "litros_100km": round(ref_modelo, 2),
         "km_l": round(100 / ref_modelo, 2),
         "propia": False,
@@ -3770,6 +3899,7 @@ def referencias_consumo():
 
 def guardar_referencia_consumo(plan_id, litros_100km):
     """Corrige el consumo esperado de un modelo."""
+    _olvidar_referencias()
     try:
         v = float(str(litros_100km).replace(",", "."))
     except Exception:
@@ -3814,6 +3944,7 @@ def referencias_por_coche():
 def guardar_referencia_coche(vehiculo_id, litros_100km):
     """Le pone a un coche su propio consumo esperado. Vacío o cero lo saca y
     el coche vuelve a usar el de su modelo."""
+    _olvidar_referencias()
     txt = str(litros_100km if litros_100km is not None else "").strip()
     if not txt:
         v = 0.0

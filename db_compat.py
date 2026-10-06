@@ -66,7 +66,19 @@ def _traducir_sql(sql):
     if not USE_POSTGRES:
         return sql
 
-    # 1. Placeholders ? → %s
+    # 0. strftime('%Y-%m', fecha) no existe en PostgreSQL. Las fechas se guardan
+    #    como texto 'AAAA-MM-DD', así que el año-mes son los primeros 7
+    #    caracteres. El CAST lo hace andar también si la columna es de tipo fecha.
+    sql = re.sub(r"strftime\(\s*'%Y-%m'\s*,\s*([^)]+?)\s*\)",
+                 r"substr(CAST(\1 AS TEXT), 1, 7)", sql, flags=re.IGNORECASE)
+
+    # 1. PostgreSQL usa '%' para marcar dónde van los datos, así que un '%'
+    #    escrito en la consulta (LIKE 'VARIABLE%', por ejemplo) se confundía
+    #    con un lugar para un dato y la consulta reventaba si además llevaba
+    #    datos. Se escapan TODOS los '%' antes de convertir los '?'.
+    sql = sql.replace("%", "%%")
+
+    # 2. Placeholders ? → %s
     #    (cuidado de no tocar ? dentro de strings, pero en este proyecto
     #     no hay ? literales en strings SQL, así que es seguro)
     sql = sql.replace("?", "%s")
@@ -106,11 +118,11 @@ class _CursorWrapper:
 
     def execute(self, sql, params=()):
         sql_t = _traducir_sql(sql)
-        # psycopg2 interpreta '%' como inicio de placeholder. Si el SQL no lleva
-        # parámetros (ej: CREATE TABLE con un '%' en un comentario), hay que
-        # escapar los '%' literales duplicándolos para que no rompa.
-        if USE_POSTGRES and (not params) and "%" in sql_t:
-            sql_t = sql_t.replace("%", "%%")
+        # Los '%' literales ya vienen escapados desde _traducir_sql, haya o no
+        # datos en la consulta. Se pasa siempre una tupla (aunque sea vacía)
+        # para que psycopg2 interprete el escape igual en los dos casos.
+        if USE_POSTGRES and params is None:
+            params = ()
         upper = sql_t.strip().upper()
         # Para INSERT en PostgreSQL, capturar el id con RETURNING (cuando aplica)
         if USE_POSTGRES and upper.startswith("INSERT"):
@@ -285,7 +297,7 @@ def columnas_de_tabla(conn, tabla):
     if USE_POSTGRES:
         rows = conn.execute("""
             SELECT column_name AS name FROM information_schema.columns
-            WHERE table_name = %s
+            WHERE table_name = ?
         """, (tabla,)).fetchall()
     else:
         rows = conn.execute(f"PRAGMA table_info({tabla})").fetchall()

@@ -1541,9 +1541,11 @@ def api_oee_flota():
     if not desde or not hasta:
         return jsonify({"ok": False, "msg": "Elegí las fechas desde y hasta"}), 400
     vehiculos = obtener_vehiculos(solo_activos=True)
+    from database import cargar_datos_oee
+    datos = cargar_datos_oee(desde, hasta)     # toda la flota en cinco consultas
     resultados = []
     for v in vehiculos:
-        r = calcular_oee_vehiculo(v["id"], desde, hasta)
+        r = calcular_oee_vehiculo(v["id"], desde, hasta, datos.get(v["id"], {}))
         if r:
             resultados.append(r)
     if not resultados:
