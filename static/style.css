@@ -2540,3 +2540,7 @@ td.center, th.center { text-align: center; }
   background: color-mix(in srgb, var(--c) 12%, transparent);
 }
 .cg-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+
+/* Elegir de qué coche ver una sección */
+.ec-modal { max-width: 460px; overflow: visible; }
+.ec-modal .bcoche-lista { max-height: 300px; }

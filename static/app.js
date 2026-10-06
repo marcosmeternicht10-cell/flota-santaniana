@@ -78,13 +78,20 @@ function setCoche(v) {
     $("#cocheInfo").textContent = "Hacé clic en un vehículo";
     box.classList.remove("has-coche");
   }
-  document.querySelectorAll("[data-needs-coche]").forEach(b => b.disabled = !v);
+  // Las secciones de un coche no se apagan: si no hay coche elegido, al
+  // tocarlas se pregunta de cuál. Antes quedaban grises y parecían rotas.
+  document.querySelectorAll("[data-needs-coche]").forEach(b => b.classList.toggle("pide-coche", !v));
 }
 
 // ─── Navegación ─────────────────────────────────────────────────────────
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
+    if (btn.hasAttribute("data-needs-coche") && !cocheActual) {
+      elegirCocheYIr(btn.dataset.sec);
+      cerrarSidebar();
+      return;
+    }
     document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
     btn.classList.add("active");
     irA(btn.dataset.sec);
@@ -144,7 +151,7 @@ function irA(sec) {
     return;
   }
   if (["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(sec) && !cocheActual) {
-    toast("Seleccioná un coche primero", "error");
+    elegirCocheYIr(sec);
     return;
   }
   // Volver al inicio al cambiar de pantalla
@@ -353,6 +360,37 @@ async function renderDashboard() {
       `}
 
     </div>`;
+}
+
+// Ventanita para elegir de qué coche ver una sección (Servicios, Costos, KPIs,
+// Preventivo, Neumáticos), con el mismo buscador que el resto del sistema.
+const NOMBRE_SECCION_COCHE = { servicios: "Servicios", costos: "Costos", kpis: "KPIs",
+                               mantenimiento: "Preventivo", neumaticos: "Neumáticos" };
+async function elegirCocheYIr(sec) {
+  const vs = await api("/api/vehiculos");
+  document.getElementById("ec-overlay")?.remove();
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.id = "ec-overlay";
+  o.innerHTML = `
+    <div class="firma-modal ec-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-bus"></i> ${NOMBRE_SECCION_COCHE[sec] || "Elegí el coche"}</h2>
+          <p>¿De qué coche?</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px 22px 22px">
+        ${buscadorCoche("ec-coche", vs, { placeholder: "Escribí el N° o la patente" })}
+        <p class="hint" style="margin-top:12px"><i class="ti ti-info-circle"></i>
+          <span>Queda elegido arriba en el menú, así las otras secciones del coche ya se abren directo.</span></p>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  window["_cocheCB_ec-coche"] = vid => { o.remove(); seleccionarYIr(Number(vid), sec); };
+  setTimeout(() => document.getElementById("ec-coche-txt")?.focus(), 80);
 }
 
 async function seleccionarYIr(vid, sec) {
