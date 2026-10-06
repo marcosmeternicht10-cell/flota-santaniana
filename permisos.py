@@ -27,6 +27,7 @@ GRUPOS_SECCIONES = [
     ]),
     ("Taller", [
         ("ots", "Órdenes de Trabajo"),
+        ("mantenimientos", "Mantenimientos"),
         ("mantenimiento", "Preventivo"),
         ("neumaticos", "Neumáticos"),
         ("correctivos", "Correctivos"),
