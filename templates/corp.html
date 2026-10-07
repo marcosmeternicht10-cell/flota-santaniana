@@ -680,9 +680,9 @@
     function chequearLitros(){
       const v = parseFloat(($("cb-litros").value||"").replace(",","."))||0;
       const cont = $("aviso-litros");
-      if(v > 600){
+      if(v > 700){
         cont.innerHTML = '<div class="aviso tomado" style="margin-top:8px"><i class="ti ti-alert-triangle"></i>' +
-          '<span><b>' + v.toLocaleString("es-PY") + ' litros</b> es demasiado. El máximo por carga es 600.</span></div>';
+          '<span><b>' + v.toLocaleString("es-PY") + ' litros</b> es demasiado. El máximo por carga es 700.</span></div>';
       } else {
         cont.innerHTML = "";
       }
@@ -717,8 +717,8 @@
       const litros = ($("cb-litros").value||"").replace(",",".");
       if(!bus){ toast("Elegí el bus", "err"); return; }
       if(!litros || parseFloat(litros)<=0){ toast("Poné los litros", "err"); $("cb-litros").focus(); return; }
-      if(parseFloat(litros) > 600){
-        toast("600 litros es el máximo por carga — revisá el número", "err");
+      if(parseFloat(litros) > 700){
+        toast("700 litros es el máximo por carga — revisá el número", "err");
         $("cb-litros").focus(); return;
       }
       if(!LUGAR){ toast("Marcá si cargaste en el taller o en una estación", "err"); return; }
