@@ -109,8 +109,101 @@ def inicializar_repuestos():
         )
     """)
 
+    # Proveedores con su contacto. Se guardan una sola vez por nombre: al
+    # cargar otro repuesto del mismo proveedor el contacto se completa solo,
+    # y si cambia el teléfono se corrige en un lugar y vale para todos.
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS repuestos_proveedores (
+            id {PK},
+            clave TEXT NOT NULL UNIQUE,     -- el nombre en minúsculas, para no duplicar
+            nombre TEXT NOT NULL,
+            contacto TEXT DEFAULT '',       -- la persona con la que se habla
+            telefono TEXT DEFAULT '',
+            actualizado TEXT DEFAULT ''
+        )
+    """)
+
     conn.commit()
     conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PROVEEDORES
+# ════════════════════════════════════════════════════════════════════════════
+
+def _clave_proveedor(nombre):
+    return " ".join(str(nombre or "").split()).lower()
+
+
+def guardar_contacto_proveedor(nombre, contacto=None, telefono=None):
+    """Crea el proveedor o actualiza su contacto. Un dato que no viene (None)
+    no se toca; uno que viene vacío tampoco borra lo que ya había, así un
+    formulario incompleto no pierde el teléfono guardado.
+
+    Devuelve el nombre tal como quedó guardado la primera vez, así "repuestos
+    del este" y "Repuestos del Este" terminan siendo el mismo proveedor."""
+    clave = _clave_proveedor(nombre)
+    if not clave:
+        return ""
+    nombre = " ".join(str(nombre).split())
+    contacto = " ".join(str(contacto or "").split())
+    telefono = " ".join(str(telefono or "").split())
+    from hora_local import hoy
+    conn = get_connection()
+    try:
+        fila = conn.execute("SELECT id, nombre, contacto, telefono FROM repuestos_proveedores WHERE clave=?",
+                            (clave,)).fetchone()
+        if fila:
+            nombre = fila["nombre"]
+            conn.execute("""UPDATE repuestos_proveedores
+                            SET contacto=?, telefono=?, actualizado=? WHERE id=?""",
+                         (contacto or fila["contacto"] or "",
+                          telefono or fila["telefono"] or "", hoy(), fila["id"]))
+        else:
+            conn.execute("""INSERT INTO repuestos_proveedores
+                            (clave, nombre, contacto, telefono, actualizado) VALUES (?,?,?,?,?)""",
+                         (clave, nombre, contacto, telefono, hoy()))
+        conn.commit()
+    except IntegrityError:
+        pass
+    finally:
+        conn.close()
+    return nombre
+
+
+def obtener_proveedores():
+    """Todos los proveedores conocidos: los de la tabla y los que solo están
+    escritos en algún repuesto (de antes de que existiera el contacto)."""
+    conn = get_connection()
+    filas = conn.execute("SELECT nombre, contacto, telefono FROM repuestos_proveedores").fetchall()
+    sueltos = conn.execute("SELECT DISTINCT proveedor FROM repuestos WHERE activo=1 AND proveedor<>''").fetchall()
+    usos = conn.execute("""SELECT LOWER(TRIM(proveedor)) AS k, COUNT(*) AS n FROM repuestos
+                           WHERE activo=1 AND proveedor<>'' GROUP BY LOWER(TRIM(proveedor))""").fetchall()
+    conn.close()
+    n = {r["k"]: r["n"] for r in usos}
+    res = {_clave_proveedor(f["nombre"]): dict(f) for f in filas}
+    for r in sueltos:
+        k = _clave_proveedor(r["proveedor"])
+        if k and k not in res:
+            res[k] = {"nombre": " ".join(r["proveedor"].split()), "contacto": "", "telefono": ""}
+    for k, v in res.items():
+        v["repuestos"] = n.get(k, 0)
+    return sorted(res.values(), key=lambda x: x["nombre"].lower())
+
+
+def _contactos_por_clave(conn):
+    try:
+        filas = conn.execute("SELECT clave, contacto, telefono FROM repuestos_proveedores").fetchall()
+    except Exception:
+        return {}
+    return {f["clave"]: f for f in filas}
+
+
+def _con_contacto(d, contactos):
+    f = contactos.get(_clave_proveedor(d.get("proveedor")))
+    d["proveedor_contacto"] = (f["contacto"] if f else "") or ""
+    d["proveedor_telefono"] = (f["telefono"] if f else "") or ""
+    return d
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -158,6 +251,8 @@ def agregar_repuesto(codigo, descripcion, **kwargs):
     y stock_inicial (cantidad de arranque; genera un movimiento de entrada)."""
     stock_inicial = float(kwargs.pop("stock_inicial", 0) or 0)
     usuario = kwargs.pop("usuario", "")
+    prov_contacto = kwargs.pop("proveedor_contacto", None)
+    prov_telefono = kwargs.pop("proveedor_telefono", None)
 
     campos = {
         "codigo_alt": "", "categoria": "Varios", "marca": "", "aplicacion": "",
@@ -166,6 +261,8 @@ def agregar_repuesto(codigo, descripcion, **kwargs):
         "proveedor": "", "observaciones": "",
     }
     campos.update({k: v for k, v in kwargs.items() if k in campos})
+    campos["proveedor"] = guardar_contacto_proveedor(
+        campos["proveedor"], prov_contacto, prov_telefono)
 
     conn = get_connection()
     try:
@@ -210,6 +307,10 @@ def agregar_repuesto(codigo, descripcion, **kwargs):
 def actualizar_repuesto(repuesto_id, **kwargs):
     """Actualiza campos del repuesto. NO toca stock_actual directamente
     (eso se hace solo vía movimientos)."""
+    if "proveedor" in kwargs:
+        kwargs["proveedor"] = guardar_contacto_proveedor(kwargs.get("proveedor"),
+                                   kwargs.get("proveedor_contacto"),
+                                   kwargs.get("proveedor_telefono"))
     permitidos = {
         "codigo", "codigo_alt", "descripcion", "categoria", "marca", "aplicacion",
         "ubic_pasillo", "ubic_estanteria", "ubic_nivel", "ubic_posicion",
@@ -257,12 +358,13 @@ def obtener_repuestos(categoria=None, buscar=None, solo_bajos=False, incluir_ina
         like = f"%{buscar.strip().lower()}%"
         q += (" AND (LOWER(codigo) LIKE ? OR LOWER(descripcion) LIKE ?"
               " OR LOWER(codigo_alt) LIKE ? OR LOWER(marca) LIKE ?"
-              " OR LOWER(aplicacion) LIKE ?)")
-        params += [like, like, like, like, like]
+              " OR LOWER(aplicacion) LIKE ? OR LOWER(proveedor) LIKE ?)")
+        params += [like, like, like, like, like, like]
     q += " ORDER BY categoria, descripcion"
     rows = conn.execute(q, params).fetchall()
+    contactos = _contactos_por_clave(conn)
     conn.close()
-    resultado = [_enriquecer(r) for r in rows]
+    resultado = [_con_contacto(_enriquecer(r), contactos) for r in rows]
     if solo_bajos:
         resultado = [r for r in resultado if r["estado_stock"] in ("bajo", "sin_stock")]
     return resultado
@@ -272,10 +374,11 @@ def obtener_repuesto(repuesto_id):
     """Un repuesto con sus campos calculados y su historial de movimientos."""
     conn = get_connection()
     row = conn.execute("SELECT * FROM repuestos WHERE id=?", (repuesto_id,)).fetchone()
+    contactos = _contactos_por_clave(conn) if row else {}
     conn.close()
     if not row:
         return None
-    d = _enriquecer(row)
+    d = _con_contacto(_enriquecer(row), contactos)
     d["movimientos"] = obtener_movimientos(repuesto_id)
     return d
 

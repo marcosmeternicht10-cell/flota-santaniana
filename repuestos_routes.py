@@ -54,6 +54,12 @@ def api_repuestos():
         categoria=categoria, buscar=buscar, solo_bajos=solo_bajos))
 
 
+@bp_repuestos.route("/api/repuestos/proveedores", methods=["GET"])
+def api_proveedores():
+    """Proveedores conocidos con su contacto, para completar el formulario."""
+    return jsonify(rdb.obtener_proveedores())
+
+
 @bp_repuestos.route("/api/repuestos/<int:rid>", methods=["GET"])
 def api_repuesto(rid):
     rep = rdb.obtener_repuesto(rid)
