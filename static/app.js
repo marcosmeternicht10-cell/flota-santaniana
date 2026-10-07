@@ -7777,6 +7777,7 @@ async function renderCorpCombustible() {
           </div>
           <div style="flex:1"></div>
           <button class="btn btn-primary" onclick="cargarCombCorp()"><i class="ti ti-refresh"></i> Actualizar</button>
+          ${puedeOperarCorp() ? `<button class="btn btn-primary" onclick="abrirCargaOficina()"><i class="ti ti-gas-station"></i> Cargar por un chofer</button>` : ""}
           <button class="btn btn-ghost" onclick="abrirReferencias()"><i class="ti ti-adjustments"></i> Consumos de referencia</button>
           <button class="btn btn-ghost" onclick="descargarPorBusPDF()"><i class="ti ti-bus"></i> Informe por coche</button>
           <button class="btn btn-ghost" onclick="descargarCombCorpPDF()"><i class="ti ti-download"></i> PDF completo</button>
@@ -7786,6 +7787,147 @@ async function renderCorpCombustible() {
     </div>`;
 
   cargarCombCorp();
+}
+
+// ── Carga desde la oficina ─────────────────────────────────────────────────
+// Para los choferes que no usan el celular: la oficina carga el ticket a su
+// nombre. Queda registrado quién la cargó, así no se pierde el rastro.
+let coLugar = "", coEmblema = "";
+
+async function abrirCargaOficina() {
+  const [choferes, vehiculos, cfg] = await Promise.all([
+    api("/api/corp/choferes"), api("/api/vehiculos"), api("/api/corp/config")]);
+  const emblemas = (cfg.emblemas || []).concat(["OTRO"]);
+  coLugar = ""; coEmblema = "";
+  const hoyStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal co-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-gas-station"></i> Cargar combustible por un chofer</h2>
+          <p>Para los choferes que no usan el celular. Copiá los datos del ticket; la carga queda a nombre del chofer y se anota que la cargaste vos.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="co-cuerpo">
+        <div class="co-grid">
+          <div class="co-campo">
+            <label>Chofer</label>
+            <select id="co-chofer" onchange="coChoferOtro()">
+              <option value="">— Elegí el chofer —</option>
+              ${(choferes || []).map(c => {
+                const n = c.nombre || c.usuario;
+                return `<option value="${n.replace(/"/g, "&quot;")}">${n}</option>`;
+              }).join("")}
+              <option value="__otro">Otro (no tiene usuario)…</option>
+            </select>
+            <input id="co-chofer-otro" placeholder="Nombre y apellido del chofer" style="display:none;margin-top:8px">
+          </div>
+          <div class="co-campo">
+            <label>Fecha de la carga</label>
+            <input id="co-fecha" type="date" value="${hoyStr}" max="${hoyStr}">
+          </div>
+          <div class="co-campo co-ancho">
+            <label>Bus</label>
+            ${buscadorCoche("co-veh", vehiculos || [], { placeholder: "Escribí el N° interno o la patente" })}
+          </div>
+          <div class="co-campo">
+            <label>Litros</label>
+            <input id="co-litros" inputmode="decimal" placeholder="ej: 205,47">
+          </div>
+          <div class="co-campo">
+            <label>Kilometraje <span class="co-opc">(si figura)</span></label>
+            <input id="co-odo" inputmode="numeric" placeholder="ej: 470500">
+          </div>
+          <div class="co-campo co-ancho">
+            <label>¿Dónde cargó?</label>
+            <div class="co-lugares">
+              <button type="button" class="co-lugar" data-l="taller" onclick="coElegirLugar('taller')"><i class="ti ti-tool"></i> En el taller</button>
+              <button type="button" class="co-lugar" data-l="tercerizado" onclick="coElegirLugar('tercerizado')"><i class="ti ti-gas-station"></i> En una estación</button>
+            </div>
+            <div id="co-emb-wrap" style="display:none;margin-top:10px">
+              <div class="co-emblemas">
+                ${emblemas.map(e => `<button type="button" class="chip co-emb" data-e="${e}" onclick="coElegirEmblema('${e}')">${e === "OTRO" ? "Otro…" : e}</button>`).join("")}
+              </div>
+              <input id="co-emb-otro" placeholder="Escribí el emblema" style="display:none;margin-top:8px">
+            </div>
+          </div>
+          <div class="co-campo co-ancho">
+            <label>Observación <span class="co-opc">(opcional)</span></label>
+            <input id="co-obs" placeholder="ej: ticket N° 1234">
+          </div>
+        </div>
+      </div>
+      <div class="firma-acciones">
+        <button class="btn btn-primary" id="co-guardar" onclick="coGuardar(false)"><i class="ti ti-device-floppy"></i> Guardar</button>
+        <button class="btn btn-ghost" onclick="coGuardar(true)"><i class="ti ti-plus"></i> Guardar y cargar otra</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+function coChoferOtro() {
+  const otro = $("#co-chofer").value === "__otro";
+  $("#co-chofer-otro").style.display = otro ? "" : "none";
+  if (otro) $("#co-chofer-otro").focus();
+}
+
+function coElegirLugar(l) {
+  coLugar = l;
+  document.querySelectorAll(".co-lugar").forEach(b => b.classList.toggle("sel", b.dataset.l === l));
+  $("#co-emb-wrap").style.display = l === "tercerizado" ? "" : "none";
+  if (l !== "tercerizado") coElegirEmblema("");
+}
+
+function coElegirEmblema(e) {
+  coEmblema = e;
+  document.querySelectorAll(".co-emb").forEach(b => b.classList.toggle("activo", b.dataset.e === e));
+  $("#co-emb-otro").style.display = e === "OTRO" ? "" : "none";
+  if (e === "OTRO") $("#co-emb-otro").focus();
+}
+
+async function coGuardar(otra) {
+  const chSel = $("#co-chofer").value;
+  const chofer = chSel === "__otro" ? $("#co-chofer-otro").value.trim() : chSel;
+  const vid = $("#co-veh").value;
+  const litros = ($("#co-litros").value || "").trim();
+  const emblema = coLugar !== "tercerizado" ? ""
+    : (coEmblema === "OTRO" ? $("#co-emb-otro").value.trim() : coEmblema);
+
+  if (chofer.length < 3) return toast("Elegí el chofer", "error");
+  if (!vid) return toast("Elegí el bus", "error");
+  if (!litros) return toast("Poné los litros del ticket", "error");
+  if (!coLugar) return toast("Marcá si cargó en el taller o en una estación", "error");
+  if (coLugar === "tercerizado" && emblema.length < 2) return toast("Elegí el emblema de la estación", "error");
+
+  const btn = $("#co-guardar"); btn.disabled = true;
+  const r = await api("/api/corp/combustible", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      desde_oficina: true, chofer, vehiculo_id: vid,
+      fecha: $("#co-fecha").value, litros,
+      odometro: ($("#co-odo").value || "").replace(/\./g, ""),
+      lugar_carga: coLugar, emblema,
+      observaciones: $("#co-obs").value.trim(),
+    }),
+  });
+  btn.disabled = false;
+  if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
+
+  toast(`Carga registrada a nombre de ${chofer}`, "success");
+  if (typeof cargarCombCorp === "function" && $("#cbc-resultado")) cargarCombCorp();
+  if (otra) {
+    // Se deja el chofer, la fecha y el lugar: suele cargar varios tickets seguidos
+    bcocheLimpiar("co-veh");
+    $("#co-litros").value = ""; $("#co-odo").value = ""; $("#co-obs").value = "";
+  } else {
+    document.querySelector(".co-modal")?.closest(".modal-overlay")?.remove();
+  }
 }
 
 function combPeriodo(cual, btn) {

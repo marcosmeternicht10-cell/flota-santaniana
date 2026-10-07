@@ -2945,3 +2945,31 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(30,90,150
   }
 }
 @media (max-width: 768px) { .destino-btn kbd { display: none; } }
+
+/* ── Carga de combustible desde la oficina ─────────────────────────────── */
+.co-modal { max-width: 620px; }
+.co-cuerpo { padding: 18px 24px 4px; }
+.co-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.co-campo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.co-campo.co-ancho { grid-column: 1 / -1; }
+.co-campo > label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.co-campo > input, .co-campo > select, #co-emb-wrap input {
+  width: 100%; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 9px;
+  font-size: 13.5px; font-family: inherit; background: var(--surface); color: var(--text);
+}
+.co-campo > input:focus, .co-campo > select:focus, #co-emb-wrap input:focus {
+  outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12);
+}
+.co-campo > input::placeholder, #co-emb-wrap input::placeholder { color: var(--light); }
+.co-opc { font-weight: 500; opacity: .75; }
+.co-lugares { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.co-lugar {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 12px; border-radius: 10px; cursor: pointer; font: inherit; font-weight: 600;
+  border: 1.5px solid var(--surface3); background: var(--surface); color: var(--text);
+  transition: border-color .15s, background .15s, color .15s;
+}
+.co-lugar:hover { border-color: var(--brand-blue); }
+.co-lugar.sel { border-color: var(--brand-blue); background: var(--brand-blue); color: #fff; }
+.co-emblemas { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 560px) { .co-grid, .co-lugares { grid-template-columns: 1fr; } }
