@@ -56,8 +56,26 @@ def api_repuestos():
 
 @bp_repuestos.route("/api/repuestos/proveedores", methods=["GET"])
 def api_proveedores():
-    """Proveedores conocidos con su contacto, para completar el formulario."""
-    return jsonify(rdb.obtener_proveedores())
+    """Busca en el directorio de proveedores (nombre, RUC o número)."""
+    return jsonify(rdb.obtener_proveedores(request.args.get("q"),
+                                           min(int(request.args.get("limite") or 30), 100)))
+
+
+@bp_repuestos.route("/api/repuestos/proveedor", methods=["GET"])
+def api_proveedor():
+    p = rdb.proveedor_por_nombre(request.args.get("nombre"))
+    return jsonify(p or {})
+
+
+@bp_repuestos.route("/api/repuestos/proveedor", methods=["PATCH"])
+def api_editar_proveedor():
+    if session.get("rol") not in ("admin", "taller", "compras"):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    d = request.json or {}
+    ok, msg = rdb.editar_proveedor(d.get("nombre"), d)
+    if ok:
+        _auditar(f"Actualizó el proveedor '{d.get('nombre')}'")
+    return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
 
 
 @bp_repuestos.route("/api/repuestos/<int:rid>", methods=["GET"])

@@ -122,9 +122,21 @@ def inicializar_repuestos():
             actualizado TEXT DEFAULT ''
         )
     """)
+    cols = columnas_de_tabla(conn, "repuestos_proveedores")
+    for col in ("codigo", "ruc", "direccion", "email"):   # del listado de la empresa
+        if col not in cols:
+            try:
+                c.execute(f"ALTER TABLE repuestos_proveedores ADD COLUMN {col} TEXT DEFAULT ''")
+            except OperationalError:
+                pass
 
     conn.commit()
     conn.close()
+
+    try:
+        importar_lista_proveedores()
+    except Exception as e:
+        print("[proveedores] no se pudo importar el listado:", e)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -171,29 +183,137 @@ def guardar_contacto_proveedor(nombre, contacto=None, telefono=None):
     return nombre
 
 
-def obtener_proveedores():
-    """Todos los proveedores conocidos: los de la tabla y los que solo están
-    escritos en algún repuesto (de antes de que existiera el contacto)."""
+CAMPOS_PROV = ("nombre", "codigo", "ruc", "contacto", "telefono", "direccion", "email")
+
+
+def importar_lista_proveedores(ruta=None):
+    """Carga el listado de proveedores de la empresa (proveedores_lista.json,
+    sacado del sistema contable) la primera vez que encuentra la tabla sin él.
+
+    No pisa nada que ya se haya cargado a mano: si el proveedor ya existe, solo
+    completa los datos que le faltan (RUC, teléfono, dirección...). Se inserta
+    en tandas para no hacer miles de viajes a la base al arrancar.
+    """
+    import json, os
+    ruta = ruta or os.path.join(os.path.dirname(os.path.abspath(__file__)), "proveedores_lista.json")
+    if not os.path.exists(ruta):
+        return 0
     conn = get_connection()
-    filas = conn.execute("SELECT nombre, contacto, telefono FROM repuestos_proveedores").fetchall()
-    sueltos = conn.execute("SELECT DISTINCT proveedor FROM repuestos WHERE activo=1 AND proveedor<>''").fetchall()
-    usos = conn.execute("""SELECT LOWER(TRIM(proveedor)) AS k, COUNT(*) AS n FROM repuestos
-                           WHERE activo=1 AND proveedor<>'' GROUP BY LOWER(TRIM(proveedor))""").fetchall()
-    conn.close()
-    n = {r["k"]: r["n"] for r in usos}
-    res = {_clave_proveedor(f["nombre"]): dict(f) for f in filas}
-    for r in sueltos:
-        k = _clave_proveedor(r["proveedor"])
-        if k and k not in res:
-            res[k] = {"nombre": " ".join(r["proveedor"].split()), "contacto": "", "telefono": ""}
-    for k, v in res.items():
-        v["repuestos"] = n.get(k, 0)
-    return sorted(res.values(), key=lambda x: x["nombre"].lower())
-
-
-def _contactos_por_clave(conn):
     try:
-        filas = conn.execute("SELECT clave, contacto, telefono FROM repuestos_proveedores").fetchall()
+        ya = conn.execute("SELECT COUNT(*) AS n FROM repuestos_proveedores WHERE codigo<>''").fetchone()
+        if ya and int(ya["n"] or 0) > 0:
+            return 0
+        lista = json.load(open(ruta, encoding="utf-8"))
+
+        # Un mismo nombre puede venir dos veces: queda el que trae más datos
+        por_clave = {}
+        for p in lista:
+            k = _clave_proveedor(p.get("nombre"))
+            if not k:
+                continue
+            datos = sum(1 for c in ("ruc", "telefono", "direccion", "email") if p.get(c))
+            if k not in por_clave or datos > por_clave[k][0]:
+                por_clave[k] = (datos, p)
+
+        existentes = {r["clave"]: dict(r) for r in conn.execute(
+            "SELECT id, clave, codigo, ruc, telefono, direccion, email FROM repuestos_proveedores").fetchall()}
+        from hora_local import hoy
+        hoy_s = hoy()
+        nuevos = []
+        for k, (_, p) in por_clave.items():
+            fila = (str(p.get("codigo", "")), p.get("ruc", ""), p.get("telefono", ""),
+                    p.get("direccion", ""), p.get("email", ""))
+            if k in existentes:
+                e = existentes[k]
+                # El nombre pasa a ser el oficial del listado (el de la factura)
+                conn.execute("""UPDATE repuestos_proveedores SET nombre=?, codigo=?, ruc=?,
+                                telefono=?, direccion=?, email=? WHERE id=?""",
+                             (" ".join(p["nombre"].split()), fila[0], e["ruc"] or fila[1], e["telefono"] or fila[2],
+                              e["direccion"] or fila[3], e["email"] or fila[4], e["id"]))
+            else:
+                nuevos.append((k, " ".join(p["nombre"].split())) + fila + (hoy_s,))
+        tanda = 400
+        for i in range(0, len(nuevos), tanda):
+            grupo = nuevos[i:i + tanda]
+            marcas = ",".join(["(?,?,?,?,?,?,?,?)"] * len(grupo))
+            conn.execute(f"""INSERT INTO repuestos_proveedores
+                (clave, nombre, codigo, ruc, telefono, direccion, email, actualizado)
+                VALUES {marcas} ON CONFLICT (clave) DO NOTHING""",
+                [v for f in grupo for v in f])
+        conn.commit()
+        print(f"[proveedores] listado importado: {len(nuevos)} nuevos")
+        return len(nuevos)
+    finally:
+        conn.close()
+
+
+def obtener_proveedores(q=None, limite=30):
+    """Busca proveedores por nombre, RUC o número. Sin búsqueda devuelve los
+    que ya se usan en algún repuesto (los más a mano)."""
+    conn = get_connection()
+    usos = {r["k"]: r["n"] for r in conn.execute(
+        """SELECT LOWER(TRIM(proveedor)) AS k, COUNT(*) AS n FROM repuestos
+           WHERE activo=1 AND proveedor<>'' GROUP BY LOWER(TRIM(proveedor))""").fetchall()}
+    cols = ", ".join(CAMPOS_PROV) + ", clave"
+    q = " ".join(str(q or "").split()).lower()
+    if q:
+        like = f"%{q}%"
+        filas = conn.execute(f"""SELECT {cols} FROM repuestos_proveedores
+            WHERE clave LIKE ? OR LOWER(ruc) LIKE ? OR codigo=? OR LOWER(contacto) LIKE ?
+            ORDER BY CASE WHEN clave LIKE ? THEN 0 ELSE 1 END, nombre LIMIT ?""",
+            (like, like, q, like, f"{q}%", int(limite))).fetchall()
+    else:
+        claves = list(usos)[:200]
+        filas = conn.execute(f"""SELECT {cols} FROM repuestos_proveedores
+            WHERE clave IN ({",".join("?" * len(claves))}) ORDER BY nombre""",
+            claves).fetchall() if claves else []
+    total = conn.execute("SELECT COUNT(*) AS n FROM repuestos_proveedores").fetchone()["n"]
+    conn.close()
+    res = []
+    for f in filas:
+        d = {k: (f[k] or "") for k in CAMPOS_PROV}
+        d["repuestos"] = usos.get(f["clave"], 0)
+        res.append(d)
+    return {"proveedores": res, "total": int(total or 0)}
+
+
+def proveedor_por_nombre(nombre):
+    k = _clave_proveedor(nombre)
+    if not k:
+        return None
+    conn = get_connection()
+    f = conn.execute(f"SELECT {', '.join(CAMPOS_PROV)} FROM repuestos_proveedores WHERE clave=?",
+                     (k,)).fetchone()
+    conn.close()
+    return {c: (f[c] or "") for c in CAMPOS_PROV} if f else None
+
+
+def editar_proveedor(nombre_actual, datos):
+    """Corrige los datos de un proveedor desde el directorio. El nombre no se
+    cambia acá: los repuestos lo tienen escrito y quedarían desenganchados."""
+    k = _clave_proveedor(nombre_actual)
+    campos = {c: " ".join(str(datos.get(c) or "").split())
+              for c in ("ruc", "contacto", "telefono", "direccion", "email") if c in datos}
+    if not k or not campos:
+        return False, "Nada para guardar."
+    from hora_local import hoy
+    conn = get_connection()
+    sets = ", ".join(f"{c}=?" for c in campos) + ", actualizado=?"
+    cur = conn.execute(f"UPDATE repuestos_proveedores SET {sets} WHERE clave=?",
+                       list(campos.values()) + [hoy(), k])
+    conn.commit()
+    conn.close()
+    return True, "Proveedor actualizado."
+
+
+def _contactos_por_clave(conn, nombres=None):
+    claves = sorted({_clave_proveedor(n) for n in (nombres or []) if _clave_proveedor(n)})
+    if not claves:
+        return {}
+    try:
+        filas = conn.execute(
+            f"SELECT clave, contacto, telefono, ruc FROM repuestos_proveedores WHERE clave IN ({','.join('?' * len(claves))})",
+            claves).fetchall()
     except Exception:
         return {}
     return {f["clave"]: f for f in filas}
@@ -203,6 +323,7 @@ def _con_contacto(d, contactos):
     f = contactos.get(_clave_proveedor(d.get("proveedor")))
     d["proveedor_contacto"] = (f["contacto"] if f else "") or ""
     d["proveedor_telefono"] = (f["telefono"] if f else "") or ""
+    d["proveedor_ruc"] = (f["ruc"] if f else "") or ""
     return d
 
 
@@ -362,7 +483,7 @@ def obtener_repuestos(categoria=None, buscar=None, solo_bajos=False, incluir_ina
         params += [like, like, like, like, like, like]
     q += " ORDER BY categoria, descripcion"
     rows = conn.execute(q, params).fetchall()
-    contactos = _contactos_por_clave(conn)
+    contactos = _contactos_por_clave(conn, [r["proveedor"] for r in rows])
     conn.close()
     resultado = [_con_contacto(_enriquecer(r), contactos) for r in rows]
     if solo_bajos:
@@ -374,7 +495,7 @@ def obtener_repuesto(repuesto_id):
     """Un repuesto con sus campos calculados y su historial de movimientos."""
     conn = get_connection()
     row = conn.execute("SELECT * FROM repuestos WHERE id=?", (repuesto_id,)).fetchone()
-    contactos = _contactos_por_clave(conn) if row else {}
+    contactos = _contactos_por_clave(conn, [row["proveedor"]]) if row else {}
     conn.close()
     if not row:
         return None
