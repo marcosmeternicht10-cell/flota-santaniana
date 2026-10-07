@@ -717,9 +717,9 @@ MAX_SERVICIOS_DIA = 2
 # Largo mínimo de la explicación cuando dos servicios chocan en horario: lo
 # justo para que no alcance con poner "ok" o un punto.
 JUSTIFICACION_MIN = 15
-# Ningún tanque de la flota pasa de esto. Un número más alto es un error de
+# Ningún tanque de la flota pasa de esto (los pisos bajos llegan a 700). Un número más alto es un error de
 # tipeo (poner 2000 en vez de 200), y si entra arruina el consumo del coche.
-MAX_LITROS_POR_CARGA = 600
+MAX_LITROS_POR_CARGA = 700
 # Un servicio se reporta el día que se hizo o, como mucho, al día siguiente.
 # Más atrás que eso ya no es un olvido: es alguien completando la planilla de
 # memoria, y esos números no sirven para liquidar ni para controlar nada.

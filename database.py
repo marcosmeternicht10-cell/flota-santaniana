@@ -3584,7 +3584,8 @@ def actualizar_carga_combustible(carga_id, datos):
     if litros <= 0:
         conn.close()
         return False, "Los litros tienen que ser mayores a cero."
-    if litros > 600:
+    from corporativos import MAX_LITROS_POR_CARGA
+    if litros > MAX_LITROS_POR_CARGA:
         conn.close()
         return False, (f"{litros:,.0f} litros es demasiado para una carga. "
                        f"Revisá el número.").replace(",", ".")
