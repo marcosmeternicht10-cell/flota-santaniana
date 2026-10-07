@@ -4996,6 +4996,7 @@ async function renderRepuestos() {
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-packages"></i> Depósito de Repuestos</h1>
+      <div class="page-actions"><button class="btn btn-ghost" onclick="abrirDirectorioProveedores()"><i class="ti ti-address-book"></i> Proveedores</button></div>
     </div>
 
     <div class="section">
@@ -5184,29 +5185,21 @@ function repToggleAdmin() {
 }
 
 // ─── Proveedor y su contacto ───
-// El contacto se guarda una vez por proveedor: al escribir uno conocido, la
-// persona y el teléfono se completan solos.
-let _provCache = null;
-async function proveedoresConocidos() {
-  if (!_provCache) _provCache = await api("/api/repuestos/proveedores");
-  return Array.isArray(_provCache) ? _provCache : [];
-}
-
+// Los proveedores están en un directorio (el listado de la empresa, con RUC y
+// teléfono). Al escribir se busca en el servidor —son miles— y al elegir uno
+// se completan el contacto y el teléfono.
+let _provBuscarT = null;
 function camposProveedor(px, r = {}) {
   const esc = v => String(v || "").replace(/"/g, "&quot;");
-  setTimeout(async () => {
-    const dl = document.getElementById(px + "-prov-lista");
-    if (dl) dl.innerHTML = (await proveedoresConocidos())
-      .map(p => `<option value="${esc(p.nombre)}">`).join("");
-  }, 0);
   return `
     <div class="rep-prov-form">
       <div class="rep-ubic-form-label"><i class="ti ti-building-store"></i> Proveedor</div>
       <div class="form-row">
-        <div class="field"><label>Proveedor</label>
-          <input id="${px}-prov" list="${px}-prov-lista" value="${esc(r.proveedor)}" placeholder="ej: Repuestos del Este"
-                 style="width:200px" onchange="completarProveedor('${px}')" autocomplete="off">
+        <div class="field"><label>Proveedor <span class="rep-prov-ayuda">(nombre o RUC)</span></label>
+          <input id="${px}-prov" list="${px}-prov-lista" value="${esc(r.proveedor)}" placeholder="Escribí para buscar"
+                 style="width:240px" oninput="buscarProveedorForm('${px}')" onchange="completarProveedor('${px}')" autocomplete="off">
           <datalist id="${px}-prov-lista"></datalist>
+          <div class="rep-prov-ruc" id="${px}-pruc">${r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""}</div>
         </div>
         <div class="field"><label>Contacto</label><input id="${px}-pcon" value="${esc(r.proveedor_contacto)}" placeholder="ej: Carlos" style="width:150px"></div>
         <div class="field"><label>Teléfono / WhatsApp</label><input id="${px}-ptel" value="${esc(r.proveedor_telefono)}" placeholder="ej: 0981 123 456" inputmode="tel" style="width:160px"></div>
@@ -5214,24 +5207,138 @@ function camposProveedor(px, r = {}) {
     </div>`;
 }
 
+function buscarProveedorForm(px) {
+  clearTimeout(_provBuscarT);
+  const q = ($("#" + px + "-prov").value || "").trim();
+  if (q.length < 2) return;
+  _provBuscarT = setTimeout(async () => {
+    const r = await api("/api/repuestos/proveedores?limite=15&q=" + encodeURIComponent(q));
+    const dl = document.getElementById(px + "-prov-lista");
+    if (dl) dl.innerHTML = (r.proveedores || []).map(p =>
+      `<option value="${p.nombre.replace(/"/g, "&quot;")}">${p.ruc ? "RUC " + p.ruc : ""}</option>`).join("");
+  }, 220);
+}
+
 async function completarProveedor(px) {
-  const nombre = ($("#" + px + "-prov").value || "").trim().toLowerCase().replace(/\s+/g, " ");
-  if (!nombre) return;
-  const p = (await proveedoresConocidos()).find(x => x.nombre.toLowerCase() === nombre);
-  if (!p) return;
+  const nombre = ($("#" + px + "-prov").value || "").trim();
+  const ruc = document.getElementById(px + "-pruc");
+  if (!nombre) { if (ruc) ruc.textContent = ""; return; }
+  const p = await api("/api/repuestos/proveedor?nombre=" + encodeURIComponent(nombre));
+  if (ruc) ruc.textContent = p && p.ruc ? "RUC " + p.ruc : (p && p.nombre ? "" : "Proveedor nuevo: se agrega al directorio");
+  if (!p || !p.nombre) return;
   // Solo se completa lo que está vacío: no se pisa algo que escribió el usuario
   const con = $("#" + px + "-pcon"), tel = $("#" + px + "-ptel");
   if (con && !con.value && p.contacto) con.value = p.contacto;
   if (tel && !tel.value && p.telefono) tel.value = p.telefono;
 }
 
+// ─── Directorio de proveedores ───
+let _dirProvT = null;
+async function abrirDirectorioProveedores() {
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal dir-prov-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-address-book"></i> Proveedores</h2>
+          <p id="dir-prov-sub">El listado de la empresa, con RUC y teléfono. Buscá por nombre, RUC o número.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="dir-prov-buscar">
+        <i class="ti ti-search"></i>
+        <input id="dir-prov-q" placeholder="ej: Diesa, 80001435, Repuestos..." autocomplete="off" oninput="dirProvBuscar()">
+      </div>
+      <div id="dir-prov-lista" class="dir-prov-lista"></div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => $("#dir-prov-q")?.focus(), 50);
+  dirProvCargar("");
+}
+
+function dirProvBuscar() {
+  clearTimeout(_dirProvT);
+  _dirProvT = setTimeout(() => dirProvCargar($("#dir-prov-q").value.trim()), 250);
+}
+
+async function dirProvCargar(q) {
+  const cont = $("#dir-prov-lista");
+  if (!cont) return;
+  const r = await api("/api/repuestos/proveedores?limite=40&q=" + encodeURIComponent(q));
+  const lista = r.proveedores || [];
+  window._dirProv = lista;
+  $("#dir-prov-sub").textContent = `${(r.total || 0).toLocaleString("es-PY")} proveedores en el directorio. Buscá por nombre, RUC o número.`;
+  if (!lista.length) {
+    cont.innerHTML = `<div class="dir-prov-vacio">${q ? `Ningún proveedor coincide con «${q}».` : "Escribí arriba para buscar. Acá aparecen los que ya se usan en repuestos."}</div>`;
+    return;
+  }
+  cont.innerHTML = (q ? "" : `<div class="dir-prov-cab">Los que ya se usan en repuestos</div>`) + lista.map((p, i) => {
+    const wa = numeroWhatsApp(p.telefono);
+    return `
+    <div class="dir-prov-item">
+      <div class="dir-prov-info">
+        <div class="dir-prov-nom">${p.nombre}${p.repuestos ? `<span class="dir-prov-uso">${p.repuestos} repuesto${p.repuestos === 1 ? "" : "s"}</span>` : ""}</div>
+        <div class="dir-prov-datos">
+          ${p.ruc ? `<span><i class="ti ti-id"></i> ${p.ruc}</span>` : ""}
+          ${p.telefono ? `<span><i class="ti ti-phone"></i> ${p.telefono}</span>` : ""}
+          ${p.contacto ? `<span><i class="ti ti-user"></i> ${p.contacto}</span>` : ""}
+          ${p.direccion ? `<span class="dir-prov-dir"><i class="ti ti-map-pin"></i> ${p.direccion}</span>` : ""}
+        </div>
+      </div>
+      <div class="dir-prov-acc">
+        ${wa ? `<a class="btn btn-ghost" target="_blank" rel="noopener" href="https://wa.me/${wa}" title="WhatsApp"><i class="ti ti-brand-whatsapp"></i></a>` : ""}
+        <button class="btn btn-ghost" onclick="dirProvEditar(${i})" title="Editar contacto"><i class="ti ti-edit"></i></button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function dirProvEditar(i) {
+  const p = (window._dirProv || [])[i];
+  if (!p) return;
+  const esc = v => String(v || "").replace(/"/g, "&quot;");
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1700";
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:460px">
+      <div class="rep-mini-titulo">${p.nombre}</div>
+      <label class="rep-mini-lbl">RUC</label><input id="dp-ruc" class="rep-mini-input" value="${esc(p.ruc)}">
+      <label class="rep-mini-lbl">Contacto (persona)</label><input id="dp-con" class="rep-mini-input" value="${esc(p.contacto)}" placeholder="ej: Carlos">
+      <label class="rep-mini-lbl">Teléfono / WhatsApp</label><input id="dp-tel" class="rep-mini-input" value="${esc(p.telefono)}" inputmode="tel">
+      <label class="rep-mini-lbl">Dirección</label><input id="dp-dir" class="rep-mini-input" value="${esc(p.direccion)}">
+      <label class="rep-mini-lbl">Email</label><input id="dp-ema" class="rep-mini-input" value="${esc(p.email)}" inputmode="email">
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="dirProvGuardar(${i}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+async function dirProvGuardar(i, btn) {
+  const p = (window._dirProv || [])[i];
+  const r = await api("/api/repuestos/proveedor", {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nombre: p.nombre, ruc: $("#dp-ruc").value, contacto: $("#dp-con").value,
+      telefono: $("#dp-tel").value, direccion: $("#dp-dir").value, email: $("#dp-ema").value }),
+  });
+  if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
+  toast("Proveedor actualizado", "success");
+  btn.closest(".rep-modal-overlay").remove();
+  dirProvCargar(($("#dir-prov-q")?.value || "").trim());
+}
+
 // Número para WhatsApp: 0981 123 456 → 595981123456
 function numeroWhatsApp(tel) {
+  // Solo celulares (09xx): un teléfono fijo no tiene WhatsApp
   let d = String(tel || "").replace(/\D/g, "");
-  if (!d) return "";
-  if (d.startsWith("595")) return d;
+  if (d.startsWith("595")) d = d.slice(3);
   if (d.startsWith("0")) d = d.slice(1);
-  return d.length >= 8 ? "595" + d : "";
+  return /^9\d{8}$/.test(d) ? "595" + d : "";
 }
 
 function tarjetaProveedor(r) {
@@ -5245,7 +5352,7 @@ function tarjetaProveedor(r) {
       <div class="rep-d-prov-ico"><i class="ti ti-building-store"></i></div>
       <div class="rep-d-prov-info">
         <div class="rep-d-prov-nom">${r.proveedor}</div>
-        <div class="rep-d-prov-sub">${[r.proveedor_contacto, r.proveedor_telefono].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
+        <div class="rep-d-prov-sub">${[r.proveedor_contacto, r.proveedor_telefono, r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
       </div>
       ${r.proveedor_telefono ? `<a class="btn btn-ghost" href="tel:${String(r.proveedor_telefono).replace(/[^\d+]/g, "")}"><i class="ti ti-phone"></i></a>` : ""}
       ${wa ? `<a class="btn ${pedir ? "btn-primary" : "btn-ghost"}" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${msj}"><i class="ti ti-brand-whatsapp"></i> ${pedir ? "Pedir" : "WhatsApp"}</a>` : ""}
@@ -5274,7 +5381,7 @@ async function guardarRepuesto() {
       costo_unitario: parseFloat(limpiar($("#r-cos").value)) || 0,
     })
   });
-  if (r.ok) { _provCache = null; toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
+  if (r.ok) { toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
   else toast(r.msg, "error");
 }
 
@@ -5594,7 +5701,6 @@ async function confirmarEditar(id, btn) {
     })
   });
   if (r.ok) {
-    _provCache = null;
     toast("Cambios guardados", "success");
     btn.closest(".rep-modal-overlay").remove();
     refrescarTrasMovimiento(id);
