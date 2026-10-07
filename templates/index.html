@@ -6,7 +6,7 @@
   <title>Gestión de Flota — La Santaniana</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="/static/style.css?v={{ v }}">
 </head>
@@ -34,6 +34,10 @@
         <div class="coche-name" id="cocheName">Ninguno</div>
         <div class="coche-info" id="cocheInfo">Hacé clic en un vehículo</div>
       </div>
+
+      <button class="destino-btn" type="button" onclick="abrirDestino()" title="Buscar un coche o una sección (Ctrl+K)">
+        <i class="ti ti-search"></i><span>Buscar</span><kbd>Ctrl K</kbd>
+      </button>
 
       <nav class="nav">
         <div class="nav-section">General</div>
