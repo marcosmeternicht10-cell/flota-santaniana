@@ -2524,11 +2524,30 @@ def api_corp_control_empresa_pdf():
 
 @bp_corp.route("/api/corp/combustible", methods=["POST"])
 def api_corp_cargar_combustible():
-    """El chofer registra una carga de combustible desde el celular."""
-    if session.get("rol") not in ("chofer_corp", "admin"):
+    """El chofer registra una carga de combustible desde el celular.
+
+    También la puede cargar la oficina (administración u operador de
+    corporativos) a nombre de un chofer que no usa el celular: en ese caso
+    viene el chofer elegido y queda anotado quién la cargó.
+    """
+    rol = _rol_efectivo()
+    if rol not in ("chofer_corp", "admin", "operador_corp"):
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
     from database import registrar_carga_combustible
     d = request.json or {}
+    quien = session.get("nombre") or session.get("usuario", "")
+
+    # Desde la oficina: hay que decir de qué chofer es la carga
+    a_nombre_de = " ".join((d.get("chofer") or "").split())
+    desde_oficina = rol != "chofer_corp" and bool(d.get("desde_oficina"))
+    if desde_oficina and len(a_nombre_de) < 3:
+        return jsonify({"ok": False, "msg": "Elegí el chofer de la carga."}), 400
+    fecha = (d.get("fecha") or "").strip() or hoy()
+    if desde_oficina:
+        # Se carga después, con el ticket en la mano: se permite una fecha
+        # pasada, pero no una futura (sería un error de tipeo).
+        if fecha > hoy():
+            return jsonify({"ok": False, "msg": "La fecha no puede ser posterior a hoy."}), 400
 
     # Los litros llevan decimales; los montos en guaraníes no.
     def num(v):
@@ -2561,18 +2580,21 @@ def api_corp_cargar_combustible():
     # más a alguien que está en el surtidor con el celular en la mano.
     precio = num(d.get("precio_litro")) or ultimo_precio_litro()
 
-    nombre = session.get("nombre") or session.get("usuario", "")
+    chofer = a_nombre_de if desde_oficina else quien
+    obs = (d.get("observaciones") or "").strip()
+    if desde_oficina:
+        obs = (f"Cargada desde la oficina por {quien}. " + obs).strip()
     cid = registrar_carga_combustible({
         "vehiculo_id": int(d["vehiculo_id"]),
-        "fecha": d.get("fecha") or hoy(),
+        "fecha": fecha,
         "odometro": odo, "litros": litros,
         "precio_litro": precio,
         "costo_total": num(d.get("costo_total")),
         "estacion": (d.get("estacion") or "").strip(),
-        "chofer": nombre,
+        "chofer": chofer,
         "tanque_lleno": True,
-        "observaciones": (d.get("observaciones") or "").strip(),
-        "registrado_por": nombre,
+        "observaciones": obs,
+        "registrado_por": quien,
         "origen": "corporativo",
         "cliente": (d.get("cliente") or "").strip(),
         "lugar_carga": lugar,
