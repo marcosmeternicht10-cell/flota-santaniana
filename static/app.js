@@ -5113,8 +5113,8 @@ function renderPanelCargar() {
           <div class="field"><label>Marca</label><input id="r-mar" placeholder="Mann" style="width:130px"></div>
           <div class="field"><label>Aplicación (qué coche)</label><input id="r-apl" placeholder="Scania DC12" style="width:170px"></div>
           <div class="field"><label>Código alt.</label><input id="r-codalt" placeholder="opcional" style="width:130px"></div>
-          <div class="field"><label>Proveedor</label><input id="r-prov" placeholder="opcional" style="width:150px"></div>
         </div>
+        ${camposProveedor("r")}
 
         <div class="rep-ubic-form">
           <div class="rep-ubic-form-label"><i class="ti ti-map-pin"></i> ¿Dónde se guarda?</div>
@@ -5183,6 +5183,75 @@ function repToggleAdmin() {
   if (repVistaAdmin) setTimeout(() => $("#rep-admin-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
 }
 
+// ─── Proveedor y su contacto ───
+// El contacto se guarda una vez por proveedor: al escribir uno conocido, la
+// persona y el teléfono se completan solos.
+let _provCache = null;
+async function proveedoresConocidos() {
+  if (!_provCache) _provCache = await api("/api/repuestos/proveedores");
+  return Array.isArray(_provCache) ? _provCache : [];
+}
+
+function camposProveedor(px, r = {}) {
+  const esc = v => String(v || "").replace(/"/g, "&quot;");
+  setTimeout(async () => {
+    const dl = document.getElementById(px + "-prov-lista");
+    if (dl) dl.innerHTML = (await proveedoresConocidos())
+      .map(p => `<option value="${esc(p.nombre)}">`).join("");
+  }, 0);
+  return `
+    <div class="rep-prov-form">
+      <div class="rep-ubic-form-label"><i class="ti ti-building-store"></i> Proveedor</div>
+      <div class="form-row">
+        <div class="field"><label>Proveedor</label>
+          <input id="${px}-prov" list="${px}-prov-lista" value="${esc(r.proveedor)}" placeholder="ej: Repuestos del Este"
+                 style="width:200px" onchange="completarProveedor('${px}')" autocomplete="off">
+          <datalist id="${px}-prov-lista"></datalist>
+        </div>
+        <div class="field"><label>Contacto</label><input id="${px}-pcon" value="${esc(r.proveedor_contacto)}" placeholder="ej: Carlos" style="width:150px"></div>
+        <div class="field"><label>Teléfono / WhatsApp</label><input id="${px}-ptel" value="${esc(r.proveedor_telefono)}" placeholder="ej: 0981 123 456" inputmode="tel" style="width:160px"></div>
+      </div>
+    </div>`;
+}
+
+async function completarProveedor(px) {
+  const nombre = ($("#" + px + "-prov").value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!nombre) return;
+  const p = (await proveedoresConocidos()).find(x => x.nombre.toLowerCase() === nombre);
+  if (!p) return;
+  // Solo se completa lo que está vacío: no se pisa algo que escribió el usuario
+  const con = $("#" + px + "-pcon"), tel = $("#" + px + "-ptel");
+  if (con && !con.value && p.contacto) con.value = p.contacto;
+  if (tel && !tel.value && p.telefono) tel.value = p.telefono;
+}
+
+// Número para WhatsApp: 0981 123 456 → 595981123456
+function numeroWhatsApp(tel) {
+  let d = String(tel || "").replace(/\D/g, "");
+  if (!d) return "";
+  if (d.startsWith("595")) return d;
+  if (d.startsWith("0")) d = d.slice(1);
+  return d.length >= 8 ? "595" + d : "";
+}
+
+function tarjetaProveedor(r) {
+  const wa = numeroWhatsApp(r.proveedor_telefono);
+  const pedir = r.estado_stock !== "ok";
+  const msj = encodeURIComponent(`Hola${r.proveedor_contacto ? " " + r.proveedor_contacto : ""}, te escribo de La Santaniana. ` +
+    `Necesitamos ${r.descripcion} (código ${r.codigo})${r.aplicacion ? " para " + r.aplicacion : ""}. ¿Tenés disponible?`);
+  return `
+    <div class="rep-d-section-lbl" style="margin-top:22px">Proveedor</div>
+    <div class="rep-d-prov ${pedir ? "pedir" : ""}">
+      <div class="rep-d-prov-ico"><i class="ti ti-building-store"></i></div>
+      <div class="rep-d-prov-info">
+        <div class="rep-d-prov-nom">${r.proveedor}</div>
+        <div class="rep-d-prov-sub">${[r.proveedor_contacto, r.proveedor_telefono].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
+      </div>
+      ${r.proveedor_telefono ? `<a class="btn btn-ghost" href="tel:${String(r.proveedor_telefono).replace(/[^\d+]/g, "")}"><i class="ti ti-phone"></i></a>` : ""}
+      ${wa ? `<a class="btn ${pedir ? "btn-primary" : "btn-ghost"}" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${msj}"><i class="ti ti-brand-whatsapp"></i> ${pedir ? "Pedir" : "WhatsApp"}</a>` : ""}
+    </div>`;
+}
+
 async function guardarRepuesto() {
   const cod = $("#r-cod").value.trim();
   const desc = $("#r-desc").value.trim();
@@ -5196,6 +5265,7 @@ async function guardarRepuesto() {
       categoria: $("#r-cat").value, marca: $("#r-mar").value,
       aplicacion: $("#r-apl").value, codigo_alt: $("#r-codalt").value,
       proveedor: $("#r-prov").value,
+      proveedor_contacto: $("#r-pcon").value, proveedor_telefono: $("#r-ptel").value,
       ubic_pasillo: $("#r-up").value, ubic_estanteria: $("#r-ue").value,
       ubic_nivel: $("#r-un").value, ubic_posicion: $("#r-uo").value,
       stock_inicial: parseFloat(limpiar($("#r-stk").value)) || 0,
@@ -5204,7 +5274,7 @@ async function guardarRepuesto() {
       costo_unitario: parseFloat(limpiar($("#r-cos").value)) || 0,
     })
   });
-  if (r.ok) { toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
+  if (r.ok) { _provCache = null; toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
   else toast(r.msg, "error");
 }
 
@@ -5304,6 +5374,8 @@ async function abrirRepuesto(id) {
             ${puedeEditar ? `<button onclick="editarRepuesto(${r.id})"><i class="ti ti-edit"></i> Editar</button>` : ""}
           </div>
         ` : ""}
+
+        ${r.proveedor ? tarjetaProveedor(r) : ""}
 
         <div class="rep-d-section-lbl" style="margin-top:22px">Últimos movimientos</div>
         ${r.movimientos.length === 0
@@ -5489,6 +5561,7 @@ async function editarRepuesto(id) {
           <div class="field"><label>Posición</label><input id="e-uo" value="${r.ubic_posicion||''}" maxlength="3" style="width:60px;text-align:center;font-size:17px;font-weight:600"></div>
         </div>
       </div>
+      ${camposProveedor("e", r)}
       <div class="form-row" style="margin-top:12px">
         <div class="field"><label>Avisar bajo de</label><input id="e-min" value="${r.stock_minimo||0}" style="width:120px"></div>
         <div class="field"><label>Precio c/u (Gs.)</label><input id="e-cos" value="${r.costo_unitario||0}" style="width:140px"></div>
@@ -5512,6 +5585,8 @@ async function confirmarEditar(id, btn) {
     body: JSON.stringify({
       codigo: cod, descripcion: desc, categoria: $("#e-cat").value,
       marca: $("#e-mar").value, aplicacion: $("#e-apl").value,
+      proveedor: $("#e-prov").value,
+      proveedor_contacto: $("#e-pcon").value, proveedor_telefono: $("#e-ptel").value,
       ubic_pasillo: $("#e-up").value, ubic_estanteria: $("#e-ue").value,
       ubic_nivel: $("#e-un").value, ubic_posicion: $("#e-uo").value,
       stock_minimo: parseFloat(limpiar($("#e-min").value)) || 0,
@@ -5519,6 +5594,7 @@ async function confirmarEditar(id, btn) {
     })
   });
   if (r.ok) {
+    _provCache = null;
     toast("Cambios guardados", "success");
     btn.closest(".rep-modal-overlay").remove();
     refrescarTrasMovimiento(id);
