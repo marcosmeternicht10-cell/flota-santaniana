@@ -73,12 +73,16 @@ async function api(url, opts) {
 function status(msg) {
   $("#statusbar").innerHTML = `<i class="ti ti-info-circle" style="vertical-align:-2px"></i> ${msg}`;
 }
+let _toastTimer = null;
 function toast(msg, tipo = "") {
   const t = $("#toast");
-  const icono = tipo === "success" ? "circle-check" : tipo === "error" ? "alert-circle" : "info-circle";
-  t.innerHTML = `<i class="ti ti-${icono}"></i> ${msg}`;
+  const icono = tipo === "success" ? "check" : tipo === "error" ? "alert-triangle" : "info-circle";
+  t.innerHTML = `<i class="ti ti-${icono}"></i><span>${msg}</span>`;
+  t.className = "toast";
+  void t.offsetWidth;                       // reinicia la animación si ya había uno
   t.className = "toast show " + tipo;
-  setTimeout(() => t.className = "toast", 2800);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.className = "toast", 2800);
 }
 
 function setCoche(v) {
@@ -161,6 +165,7 @@ function aplicarSecciones() {
 }
 
 function irA(sec) {
+  destRecordar(sec);
   if (!puedeVerSeccion(sec)) {
     toast("No tenés acceso a esa sección", "error");
     return;
@@ -247,7 +252,7 @@ async function renderDashboard() {
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-layout-dashboard"></i> Dashboard</h1>
-      <p>Resumen general de la flota La Santaniana</p>
+      <p>${saludoDelDia()}</p>
     </div>
     <div class="section">
 
@@ -1381,11 +1386,13 @@ function autoConsumo() {
 
 // Junta los datos del formulario
 function datosTurismo() {
-  const sel = document.getElementById("tu-vehiculo");
-  const opt = sel.options[sel.selectedIndex];
+  // El coche ahora se elige con el buscador (un campo oculto con el id), no
+  // con una lista desplegable: la patente se saca de los coches que cargó
+  const sel = document.getElementById("tu-vehiculo") || {};
+  const coche = (window["_coches_tu-vehiculo"] || []).find(x => String(x.id) === String(sel.value));
   return {
     destino: $("#tu-destino").value, descripcion: $("#tu-desc").value, cliente: $("#tu-cliente").value,
-    vehiculo_id: sel.value || null, patente: opt ? (opt.dataset.patente || "") : "",
+    vehiculo_id: sel.value || null, patente: coche ? (coche.patente || "") : "",
     km_total: $("#tu-km").value, dias: $("#tu-dias").value, noches: $("#tu-noches").value,
     pasajeros: $("#tu-pax").value, consumo_km_litro: $("#tu-consumo").value,
     precio_gasoil: $("#tu-gasoil").value, jornal_chofer: $("#tu-jornal").value,
@@ -9468,7 +9475,12 @@ async function renderMantenimientos() {
       <div id="mt-cuerpo"></div>
     </div>`;
   mtCargarStats();
-  mtVerLista();
+  if (window._mtAbrirCoche) {
+    const vid = window._mtAbrirCoche; window._mtAbrirCoche = null;
+    mtVerCoche(vid);
+  } else {
+    mtVerLista();
+  }
 }
 
 // ─── Estadísticas ───
@@ -9856,3 +9868,311 @@ function _uiContar(el) {
     });
   }).observe(raiz, { childList: true, subtree: true });
 })();
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  IDENTIDAD — el sistema como una red de recorridos
+// ════════════════════════════════════════════════════════════════════════
+
+function saludoDelDia() {
+  const ahora = new Date();
+  const h = ahora.getHours();
+  const saludo = h < 12 ? "Buen día" : h < 19 ? "Buenas tardes" : "Buenas noches";
+  const nombre = (document.getElementById("user-name")?.textContent || "").trim().split(/[\s,]+/)[0];
+  const fecha = ahora.toLocaleDateString("es-PY", { weekday: "long", day: "numeric", month: "long" });
+  return `${saludo}${nombre ? ", " + nombre : ""}. Hoy es ${fecha}.`;
+}
+
+// ─── El colectivo que recorre el menú ───
+// Cada grupo del menú es una línea y cada sección una parada. Al cambiar de
+// sección, el colectivo viaja por la línea hasta la parada nueva. La duración
+// depende de la distancia, así un salto largo se siente como un viaje largo.
+(function rutaDelMenu() {
+  const nav = document.querySelector(".sidebar .nav");
+  if (!nav) return;
+  const bus = document.createElement("div");
+  bus.className = "nav-bus";
+  bus.innerHTML = "<span></span>";
+  nav.appendChild(bus);
+  let ultimaY = null, timer = null;
+  function mover() {
+    const a = nav.querySelector(".nav-item.active");
+    if (!a || a.offsetParent === null) { bus.style.opacity = 0; return; }
+    const y = a.offsetTop + a.offsetHeight / 2;
+    if (y === ultimaY) { bus.style.opacity = 1; return; }
+    if (ultimaY === null || _uiSinMovimiento) {
+      bus.style.transition = "none";
+    } else {
+      const d = Math.abs(y - ultimaY);
+      const ms = Math.round(Math.min(780, 260 + d * 0.85));
+      bus.style.transition = `transform ${ms}ms cubic-bezier(.5,.05,.2,1), opacity .2s`;
+      bus.classList.toggle("baja", y > ultimaY);
+      bus.classList.toggle("sube", y < ultimaY);
+      bus.classList.add("viaja");
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        bus.classList.remove("viaja");
+        bus.classList.remove("llego"); void bus.offsetWidth; bus.classList.add("llego");
+      }, ms);
+    }
+    bus.style.transform = `translate(-50%, ${y}px) translateY(-50%)`;
+    bus.style.opacity = 1;
+    ultimaY = y;
+  }
+  new MutationObserver(() => requestAnimationFrame(mover))
+    .observe(nav, { attributes: true, attributeFilter: ["class", "style"], subtree: true });
+  window.addEventListener("resize", () => { ultimaY = null; mover(); });
+  requestAnimationFrame(mover);
+})();
+
+// ─── Títulos como letrero de destino ───
+// Cuando cambiás de pantalla, las letras del título giran como en los
+// carteles de las terminales y se acomodan una atrás de la otra.
+let _flapUltimo = "";
+function flapTitulo(h1) {
+  const nodo = [...h1.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+  if (!nodo) return;
+  const texto = nodo.textContent, limpio = texto.trim();
+  if (limpio === _flapUltimo) return;
+  _flapUltimo = limpio;
+  if (_uiSinMovimiento) return;
+  const flap = document.createElement("span");
+  flap.className = "flap";
+  [...texto].forEach(ch => { const s = document.createElement("span"); s.className = "flap-c"; s.textContent = ch; flap.appendChild(s); });
+  nodo.replaceWith(flap);
+  const letras = [...flap.children];
+  letras.forEach(s => { s.style.width = s.getBoundingClientRect().width + "px"; });
+  // Letras al azar de la misma caja que la final, así el ancho casi no salta
+  const MAY = "ABCDEFGHIJKLMNOPRSTUVZ", MIN = "abcdeghinoprstuvz", NUM = "0123456789";
+  let fuente = MAY;
+  const azar = () => fuente[Math.floor(Math.random() * fuente.length)];
+  let ultimo = 0;
+  letras.forEach((s, i) => {
+    const fin = s.textContent;
+    if (!fin.trim()) return;
+    const giros = 3 + Math.floor(Math.random() * 4);
+    const inicio = i * 24;
+    ultimo = Math.max(ultimo, inicio + giros * 42);
+    s.classList.add("girando");
+    s.dataset.caja = /\d/.test(fin) ? "n" : fin === fin.toUpperCase() ? "M" : "m";
+    const deCaja = () => { fuente = s.dataset.caja === "n" ? NUM : s.dataset.caja === "M" ? MAY : MIN; return azar(); };
+    s.textContent = deCaja();
+    let k = 0;
+    const paso = () => {
+      if (!flap.isConnected) return;
+      if (++k >= giros) { s.textContent = fin; s.classList.remove("girando"); s.classList.add("cae"); return; }
+      s.textContent = deCaja();
+      setTimeout(paso, 42);
+    };
+    setTimeout(paso, inicio);
+  });
+  // Al terminar vuelve a ser texto común (para copiar, buscar, imprimir)
+  setTimeout(() => { if (flap.isConnected) flap.replaceWith(document.createTextNode(texto)); }, ultimo + 320);
+}
+(function () {
+  const raiz = document.getElementById("content");
+  if (!raiz || !window.MutationObserver) return;
+  const vistos = new WeakSet();
+  new MutationObserver(() => requestAnimationFrame(() => {
+    const h1 = raiz.querySelector(".page-header h1");
+    if (h1 && !vistos.has(h1)) { vistos.add(h1); flapTitulo(h1); }
+  })).observe(raiz, { childList: true, subtree: false });
+})();
+
+// ─── ¿A dónde vamos? — ir a cualquier coche o sección escribiendo ───
+const DEST_COCHE_SECCIONES = [["mantenimientos", "Historia"], ["servicios", "Servicios"], ["costos", "Costos"],
+                              ["kpis", "KPIs"], ["mantenimiento", "Preventivo"]];
+let _dest = { sel: 0, items: [], coches: null, cochesAt: 0 };
+
+function destRecordar(sec) {
+  try {
+    const r = JSON.parse(sessionStorage.getItem("destRecientes") || "[]").filter(x => x !== sec);
+    r.unshift(sec);
+    sessionStorage.setItem("destRecientes", JSON.stringify(r.slice(0, 5)));
+  } catch (e) { /* sin almacenamiento: no pasa nada */ }
+}
+function destRecientes() {
+  try { return JSON.parse(sessionStorage.getItem("destRecientes") || "[]"); } catch (e) { return []; }
+}
+const destNorm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+const destEsc = s => String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function destMarcar(texto, q) {
+  const t = String(texto || "");
+  if (!q) return destEsc(t);
+  const i = destNorm(t).indexOf(q);
+  if (i < 0) return destEsc(t);
+  return destEsc(t.slice(0, i)) + "<mark>" + destEsc(t.slice(i, i + q.length)) + "</mark>" + destEsc(t.slice(i + q.length));
+}
+
+// Las secciones que esta persona ve en su menú, con el grupo al que pertenecen
+function destSecciones() {
+  const out = [];
+  let grupo = "";
+  document.querySelectorAll(".sidebar .nav > .nav-section, .sidebar .nav > .nav-item[data-sec]").forEach(el => {
+    if (el.classList.contains("nav-section")) { grupo = el.textContent.trim(); return; }
+    if (el.style.display === "none" || getComputedStyle(el).display === "none") return;
+    out.push({ tipo: "seccion", sec: el.dataset.sec, nombre: el.textContent.trim(), grupo,
+               icono: (el.querySelector(".ti")?.className || "ti ti-point").replace(/\s+/g, " ") });
+  });
+  return out;
+}
+
+async function abrirDestino() {
+  if (document.getElementById("destino-overlay")) return;
+  cerrarSidebar?.();
+  const o = document.createElement("div");
+  o.className = "destino-overlay";
+  o.id = "destino-overlay";
+  o.innerHTML = `
+    <div class="destino" role="dialog" aria-label="Buscar coche o sección">
+      <div class="destino-cab">
+        <label for="destino-q">¿A dónde vamos?</label>
+        <div class="destino-campo">
+          <i class="ti ti-map-pin"></i>
+          <input id="destino-q" autocomplete="off" spellcheck="false" placeholder="Un coche, una patente o una sección">
+        </div>
+      </div>
+      <div class="destino-linea"></div>
+      <div class="destino-lista" id="destino-lista"></div>
+      <div class="destino-teclas">
+        <span><kbd>↑</kbd><kbd>↓</kbd> moverse</span>
+        <span><kbd>Enter</kbd> ir</span>
+        <span><kbd>Esc</kbd> cerrar</span>
+      </div>
+    </div>`;
+  o.addEventListener("mousedown", e => { if (e.target === o) cerrarDestino(); });
+  document.body.appendChild(o);
+  const q = document.getElementById("destino-q");
+  q.addEventListener("input", () => { _dest.sel = 0; destDibujar(); });
+  q.addEventListener("keydown", destTeclas);
+  q.focus();
+  destDibujar();
+  // Los coches se traen una vez y se guardan un rato
+  if (!_dest.coches || Date.now() - _dest.cochesAt > 5 * 60 * 1000) {
+    const vs = await api("/api/vehiculos");
+    if (Array.isArray(vs)) { _dest.coches = vs; _dest.cochesAt = Date.now(); destDibujar(); }
+  }
+}
+
+function cerrarDestino() {
+  document.getElementById("destino-overlay")?.remove();
+}
+
+function destDibujar() {
+  const lista = document.getElementById("destino-lista");
+  if (!lista) return;
+  const qCruda = (document.getElementById("destino-q")?.value || "").trim();
+  const q = destNorm(qCruda).replace(/^#/, "");
+  const secciones = destSecciones();
+  const grupos = [];
+
+  if (!q) {
+    const rec = destRecientes().map(s => secciones.find(x => x.sec === s)).filter(Boolean).slice(0, 4);
+    if (rec.length) grupos.push(["Hace un rato", rec]);
+    grupos.push(["Todas las secciones", secciones]);
+  } else {
+    const coches = (_dest.coches || []).map(v => {
+      const num = destNorm(v.n_interno), pat = destNorm(v.patente);
+      const otros = destNorm(`${v.marca || ""} ${v.modelo || ""}`);
+      const p = num === q ? 0 : num.startsWith(q) ? 1 : pat.startsWith(q) ? 2 : pat.includes(q) ? 3
+              : num.includes(q) ? 4 : otros.includes(q) ? 5 : 99;
+      return { tipo: "coche", v, p };
+    }).filter(x => x.p < 99).sort((a, b) => a.p - b.p || String(a.v.n_interno).localeCompare(String(b.v.n_interno), "es", { numeric: true }))
+      .slice(0, 7);
+    const secs = secciones.map(s => {
+      const n = destNorm(s.nombre), g = destNorm(s.grupo);
+      const p = n.startsWith(q) ? 0 : n.split(/\s+/).some(w => w.startsWith(q)) ? 1 : n.includes(q) ? 2 : g.includes(q) ? 3 : 99;
+      return { ...s, p };
+    }).filter(s => s.p < 99).sort((a, b) => a.p - b.p);
+    // Si parece un número de coche, los coches van primero
+    if (/^\d/.test(q)) {
+      if (coches.length) grupos.push(["Coches", coches]);
+      if (secs.length) grupos.push(["Secciones", secs]);
+    } else {
+      if (secs.length) grupos.push(["Secciones", secs]);
+      if (coches.length) grupos.push(["Coches", coches]);
+    }
+  }
+
+  _dest.items = grupos.flatMap(g => g[1]);
+  if (_dest.sel >= _dest.items.length) _dest.sel = Math.max(0, _dest.items.length - 1);
+  if (!_dest.items.length) {
+    lista.innerHTML = `<div class="destino-vacio">${_dest.coches === null && /^\d/.test(q)
+      ? "Buscando coches…"
+      : `Nada con «${destEsc(qCruda)}». Probá con el número del coche, la patente o el nombre de una sección.`}</div>`;
+    return;
+  }
+  let k = 0;
+  lista.innerHTML = grupos.map(([titulo, items]) => `
+    <div class="destino-grupo">${titulo}</div>
+    ${items.map(it => {
+      const i = k++;
+      if (it.tipo === "coche") {
+        const v = it.v;
+        return `<div class="destino-item ${i === _dest.sel ? "sel" : ""}" data-i="${i}">
+          <div class="destino-num">#${destMarcar(v.n_interno, q)}</div>
+          <div class="destino-txt"><b>${destMarcar(v.patente, q)}</b><small>${destEsc([v.marca, v.modelo].filter(Boolean).join(" "))}</small></div>
+          <div class="destino-atajos">${DEST_COCHE_SECCIONES.filter(([s]) => puedeVerSeccion(s))
+            .map(([s, n]) => `<button type="button" data-i="${i}" data-sec="${s}">${n}</button>`).join("")}</div>
+        </div>`;
+      }
+      return `<div class="destino-item ${i === _dest.sel ? "sel" : ""}" data-i="${i}">
+        <div class="destino-ico"><i class="${it.icono}"></i></div>
+        <div class="destino-txt"><b>${destMarcar(it.nombre, q)}</b><small>${destEsc(it.grupo)}</small></div>
+      </div>`;
+    }).join("")}`).join("");
+  lista.querySelectorAll(".destino-item").forEach(el => {
+    el.addEventListener("mousemove", () => { if (_dest.sel !== +el.dataset.i) { _dest.sel = +el.dataset.i; destMarcarSel(); } });
+    el.addEventListener("click", e => {
+      const b = e.target.closest("button[data-sec]");
+      destIr(_dest.items[+el.dataset.i], b ? b.dataset.sec : null);
+    });
+  });
+}
+
+function destMarcarSel() {
+  document.querySelectorAll("#destino-lista .destino-item").forEach(el => el.classList.toggle("sel", +el.dataset.i === _dest.sel));
+  document.querySelector("#destino-lista .destino-item.sel")?.scrollIntoView({ block: "nearest" });
+}
+
+function destTeclas(e) {
+  if (e.key === "Escape") { e.preventDefault(); cerrarDestino(); return; }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = _dest.items.length;
+    if (!n) return;
+    _dest.sel = (_dest.sel + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+    destMarcarSel();
+  }
+  if (e.key === "Enter") { e.preventDefault(); const it = _dest.items[_dest.sel]; if (it) destIr(it); }
+}
+
+function destNavegar(sec) {
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  document.querySelector(`.nav-item[data-sec="${sec}"]`)?.classList.add("active");
+  irA(sec);
+}
+
+function destIr(it, secCoche = null) {
+  cerrarDestino();
+  if (it.tipo === "seccion") {
+    if (["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(it.sec) && !cocheActual) {
+      elegirCocheYIr(it.sec);
+      return;
+    }
+    destNavegar(it.sec);
+    return;
+  }
+  const v = it.v;
+  setCoche(v);
+  let sec = secCoche || (puedeVerSeccion("mantenimientos") ? "mantenimientos" : "servicios");
+  if (!puedeVerSeccion(sec)) sec = "servicios";
+  if (sec === "mantenimientos") window._mtAbrirCoche = v.id;
+  destNavegar(sec);
+}
+
+document.addEventListener("keydown", e => {
+  const escribiendo = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); abrirDestino(); }
+  else if (e.key === "/" && !escribiendo) { e.preventDefault(); abrirDestino(); }
+});
