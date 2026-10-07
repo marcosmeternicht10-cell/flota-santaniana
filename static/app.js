@@ -40,8 +40,23 @@ function diasHasta(fecha) {
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
+// Barra fina arriba mientras el sistema trae datos. Solo aparece si el pedido
+// tarda más de 150 ms, así las respuestas rápidas no parpadean.
+let _uiPendientes = 0, _uiTimer = null;
+function _uiCarga(delta) {
+  _uiPendientes = Math.max(0, _uiPendientes + delta);
+  let b = document.getElementById("ui-carga");
+  if (!b) { b = document.createElement("div"); b.id = "ui-carga"; document.body.appendChild(b); }
+  clearTimeout(_uiTimer);
+  if (_uiPendientes > 0) _uiTimer = setTimeout(() => b.classList.add("activa"), 150);
+  else b.classList.remove("activa");
+}
+
 async function api(url, opts) {
-  const r = await fetch(url, opts);
+  _uiCarga(+1);
+  let r;
+  try { r = await fetch(url, opts); }
+  finally { _uiCarga(-1); }
   // Sesión expirada → redirigir al login
   if (r.status === 401) {
     window.location.href = "/login";
@@ -9471,14 +9486,16 @@ async function mtCargarStats() {
         <div class="mt-kpi-num">${e.ultimos_30.registros}</div>
         <div class="mt-kpi-sub">mantenimientos${e.ultimos_30.costo ? ` · Gs. ${fmtNum(Math.round(e.ultimos_30.costo))}` : ""}</div>
       </div>
-      <div class="mt-kpi" style="--c:${MT_COLOR.preventivo}">
-        <div class="mt-kpi-lbl">Preventivo</div>
+      <div class="mt-kpi mt-kpi-link" style="--c:${MT_COLOR.preventivo}" role="button" tabindex="0"
+           onclick="mtVerTipo('preventivo')" onkeydown="if(event.key==='Enter')mtVerTipo('preventivo')">
+        <div class="mt-kpi-lbl">Preventivo <i class="ti ti-arrow-right mt-kpi-ir"></i></div>
         <div class="mt-kpi-num">${e.pct_preventivo === null ? "—" : e.pct_preventivo + "%"}</div>
         <div class="mt-kpi-barra"><div style="width:${e.pct_preventivo || 0}%"></div></div>
         <div class="mt-kpi-sub">de los arreglos son preventivos (6 meses)</div>
       </div>
-      <div class="mt-kpi" style="--c:${MT_COLOR.correctivo}">
-        <div class="mt-kpi-lbl">Correctivos</div>
+      <div class="mt-kpi mt-kpi-link" style="--c:${MT_COLOR.correctivo}" role="button" tabindex="0"
+           onclick="mtVerTipo('correctivo')" onkeydown="if(event.key==='Enter')mtVerTipo('correctivo')">
+        <div class="mt-kpi-lbl">Correctivos <i class="ti ti-arrow-right mt-kpi-ir"></i></div>
         <div class="mt-kpi-num">${totalCorr}</div>
         <div class="mt-kpi-sub">fallas reparadas en 6 meses</div>
       </div>
@@ -9598,8 +9615,8 @@ function paginador(actual, total, fn) {
 }
 
 // ─── La historia de un coche ───
-async function mtVerCoche(vid) {
-  mtEstado.coche = vid; mtEstado.hpagina = 1; mtEstado.tipo = "";
+async function mtVerCoche(vid, tipo = "") {
+  mtEstado.coche = vid; mtEstado.hpagina = 1; mtEstado.tipo = tipo;
   $("#mt-stats").style.display = "none";
   $("#mt-cuerpo").innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
   content.scrollTop = 0;
@@ -9616,7 +9633,7 @@ async function mtCargarCoche(armar = false) {
   if (armar || !$("#mt-historia")) {
     const hoy = new Date().toISOString().slice(0, 10);
     $("#mt-cuerpo").innerHTML = `
-      <button class="btn btn-ghost" style="margin-bottom:12px" onclick="mtVolver()"><i class="ti ti-arrow-left"></i> Volver a la lista</button>
+      <button class="btn btn-ghost" style="margin-bottom:12px" onclick="mtVolver()"><i class="ti ti-arrow-left"></i> ${mtEstado.desdeTipo ? "Volver a " + (mtEstado.desdeTipo === "preventivo" ? "preventivos" : "correctivos") : "Volver a la lista"}</button>
       <div class="mt-cab card">
         <div class="mt-cab-num">#${v.n_interno || "—"}</div>
         <div class="mt-cab-datos">
@@ -9687,6 +9704,64 @@ async function mtCargarCoche(armar = false) {
   $("#mt-hpag").innerHTML = paginador(d.pagina, d.paginas, "mtIrHPagina");
 }
 
+// Todos los preventivos o correctivos de la flota (los mismos 6 meses que
+// cuenta la tarjeta). Tocar uno abre la historia de ese coche ya filtrada.
+async function mtVerTipo(tipo, pagina = 1) {
+  mtEstado.coche = null; mtEstado.desdeTipo = null; mtEstado.tpagina = pagina;
+  $("#mt-stats").style.display = "none";
+  const caja = $("#mt-cuerpo");
+  if (!$("#mt-tipo-lista")) caja.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const d = await api(`/api/mant/registros?tipo=${tipo}&pagina=${pagina}`);
+  if (!d || d.error) { toast("No se pudo abrir la lista", "error"); mtVolverLista(); return; }
+  const fecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) + "/" + f.slice(0, 4) : "—";
+  const nombre = tipo === "preventivo" ? "Preventivos" : "Correctivos";
+  caja.innerHTML = `
+    <button class="btn btn-ghost" style="margin-bottom:12px" onclick="mtVolverLista()"><i class="ti ti-arrow-left"></i> Volver</button>
+    <div class="card">
+      <div class="card-head" style="--c:${MT_COLOR[tipo]}">
+        <span class="mt-tipo-punto" style="background:${MT_COLOR[tipo]}"></span>
+        ${nombre} de toda la flota
+        <span class="emp-tab-n">${d.total}</span>
+        <span class="hint" style="margin-left:auto;font-weight:400">desde el ${fecha(d.desde)} · tocá uno para ver ese coche</span>
+      </div>
+      <div id="mt-tipo-lista">
+        ${d.items.length ? d.items.map(x => `
+          <div class="mt-item mt-item-flota" style="--c:${MT_COLOR[x.grupo]}" onclick="mtAbrirDesdeTipo(${x.vehiculo_id}, '${tipo}')">
+            <div class="mt-item-fecha">${fecha(x.fecha)}</div>
+            <div class="mt-item-linea"></div>
+            <div class="mt-item-cuerpo">
+              <div class="mt-item-tit">
+                <span class="mt-item-coche">#${x.n_interno || "—"}</span>
+                <b>${x.categoria && x.categoria !== "Orden de trabajo" ? x.categoria : x.descripcion}</b>
+              </div>
+              ${x.categoria && x.categoria !== "Orden de trabajo" && x.descripcion && x.descripcion !== x.categoria
+                ? `<div class="mt-item-desc">${x.descripcion}</div>` : ""}
+              <div class="mt-item-meta">
+                ${x.patente ? `<span><i class="ti ti-bus"></i>${x.patente}</span>` : ""}
+                ${x.km ? `<span><i class="ti ti-gauge"></i>${fmtNum(Math.round(x.km))} km</span>` : ""}
+                ${x.costo ? `<span><i class="ti ti-cash"></i>Gs. ${fmtNum(Math.round(x.costo))}</span>` : ""}
+                ${x.taller ? `<span><i class="ti ti-tool"></i>${x.taller}</span>` : ""}
+              </div>
+            </div>
+            <i class="ti ti-chevron-right mt-flecha"></i>
+          </div>`).join("")
+          : `<div class="empty"><i class="ti ti-circle-check"></i>No hay ${nombre.toLowerCase()} cargados en este período.</div>`}
+      </div>
+      ${paginador(d.pagina, d.paginas, `(n => mtVerTipo('${tipo}', n))`)}
+    </div>`;
+  content.scrollTop = 0;
+}
+function mtAbrirDesdeTipo(vid, tipo) {
+  const pag = mtEstado.tpagina;
+  mtVerCoche(vid, tipo);
+  mtEstado.desdeTipo = tipo; mtEstado.tpagina = pag;
+}
+function mtVolverLista() {
+  mtEstado.desdeTipo = null;
+  mtVerLista();
+  if (mtEstado.statsViejas) { mtEstado.statsViejas = false; mtCargarStats(); }
+}
+
 function mtIrHPagina(n) { mtEstado.hpagina = n; mtCargarCoche(); }
 function mtFiltrar(t) {
   mtEstado.tipo = t; mtEstado.hpagina = 1;
@@ -9697,6 +9772,7 @@ function mtElegirTipo(t) {
   document.querySelectorAll("#mt-tipos .mt-tipo").forEach(b => b.classList.toggle("sel", b.dataset.t === t));
 }
 function mtVolver() {
+  if (mtEstado.desdeTipo) { const t = mtEstado.desdeTipo; mtEstado.desdeTipo = null; mtVerTipo(t, mtEstado.tpagina || 1); return; }
   mtVerLista();
   if (mtEstado.statsViejas) { mtEstado.statsViejas = false; mtCargarStats(); }
 }
@@ -9729,3 +9805,54 @@ async function mtBorrar(origen, id) {
   if (r && r.ok) { toast("Registro borrado", "success"); mtEstado.statsViejas = true; mtCargarCoche(); }
   else toast((r && r.msg) || "No se pudo borrar", "error");
 }
+
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  NÚMEROS QUE CUENTAN — los valores grandes suben hasta su valor
+// ════════════════════════════════════════════════════════════════════════
+// Se aplica solo a los números de las tarjetas de resumen, una vez por
+// número que aparece. Respeta el formato (Gs., %, L, puntos de miles, coma
+// decimal) y no hace nada si el equipo pide reducir el movimiento.
+const UI_NUMEROS = ".metric-value, .mt-kpi-num, .cg-kpi-num, .ctrl-num";
+const _uiSinMovimiento = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function _uiContar(el) {
+  if (el.dataset.contado) return;
+  el.dataset.contado = "1";
+  if (_uiSinMovimiento || el.children.length > 1) return;
+  // El primer texto numérico: "Gs. 15.690.000", "58%", "2.207,5 L", "35,39"
+  const nodo = [...el.childNodes].find(n => n.nodeType === 3 && /\d/.test(n.textContent));
+  if (!nodo) return;
+  const m = nodo.textContent.match(/^(.*?)(\d{1,3}(?:\.\d{3})+|\d+)(,\d+)?(.*)$/s);
+  if (!m) return;
+  const [, antes, entero, dec, despues] = m;
+  const decimales = dec ? dec.length - 1 : 0;
+  const final = parseFloat(entero.replace(/\./g, "") + (dec ? "." + dec.slice(1) : ""));
+  if (!isFinite(final) || final === 0) return;
+  const fmt = v => v.toLocaleString("es-PY", { minimumFractionDigits: decimales, maximumFractionDigits: decimales })
+                     .replace(/,(?=\d{3})/g, ".");
+  const dur = 650, t0 = performance.now();
+  const paso = t => {
+    const p = Math.min(1, (t - t0) / dur);
+    const e = 1 - Math.pow(1 - p, 3);              // arranca rápido, frena al final
+    nodo.textContent = antes + fmt(final * e) + despues;
+    if (p < 1) requestAnimationFrame(paso);
+    else nodo.textContent = antes + entero + (dec || "") + despues;   // el texto exacto original
+  };
+  requestAnimationFrame(paso);
+}
+
+(function () {
+  const raiz = document.getElementById("content");
+  if (!raiz || !window.MutationObserver) return;
+  let pendiente = false;
+  new MutationObserver(() => {
+    if (pendiente) return;
+    pendiente = true;
+    requestAnimationFrame(() => {
+      pendiente = false;
+      raiz.querySelectorAll(UI_NUMEROS).forEach(_uiContar);
+    });
+  }).observe(raiz, { childList: true, subtree: true });
+})();

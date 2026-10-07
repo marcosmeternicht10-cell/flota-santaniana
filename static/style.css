@@ -2660,3 +2660,120 @@ td.center, th.center { text-align: center; }
 .mt-item-origen { color: var(--light); }
 .mt-borrar { opacity: .5; }
 .mt-borrar:hover { opacity: 1; color: var(--danger); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOVIMIENTO — transiciones y animaciones de todo el sistema
+   ═══════════════════════════════════════════════════════════════════
+   Reglas: todo dura poco (150–450 ms), las entradas usan "backwards"
+   para no pisar los efectos de :hover una vez terminadas, y quien tenga
+   activado "reducir movimiento" en su equipo no ve ninguna. */
+:root {
+  --ui-suave: cubic-bezier(.2, .7, .2, 1);
+  --ui-resorte: cubic-bezier(.34, 1.4, .64, 1);
+}
+@keyframes uiEntra   { from { opacity: 0; transform: translateY(10px); } }
+@keyframes uiAparece { from { opacity: 0; } }
+@keyframes uiFila    { from { opacity: 0; transform: translateX(-6px); } }
+@keyframes uiPop     { from { opacity: 0; transform: translateY(14px) scale(.97); } }
+@keyframes uiBrillo  { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+@keyframes uiCarga   { 0% { left: -35%; right: 100%; } 60% { left: 100%; right: -90%; } 100% { left: 100%; right: -90%; } }
+
+/* Al cambiar de pantalla: el encabezado y los bloques entran escalonados */
+.page-header { animation: uiEntra .4s var(--ui-suave) backwards; }
+.section > * { animation: uiEntra .45s var(--ui-suave) backwards; }
+.section > *:nth-child(2) { animation-delay: 50ms; }
+.section > *:nth-child(3) { animation-delay: 100ms; }
+.section > *:nth-child(4) { animation-delay: 150ms; }
+.section > *:nth-child(n+5) { animation-delay: 200ms; }
+
+/* Tarjetas y números grandes: entran en cascada */
+.card { animation: uiEntra .4s var(--ui-suave) backwards; transition: box-shadow .2s, border-color .2s; }
+.metric, .mt-kpi, .cg-kpi, .ctrl-met { animation: uiEntra .45s var(--ui-suave) backwards; }
+:is(.metrics, .mt-kpis, .cg-kpis, .ctrl-hero) > :nth-child(2) { animation-delay: 60ms; }
+:is(.metrics, .mt-kpis, .cg-kpis, .ctrl-hero) > :nth-child(3) { animation-delay: 120ms; }
+:is(.metrics, .mt-kpis, .cg-kpis, .ctrl-hero) > :nth-child(4) { animation-delay: 180ms; }
+:is(.metrics, .mt-kpis, .cg-kpis, .ctrl-hero) > :nth-child(n+5) { animation-delay: 240ms; }
+:is(.mt-graficos, .cg-graficos) > :nth-child(2) { animation-delay: 90ms; }
+
+.mt-kpi, .cg-kpi, .ctrl-met { transition: transform .2s var(--ui-suave), box-shadow .2s; }
+.mt-kpi:hover, .cg-kpi:hover, .ctrl-met:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.metric { transition: transform .2s var(--ui-suave), box-shadow .2s; }
+.metric:hover { transform: translateY(-2px); }
+
+/* Tarjetas que llevan a algún lado */
+.mt-kpi-link { cursor: pointer; outline: none; }
+.mt-kpi-link:hover, .mt-kpi-link:focus-visible { transform: translateY(-3px); box-shadow: var(--shadow-md); border-color: var(--c); }
+.mt-kpi-link:active { transform: translateY(-1px) scale(.99); }
+.mt-kpi-ir { float: right; color: var(--c); opacity: .45; transition: transform .2s var(--ui-suave), opacity .2s; }
+.mt-kpi-link:hover .mt-kpi-ir { opacity: 1; transform: translateX(3px); }
+
+/* Filas de tablas y listas: entran de a una (las primeras, el resto ya está fuera de vista) */
+tbody tr, .mt-fila, .mt-item { animation: uiFila .32s var(--ui-suave) backwards; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(2)  { animation-delay: 25ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(3)  { animation-delay: 50ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(4)  { animation-delay: 75ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(5)  { animation-delay: 100ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(6)  { animation-delay: 125ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(7)  { animation-delay: 150ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(8)  { animation-delay: 175ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(9)  { animation-delay: 200ms; }
+:is(tbody tr, .mt-fila, .mt-item):nth-child(n+10) { animation-delay: 225ms; }
+.mt-fila, .mt-item-flota { transition: background .15s, padding-left .2s var(--ui-suave); }
+.mt-fila:hover, .mt-item-flota:hover { padding-left: 20px; }
+.mt-item-flota { cursor: pointer; grid-template-columns: 92px 14px 1fr auto; }
+.mt-item-flota:hover { background: var(--surface2); }
+.mt-fila .mt-flecha, .mt-item-flota .mt-flecha { transition: transform .2s var(--ui-suave), color .2s; }
+.mt-fila:hover .mt-flecha, .mt-item-flota:hover .mt-flecha { transform: translateX(4px); color: var(--brand-blue); }
+.mt-item-coche { font-weight: 800; color: var(--brand-blue); font-variant-numeric: tabular-nums; }
+.mt-tipo-punto { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* Botones */
+.btn { transition: background .15s, border-color .15s, color .15s, box-shadow .2s, transform .12s; }
+.btn-primary:hover:not(:disabled) { box-shadow: 0 4px 14px rgba(30,90,150,.28); transform: translateY(-1px); }
+.btn:active:not(:disabled) { transform: scale(.97); }
+.btn:focus-visible, .chip:focus-visible, .pg-btn:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 2px; }
+.chip, .pg-btn, .mt-tipo, .emblema, .ref-tab { transition: background .15s, border-color .15s, color .15s, transform .12s; }
+.chip:active, .pg-btn:active:not(:disabled), .mt-tipo:active { transform: scale(.95); }
+.icon-btn { transition: background .15s, color .15s, transform .12s; }
+.icon-btn:active { transform: scale(.9); }
+
+/* Campos: el foco se ilumina suave */
+input, select, textarea { transition: border-color .15s, box-shadow .2s; }
+input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+
+/* Menú lateral */
+.nav-item .ti { transition: transform .2s var(--ui-suave); }
+.nav-item:hover:not(:disabled) .ti { transform: translateX(2px); }
+.nav-item.active::before { animation: uiBarra .3s var(--ui-resorte); transform-origin: center; }
+@keyframes uiBarra { from { transform: scaleY(0); } }
+
+/* Ventanas emergentes: el fondo se oscurece y la ventana sube */
+.modal-overlay, .firma-overlay { animation: uiAparece .2s ease-out; }
+.modal-overlay > *, .firma-overlay > .firma-modal { animation: uiPop .3s var(--ui-resorte); }
+
+/* Avisos: entran con resorte */
+.toast { transition: transform .35s var(--ui-resorte), opacity .25s; }
+
+/* Mientras carga: brillo que recorre en vez de pantalla en blanco */
+.dossier-loading { animation: uiAparece .3s .15s backwards; }
+.empty { animation: uiEntra .35s var(--ui-suave) backwards; }
+
+/* Barra fina arriba cuando el sistema está trayendo datos */
+#ui-carga {
+  position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 5000;
+  pointer-events: none; opacity: 0; transition: opacity .25s; overflow: hidden;
+}
+#ui-carga.activa { opacity: 1; }
+#ui-carga::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: -35%; right: 100%;
+  background: linear-gradient(90deg, var(--brand-blue), var(--brand-red));
+  border-radius: 0 3px 3px 0; animation: uiCarga 1.2s cubic-bezier(.65,.05,.36,1) infinite;
+}
+
+/* Quien pidió menos movimiento en su equipo, no ve animaciones */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important; transition-duration: .01ms !important;
+  }
+}
