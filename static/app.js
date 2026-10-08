@@ -6008,172 +6008,628 @@ function metricaCard(icono, label, valor, sub) {
 
 
 // ════════════════════════════════════════════════════════════════════════
-//  CARGA DE HISTORIAL RETROACTIVO (el papel al sistema)
+//  HISTORIAL POR COCHE — la vida de cada coche como un recorrido
 // ════════════════════════════════════════════════════════════════════════
+// Dos pantallas. La flota: todos los coches con su actividad del último año,
+// mes a mes. La ficha de un coche: su historia dibujada como una línea de
+// recorrido, igual que el menú; cada registro es una parada y cada año una
+// terminal. Junta todo lo que se le hizo al coche (lo cargado del papel, los
+// correctivos, el plan preventivo y las órdenes de trabajo) y desde ahí mismo
+// se carga lo nuevo.
+//
+// Al tocar un coche, su número viaja desde la tarjeta hasta el cartel de la
+// ficha (View Transitions del navegador; si no las tiene, cambia sin más).
 
 const TIPOS_HIST = [
-  { v: "correctivo", l: "Correctivo / Avería", i: "alert-triangle" },
-  { v: "preventivo", l: "Preventivo / Service", i: "shield-check" },
+  { v: "preventivo", l: "Preventivo", i: "shield-check" },
+  { v: "correctivo", l: "Correctivo", i: "alert-triangle" },
   { v: "neumaticos", l: "Neumáticos", i: "disc" },
-  { v: "servicio", l: "Servicio / Viaje", i: "route" },
+  { v: "servicio", l: "Servicio", i: "route" },
   { v: "otro", l: "Otro", i: "notes" },
 ];
+const HI_TIPO_NOMBRE = { preventivo: "Preventivo", control: "Control", correctivo: "Correctivo",
+  neumaticos: "Neumáticos", servicio: "Servicio", otro: "Otro" };
+const HI_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+  "septiembre", "octubre", "noviembre", "diciembre"];
+const HI_FILTROS = [
+  ["todos", "Todos"], ["correctivos", "Con correctivos recientes"],
+  ["quietos", "Sin registros en 90 días"], ["vacios", "Sin historial"],
+];
 
-let histCargaVehiculo = null;   // coche seleccionado (queda fijo entre cargas)
-let histCargaSesion = [];       // eventos cargados en esta sesión (para deshacer)
+let hi = { flota: null, flotaVieja: false, filtro: "todos", q: "", coche: null, d: null,
+           tipo: "", anio: "", pagina: 1, items: [], sesion: 0, editando: null,
+           lugar: null, scroll: 0, ultimoMes: "" };
+
+const hiEsc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hiColor = g => MT_COLOR[g] || MT_COLOR.otros;
+function hiHoyLocal() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function hiHace(dias) {
+  if (dias == null) return "sin registros";
+  if (dias <= 0) return "hoy";
+  if (dias === 1) return "ayer";
+  if (dias < 31) return `hace ${dias} días`;
+  if (dias < 365) { const m = Math.round(dias / 30.4); return `hace ${m} ${m === 1 ? "mes" : "meses"}`; }
+  const a = Math.floor(dias / 365);
+  return `hace ${a} ${a === 1 ? "año" : "años"}`;
+}
+function hiDominante(c) {
+  let mejor = null, n = 0;
+  for (const g of ["correctivo", "preventivo", "neumaticos", "otros"]) if ((c[g] || 0) > n) { n = c[g]; mejor = g; }
+  return mejor;
+}
+function hiTotal(c) { return (c.preventivo || 0) + (c.correctivo || 0) + (c.neumaticos || 0) + (c.otros || 0); }
+
+// Pasa de una pantalla a otra con transición si el navegador la tiene
+async function hiTransicion(cambiar) {
+  if (document.startViewTransition && !_uiSinMovimiento) {
+    const t = document.startViewTransition(cambiar);
+    try { await t.finished; } catch (e) { /* si se interrumpe, queda el estado final igual */ }
+  } else {
+    cambiar();
+  }
+}
 
 async function renderHistorialCarga() {
-  status("Carga de historial retroactivo");
-  const vehiculos = await api("/api/vehiculos");
-
+  status("Historial por coche");
+  const abrir = window._hiAbrirCoche;
+  window._hiAbrirCoche = null;
   content.innerHTML = `
     <div class="page-header">
-      <h1><i class="ti ti-archive"></i> Cargar Historial</h1>
-      <p>Pasá el historial en papel al sistema — todo lo cargado suma a los reportes y al dossier de cada coche</p>
+      <h1><i class="ti ti-timeline-event"></i> Historial por coche</h1>
+      <p>Todo lo que se le hizo a cada coche: lo cargado del papel, los correctivos, el plan preventivo y las órdenes de trabajo</p>
     </div>
-    <div class="section">
+    <div class="section hi-raiz" id="hi-raiz"><div class="dossier-loading"></div></div>`;
+  hi.flota = null;
+  if (abrir) { await hiAbrirCoche(abrir, null); return; }
+  await hiVerFlota(true);
+}
 
-      <div class="card">
-        <div class="card-body" style="padding-bottom:14px">
-          <div class="form-row" style="align-items:flex-end">
-            <div class="field" style="flex:1;min-width:260px">
-              <label>Coche (queda fijo mientras cargás sus papeles)</label>
-              ${buscadorCoche("hc-coche", vehiculos, { seleccionado: histCargaVehiculo || "" })}
-            </div>
-          </div>
-        </div>
-      </div>
+// ─── La flota ───────────────────────────────────────────────────────────
 
-      <div id="hc-zona" style="${histCargaVehiculo ? "" : "display:none"}">
-
-        <div class="card" style="border-left:3px solid var(--brand-blue)">
-          <div class="card-head"><i class="ti ti-pencil-plus"></i> Nuevo evento del papel</div>
-          <div class="card-body">
-            <div class="form-row">
-              <div class="field"><label>Fecha</label><input id="hc-fecha" type="date"></div>
-              <div class="field"><label>Tipo</label>
-                <select id="hc-tipo">${TIPOS_HIST.map(t => `<option value="${t.v}">${t.l}</option>`).join("")}</select>
-              </div>
-              <div class="field"><label>Categoría <span style="color:var(--light);font-weight:400">(opcional)</span></label>
-                <input id="hc-cat" placeholder="Motor, Frenos, Aceite..." style="width:160px"></div>
-            </div>
-            <div class="form-row" style="margin-top:12px">
-              <div class="field" style="flex:1;min-width:260px">
-                <label>Descripción — qué se hizo *</label>
-                <input id="hc-desc" placeholder="Lo que dice el papel, tal cual">
-              </div>
-            </div>
-            <div class="form-row" style="margin-top:12px;align-items:flex-end">
-              <div class="field"><label>Km <span style="color:var(--light);font-weight:400">(si figura)</span></label><input id="hc-km" placeholder="0" style="width:110px"></div>
-              <div class="field"><label>Costo Gs. <span style="color:var(--light);font-weight:400">(si figura)</span></label><input id="hc-costo" placeholder="0" style="width:140px"></div>
-              <div class="field"><label>Taller <span style="color:var(--light);font-weight:400">(si figura)</span></label><input id="hc-taller" placeholder="opcional" style="width:150px"></div>
-              <button class="btn btn-primary" onclick="hcAgregar()" style="min-width:130px"><i class="ti ti-plus"></i> Agregar</button>
-            </div>
-            <p class="hint" style="margin-top:12px"><i class="ti ti-keyboard"></i> Tip: <b>Enter</b> en cualquier campo agrega el evento. La fecha se mantiene para el siguiente — solo ajustá el día si cambia.</p>
-          </div>
-        </div>
-
-        <div class="section-title" style="display:flex;align-items:center;gap:8px">
-          <i class="ti ti-list-check"></i> <span id="hc-lista-titulo">Historial cargado</span>
-        </div>
-        <div id="hc-lista"></div>
-
-      </div>
-    </div>`;
-
-  // Enter agrega desde cualquier campo del formulario
-  ["hc-fecha", "hc-tipo", "hc-cat", "hc-desc", "hc-km", "hc-costo", "hc-taller"].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); hcAgregar(); } });
+function hiFiltrados() {
+  const q = hi.q.trim().toLowerCase();
+  return (hi.flota?.coches || []).filter(v => {
+    if (q && !`${v.n_interno || ""} ${v.patente || ""} ${v.marca || ""} ${v.modelo || ""}`.toLowerCase().includes(q)) return false;
+    if (hi.filtro === "correctivos") return v.correctivos_90 > 0;
+    if (hi.filtro === "quietos") return v.registros > 0 && v.ultimos_90 === 0;
+    if (hi.filtro === "vacios") return v.registros === 0;
+    return true;
   });
-
-  if (histCargaVehiculo) {
-    // fecha por defecto: la última usada, o hoy
-    const f = document.getElementById("hc-fecha");
-    if (f && !f.value) f.value = window._hcUltimaFecha || hoy();
-    hcCargarLista();
-  }
 }
 
-window["_cocheCB_hc-coche"] = (id) => hcSeleccionarCoche(id);
-
-function hcSeleccionarCoche(vid) {
-  histCargaVehiculo = vid || null;
-  histCargaSesion = [];
-  renderHistorialCarga();
+async function hiVerFlota(primeraVez = false) {
+  const raiz = $("#hi-raiz");
+  if (!raiz) return;
+  if (!hi.flota || hi.flotaVieja) { hi.flota = await api("/api/historia/flota"); hi.flotaVieja = false; }
+  if (!hi.flota || !hi.flota.coches) { raiz.innerHTML = `<div class="empty">No se pudo traer la flota. Probá de nuevo.</div>`; return; }
+  hi.coche = null;
+  const cs = hi.flota.coches;
+  const cuenta = {
+    todos: cs.length,
+    correctivos: cs.filter(v => v.correctivos_90 > 0).length,
+    quietos: cs.filter(v => v.registros > 0 && v.ultimos_90 === 0).length,
+    vacios: cs.filter(v => v.registros === 0).length,
+  };
+  raiz.innerHTML = `
+    <div class="hi-barra">
+      <label class="hi-buscar">
+        <i class="ti ti-search"></i>
+        <input id="hi-q" placeholder="Buscar por número, patente o modelo" autocomplete="off"
+               value="${hiEsc(hi.q)}" oninput="hi.q=this.value; hiDibujarGrilla()">
+      </label>
+      <div class="hi-filtros">
+        ${HI_FILTROS.map(([k, l]) => `
+          <button class="hi-filtro ${hi.filtro === k ? "on" : ""}" onclick="hiFiltrar('${k}', this)">
+            ${l}<span>${cuenta[k]}</span>
+          </button>`).join("")}
+      </div>
+    </div>
+    <div class="hi-leyenda">
+      <span>Cada coche muestra su último año, mes a mes:</span>
+      ${["preventivo", "correctivo", "neumaticos", "otros"].map(g =>
+        `<span class="hi-ley"><i style="background:${hiColor(g)}"></i>${MT_NOMBRE[g]}</span>`).join("")}
+    </div>
+    <div class="hi-grilla ${primeraVez ? "entra" : ""}" id="hi-grilla"></div>`;
+  hiDibujarGrilla();
 }
 
-async function hcAgregar() {
-  if (!histCargaVehiculo) { toast("Elegí un coche primero", "error"); return; }
-  const fecha = $("#hc-fecha").value;
-  const desc = $("#hc-desc").value.trim();
-  if (!fecha) { toast("Falta la fecha", "error"); return; }
-  if (!desc) { toast("Falta la descripción", "error"); $("#hc-desc").focus(); return; }
-  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
-
-  const r = await api("/api/historial_carga", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      vehiculo_id: histCargaVehiculo, fecha,
-      tipo: $("#hc-tipo").value, categoria: $("#hc-cat").value,
-      descripcion: desc,
-      km: parseFloat(limpiar($("#hc-km").value)) || 0,
-      costo: parseFloat(limpiar($("#hc-costo").value)) || 0,
-      taller: $("#hc-taller").value,
-    })
-  });
-  if (!r.ok) { toast(r.msg || "Error", "error"); return; }
-
-  histCargaSesion.push(r.id);
-  window._hcUltimaFecha = fecha;   // recordar la fecha para el próximo
-  toast("Evento guardado", "success");
-
-  // Limpiar solo lo que cambia entre eventos; fecha, tipo y categoría quedan
-  $("#hc-desc").value = ""; $("#hc-km").value = "";
-  $("#hc-costo").value = ""; $("#hc-taller").value = "";
-  $("#hc-desc").focus();
-  hcCargarLista();
+function hiFiltrar(k, btn) {
+  hi.filtro = k;
+  document.querySelectorAll(".hi-filtro").forEach(b => b.classList.toggle("on", b === btn));
+  hiDibujarGrilla();
 }
 
-async function hcCargarLista() {
-  const cont = $("#hc-lista");
-  if (!cont || !histCargaVehiculo) return;
-  const eventos = await api(`/api/historial_carga/${histCargaVehiculo}`);
-  $("#hc-lista-titulo").textContent = `Historial cargado (${eventos.length})`;
+function hiTarjeta(v, i) {
+  const max = Math.max(1, ...v.meses.map(hiTotal));
+  const barras = v.meses.map((c, k) => {
+    const n = hiTotal(c);
+    const mes = hi.flota.meses[k];
+    const nombre = `${HI_MESES[+mes.slice(5) - 1]} ${mes.slice(0, 4)}`;
+    if (!n) return `<i class="hi-barra-mes vacia" title="${nombre}: nada"></i>`;
+    // Una barra por mes, alta según cuántos registros hubo y pintada por tipo
+    let acum = 0;
+    const tramos = ["correctivo", "preventivo", "neumaticos", "otros"].filter(g => c[g]).map(g => {
+      const a = acum; acum += c[g] / n * 100;
+      return `${hiColor(g)} ${a}% ${acum}%`;
+    }).join(", ");
+    const detalle = ["preventivo", "correctivo", "neumaticos", "otros"].filter(g => c[g])
+      .map(g => `${c[g]} ${MT_NOMBRE[g].toLowerCase()}`).join(", ");
+    return `<i class="hi-barra-mes" title="${nombre}: ${detalle}"
+               style="height:${Math.round(22 + 78 * n / max)}%;background:linear-gradient(to top, ${tramos})"></i>`;
+  }).join("");
+  const modelo = `${v.marca || ""} ${v.modelo || ""}`.trim();
+  return `
+    <button class="hi-coche ${v.registros ? "" : "sin"}" data-vid="${v.id}" style="--i:${Math.min(i, 24)}"
+            onclick="hiAbrirCoche(${v.id}, this)" aria-label="Abrir el historial del coche ${hiEsc(v.n_interno || v.patente)}">
+      <span class="hi-coche-cab">
+        <span class="hi-coche-num">${hiEsc(v.n_interno || "—")}</span>
+        ${v.correctivos_90 ? `<span class="hi-coche-alerta" title="Correctivos en los últimos 90 días">${v.correctivos_90}</span>` : ""}
+      </span>
+      <span class="hi-coche-id"><b>${hiEsc(v.patente || "")}</b>${modelo ? `<span>${hiEsc(modelo)}</span>` : ""}</span>
+      <span class="hi-pulso">${barras}</span>
+      <span class="hi-coche-pie">
+        ${v.registros
+          ? `<span><b>${fmtNum(v.registros)}</b> ${v.registros === 1 ? "registro" : "registros"}</span><span>${hiHace(v.dias_desde)}</span>`
+          : `<span>Sin historial cargado</span>`}
+      </span>
+    </button>`;
+}
 
-  if (!eventos.length) {
-    cont.innerHTML = `<div class="empty"><i class="ti ti-archive-off"></i>Todavía no hay historial cargado para este coche.<br>Arrancá con el papel más viejo.</div>`;
+function hiDibujarGrilla() {
+  const g = $("#hi-grilla");
+  if (!g) return;
+  const lista = hiFiltrados();
+  if (!lista.length) {
+    const msj = hi.q ? `Ningún coche coincide con «${hiEsc(hi.q)}».`
+      : hi.filtro === "correctivos" ? "Ningún coche tuvo correctivos en los últimos 90 días."
+      : hi.filtro === "quietos" ? "Todos los coches con historial tuvieron algún registro en los últimos 90 días."
+      : hi.filtro === "vacios" ? "Todos los coches tienen algo cargado." : "No hay coches activos.";
+    g.innerHTML = `<div class="hi-vacio"><i class="ti ti-bus"></i>${msj}</div>`;
     return;
   }
-  const iconoDe = t => (TIPOS_HIST.find(x => x.v === t) || TIPOS_HIST[4]).i;
-  const labelDe = t => (TIPOS_HIST.find(x => x.v === t) || TIPOS_HIST[4]).l;
+  g.innerHTML = lista.map(hiTarjeta).join("");
+  setTimeout(() => g.classList.remove("entra"), 900);
+}
+
+// ─── La ficha de un coche ───────────────────────────────────────────────
+
+async function hiTraer(pagina = 1) {
+  const p = new URLSearchParams({ pagina });
+  if (hi.tipo) p.set("tipo", hi.tipo);
+  if (hi.anio) p.set("anio", hi.anio);
+  return api(`/api/historia/coche/${hi.coche}?${p.toString()}`);
+}
+
+async function hiAbrirCoche(vid, tile) {
+  hi.coche = vid; hi.tipo = ""; hi.anio = ""; hi.pagina = 1; hi.sesion = 0;
+  hi.scroll = content.scrollTop;
+  if (tile) tile.classList.add("abriendo");
+  const d = await hiTraer(1);
+  if (tile) tile.classList.remove("abriendo");
+  if (!d || d.error) { toast("No se pudo abrir el historial de ese coche", "error"); hi.coche = null; return; }
+  if (tile) {
+    tile.style.viewTransitionName = "hi-coche";
+    tile.querySelector(".hi-coche-num").style.viewTransitionName = "hi-num";
+  }
+  await hiTransicion(() => {
+    hiPintarFicha(d);
+    content.scrollTop = 0;
+    // El cartel de la ficha toma el lugar de la tarjeta: el número viaja
+    if (tile) {
+      document.querySelector(".hi-hero-cartel").style.viewTransitionName = "hi-coche";
+      document.querySelector(".hi-hero-num").style.viewTransitionName = "hi-num";
+    }
+  });
+  document.querySelectorAll(".hi-hero-cartel, .hi-hero-num").forEach(e => e.style.viewTransitionName = "");
+}
+
+async function hiVolver() {
+  hiCerrarCarga(true);
+  const vid = hi.coche;
+  if (hi.flotaVieja || !hi.flota) { hi.flota = await api("/api/historia/flota"); hi.flotaVieja = false; }
+  const hero = document.querySelector(".hi-hero-cartel"), num = document.querySelector(".hi-hero-num");
+  if (hero) hero.style.viewTransitionName = "hi-coche";
+  if (num) num.style.viewTransitionName = "hi-num";
+  await hiTransicion(() => {
+    hiVerFlota(false);
+    content.scrollTop = hi.scroll;
+    const t = document.querySelector(`.hi-coche[data-vid="${vid}"]`);
+    if (t) {
+      t.style.viewTransitionName = "hi-coche";
+      t.querySelector(".hi-coche-num").style.viewTransitionName = "hi-num";
+      const r = t.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) t.scrollIntoView({ block: "center" });
+    }
+  });
+  const t = document.querySelector(`.hi-coche[data-vid="${vid}"]`);
+  if (t) {
+    t.style.viewTransitionName = "";
+    t.querySelector(".hi-coche-num").style.viewTransitionName = "";
+    t.focus({ preventScroll: true });
+  }
+}
+
+function hiResumen(d) {
+  const r = d.resumen, c = d.coche;
+  if (!r.registros) return `Todavía no tiene nada cargado. Empezá por el papel más viejo que tengas.`;
+  const desde = r.primero ? `${HI_MESES[+r.primero.slice(5, 7) - 1]} de ${r.primero.slice(0, 4)}` : "";
+  const dias = r.ultimo ? Math.round((new Date(hiHoyLocal()) - new Date(r.ultimo.slice(0, 10))) / 86400000) : null;
+  let t = `<b>${fmtNum(r.registros)}</b> ${r.registros === 1 ? "registro" : "registros"}${desde ? ` desde ${desde}` : ""}. `;
+  t += `El último fue <b>${hiHace(dias)}</b>`;
+  t += r.km ? `, y el kilometraje más alto anotado es <b>${fmtNum(Math.round(r.km))} km</b>. ` : ". ";
+  if (r.costo) t += `En total se gastaron <b>${gs(r.costo)}</b>.`;
+  return t;
+}
+
+function hiPintarFicha(d) {
+  hi.d = d;
+  hi.items = d.items;
+  hi.pagina = d.pagina;
+  const raiz = $("#hi-raiz");
+  const c = d.coche;
+  const modelo = `${c.marca || ""} ${c.modelo || ""}`.trim();
+  raiz.innerHTML = `
+    <div class="hi-ficha">
+      <div class="hi-nav">
+        <button class="hi-volver" onclick="hiVolver()"><i class="ti ti-arrow-left"></i> Toda la flota</button>
+        ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
+      </div>
+      <section class="hi-hero">
+        <div class="hi-hero-cartel">
+          <span class="hi-hero-num">${hiEsc(c.n_interno || "—")}</span>
+          <span class="hi-hero-id"><b>${hiEsc(c.patente || "")}</b>${modelo ? `<span>${hiEsc(modelo)}</span>` : ""}</span>
+        </div>
+        <p class="hi-hero-texto" id="hi-resumen">${hiResumen(d)}</p>
+      </section>
+      <section class="hi-vida" id="hi-vida"></section>
+      <div class="hi-tipos" id="hi-tipos"></div>
+      <div class="hi-linea" id="hi-linea"></div>
+      <div class="hi-mas" id="hi-mas"></div>
+    </div>`;
+  hiPintarVida();
+  hiPintarTipos();
+  hiPintarLinea(false);
+}
+
+// Mes a mes, desde el primer registro: dónde se concentró el trabajo
+function hiPintarVida() {
+  const cont = $("#hi-vida");
+  const vida = hi.d.vida || [];
+  if (!vida.length) { cont.innerHTML = ""; cont.style.display = "none"; return; }
+  cont.style.display = "";
+  const porMes = Object.fromEntries(vida.map(v => [v.mes, v]));
+  const desde = +vida[0].mes.slice(0, 4), hasta = Math.max(+hiHoyLocal().slice(0, 4), +vida[vida.length - 1].mes.slice(0, 4));
+  const anios = [];
+  for (let a = hasta; a >= desde; a--) anios.push(a);
+  const filas = anios.map(a => {
+    const celdas = Array.from({ length: 12 }, (_, m) => {
+      const k = `${a}-${String(m + 1).padStart(2, "0")}`;
+      const c = porMes[k];
+      const n = c ? hiTotal(c) : 0;
+      if (!n) return `<span class="hi-celda"></span>`;
+      const g = hiDominante(c);
+      const op = n >= 3 ? 1 : n === 2 ? .72 : .45;
+      const det = ["preventivo", "correctivo", "neumaticos", "otros"].filter(x => c[x]).map(x => `${c[x]} ${MT_NOMBRE[x].toLowerCase()}`).join(", ");
+      return `<button class="hi-celda llena" style="--c:${hiColor(g)};--o:${op}" title="${HI_MESES[m]} de ${a}: ${det}"
+                      onclick="hiIrAnio('${a}', '${k}')"></button>`;
+    }).join("");
+    const total = vida.filter(v => v.mes.startsWith(a)).reduce((s, v) => s + hiTotal(v), 0);
+    return `<button class="hi-vida-anio ${hi.anio === String(a) ? "on" : ""}" onclick="hiIrAnio('${a}')"
+                    ${total ? "" : "disabled"} title="${total ? `Ver solo ${a}` : `Nada en ${a}`}">${a}</button>${celdas}`;
+  }).join("");
   cont.innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th class="num">Km</th><th class="num">Costo</th><th>Taller</th><th class="td-action"></th></tr></thead>
-        <tbody>
-          ${eventos.map(e => `
-            <tr class="${histCargaSesion.includes(e.id) && e.origen === 'historial_eventos' ? 'hc-nuevo' : ''}">
-              <td style="font-size:12.5px;white-space:nowrap">${e.fecha}</td>
-              <td><span class="badge"><i class="ti ti-${iconoDe(e.tipo)}" style="font-size:11px"></i> ${labelDe(e.tipo)}</span>${e.categoria ? `<br><span style="font-size:11px;color:var(--muted)">${e.categoria}</span>` : ""}</td>
-              <td style="font-size:13px">${e.descripcion}</td>
-              <td class="num" style="font-size:12.5px">${e.km ? fmtNum(e.km) : "—"}</td>
-              <td class="num" style="font-size:12.5px">${e.costo ? gsSmall(e.costo) : "—"}</td>
-              <td style="font-size:12px;color:var(--muted)">${e.taller || "—"}</td>
-              <td class="td-action">
-                <button class="icon-btn" title="Borrar (cargado por error)" onclick="hcBorrar('${e.origen}', ${e.id})"><i class="ti ti-trash"></i></button>
-              </td>
-            </tr>`).join("")}
-        </tbody>
-      </table>
+    <div class="hi-vida-cab"><span>Mes a mes</span><small>Tocá un año o un mes para ver solo ese año</small></div>
+    <div class="hi-vida-grilla">
+      <span></span>${"EFMAMJJASOND".split("").map(l => `<span class="hi-vida-m">${l}</span>`).join("")}
+      ${filas}
     </div>`;
 }
 
-async function hcBorrar(origen, id) {
-  if (!confirm("¿Borrar este evento del historial?")) return;
+function hiPintarTipos() {
+  const pt = hi.d.por_tipo || {};
+  const total = (pt.preventivo || 0) + (pt.correctivo || 0) + (pt.neumaticos || 0) + (pt.otros || 0);
+  const ops = [["", "Todo", total, "var(--text)"],
+    ...["preventivo", "correctivo", "neumaticos", "otros"].map(g => [g, MT_NOMBRE[g], pt[g] || 0, hiColor(g)])];
+  $("#hi-tipos").innerHTML = `
+    <span class="hi-tipos-ind" id="hi-tipos-ind"></span>
+    ${ops.map(([k, l, n, col]) => `
+      <button class="hi-tipo ${hi.tipo === k ? "on" : ""}" data-t="${k}" onclick="hiFiltrarTipo('${k}')" ${n || !k ? "" : "disabled"}>
+        ${k ? `<i style="background:${col}"></i>` : ""}${l}<span>${n}</span>
+      </button>`).join("")}
+    ${hi.anio ? `<button class="hi-anio-chip" onclick="hiIrAnio('')" title="Ver todos los años">Solo ${hi.anio} <i class="ti ti-x"></i></button>` : ""}`;
+  requestAnimationFrame(hiMoverIndicador);
+}
+
+function hiMoverIndicador() {
+  const ind = $("#hi-tipos-ind"), act = document.querySelector(".hi-tipo.on");
+  if (!ind || !act) return;
+  ind.style.transform = `translate(${act.offsetLeft}px, ${act.offsetTop}px)`;
+  ind.style.width = act.offsetWidth + "px";
+  ind.style.height = act.offsetHeight + "px";
+  ind.style.background = act.dataset.t ? hiColor(act.dataset.t) : "var(--text)";
+}
+
+async function hiFiltrarTipo(t) {
+  hi.tipo = t;
+  document.querySelectorAll(".hi-tipo").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  hiMoverIndicador();
+  await hiRecargarLinea();
+}
+
+async function hiIrAnio(a, mes = "") {
+  hi.anio = hi.anio === a && !mes ? "" : a;
+  await hiRecargarLinea();
+  hiPintarVida();
+  hiPintarTipos();
+  const destino = mes ? document.querySelector(`.hi-mes[data-mes="${mes}"]`) : $("#hi-tipos");
+  if (destino) destino.scrollIntoView({ behavior: _uiSinMovimiento ? "auto" : "smooth", block: "start" });
+}
+
+async function hiRecargarLinea() {
+  const linea = $("#hi-linea");
+  linea.classList.add("cambiando");
+  const d = await hiTraer(1);
+  if (!d || d.error) return;
+  hi.d = d; hi.items = d.items; hi.pagina = d.pagina;
+  linea.classList.remove("cambiando");
+  hiPintarLinea(false);
+}
+
+// Cuántos registros tiene un año, respetando el tipo elegido
+function hiCuentaAnio(a) {
+  return (hi.d.vida || []).filter(v => v.mes.startsWith(a))
+    .reduce((s, v) => s + (hi.tipo ? (v[hi.tipo] || 0) : hiTotal(v)), 0);
+}
+
+function hiParada(e, i) {
+  const g = e.grupo || "otros";
+  const f = String(e.fecha || "").slice(0, 10);
+  const titulo = e.descripcion || e.categoria || HI_TIPO_NOMBRE[e.tipo] || "Registro";
+  const sub = [e.categoria && e.categoria !== titulo ? e.categoria : "", e.km ? `a los ${fmtNum(Math.round(e.km))} km` : ""].filter(Boolean).join(", ");
+  const detalles = [
+    ["Fecha", `${+f.slice(8)} de ${HI_MESES[+f.slice(5, 7) - 1]} de ${f.slice(0, 4)}`],
+    ["Tipo", HI_TIPO_NOMBRE[e.tipo] || MT_NOMBRE[g]],
+    e.categoria ? ["Categoría", hiEsc(e.categoria)] : null,
+    e.km ? ["Kilometraje", `${fmtNum(Math.round(e.km))} km`] : null,
+    e.costo ? ["Costo", gs(e.costo)] : null,
+    e.taller ? [e.origen === "ot" ? "Técnico" : "Taller", hiEsc(e.taller)] : null,
+    ["De dónde viene", MT_ORIGEN[e.origen] || e.origen],
+  ].filter(Boolean);
+  const dondeCorregir = { plan: "Plan preventivo", ot: "Órdenes de trabajo", correctivos: "Correctivos" }[e.origen];
+  return `
+    <article class="hi-parada" data-k="${e.origen}-${e.id}" style="--c:${hiColor(g)};--i:${Math.min(i, 12)}">
+      <span class="hi-punto"></span>
+      <button class="hi-parada-cab" onclick="hiAbrirParada(this)" aria-expanded="false">
+        <span class="hi-dia">${+f.slice(8) || "—"}</span>
+        <span class="hi-txt"><b>${hiEsc(titulo)}</b>${sub ? `<small>${hiEsc(sub)}</small>` : ""}</span>
+        <span class="hi-tag">${HI_TIPO_NOMBRE[e.tipo] || MT_NOMBRE[g]}</span>
+        <i class="ti ti-chevron-down hi-abre"></i>
+      </button>
+      <div class="hi-parada-mas"><div><div class="hi-parada-dentro">
+        <dl class="hi-datos">${detalles.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
+        ${e.descripcion && e.descripcion.length > 70 ? `<p class="hi-desc-larga">${hiEsc(e.descripcion)}</p>` : ""}
+        <div class="hi-acciones">
+          ${e.borrable && hi.d.puede_cargar
+            ? `<button class="btn btn-ghost" onclick="hiEditar('${e.origen}', ${e.id})"><i class="ti ti-pencil"></i> Corregir</button>
+               <button class="btn btn-ghost hi-borrar" onclick="hiBorrar('${e.origen}', ${e.id}, this)"><i class="ti ti-trash"></i> Borrar</button>`
+            : dondeCorregir && !e.borrable ? `<span class="hi-nota"><i class="ti ti-info-circle"></i> Se corrige desde ${dondeCorregir}.</span>` : ""}
+        </div>
+      </div></div></div>
+    </article>`;
+}
+
+function hiPintarLinea(agregar) {
+  const linea = $("#hi-linea");
+  const items = agregar ? hi.items.slice(-hi.d.items.length) : hi.items;
+  if (!agregar) { linea.innerHTML = ""; hi.ultimoMes = ""; }
+  if (!hi.items.length) {
+    const sinNada = !(hi.d.resumen || {}).registros;
+    linea.innerHTML = `<div class="hi-vacio">${sinNada
+      ? `<i class="ti ti-file-plus"></i>Este coche todavía no tiene historial.${hi.d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar el primer papel</button>` : ""}`
+      : `<i class="ti ti-filter-off"></i>No hay registros de ese tipo${hi.anio ? ` en ${hi.anio}` : ""}.`}</div>`;
+    $("#hi-mas").innerHTML = "";
+    return;
+  }
+  let html = "";
+  items.forEach((e, i) => {
+    const mes = String(e.fecha || "").slice(0, 7);
+    const anioAnt = hi.ultimoMes.slice(0, 4);
+    if (mes.slice(0, 4) !== anioAnt) {
+      const n = hiCuentaAnio(mes.slice(0, 4));
+      html += `<div class="hi-terminal"><span class="hi-terminal-anio">${mes.slice(0, 4)}</span><span class="hi-terminal-n">${n} ${n === 1 ? "registro" : "registros"}</span></div>`;
+    }
+    if (mes !== hi.ultimoMes) html += `<div class="hi-mes" data-mes="${mes}">${HI_MESES[+mes.slice(5) - 1] || "Sin fecha"}</div>`;
+    hi.ultimoMes = mes;
+    html += hiParada(e, i);
+  });
+  linea.insertAdjacentHTML("beforeend", html);
+  const quedan = hi.d.total - hi.items.length;
+  $("#hi-mas").innerHTML = quedan > 0
+    ? `<button class="hi-mas-btn" onclick="hiVerMas(this)">Ver ${Math.min(quedan, 30)} más <span>quedan ${quedan}</span></button>`
+    : hi.items.length > 6 ? `<div class="hi-fin"><span></span>Acá empieza la historia de este coche</div>` : "";
+}
+
+async function hiVerMas(btn) {
+  btn.disabled = true;
+  btn.classList.add("cargando");
+  const d = await hiTraer(hi.pagina + 1);
+  if (!d || d.error) { btn.disabled = false; return; }
+  hi.d = d; hi.pagina = d.pagina;
+  hi.items = hi.items.concat(d.items);
+  hiPintarLinea(true);
+}
+
+function hiAbrirParada(btn) {
+  const p = btn.closest(".hi-parada");
+  const abierta = !p.classList.contains("abierta");
+  p.classList.toggle("abierta", abierta);
+  btn.setAttribute("aria-expanded", abierta);
+}
+
+async function hiBorrar(origen, id, btn) {
+  if (!confirm("¿Borrar este registro del historial? Usalo solo si se cargó por error.")) return;
   const r = await api(`/api/historial_carga/${origen}/${id}`, { method: "DELETE" });
-  if (r.ok) { toast("Evento borrado"); hcCargarLista(); }
-  else toast(r.msg || "Error", "error");
+  if (!r.ok) { toast(r.msg || "No se pudo borrar", "error"); return; }
+  const p = btn.closest(".hi-parada");
+  p.classList.add("sale");
+  hi.flotaVieja = true;
+  toast("Registro borrado", "success");
+  setTimeout(() => hiRefrescar(), _uiSinMovimiento ? 0 : 320);
+}
+
+// Vuelve a traer la ficha manteniendo los filtros; si se indica, marca un registro
+async function hiRefrescar(marcar = null, fecha = "") {
+  let d = await hiTraer(1);
+  if (!d || d.error) return;
+  // Si lo recién cargado no entra en lo que se ve (un papel viejo), se salta a su año
+  if (marcar && !d.items.some(e => `${e.origen}-${e.id}` === marcar) && fecha) {
+    hi.anio = fecha.slice(0, 4);
+    d = await hiTraer(1);
+  }
+  hi.d = d; hi.items = d.items; hi.pagina = d.pagina;
+  const res = $("#hi-resumen");
+  if (res) res.innerHTML = hiResumen(d);
+  hiPintarVida();
+  hiPintarTipos();
+  hiPintarLinea(false);
+  if (marcar) {
+    const p = document.querySelector(`.hi-parada[data-k="${marcar}"]`);
+    if (p) {
+      p.classList.add("recien");
+      p.scrollIntoView({ behavior: _uiSinMovimiento ? "auto" : "smooth", block: "center" });
+      setTimeout(() => p.classList.remove("recien"), 2400);
+    }
+  }
+}
+
+// ─── Cargar del papel / corregir ────────────────────────────────────────
+
+function hiAbrirCarga(evento = null) {
+  hiCerrarCarga(true);
+  hi.editando = evento;
+  const c = hi.d.coche;
+  const v = evento || {};
+  const tipo = evento ? evento.tipo : (window._hiUltimoTipo || "preventivo");
+  const fecha = evento ? String(evento.fecha).slice(0, 10) : (window._hiUltimaFecha || hiHoyLocal());
+  const fondo = document.createElement("div");
+  fondo.className = "hi-cajon-fondo";
+  fondo.onclick = () => hiCerrarCarga();
+  const caj = document.createElement("aside");
+  caj.className = "hi-cajon";
+  caj.setAttribute("role", "dialog");
+  caj.setAttribute("aria-label", evento ? "Corregir registro" : "Cargar del papel");
+  const esCorr = evento && evento.origen === "correctivos";
+  caj.innerHTML = `
+    <header class="hi-cajon-cab">
+      <div>
+        <h2>${evento ? "Corregir registro" : "Cargar del papel"}</h2>
+        <p>${evento ? `Coche ${hiEsc(c.n_interno || c.patente)}.`
+          : `Coche ${hiEsc(c.n_interno || c.patente)}. Copiá cada anotación tal cual; la fecha y el tipo quedan para la siguiente.`}</p>
+      </div>
+      <button class="firma-x" onclick="hiCerrarCarga()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+    </header>
+    <div class="hi-cajon-cuerpo">
+      <label class="hi-campo"><span>Fecha</span><input type="date" id="hi-f-fecha" value="${fecha}" max="${hiHoyLocal()}"></label>
+      <div class="hi-campo"><span>Tipo</span>
+        <div class="hi-tipos-sel">
+          ${TIPOS_HIST.map(t => {
+            const bloqueado = evento && (esCorr ? t.v !== "correctivo" : t.v === "correctivo");
+            const g = t.v === "servicio" || t.v === "otro" ? "otros" : t.v;
+            return `<button type="button" class="hi-tsel ${tipo === t.v ? "on" : ""}" data-t="${t.v}" style="--c:${hiColor(g)}"
+                      ${bloqueado ? "disabled" : ""} onclick="hiElegirTipo('${t.v}')"><i class="ti ti-${t.i}"></i>${t.l}</button>`;
+          }).join("")}
+        </div>
+        ${!evento ? `<small class="hi-ayuda" id="hi-ayuda-tipo"></small>` : ""}
+      </div>
+      <label class="hi-campo"><span>Categoría <em>opcional</em></span>
+        <input id="hi-f-cat" list="hi-cat-lista" value="${hiEsc(v.categoria || "")}" placeholder="ej: Frenos, Cambio de aceite">
+        <datalist id="hi-cat-lista">${MT_CATEGORIAS.map(x => `<option value="${x}">`).join("")}</datalist>
+      </label>
+      <label class="hi-campo"><span>Qué se hizo</span>
+        <textarea id="hi-f-desc" rows="3" placeholder="Lo que dice el papel">${hiEsc(v.descripcion || "")}</textarea>
+      </label>
+      <div class="hi-campo-par">
+        <label class="hi-campo"><span>Km <em>si figura</em></span><input id="hi-f-km" inputmode="numeric" value="${v.km ? Math.round(v.km) : ""}" placeholder="ej: 470500"></label>
+        <label class="hi-campo"><span>Costo Gs. <em>si figura</em></span><input id="hi-f-costo" inputmode="numeric" value="${v.costo ? Math.round(v.costo) : ""}" placeholder="ej: 350000"></label>
+      </div>
+      <label class="hi-campo"><span>Taller o mecánico <em>si figura</em></span><input id="hi-f-taller" value="${hiEsc(v.taller || "")}"></label>
+    </div>
+    <footer class="hi-cajon-pie">
+      <span class="hi-sesion" id="hi-sesion">${!evento && hi.sesion ? `${hi.sesion} cargado${hi.sesion === 1 ? "" : "s"} ahora` : ""}</span>
+      <button class="btn btn-primary" id="hi-f-guardar" onclick="hiGuardar()"><i class="ti ti-check"></i> ${evento ? "Guardar cambios" : "Guardar"}</button>
+    </footer>`;
+  document.body.append(fondo, caj);
+  hiElegirTipo(tipo, true);
+  caj.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.preventDefault(); hiCerrarCarga(); }
+    else if (e.key === "Enter" && !e.shiftKey && e.target.tagName !== "BUTTON") { e.preventDefault(); hiGuardar(); }
+  });
+  requestAnimationFrame(() => { fondo.classList.add("abierto"); caj.classList.add("abierto"); });
+  setTimeout(() => $("#hi-f-desc")?.focus(), 260);
+}
+
+function hiElegirTipo(t, inicial = false) {
+  document.querySelectorAll(".hi-tsel").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  const ay = $("#hi-ayuda-tipo");
+  if (ay) ay.textContent = t === "correctivo"
+    ? "Va a Correctivos como una falla ya resuelta: cuenta en los reportes de fallas."
+    : "Queda en el historial del coche sin contar como falla.";
+  if (!inicial) $("#hi-f-desc")?.focus();
+}
+
+function hiCerrarCarga(inmediato = false) {
+  const caj = document.querySelector(".hi-cajon"), fondo = document.querySelector(".hi-cajon-fondo");
+  if (!caj) return;
+  hi.editando = null;
+  if (inmediato || _uiSinMovimiento) { caj.remove(); fondo?.remove(); return; }
+  caj.classList.remove("abierto"); fondo?.classList.remove("abierto");
+  setTimeout(() => { caj.remove(); fondo?.remove(); }, 300);
+}
+
+function hiEditar(origen, id) {
+  const e = hi.items.find(x => x.origen === origen && x.id === id);
+  if (e) hiAbrirCarga(e);
+}
+
+async function hiGuardar() {
+  const btn = $("#hi-f-guardar");
+  if (!btn || btn.disabled) return;
+  const fecha = $("#hi-f-fecha").value;
+  const desc = $("#hi-f-desc").value.trim();
+  const tipo = document.querySelector(".hi-tsel.on")?.dataset.t || "otro";
+  if (!fecha) { toast("Poné la fecha del papel", "error"); $("#hi-f-fecha").focus(); return; }
+  if (fecha > hiHoyLocal()) { toast("La fecha no puede ser posterior a hoy", "error"); $("#hi-f-fecha").focus(); return; }
+  if (!desc) { toast("Escribí qué se hizo", "error"); $("#hi-f-desc").focus(); return; }
+  const num = id => parseFloat(($(id).value || "").replace(/\./g, "").replace(/,/g, ".")) || 0;
+  const datos = { fecha, tipo, descripcion: desc, categoria: $("#hi-f-cat").value.trim(),
+                  km: num("#hi-f-km"), costo: num("#hi-f-costo"), taller: $("#hi-f-taller").value.trim() };
+  btn.disabled = true;
+  const ed = hi.editando;
+  const r = ed
+    ? await api(`/api/historial_carga/${ed.origen}/${ed.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos) })
+    : await api("/api/historial_carga", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vehiculo_id: hi.coche, ...datos }) });
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  hi.flotaVieja = true;
+  if (ed) {
+    toast("Registro corregido", "success");
+    hiCerrarCarga();
+    await hiRefrescar(`${ed.origen}-${ed.id}`, fecha);
+    return;
+  }
+  hi.sesion++;
+  window._hiUltimaFecha = fecha;
+  window._hiUltimoTipo = tipo;
+  toast("Guardado en el historial", "success");
+  // Queda abierto para el próximo papel: solo se limpia lo que cambia
+  ["#hi-f-desc", "#hi-f-km", "#hi-f-costo", "#hi-f-taller"].forEach(id => $(id).value = "");
+  $("#hi-sesion").textContent = `${hi.sesion} cargado${hi.sesion === 1 ? "" : "s"} ahora`;
+  $("#hi-f-desc").focus();
+  await hiRefrescar(`${r.origen}-${r.id}`, fecha);
 }
 
 
@@ -10368,7 +10824,7 @@ function flapTitulo(h1) {
 })();
 
 // ─── ¿A dónde vamos? — ir a cualquier coche o sección escribiendo ───
-const DEST_COCHE_SECCIONES = [["mantenimientos", "Historia"], ["servicios", "Servicios"], ["costos", "Costos"],
+const DEST_COCHE_SECCIONES = [["historial_carga", "Historial"], ["mantenimientos", "Mantenimientos"], ["servicios", "Servicios"], ["costos", "Costos"],
                               ["kpis", "KPIs"], ["mantenimiento", "Preventivo"]];
 let _dest = { sel: 0, items: [], coches: null, cochesAt: 0 };
 
@@ -10553,9 +11009,11 @@ function destIr(it, secCoche = null) {
   }
   const v = it.v;
   setCoche(v);
-  let sec = secCoche || (puedeVerSeccion("mantenimientos") ? "mantenimientos" : "servicios");
+  let sec = secCoche || (puedeVerSeccion("historial_carga") ? "historial_carga"
+    : puedeVerSeccion("mantenimientos") ? "mantenimientos" : "servicios");
   if (!puedeVerSeccion(sec)) sec = "servicios";
   if (sec === "mantenimientos") window._mtAbrirCoche = v.id;
+  if (sec === "historial_carga") window._hiAbrirCoche = v.id;
   destNavegar(sec);
 }
 

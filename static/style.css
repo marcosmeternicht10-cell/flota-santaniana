@@ -3079,3 +3079,340 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(30,90,150
   font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
   color: var(--muted); background: var(--surface2); border-bottom: 1px solid var(--border);
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   HISTORIAL POR COCHE — la vida de cada coche como un recorrido
+   ═══════════════════════════════════════════════════════════════════
+   La grilla de la flota es sobria: número, patente y el último año en
+   barras. El gesto fuerte está en la ficha: la historia es una línea de
+   recorrido como la del menú (cada registro una parada, cada año una
+   terminal) y el número del coche viaja desde la tarjeta hasta el cartel. */
+
+/* ── Barra de búsqueda y filtros ── */
+.hi-barra { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.hi-buscar {
+  display: flex; align-items: center; gap: 10px; padding: 0 14px; cursor: text;
+  border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface);
+  transition: border-color .15s, box-shadow .15s;
+}
+.hi-buscar:focus-within { border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.hi-buscar .ti { color: var(--light); font-size: 18px; }
+.hi-buscar input, .hi-buscar input:focus {
+  flex: 1; border: 0; outline: 0; box-shadow: none; background: transparent; color: var(--text);
+  font: inherit; font-size: 15px; padding: 12px 0;
+}
+.hi-filtros { display: flex; flex-wrap: wrap; gap: 6px; }
+.hi-filtro {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 13px; font-weight: 600; transition: background .15s, color .15s, border-color .15s;
+}
+.hi-filtro span { font-size: 11.5px; font-variant-numeric: tabular-nums; opacity: .75; }
+.hi-filtro:hover { border-color: var(--border-strong); color: var(--text); }
+.hi-filtro.on { background: var(--sb-bg); border-color: var(--sb-bg); color: #fff; }
+.hi-leyenda { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 4px 2px 14px; font-size: 12px; color: var(--muted); }
+.hi-ley { display: inline-flex; align-items: center; gap: 6px; }
+.hi-ley i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+/* ── La grilla de coches ── */
+.hi-grilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); gap: 12px; }
+.hi-coche {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 15px 12px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s, background .15s, transform .15s var(--ui-suave);
+}
+.hi-coche:hover { border-color: var(--border-strong); background: var(--surface2); }
+.hi-coche:active { transform: scale(.985); }
+.hi-coche:focus-visible { outline: 2px solid var(--brand-blue-light); outline-offset: 2px; }
+.hi-coche.sin { background: transparent; border-style: dashed; }
+.hi-coche.sin .hi-coche-num { color: var(--light); }
+.hi-coche.abriendo::after {               /* mientras trae la ficha */
+  content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: 45%;
+  background: linear-gradient(90deg, var(--brand-blue), var(--brand-red));
+  animation: hiTrae .9s ease-in-out infinite;
+}
+@keyframes hiTrae { from { transform: translateX(-100%); } to { transform: translateX(240%); } }
+.hi-coche-cab { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.hi-coche-num {
+  font-family: var(--display); font-size: 32px; font-weight: 700; line-height: .95;
+  font-variant-numeric: tabular-nums; transition: color .15s;
+}
+.hi-coche:hover .hi-coche-num { color: var(--brand-blue); }
+.hi-coche-alerta {
+  min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; display: grid; place-items: center;
+  background: var(--danger); color: #fff; font-size: 12px; font-weight: 700;
+}
+.hi-coche-id { display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; color: var(--muted); }
+.hi-coche-id b { font-size: 13px; font-weight: 600; color: var(--text); }
+.hi-pulso { display: flex; align-items: flex-end; gap: 3px; height: 30px; }
+.hi-barra-mes { flex: 1; min-height: 3px; border-radius: 2px 2px 1px 1px; }
+.hi-barra-mes.vacia { height: 3px; background: var(--surface3); }
+.hi-coche-pie {
+  display: flex; justify-content: space-between; gap: 8px; padding-top: 8px;
+  border-top: 1px solid var(--surface3); font-size: 12px; color: var(--muted);
+}
+.hi-coche-pie b { color: var(--text); font-weight: 600; }
+.hi-coche-pie { flex-wrap: wrap; row-gap: 2px; }
+.hi-coche-pie span { white-space: nowrap; }
+.hi-grilla.entra .hi-coche { animation: hiEntra .42s var(--ui-suave) backwards; animation-delay: calc(var(--i) * 18ms); }
+@keyframes hiEntra { from { opacity: 0; transform: translateY(6px); } }
+.hi-vacio {
+  grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 44px 16px; text-align: center; color: var(--muted); font-size: 14px;
+}
+.hi-vacio > .ti { font-size: 30px; color: var(--light); }
+
+/* ── Ficha: navegación y cartel ── */
+.hi-nav { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.hi-volver {
+  display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px 8px 8px; border-radius: 10px;
+  border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.hi-volver .ti { font-size: 18px; transition: transform .2s var(--ui-suave); }
+.hi-volver:hover { background: var(--surface3); color: var(--text); }
+.hi-volver:hover .ti { transform: translateX(-3px); }
+.hi-hero { margin-bottom: 18px; }
+.hi-hero-cartel {
+  position: relative; overflow: hidden; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 24px;
+  padding: 22px 28px 26px; border-radius: 16px; background: var(--sb-bg); color: #fff;
+}
+.hi-hero-cartel::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 5px;
+  background: linear-gradient(90deg, var(--brand-red), var(--brand-blue));
+}
+.hi-hero-num {
+  font-family: var(--display); font-size: 88px; font-weight: 700; line-height: .82;
+  letter-spacing: -.5px; font-variant-numeric: tabular-nums;
+}
+.hi-hero-id { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
+.hi-hero-id b { font-family: var(--display); font-size: 24px; font-weight: 600; letter-spacing: .3px; }
+.hi-hero-id span { font-size: 13.5px; color: var(--sb-text); }
+.hi-hero-texto { margin: 14px 4px 0; max-width: 72ch; font-size: 15px; line-height: 1.6; color: var(--text); }
+.hi-hero-texto b { font-family: var(--display); font-size: 18px; font-weight: 700; }
+
+/* ── Mes a mes ── */
+.hi-vida { margin-bottom: 18px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.hi-vida-cab { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
+.hi-vida-cab span { font-weight: 600; }
+.hi-vida-cab small { font-size: 12px; color: var(--muted); }
+.hi-vida-grilla {
+  display: grid; grid-template-columns: 48px repeat(12, minmax(0, 1fr)); gap: 5px; align-items: center;
+  max-width: 640px; max-height: 260px; overflow-y: auto;
+}
+.hi-vida-m { font-size: 10.5px; color: var(--light); text-align: center; }
+.hi-vida-anio {
+  padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  font-family: var(--display); font-size: 15px; font-weight: 600; color: var(--muted); transition: color .15s;
+}
+.hi-vida-anio:hover:not(:disabled) { color: var(--text); }
+.hi-vida-anio.on { color: var(--brand-blue); }
+.hi-vida-anio:disabled { color: var(--lighter); cursor: default; }
+.hi-celda { display: block; height: 16px; padding: 0; border: 0; border-radius: 4px; background: var(--surface3); }
+.hi-celda.llena {
+  background: var(--c); opacity: var(--o); cursor: pointer;
+  transition: transform .18s var(--ui-resorte), opacity .15s;
+}
+.hi-celda.llena:hover, .hi-celda.llena:focus-visible { transform: scale(1.25); opacity: 1; outline: none; }
+
+/* ── Filtro por tipo: la pastilla se desliza a la opción elegida ── */
+.hi-tipos {
+  position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  width: fit-content; max-width: 100%; margin-bottom: 22px; padding: 4px;
+  border-radius: 12px; background: var(--surface3);
+}
+.hi-tipos-ind {
+  position: absolute; z-index: 0; left: 0; top: 0; border-radius: 9px; background: var(--text);
+  transition: transform .38s var(--ui-resorte), width .38s var(--ui-resorte), background-color .3s;
+}
+.hi-tipo {
+  position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 13px; border: 0; border-radius: 9px; background: none; cursor: pointer;
+  font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); transition: color .2s;
+}
+.hi-tipo i { width: 8px; height: 8px; border-radius: 50%; transition: background .2s; }
+.hi-tipo span { font-size: 11.5px; opacity: .75; font-variant-numeric: tabular-nums; }
+.hi-tipo:hover:not(:disabled):not(.on) { color: var(--text); }
+.hi-tipo.on { color: #fff; }
+.hi-tipo.on i { background: #fff !important; }
+.hi-tipo:disabled { opacity: .4; cursor: default; }
+.hi-anio-chip {
+  position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 6px; margin-left: 4px;
+  padding: 6px 10px; border-radius: 8px; border: 1px solid var(--info-bd); background: var(--info-bg);
+  color: var(--brand-blue); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.hi-anio-chip:hover { border-color: var(--brand-blue); }
+
+/* ── La línea de recorrido ── */
+.hi-linea { position: relative; padding-left: 46px; transition: opacity .2s; }
+.hi-linea::before {                       /* la ruta, que se dibuja hacia abajo */
+  content: ""; position: absolute; left: 19px; top: 10px; bottom: 0; width: 3px; border-radius: 2px;
+  background: var(--lighter); transform-origin: top; animation: hiRuta .7s var(--ui-suave);
+}
+@keyframes hiRuta { from { transform: scaleY(0); } }
+.hi-linea.cambiando { opacity: .45; }
+.hi-linea:has(> .hi-vacio) { padding-left: 0; }
+.hi-linea:has(> .hi-vacio)::before { display: none; }
+.hi-terminal { position: relative; display: flex; align-items: baseline; gap: 12px; margin: 28px 0 4px; }
+.hi-terminal:first-child { margin-top: 2px; }
+.hi-terminal::before {                    /* la terminal: cada año */
+  content: ""; position: absolute; left: -35px; top: 50%; width: 18px; height: 18px; border-radius: 5px;
+  transform: translateY(-50%); background: var(--sb-bg); box-shadow: 0 0 0 4px var(--bg);
+}
+.hi-terminal-anio { font-family: var(--display); font-size: 30px; font-weight: 700; line-height: 1; }
+.hi-terminal-n { font-size: 12.5px; color: var(--muted); }
+.hi-mes { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); text-transform: capitalize; scroll-margin-top: 12px; }
+.hi-parada {
+  position: relative; margin-bottom: 8px;
+  animation: hiLlega .45s var(--ui-suave) backwards; animation-delay: calc(var(--i) * 32ms);
+}
+@keyframes hiLlega { from { opacity: 0; transform: translateX(-10px); } }
+.hi-punto {                               /* la parada */
+  position: absolute; left: -33px; top: 19px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--surface); border: 3px solid var(--c); box-shadow: 0 0 0 3px var(--bg);
+  transition: transform .25s var(--ui-resorte), background .2s;
+}
+.hi-punto::after {
+  content: ""; position: absolute; inset: -8px; border-radius: 50%; border: 2px solid var(--c); opacity: 0;
+}
+.hi-parada:hover .hi-punto, .hi-parada.abierta .hi-punto { transform: scale(1.2); background: var(--c); }
+.hi-parada-cab {
+  width: 100%; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto 16px; gap: 12px; align-items: center;
+  padding: 11px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+  color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s, box-shadow .2s, border-radius .25s;
+}
+.hi-parada-cab:hover { border-color: var(--border-strong); }
+.hi-parada-cab:focus-visible { outline: 2px solid var(--brand-blue-light); outline-offset: 2px; }
+.hi-parada.abierta .hi-parada-cab {
+  border-color: var(--c); border-bottom-left-radius: 0; border-bottom-right-radius: 0; box-shadow: inset 3px 0 0 var(--c);
+}
+.hi-dia {
+  font-family: var(--display); font-size: 24px; font-weight: 700; line-height: 1; text-align: center;
+  color: var(--c); font-variant-numeric: tabular-nums;
+}
+.hi-txt { min-width: 0; }
+.hi-txt b {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 14px; font-weight: 600; line-height: 1.35;
+}
+.hi-parada.abierta .hi-txt b { -webkit-line-clamp: unset; }
+.hi-txt small { display: block; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
+.hi-tag {
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap; font-size: 11.5px; font-weight: 600;
+  color: var(--c); background: color-mix(in srgb, var(--c) 10%, transparent);
+}
+.hi-abre { color: var(--light); transition: transform .3s var(--ui-suave), color .2s; }
+.hi-parada.abierta .hi-abre { transform: rotate(180deg); color: var(--c); }
+.hi-parada-mas { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .32s var(--ui-suave); }
+.hi-parada-mas > div { min-height: 0; overflow: hidden; }
+.hi-parada.abierta .hi-parada-mas { grid-template-rows: 1fr; }
+.hi-parada-dentro {
+  padding: 12px 16px 14px 60px; border: 1px solid var(--c); border-top: 0;
+  border-radius: 0 0 12px 12px; background: var(--surface);
+}
+.hi-datos { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 18px; margin: 0; }
+.hi-datos dt { font-size: 11.5px; color: var(--muted); }
+.hi-datos dd { margin: 2px 0 0; font-size: 13.5px; font-weight: 600; }
+.hi-desc-larga { margin: 12px 0 0; max-width: 72ch; font-size: 13.5px; line-height: 1.55; }
+.hi-acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.hi-acciones:empty { display: none; }
+.hi-borrar:hover { color: var(--danger) !important; border-color: var(--danger-bd) !important; }
+.hi-nota { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.hi-parada.recien .hi-parada-cab { animation: hiRecien 2.2s ease-out; }
+@keyframes hiRecien { 0%, 35% { border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, var(--surface)); } }
+.hi-parada.recien .hi-punto { background: var(--c); }
+.hi-parada.recien .hi-punto::after { animation: busLlega .8s ease-out 2; }
+.hi-parada.sale { animation: hiSale .3s ease-in forwards; }
+@keyframes hiSale { to { opacity: 0; transform: translateX(18px); } }
+.hi-mas { padding-left: 46px; margin-top: 8px; }
+.hi-mas-btn {
+  width: 100%; display: flex; justify-content: center; align-items: baseline; gap: 10px; padding: 12px 16px;
+  border: 1px dashed var(--border-strong); border-radius: 12px; background: none; cursor: pointer;
+  font: inherit; font-weight: 600; color: var(--brand-blue); transition: background .15s, border-color .15s;
+}
+.hi-mas-btn span { font-size: 12.5px; font-weight: 500; color: var(--muted); }
+.hi-mas-btn:hover { background: var(--surface); border-color: var(--brand-blue); }
+.hi-mas-btn.cargando { opacity: .55; }
+.hi-fin { position: relative; display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--muted); }
+.hi-fin span {                            /* fin del recorrido */
+  margin-left: -35px; width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+  border: 3px solid var(--sb-bg); background: var(--bg);
+}
+
+/* ── Cajón para cargar del papel ── */
+.hi-cajon-fondo { position: fixed; inset: 0; z-index: 1400; background: rgba(19,19,18,.22); opacity: 0; transition: opacity .28s; }
+.hi-cajon-fondo.abierto { opacity: 1; }
+.hi-cajon {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 1401; width: min(440px, 100%);
+  display: flex; flex-direction: column; background: var(--surface); box-shadow: -20px 0 60px rgba(0,0,0,.18);
+  transform: translateX(104%); transition: transform .34s var(--ui-suave);
+}
+.hi-cajon.abierto { transform: none; }
+.hi-cajon::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: linear-gradient(var(--brand-red), var(--brand-blue));
+}
+.hi-cajon-cab { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 22px 24px 14px; border-bottom: 1px solid var(--border); }
+.hi-cajon-cab h2 { margin: 0 0 4px; font-family: var(--display); font-size: 26px; font-weight: 700; line-height: 1.1; }
+.hi-cajon-cab p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.hi-cajon-cuerpo { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; padding: 18px 24px; }
+.hi-campo { display: flex; flex-direction: column; gap: 6px; }
+.hi-campo > span { font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.hi-campo em { margin-left: 4px; font-style: normal; font-weight: 500; color: var(--light); }
+.hi-campo input, .hi-campo textarea {
+  width: 100%; padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 9px;
+  font: inherit; font-size: 14px; background: var(--surface); color: var(--text); resize: vertical;
+}
+.hi-campo input:focus, .hi-campo textarea:focus { outline: none; border-color: var(--brand-blue); }
+.hi-campo-par { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.hi-tipos-sel { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.hi-tsel {
+  display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 10px 4px;
+  border: 1.5px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 600; color: var(--muted);
+  transition: background .15s, border-color .15s, color .15s, transform .12s;
+}
+.hi-tsel .ti { font-size: 18px; }
+.hi-tsel:hover:not(:disabled):not(.on) { border-color: var(--c); color: var(--c); }
+.hi-tsel:active:not(:disabled) { transform: scale(.95); }
+.hi-tsel.on { border-color: var(--c); background: var(--c); color: #fff; }
+.hi-tsel:disabled { opacity: .35; cursor: not-allowed; }
+.hi-ayuda { font-size: 12px; line-height: 1.45; color: var(--muted); }
+.hi-cajon-pie {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 14px 24px; border-top: 1px solid var(--border); background: var(--surface2);
+}
+.hi-sesion { font-size: 12.5px; font-weight: 600; color: var(--success); }
+
+/* ── El número viaja de la tarjeta al cartel ── */
+::view-transition-group(hi-coche), ::view-transition-group(hi-num) {
+  animation-duration: .5s; animation-timing-function: cubic-bezier(.2, .75, .2, 1);
+}
+::view-transition-old(hi-coche), ::view-transition-new(hi-coche) { height: 100%; }
+::view-transition-old(hi-coche) { animation: hiVtSale .22s ease-out both; }
+::view-transition-new(hi-coche) { animation: hiVtEntra .34s .12s ease-out both; }
+::view-transition-old(root) { animation-duration: .16s; }   /* lo viejo se va rápido: no se superponen */
+::view-transition-new(root) { animation-duration: .3s; }
+@keyframes hiVtSale { to { opacity: 0; } }
+@keyframes hiVtEntra { from { opacity: 0; } }
+
+@media (max-width: 720px) {
+  .hi-grilla { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .hi-coche { padding: 12px; }
+  .hi-coche-num { font-size: 27px; }
+  .hi-hero-cartel { padding: 18px 18px 22px; }
+  .hi-hero-num { font-size: 64px; }
+  .hi-linea { padding-left: 36px; }
+  .hi-linea::before { left: 13px; }
+  .hi-terminal::before { left: -31px; }
+  .hi-punto { left: -29px; }
+  .hi-mas { padding-left: 36px; }
+  .hi-fin span { margin-left: -31px; }
+  .hi-parada-cab { grid-template-columns: 28px minmax(0, 1fr) 16px; gap: 10px; }
+  .hi-tag { display: none; }
+  .hi-parada-dentro { padding-left: 16px; }
+  .hi-tipos-sel { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .hi-nav .btn { padding: 8px 12px; }
+}
