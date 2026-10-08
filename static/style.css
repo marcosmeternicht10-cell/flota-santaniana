@@ -3416,3 +3416,8 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(30,90,150
   .hi-tipos-sel { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .hi-nav .btn { padding: 8px 12px; }
 }
+
+/* Nombre de fantasía: es como la gente conoce al proveedor, va primero;
+   la razón social queda debajo, más chica */
+.prov-razon, .rep-d-prov-razon { font-size: 12px; color: var(--muted); margin-top: 1px; }
+.rep-mini-opc { font-weight: 500; color: var(--light); margin-left: 4px; font-size: 12px; }

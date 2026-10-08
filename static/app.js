@@ -5196,11 +5196,11 @@ function camposProveedor(px, r = {}) {
     <div class="rep-prov-form">
       <div class="rep-ubic-form-label"><i class="ti ti-building-store"></i> Proveedor</div>
       <div class="form-row">
-        <div class="field"><label>Proveedor <span class="rep-prov-ayuda">(nombre o RUC)</span></label>
+        <div class="field"><label>Proveedor <span class="rep-prov-ayuda">(nombre, fantasía o RUC)</span></label>
           <input id="${px}-prov" list="${px}-prov-lista" value="${esc(r.proveedor)}" placeholder="Escribí para buscar"
                  style="width:240px" oninput="buscarProveedorForm('${px}')" onchange="completarProveedor('${px}')" autocomplete="off">
           <datalist id="${px}-prov-lista"></datalist>
-          <div class="rep-prov-ruc" id="${px}-pruc">${r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""}</div>
+          <div class="rep-prov-ruc" id="${px}-pruc">${[r.proveedor_fantasia, r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""].filter(Boolean).join(" — ")}</div>
         </div>
         <div class="field"><label>Contacto</label><input id="${px}-pcon" value="${esc(r.proveedor_contacto)}" placeholder="ej: Carlos" style="width:150px"></div>
         <div class="field"><label>Teléfono / WhatsApp</label><input id="${px}-ptel" value="${esc(r.proveedor_telefono)}" placeholder="ej: 0981 123 456" inputmode="tel" style="width:160px"></div>
@@ -5216,7 +5216,7 @@ function buscarProveedorForm(px) {
     const r = await api("/api/repuestos/proveedores?limite=15&q=" + encodeURIComponent(q));
     const dl = document.getElementById(px + "-prov-lista");
     if (dl) dl.innerHTML = (r.proveedores || []).map(p =>
-      `<option value="${p.nombre.replace(/"/g, "&quot;")}">${p.ruc ? "RUC " + p.ruc : ""}</option>`).join("");
+      `<option value="${p.nombre.replace(/"/g, "&quot;")}">${[p.fantasia, p.ruc ? "RUC " + p.ruc : ""].filter(Boolean).join(" — ")}</option>`).join("");
   }, 220);
 }
 
@@ -5225,7 +5225,9 @@ async function completarProveedor(px) {
   const ruc = document.getElementById(px + "-pruc");
   if (!nombre) { if (ruc) ruc.textContent = ""; return; }
   const p = await api("/api/repuestos/proveedor?nombre=" + encodeURIComponent(nombre));
-  if (ruc) ruc.textContent = p && p.ruc ? "RUC " + p.ruc : (p && p.nombre ? "" : "Proveedor nuevo: se agrega al directorio");
+  if (ruc) ruc.textContent = p && p.nombre
+    ? [p.fantasia, p.ruc ? "RUC " + p.ruc : ""].filter(Boolean).join(" — ")
+    : "Proveedor nuevo: se agrega al directorio";
   if (!p || !p.nombre) return;
   // Solo se completa lo que está vacío: no se pisa algo que escribió el usuario
   const con = $("#" + px + "-pcon"), tel = $("#" + px + "-ptel");
@@ -5263,7 +5265,7 @@ async function renderProveedores() {
       </div>
       <div class="dir-prov-buscar prov-buscar">
         <i class="ti ti-search"></i>
-        <input id="prov-q" placeholder="Buscar por nombre, RUC, número o contacto" autocomplete="off"
+        <input id="prov-q" placeholder="Buscar por nombre, nombre de fantasía, RUC, número o contacto" autocomplete="off"
                value="${provEstado.q.replace(/"/g, "&quot;")}" oninput="provBuscar(this.value)">
       </div>
       <div class="prov-filtros">
@@ -5321,7 +5323,7 @@ async function provCargar() {
             const wa = numeroWhatsApp(x.telefono);
             return `<tr onclick="dirProvEditar(${i})">
               <td class="prov-num">${x.codigo || "—"}</td>
-              <td><div class="prov-nom">${x.nombre}</div>${x.repuestos ? `<span class="dir-prov-uso">${x.repuestos} repuesto${x.repuestos === 1 ? "" : "s"}</span>` : ""}</td>
+              <td><div class="prov-nom">${hiEsc(x.fantasia || x.nombre)}</div>${x.fantasia ? `<div class="prov-razon">${hiEsc(x.nombre)}</div>` : ""}${x.repuestos ? `<span class="dir-prov-uso">${x.repuestos} repuesto${x.repuestos === 1 ? "" : "s"}</span>` : ""}</td>
               <td class="prov-mono">${x.ruc || "—"}</td>
               <td class="prov-mono">${x.telefono || "—"}</td>
               <td>${x.contacto || `<span class="prov-vacio">—</span>`}</td>
@@ -5350,9 +5352,12 @@ function dirProvEditar(i) {
   o.style.zIndex = "1700";
   o.innerHTML = `
     <div class="rep-mini-modal" style="max-width:480px">
-      <div class="rep-mini-titulo">${nuevo ? "Nuevo proveedor" : p.nombre}</div>
+      <div class="rep-mini-titulo">${nuevo ? "Nuevo proveedor" : hiEsc(p.fantasia || p.nombre)}</div>
+      ${!nuevo && p.fantasia ? `<p class="rep-mini-help">Razón social: ${hiEsc(p.nombre)}</p>` : ""}
       ${!nuevo && p.codigo ? `<p class="rep-mini-help">Proveedor N° ${p.codigo}${p.repuestos ? ` · usado en ${p.repuestos} repuesto${p.repuestos === 1 ? "" : "s"}` : ""}</p>` : ""}
-      ${nuevo ? `<label class="rep-mini-lbl">Nombre / razón social</label><input id="dp-nom" class="rep-mini-input" placeholder="ej: Repuestos del Este S.A.">` : ""}
+      ${nuevo ? `<label class="rep-mini-lbl">Razón social</label><input id="dp-nom" class="rep-mini-input" placeholder="ej: Amanda Mallada">` : ""}
+      <label class="rep-mini-lbl">Nombre de fantasía <span class="rep-mini-opc">cómo lo conocen, para encontrarlo al buscar</span></label>
+      <input id="dp-fan" class="rep-mini-input" value="${esc(p.fantasia)}" placeholder="ej: Repuestos Amanda" ${dis}>
       <label class="rep-mini-lbl">RUC</label><input id="dp-ruc" class="rep-mini-input" value="${esc(p.ruc)}" ${dis}>
       <label class="rep-mini-lbl">Contacto (persona)</label><input id="dp-con" class="rep-mini-input" value="${esc(p.contacto)}" placeholder="ej: Carlos" ${dis}>
       <label class="rep-mini-lbl">Teléfono / WhatsApp</label><input id="dp-tel" class="rep-mini-input" value="${esc(p.telefono)}" inputmode="tel" ${dis}>
@@ -5370,7 +5375,7 @@ function dirProvEditar(i) {
 
 async function dirProvGuardar(i, btn) {
   const nuevo = i < 0;
-  const datos = { ruc: $("#dp-ruc").value, contacto: $("#dp-con").value, telefono: $("#dp-tel").value,
+  const datos = { fantasia: $("#dp-fan").value, ruc: $("#dp-ruc").value, contacto: $("#dp-con").value, telefono: $("#dp-tel").value,
                   direccion: $("#dp-dir").value, email: $("#dp-ema").value };
   datos.nombre = nuevo ? $("#dp-nom").value.trim() : (window._dirProv || [])[i].nombre;
   const r = await api("/api/repuestos/proveedor", {
@@ -5380,7 +5385,7 @@ async function dirProvGuardar(i, btn) {
   if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
   toast(nuevo ? (r.msg || "Proveedor agregado") : "Proveedor actualizado", "success");
   btn.closest(".rep-modal-overlay").remove();
-  if (nuevo) { provEstado.q = datos.nombre; provEstado.letra = ""; provEstado.uso = false; provEstado.pagina = 1; renderProveedores(); }
+  if (nuevo) { provEstado.q = datos.fantasia || datos.nombre; provEstado.letra = ""; provEstado.uso = false; provEstado.pagina = 1; renderProveedores(); }
   else provCargar();
 }
 
@@ -5403,7 +5408,8 @@ function tarjetaProveedor(r) {
     <div class="rep-d-prov ${pedir ? "pedir" : ""}">
       <div class="rep-d-prov-ico"><i class="ti ti-building-store"></i></div>
       <div class="rep-d-prov-info">
-        <div class="rep-d-prov-nom">${r.proveedor}</div>
+        <div class="rep-d-prov-nom">${hiEsc(r.proveedor_fantasia || r.proveedor)}</div>
+        ${r.proveedor_fantasia ? `<div class="rep-d-prov-razon">${hiEsc(r.proveedor)}</div>` : ""}
         <div class="rep-d-prov-sub">${[r.proveedor_contacto, r.proveedor_telefono, r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
       </div>
       ${r.proveedor_telefono ? `<a class="btn btn-ghost" href="tel:${String(r.proveedor_telefono).replace(/[^\d+]/g, "")}"><i class="ti ti-phone"></i></a>` : ""}
