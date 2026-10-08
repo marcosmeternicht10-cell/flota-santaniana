@@ -7915,6 +7915,7 @@ function bcocheFiltrar(id) {
     lista.style.display = "block";
     return;
   }
+  bcocheLiberar(lista);
   const cab = `<div class="bcoche-cab">${res.length} coche${res.length === 1 ? "" : "s"}${q ? " que coinciden" : " en la flota"}</div>`;
   lista.innerHTML = cab + res.map(v => `
     <div class="bcoche-item" onmousedown="bcocheElegir('${id}', ${v.id})">
@@ -7923,6 +7924,17 @@ function bcocheFiltrar(id) {
       <span class="bcoche-mar">${v.marca || ""} ${v.modelo || ""}</span>
     </div>`).join("");
   lista.style.display = "block";
+}
+
+// Respaldo para navegadores viejos sin :has(): los contenedores que recortan
+// dejan ver la lista mientras está abierta.
+function bcocheLiberar(lista) {
+  let el = lista.parentElement;
+  while (el && el !== document.body && el.id !== "content") {
+    if (getComputedStyle(el).overflow === "hidden" && !el.classList.contains("main") && !el.classList.contains("app"))
+      el.classList.add("bcoche-abierto");
+    el = el.parentElement;
+  }
 }
 
 function bcocheElegir(id, vid) {

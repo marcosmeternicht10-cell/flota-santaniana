@@ -3063,3 +3063,19 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(30,90,150
 .prov-acc .icon-btn { text-decoration: none; }
 @media (max-width: 900px) { .prov-tabla th:nth-child(6), .prov-tabla td:nth-child(6) { display: none; } }
 @media (max-width: 640px) { .prov-tabla th:nth-child(1), .prov-tabla td:nth-child(1), .prov-tabla th:nth-child(5), .prov-tabla td:nth-child(5) { display: none; } }
+
+/* ── El buscador de coches no se corta ──────────────────────────────────────
+   Las tarjetas recortan lo que se sale (por las esquinas redondeadas), y la
+   lista de coches se abre hacia abajo, fuera de la tarjeta: quedaba tapada y
+   no se podía elegir. Donde hay un buscador de coches, la tarjeta deja ver. */
+.card:has(.bcoche), .table-wrap:has(.bcoche), .ag-dia:has(.bcoche), .bcoche-abierto { overflow: visible !important; }
+.card:has(.bcoche) > :first-child { border-top-left-radius: inherit; border-top-right-radius: inherit; }
+.bcoche-lista { z-index: 400; }
+/* Dentro de un formulario, el estilo general de los campos pisaba el espacio
+   de la lupa y la "E" de "Escribí" quedaba debajo del ícono. */
+.bcoche input.bcoche-input { padding: 10px 32px 10px 34px; width: 100%; }
+.bcoche-cab {
+  position: sticky; top: 0; z-index: 1; padding: 8px 14px;
+  font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--muted); background: var(--surface2); border-bottom: 1px solid var(--border);
+}
