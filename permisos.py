@@ -38,6 +38,7 @@ GRUPOS_SECCIONES = [
     ("Compras", [
         ("compras", "Compras / Depósito"),
         ("repuestos", "Inventario Repuestos"),
+        ("proveedores", "Proveedores"),
     ]),
     ("Reportes", [
         ("gerencial", "Reporte gerencial"),
@@ -68,7 +69,7 @@ MODULOS_API = [
      ("/api/corp/", "/api/combustible/control", "/api/consumo/")),
     ({"turismo_agenda", "turismo"},
      ("/api/turismo",)),
-    ({"compras", "repuestos"},
+    ({"compras", "repuestos", "proveedores"},
      ("/api/compras", "/api/repuestos")),
     ({"gerencial", "oee"},
      ("/api/reporte_gerencial", "/api/exportar_reporte_gerencial",

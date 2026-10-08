@@ -247,34 +247,95 @@ def importar_lista_proveedores(ruta=None):
         conn.close()
 
 
-def obtener_proveedores(q=None, limite=30):
-    """Busca proveedores por nombre, RUC o número. Sin búsqueda devuelve los
-    que ya se usan en algún repuesto (los más a mano)."""
+def obtener_proveedores(q=None, limite=30, pagina=0, letra="", solo_uso=False):
+    """Busca o lista proveedores.
+
+    - q: nombre, RUC, número o contacto.
+    - pagina (desde 1): lista completa paginada, por orden alfabético.
+    - letra: los que empiezan con esa letra ("#" = los que empiezan con número).
+    - solo_uso: solo los que ya figuran en algún repuesto.
+    Sin q ni página devuelve los que ya se usan en repuestos (los más a mano).
+    """
     conn = get_connection()
     usos = {r["k"]: r["n"] for r in conn.execute(
         """SELECT LOWER(TRIM(proveedor)) AS k, COUNT(*) AS n FROM repuestos
            WHERE activo=1 AND proveedor<>'' GROUP BY LOWER(TRIM(proveedor))""").fetchall()}
     cols = ", ".join(CAMPOS_PROV) + ", clave"
     q = " ".join(str(q or "").split()).lower()
+    donde, params = [], []
     if q:
         like = f"%{q}%"
-        filas = conn.execute(f"""SELECT {cols} FROM repuestos_proveedores
-            WHERE clave LIKE ? OR LOWER(ruc) LIKE ? OR codigo=? OR LOWER(contacto) LIKE ?
-            ORDER BY CASE WHEN clave LIKE ? THEN 0 ELSE 1 END, nombre LIMIT ?""",
-            (like, like, q, like, f"{q}%", int(limite))).fetchall()
+        donde.append("(clave LIKE ? OR LOWER(ruc) LIKE ? OR codigo=? OR LOWER(contacto) LIKE ?)")
+        params += [like, like, q, like]
+    letra = str(letra or "").strip().lower()[:1]
+    # Algunos nombres vienen entre comillas ("AMM" S.A.): cuentan por su letra
+    sin_comillas = "LTRIM(clave, '\" ')"
+    if letra == "#":
+        donde.append(f"SUBSTR({sin_comillas},1,1) BETWEEN '0' AND '9'")
+    elif letra:
+        donde.append(f"{sin_comillas} LIKE ?")
+        params.append(letra + "%")
+    if solo_uso or (not q and not pagina and not letra):
+        claves = list(usos)
+        if not claves:
+            conn.close()
+            return {"proveedores": [], "total": _total_proveedores(), "coincidencias": 0}
+        donde.append(f"clave IN ({','.join('?' * len(claves))})")
+        params += claves
+    where = ("WHERE " + " AND ".join(donde)) if donde else ""
+    coinc = conn.execute(f"SELECT COUNT(*) AS n FROM repuestos_proveedores {where}", params).fetchone()["n"]
+    orden = "nombre"
+    extra = []
+    if q:
+        orden = "CASE WHEN clave LIKE ? THEN 0 ELSE 1 END, LOWER(nombre)"
+        extra = [f"{q}%"]
     else:
-        claves = list(usos)[:200]
-        filas = conn.execute(f"""SELECT {cols} FROM repuestos_proveedores
-            WHERE clave IN ({",".join("?" * len(claves))}) ORDER BY nombre""",
-            claves).fetchall() if claves else []
-    total = conn.execute("SELECT COUNT(*) AS n FROM repuestos_proveedores").fetchone()["n"]
+        orden = "LTRIM(clave, '\" ')"
+    limite = int(limite)
+    desde = (max(int(pagina or 1), 1) - 1) * limite
+    filas = conn.execute(f"""SELECT {cols} FROM repuestos_proveedores {where}
+        ORDER BY {orden} LIMIT ? OFFSET ?""", params + extra + [limite, desde]).fetchall()
     conn.close()
     res = []
     for f in filas:
         d = {k: (f[k] or "") for k in CAMPOS_PROV}
         d["repuestos"] = usos.get(f["clave"], 0)
         res.append(d)
-    return {"proveedores": res, "total": int(total or 0)}
+    return {"proveedores": res, "total": _total_proveedores(), "coincidencias": int(coinc or 0)}
+
+
+def _total_proveedores():
+    conn = get_connection()
+    try:
+        return int(conn.execute("SELECT COUNT(*) AS n FROM repuestos_proveedores").fetchone()["n"] or 0)
+    finally:
+        conn.close()
+
+
+def resumen_proveedores():
+    """Los números de arriba del directorio."""
+    conn = get_connection()
+    f = conn.execute("""SELECT COUNT(*) AS total,
+        SUM(CASE WHEN telefono<>'' THEN 1 ELSE 0 END) AS con_tel,
+        SUM(CASE WHEN contacto<>'' THEN 1 ELSE 0 END) AS con_contacto
+        FROM repuestos_proveedores""").fetchone()
+    en_uso = conn.execute("""SELECT COUNT(DISTINCT LOWER(TRIM(proveedor))) AS n FROM repuestos
+        WHERE activo=1 AND proveedor<>''""").fetchone()["n"]
+    conn.close()
+    return {"total": int(f["total"] or 0), "con_telefono": int(f["con_tel"] or 0),
+            "con_contacto": int(f["con_contacto"] or 0), "en_uso": int(en_uso or 0)}
+
+
+def crear_proveedor(datos):
+    """Agrega un proveedor al directorio a mano."""
+    nombre = " ".join(str(datos.get("nombre") or "").split())
+    if len(nombre) < 2:
+        return False, "Poné el nombre del proveedor."
+    if proveedor_por_nombre(nombre):
+        return False, "Ese proveedor ya está en el directorio."
+    guardar_contacto_proveedor(nombre, datos.get("contacto"), datos.get("telefono"))
+    editar_proveedor(nombre, datos)
+    return True, "Proveedor agregado."
 
 
 def proveedor_por_nombre(nombre):

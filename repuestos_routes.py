@@ -57,8 +57,27 @@ def api_repuestos():
 @bp_repuestos.route("/api/repuestos/proveedores", methods=["GET"])
 def api_proveedores():
     """Busca en el directorio de proveedores (nombre, RUC o número)."""
-    return jsonify(rdb.obtener_proveedores(request.args.get("q"),
-                                           min(int(request.args.get("limite") or 30), 100)))
+    a = request.args
+    return jsonify(rdb.obtener_proveedores(
+        a.get("q"), min(int(a.get("limite") or 30), 100),
+        pagina=int(a.get("pagina") or 0), letra=a.get("letra") or "",
+        solo_uso=a.get("uso") in ("1", "true")))
+
+
+@bp_repuestos.route("/api/repuestos/proveedores/resumen", methods=["GET"])
+def api_proveedores_resumen():
+    return jsonify(rdb.resumen_proveedores())
+
+
+@bp_repuestos.route("/api/repuestos/proveedor", methods=["POST"])
+def api_crear_proveedor():
+    if session.get("rol") not in ("admin", "taller", "compras"):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    d = request.json or {}
+    ok, msg = rdb.crear_proveedor(d)
+    if ok:
+        _auditar(f"Agregó el proveedor '{d.get('nombre')}'")
+    return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
 
 
 @bp_repuestos.route("/api/repuestos/proveedor", methods=["GET"])
