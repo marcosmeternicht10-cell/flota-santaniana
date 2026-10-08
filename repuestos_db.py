@@ -123,7 +123,9 @@ def inicializar_repuestos():
         )
     """)
     cols = columnas_de_tabla(conn, "repuestos_proveedores")
-    for col in ("codigo", "ruc", "direccion", "email"):   # del listado de la empresa
+    # codigo, ruc, direccion y email vienen del listado de la empresa; el
+    # nombre de fantasía (cómo lo conoce la gente) se carga a mano
+    for col in ("codigo", "ruc", "direccion", "email", "fantasia"):
         if col not in cols:
             try:
                 c.execute(f"ALTER TABLE repuestos_proveedores ADD COLUMN {col} TEXT DEFAULT ''")
@@ -142,6 +144,21 @@ def inicializar_repuestos():
 # ════════════════════════════════════════════════════════════════════════════
 # PROVEEDORES
 # ════════════════════════════════════════════════════════════════════════════
+
+def _sin_tildes(texto):
+    """'El Rápido' → 'el rapido': para buscar sin depender de las tildes."""
+    import unicodedata
+    t = unicodedata.normalize("NFD", str(texto or "").lower())
+    return "".join(c for c in t if unicodedata.category(c) != "Mn")
+
+
+def _col_sin_tildes(col):
+    """La misma idea del lado de la base. En PostgreSQL se sacan las tildes
+    con translate; la base local de pruebas (SQLite) no lo tiene."""
+    if USE_POSTGRES:
+        return f"translate(LOWER({col}), 'áéíóúüñàèìòùâêîôû', 'aeiouunaeiouaeiou')"
+    return f"LOWER({col})"
+
 
 def _clave_proveedor(nombre):
     return " ".join(str(nombre or "").split()).lower()
@@ -194,7 +211,7 @@ def guardar_contacto_proveedor(nombre, contacto=None, telefono=None):
     return nombre
 
 
-CAMPOS_PROV = ("nombre", "codigo", "ruc", "contacto", "telefono", "direccion", "email")
+CAMPOS_PROV = ("nombre", "fantasia", "codigo", "ruc", "contacto", "telefono", "direccion", "email")
 
 
 def importar_lista_proveedores(ruta=None):
@@ -274,12 +291,13 @@ def obtener_proveedores(q=None, limite=30, pagina=0, letra="", solo_uso=False):
         """SELECT LOWER(TRIM(proveedor)) AS k, COUNT(*) AS n FROM repuestos
            WHERE activo=1 AND proveedor<>'' GROUP BY LOWER(TRIM(proveedor))""").fetchall()}
     cols = ", ".join(CAMPOS_PROV) + ", clave"
-    q = " ".join(str(q or "").split()).lower()
+    q = _sin_tildes(" ".join(str(q or "").split()))
     donde, params = [], []
     if q:
         like = f"%{q}%"
-        donde.append("(clave LIKE ? OR LOWER(ruc) LIKE ? OR codigo=? OR LOWER(contacto) LIKE ?)")
-        params += [like, like, q, like]
+        donde.append(f"({_col_sin_tildes('clave')} LIKE ? OR {_col_sin_tildes('fantasia')} LIKE ?"
+                     f" OR LOWER(ruc) LIKE ? OR codigo=? OR {_col_sin_tildes('contacto')} LIKE ?)")
+        params += [like, like, like, q, like]
     letra = str(letra or "").strip().lower()[:1]
     # Algunos nombres vienen entre comillas ("AMM" S.A.): cuentan por su letra
     sin_comillas = "LTRIM(clave, '\" ')"
@@ -300,8 +318,10 @@ def obtener_proveedores(q=None, limite=30, pagina=0, letra="", solo_uso=False):
     orden = "nombre"
     extra = []
     if q:
-        orden = "CASE WHEN clave LIKE ? THEN 0 ELSE 1 END, LOWER(nombre)"
-        extra = [f"{q}%"]
+        # Primero los que empiezan con lo buscado, por razón social o por fantasía
+        orden = (f"CASE WHEN {_col_sin_tildes('clave')} LIKE ? OR {_col_sin_tildes('fantasia')} LIKE ?"
+                 " THEN 0 ELSE 1 END, LOWER(nombre)")
+        extra = [f"{q}%", f"{q}%"]
     else:
         orden = "LTRIM(clave, '\" ')"
     limite = int(limite)
@@ -375,7 +395,7 @@ def editar_proveedor(nombre_actual, datos):
     cambia acá: los repuestos lo tienen escrito y quedarían desenganchados."""
     k = _clave_proveedor(nombre_actual)
     campos = {c: " ".join(str(datos.get(c) or "").split())
-              for c in ("ruc", "contacto", "telefono", "direccion", "email") if c in datos}
+              for c in ("fantasia", "ruc", "contacto", "telefono", "direccion", "email") if c in datos}
     if not k or not campos:
         return False, "Nada para guardar."
     from hora_local import hoy
@@ -394,7 +414,7 @@ def _contactos_por_clave(conn, nombres=None):
         return {}
     try:
         filas = conn.execute(
-            f"SELECT clave, contacto, telefono, ruc FROM repuestos_proveedores WHERE clave IN ({','.join('?' * len(claves))})",
+            f"SELECT clave, contacto, telefono, ruc, fantasia FROM repuestos_proveedores WHERE clave IN ({','.join('?' * len(claves))})",
             claves).fetchall()
     except Exception:
         return {}
@@ -406,6 +426,7 @@ def _con_contacto(d, contactos):
     d["proveedor_contacto"] = (f["contacto"] if f else "") or ""
     d["proveedor_telefono"] = (f["telefono"] if f else "") or ""
     d["proveedor_ruc"] = (f["ruc"] if f else "") or ""
+    d["proveedor_fantasia"] = (f["fantasia"] if f else "") or ""
     return d
 
 
@@ -561,8 +582,11 @@ def obtener_repuestos(categoria=None, buscar=None, solo_bajos=False, incluir_ina
         like = f"%{buscar.strip().lower()}%"
         q += (" AND (LOWER(codigo) LIKE ? OR LOWER(descripcion) LIKE ?"
               " OR LOWER(codigo_alt) LIKE ? OR LOWER(marca) LIKE ?"
-              " OR LOWER(aplicacion) LIKE ? OR LOWER(proveedor) LIKE ?)")
-        params += [like, like, like, like, like, like]
+              " OR LOWER(aplicacion) LIKE ? OR LOWER(proveedor) LIKE ?"
+              # también por el nombre de fantasía del proveedor
+              " OR LOWER(TRIM(proveedor)) IN (SELECT clave FROM repuestos_proveedores"
+              f" WHERE {_col_sin_tildes('fantasia')} LIKE ?))")
+        params += [like, like, like, like, like, like, f"%{_sin_tildes(buscar.strip())}%"]
     q += " ORDER BY categoria, descripcion"
     rows = conn.execute(q, params).fetchall()
     contactos = _contactos_por_clave(conn, [r["proveedor"] for r in rows])
