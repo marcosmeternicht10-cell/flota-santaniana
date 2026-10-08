@@ -33,7 +33,7 @@ GRUPOS_SECCIONES = [
         ("correctivos", "Correctivos"),
         ("planes", "Planes"),
         ("inventario_neu", "Inventario neumáticos"),
-        ("historial_carga", "Cargar historial"),
+        ("historial_carga", "Historial por coche"),
     ]),
     ("Compras", [
         ("compras", "Compras / Depósito"),

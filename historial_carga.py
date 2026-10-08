@@ -340,8 +340,12 @@ def lista_coches_mant(q="", pagina=1, por_pagina=POR_PAGINA_COCHES):
             "por_pagina": por_pagina}
 
 
-def historia_coche(vid, pagina=1, por_pagina=POR_PAGINA_HISTORIA, tipo=""):
-    """La historia completa de un coche, más reciente primero, por páginas."""
+def historia_coche(vid, pagina=1, por_pagina=POR_PAGINA_HISTORIA, tipo="", anio=""):
+    """La historia completa de un coche, más reciente primero, por páginas.
+
+    Además del pedazo pedido trae lo que hace falta para dibujar la ficha sin
+    otra consulta: cuántos registros hay de cada tipo y la "línea de vida"
+    (cuántos hubo cada mes y de qué tipo, desde el primer registro)."""
     conn = get_connection()
     v = conn.execute("SELECT id, n_interno, patente, marca, modelo FROM vehiculos WHERE id=?",
                      (vid,)).fetchone()
@@ -355,13 +359,21 @@ def historia_coche(vid, pagina=1, por_pagina=POR_PAGINA_HISTORIA, tipo=""):
                SUM(CASE WHEN tipo IN ('preventivo','control') THEN 1 ELSE 0 END) AS preventivos,
                SUM(CASE WHEN tipo = 'correctivo' THEN 1 ELSE 0 END) AS correctivos
         FROM ({sql}) t""", params).fetchone()
-    filtro, extra = "", []
+    conds, extra = [], []
     if tipo == "preventivo":
-        filtro = "WHERE tipo IN ('preventivo','control')"
+        conds.append("tipo IN ('preventivo','control')")
     elif tipo in ("correctivo", "neumaticos"):
-        filtro, extra = "WHERE tipo = ?", [tipo]
+        conds.append("tipo = ?"); extra.append(tipo)
     elif tipo == "otros":
-        filtro = "WHERE tipo NOT IN ('preventivo','control','correctivo','neumaticos')"
+        conds.append("tipo NOT IN ('preventivo','control','correctivo','neumaticos')")
+    anio = str(anio or "").strip()
+    if anio.isdigit() and len(anio) == 4:
+        conds.append("substr(CAST(fecha AS TEXT), 1, 4) = ?"); extra.append(anio)
+    filtro = ("WHERE " + " AND ".join(conds)) if conds else ""
+    # Por mes y tipo: alimenta los contadores de cada tipo y la línea de vida
+    por_mes = conn.execute(f"""
+        SELECT substr(CAST(fecha AS TEXT), 1, 7) AS mes, tipo, COUNT(*) AS n
+        FROM ({sql}) t GROUP BY 1, 2""", params).fetchall()
     total = conn.execute(f"SELECT COUNT(*) AS n FROM ({sql}) t {filtro}", params + extra).fetchone()["n"]
     paginas = max(1, -(-int(total) // por_pagina))
     pagina = min(max(1, pagina), paginas)
@@ -378,8 +390,17 @@ def historia_coche(vid, pagina=1, por_pagina=POR_PAGINA_HISTORIA, tipo=""):
         d["borrable"] = bool(d.pop("de_historial", 0))
         items.append(d)
     r = dict(resumen)
+    por_tipo = {"preventivo": 0, "correctivo": 0, "neumaticos": 0, "otros": 0}
+    vida = {}
+    for f in por_mes:
+        g = _grupo(f["tipo"])
+        por_tipo[g] += int(f["n"])
+        mes = str(f["mes"] or "")
+        if len(mes) == 7:
+            vida.setdefault(mes, {"preventivo": 0, "correctivo": 0, "neumaticos": 0, "otros": 0})[g] += int(f["n"])
     return {"coche": dict(v), "items": items, "total": int(total), "pagina": pagina,
-            "paginas": paginas,
+            "paginas": paginas, "por_tipo": por_tipo,
+            "vida": [{"mes": k, **vida[k]} for k in sorted(vida)],
             "resumen": {"registros": int(r["registros"] or 0), "ultimo": r["ultimo"],
                         "primero": r["primero"], "km": float(r["km_max"] or 0),
                         "costo": float(r["costo"] or 0),
@@ -442,6 +463,108 @@ def estadisticas_mant(meses=6):
         "activos": int(activos),
         "top_correctivos": [dict(r) for r in top],
     }
+
+
+def flota_historia(meses=12):
+    """Todos los coches con el resumen de su historia y la actividad de los
+    últimos 12 meses, para la grilla de "Historial por coche". Son dos
+    consultas agrupadas para toda la flota, nunca una por coche."""
+    from datetime import date
+    hoy = date.today()
+    y, m = hoy.year, hoy.month - (meses - 1)
+    while m <= 0:
+        m += 12; y -= 1
+    desde = date(y, m, 1).isoformat()
+    hace90 = date.fromordinal(hoy.toordinal() - 90).isoformat()
+    lista_meses = []
+    yy, mm = y, m
+    for _ in range(meses):
+        lista_meses.append(f"{yy:04d}-{mm:02d}")
+        mm += 1
+        if mm > 12:
+            mm, yy = 1, yy + 1
+
+    conn = get_connection()
+    coches = [dict(r) for r in conn.execute(
+        """SELECT id, n_interno, patente, marca, modelo FROM vehiculos
+           WHERE COALESCE(activo, 1) = 1""").fetchall()]
+    sql, params = _fuentes()
+    tot = {r["vehiculo_id"]: dict(r) for r in conn.execute(f"""
+        SELECT vehiculo_id, COUNT(*) AS registros, MAX(fecha) AS ultimo, MIN(fecha) AS primero,
+               COALESCE(SUM(costo), 0) AS costo,
+               SUM(CASE WHEN tipo = 'correctivo' THEN 1 ELSE 0 END) AS correctivos,
+               SUM(CASE WHEN tipo IN ('preventivo','control') THEN 1 ELSE 0 END) AS preventivos,
+               SUM(CASE WHEN fecha >= ? THEN 1 ELSE 0 END) AS u90,
+               SUM(CASE WHEN fecha >= ? AND tipo = 'correctivo' THEN 1 ELSE 0 END) AS corr90
+        FROM ({sql}) t GROUP BY vehiculo_id""", [hace90, hace90] + params).fetchall()}
+    sql2, p2 = _fuentes(desde=desde)
+    act = {}
+    for r in conn.execute(f"""
+        SELECT vehiculo_id, substr(CAST(fecha AS TEXT), 1, 7) AS mes, tipo, COUNT(*) AS n
+        FROM ({sql2}) t GROUP BY 1, 2, 3""", p2).fetchall():
+        celda = act.setdefault(r["vehiculo_id"], {}).setdefault(
+            r["mes"], {"preventivo": 0, "correctivo": 0, "neumaticos": 0, "otros": 0})
+        celda[_grupo(r["tipo"])] += int(r["n"])
+    conn.close()
+
+    for v in coches:
+        t = tot.get(v["id"], {})
+        v["registros"] = int(t.get("registros") or 0)
+        v["ultimo"] = t.get("ultimo")
+        v["primero"] = t.get("primero")
+        v["costo"] = float(t.get("costo") or 0)
+        v["correctivos"] = int(t.get("correctivos") or 0)
+        v["preventivos"] = int(t.get("preventivos") or 0)
+        v["ultimos_90"] = int(t.get("u90") or 0)
+        v["correctivos_90"] = int(t.get("corr90") or 0)
+        try:
+            v["dias_desde"] = (hoy - date.fromisoformat(str(v["ultimo"])[:10])).days if v["ultimo"] else None
+        except Exception:
+            v["dias_desde"] = None
+        a = act.get(v["id"], {})
+        v["meses"] = [a.get(k) or {} for k in lista_meses]
+    coches.sort(key=lambda v: _orden_coche(v["n_interno"]))
+    return {"coches": coches, "meses": lista_meses}
+
+
+def editar_evento(origen, evento_id, d):
+    """Corrige un evento cargado del papel o desde el historial. El tipo no se
+    cambia: un correctivo vive en otra tabla y moverlo es borrar y volver a
+    cargar. Lo del plan y lo de las órdenes de trabajo se corrige allá."""
+    def num(v):
+        if isinstance(v, (int, float)):
+            return float(v)
+        try:   # escrito a mano: 470.500 o 1.250.000,5
+            return float(str(v or 0).replace(".", "").replace(",", "."))
+        except ValueError:
+            return 0.0
+    fecha = (d.get("fecha") or "").strip()
+    desc = (d.get("descripcion") or "").strip()
+    if not fecha or not desc:
+        return False, "La fecha y la descripción son obligatorias."
+    datos = (fecha, (d.get("categoria") or "").strip(), desc, num(d.get("km")),
+             num(d.get("costo")), (d.get("taller") or "").strip())
+    conn = get_connection()
+    try:
+        if origen == "historial_eventos":
+            tipo = (d.get("tipo") or "").strip().lower()
+            if tipo not in TIPOS_EVENTO or tipo == "correctivo":
+                tipo = None
+            conn.execute(f"""UPDATE historial_eventos SET fecha=?, categoria=?, descripcion=?,
+                             km=?, costo=?, taller=?{", tipo=?" if tipo else ""} WHERE id=?""",
+                         datos + ((tipo,) if tipo else ()) + (evento_id,))
+        elif origen == "correctivos":
+            row = conn.execute("SELECT observaciones FROM correctivos WHERE id=?", (evento_id,)).fetchone()
+            if not row or not str(row["observaciones"] or "").startswith("[Historial"):
+                return False, "Ese correctivo se corrige desde Correctivos."
+            conn.execute("""UPDATE correctivos SET fecha=?, tipo_falla=?, descripcion=?,
+                            km=?, costo=?, taller=? WHERE id=?""", datos + (evento_id,))
+        else:
+            return False, "Ese registro se corrige desde su propia pantalla."
+        conn.commit()
+        return True, "Evento corregido."
+    finally:
+        conn.close()
 
 
 def _puede_ver_mant():
@@ -528,3 +651,47 @@ def api_mant_registros():
     except ValueError:
         pagina = 1
     return jsonify(registros_flota(tipo, pagina=pagina))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  HISTORIAL POR COCHE — la grilla de la flota y la ficha de cada coche
+# ════════════════════════════════════════════════════════════════════════════
+
+@bp_historial.route("/api/historia/flota", methods=["GET"])
+def api_historia_flota():
+    if not _puede_ver_mant():
+        return jsonify({"error": "Sin permiso"}), 403
+    return jsonify(flota_historia())
+
+
+@bp_historial.route("/api/historia/coche/<int:vid>", methods=["GET"])
+def api_historia_coche(vid):
+    if not _puede_ver_mant():
+        return jsonify({"error": "Sin permiso"}), 403
+    try:
+        pagina = int(request.args.get("pagina") or 1)
+    except ValueError:
+        pagina = 1
+    d = historia_coche(vid, pagina, por_pagina=30, tipo=request.args.get("tipo", ""),
+                       anio=request.args.get("anio", ""))
+    if not d:
+        return jsonify({"error": "No existe ese coche"}), 404
+    d["puede_cargar"] = _puede_cargar()
+    return jsonify(d)
+
+
+@bp_historial.route("/api/historial_carga/<origen>/<int:eid>", methods=["PATCH"])
+def api_editar_evento(origen, eid):
+    if not _puede_cargar():
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    ok, msg = editar_evento(origen, eid, request.json or {})
+    if ok:
+        try:
+            from database import registrar_auditoria
+            registrar_auditoria(
+                usuario=session.get("nombre") or "?", rol=session.get("rol") or "",
+                accion=f"Corrigió un evento del historial ({origen} #{eid})",
+                categoria="Historial", detalle=(request.json or {}).get("descripcion", "")[:120])
+        except Exception:
+            pass
+    return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
