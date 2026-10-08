@@ -147,6 +147,17 @@ def _clave_proveedor(nombre):
     return " ".join(str(nombre or "").split()).lower()
 
 
+def _siguiente_codigo(conn):
+    """El número que le toca a un proveedor nuevo: el siguiente al más alto,
+    así sigue la misma numeración del listado de la empresa."""
+    mayor = 0
+    for r in conn.execute("SELECT codigo FROM repuestos_proveedores WHERE codigo<>''").fetchall():
+        c = str(r["codigo"]).strip()
+        if c.isdigit():
+            mayor = max(mayor, int(c))
+    return str(mayor + 1)
+
+
 def guardar_contacto_proveedor(nombre, contacto=None, telefono=None):
     """Crea el proveedor o actualiza su contacto. Un dato que no viene (None)
     no se toca; uno que viene vacío tampoco borra lo que ya había, así un
@@ -173,8 +184,8 @@ def guardar_contacto_proveedor(nombre, contacto=None, telefono=None):
                           telefono or fila["telefono"] or "", hoy(), fila["id"]))
         else:
             conn.execute("""INSERT INTO repuestos_proveedores
-                            (clave, nombre, contacto, telefono, actualizado) VALUES (?,?,?,?,?)""",
-                         (clave, nombre, contacto, telefono, hoy()))
+                            (clave, nombre, contacto, telefono, actualizado, codigo) VALUES (?,?,?,?,?,?)""",
+                         (clave, nombre, contacto, telefono, hoy(), _siguiente_codigo(conn)))
         conn.commit()
     except IntegrityError:
         pass
@@ -200,8 +211,10 @@ def importar_lista_proveedores(ruta=None):
         return 0
     conn = get_connection()
     try:
+        # Ya importado: hay miles con número. Unos pocos con número son los
+        # que se agregaron a mano, y no cuentan como listado cargado.
         ya = conn.execute("SELECT COUNT(*) AS n FROM repuestos_proveedores WHERE codigo<>''").fetchone()
-        if ya and int(ya["n"] or 0) > 0:
+        if ya and int(ya["n"] or 0) >= 1000:
             return 0
         lista = json.load(open(ruta, encoding="utf-8"))
 
@@ -333,9 +346,17 @@ def crear_proveedor(datos):
         return False, "Poné el nombre del proveedor."
     if proveedor_por_nombre(nombre):
         return False, "Ese proveedor ya está en el directorio."
+    ruc = " ".join(str(datos.get("ruc") or "").split())
+    if ruc:
+        conn = get_connection()
+        otro = conn.execute("SELECT nombre FROM repuestos_proveedores WHERE ruc=?", (ruc,)).fetchone()
+        conn.close()
+        if otro:
+            return False, f"Ese RUC ya está cargado como «{otro['nombre']}»."
     guardar_contacto_proveedor(nombre, datos.get("contacto"), datos.get("telefono"))
     editar_proveedor(nombre, datos)
-    return True, "Proveedor agregado."
+    p = proveedor_por_nombre(nombre) or {}
+    return True, f"Proveedor agregado con el N° {p.get('codigo') or '—'}."
 
 
 def proveedor_por_nombre(nombre):
