@@ -196,6 +196,7 @@ function irA(sec) {
     ots: renderOts,
     compras: renderCompras,
     repuestos: renderRepuestos,
+    proveedores: renderProveedores,
     gerencial: renderGerencial,
     corp_resumen: renderCorpResumen,
     corp_historial: renderCorpHistorial,
@@ -2648,7 +2649,7 @@ function generarReporteDocumentos(btn) {
 setCoche(null);
 if (window.USUARIO_ROL === "compras") {
   // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
-  const seccionesCompras = ["compras", "ots", "repuestos", "historial_carga"];
+  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesCompras.includes(b.dataset.sec)) b.style.display = "none";
   });
@@ -4996,7 +4997,7 @@ async function renderRepuestos() {
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-packages"></i> Depósito de Repuestos</h1>
-      <div class="page-actions"><button class="btn btn-ghost" onclick="abrirDirectorioProveedores()"><i class="ti ti-address-book"></i> Proveedores</button></div>
+      <div class="page-actions"><button class="btn btn-ghost" onclick="irA('proveedores')"><i class="ti ti-address-book"></i> Proveedores</button></div>
     </div>
 
     <div class="section">
@@ -5232,104 +5233,155 @@ async function completarProveedor(px) {
   if (tel && !tel.value && p.telefono) tel.value = p.telefono;
 }
 
-// ─── Directorio de proveedores ───
-let _dirProvT = null;
-async function abrirDirectorioProveedores() {
-  const o = document.createElement("div");
-  o.className = "modal-overlay firma-overlay";
-  o.innerHTML = `
-    <div class="firma-modal dir-prov-modal">
-      <div class="firma-head">
-        <div>
-          <h2><i class="ti ti-address-book"></i> Proveedores</h2>
-          <p id="dir-prov-sub">El listado de la empresa, con RUC y teléfono. Buscá por nombre, RUC o número.</p>
-        </div>
-        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+// ════════════════════════════════════════════════════════════════════════
+//  PROVEEDORES — el directorio de la empresa
+// ════════════════════════════════════════════════════════════════════════
+// La lista completa (son miles) se pagina en el servidor. Se puede recorrer
+// por letra, ver solo los que ya se usan en repuestos, o buscar.
+const provEstado = { q: "", letra: "", uso: false, pagina: 1 };
+const PROV_POR_PAGINA = 25;
+let _provPagT = null;
+
+async function renderProveedores() {
+  status("Proveedores");
+  const r = await api("/api/repuestos/proveedores/resumen");
+  const fmt = n => (n || 0).toLocaleString("es-PY");
+  const letras = ["#", ..."ABCDEFGHIJKLMNÑOPQRSTUVWXYZ"];
+  const puede = ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-address-book"></i> Proveedores</h1>
+      <p>El directorio de la empresa: RUC, teléfono, dirección y la persona de contacto</p>
+      ${puede ? `<div class="page-actions"><button class="btn btn-primary" onclick="dirProvEditar(-1)"><i class="ti ti-plus"></i> Nuevo proveedor</button></div>` : ""}
+    </div>
+    <div class="section">
+      <div class="prov-kpis">
+        <div class="prov-kpi"><span>Proveedores</span><b>${fmt(r.total)}</b></div>
+        <div class="prov-kpi"><span>Con teléfono</span><b>${fmt(r.con_telefono)}</b></div>
+        <div class="prov-kpi"><span>Con contacto cargado</span><b>${fmt(r.con_contacto)}</b></div>
+        <div class="prov-kpi"><span>Usados en repuestos</span><b>${fmt(r.en_uso)}</b></div>
       </div>
-      <div class="dir-prov-buscar">
+      <div class="dir-prov-buscar prov-buscar">
         <i class="ti ti-search"></i>
-        <input id="dir-prov-q" placeholder="ej: Diesa, 80001435, Repuestos..." autocomplete="off" oninput="dirProvBuscar()">
+        <input id="prov-q" placeholder="Buscar por nombre, RUC, número o contacto" autocomplete="off"
+               value="${provEstado.q.replace(/"/g, "&quot;")}" oninput="provBuscar(this.value)">
       </div>
-      <div id="dir-prov-lista" class="dir-prov-lista"></div>
+      <div class="prov-filtros">
+        <button class="prov-letra ${!provEstado.letra && !provEstado.uso ? "on" : ""}" data-l="" onclick="provLetra('')">Todos</button>
+        <button class="prov-letra uso ${provEstado.uso ? "on" : ""}" onclick="provSoloUso()"><i class="ti ti-packages"></i> En uso</button>
+        <span class="prov-sep"></span>
+        ${letras.map(l => `<button class="prov-letra ${provEstado.letra === l ? "on" : ""}" data-l="${l}" onclick="provLetra('${l}')">${l}</button>`).join("")}
+      </div>
+      <div id="prov-lista"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
     </div>`;
-  o.onclick = e => { if (e.target === o) o.remove(); };
-  document.body.appendChild(o);
-  setTimeout(() => $("#dir-prov-q")?.focus(), 50);
-  dirProvCargar("");
+  provCargar();
 }
 
-function dirProvBuscar() {
-  clearTimeout(_dirProvT);
-  _dirProvT = setTimeout(() => dirProvCargar($("#dir-prov-q").value.trim()), 250);
+function provBuscar(v) {
+  clearTimeout(_provPagT);
+  _provPagT = setTimeout(() => { provEstado.q = v.trim(); provEstado.pagina = 1; provCargar(); }, 250);
 }
+function provLetra(l) {
+  provEstado.letra = l; provEstado.uso = false; provEstado.pagina = 1;
+  document.querySelectorAll(".prov-letra").forEach(b => b.classList.toggle("on", !b.classList.contains("uso") && b.dataset.l === l));
+  provCargar();
+}
+function provSoloUso() {
+  provEstado.uso = !provEstado.uso; provEstado.letra = ""; provEstado.pagina = 1;
+  document.querySelectorAll(".prov-letra").forEach(b =>
+    b.classList.toggle("on", b.classList.contains("uso") ? provEstado.uso : (!provEstado.uso && b.dataset.l === "")));
+  provCargar();
+}
+function provPagina(n) { provEstado.pagina = n; provCargar(); content.scrollTop = 0; }
 
-async function dirProvCargar(q) {
-  const cont = $("#dir-prov-lista");
+async function provCargar() {
+  const cont = $("#prov-lista");
   if (!cont) return;
-  const r = await api("/api/repuestos/proveedores?limite=40&q=" + encodeURIComponent(q));
+  const p = new URLSearchParams({ pagina: provEstado.pagina, limite: PROV_POR_PAGINA });
+  if (provEstado.q) p.set("q", provEstado.q);
+  if (provEstado.letra) p.set("letra", provEstado.letra);
+  if (provEstado.uso) p.set("uso", "1");
+  const r = await api("/api/repuestos/proveedores?" + p.toString());
   const lista = r.proveedores || [];
   window._dirProv = lista;
-  $("#dir-prov-sub").textContent = `${(r.total || 0).toLocaleString("es-PY")} proveedores en el directorio. Buscá por nombre, RUC o número.`;
+  const n = r.coincidencias || 0;
+  const paginas = Math.ceil(n / PROV_POR_PAGINA);
   if (!lista.length) {
-    cont.innerHTML = `<div class="dir-prov-vacio">${q ? `Ningún proveedor coincide con «${q}».` : "Escribí arriba para buscar. Acá aparecen los que ya se usan en repuestos."}</div>`;
+    cont.innerHTML = `<div class="empty"><i class="ti ti-address-book-off"></i>${provEstado.q ? `Ningún proveedor coincide con «${provEstado.q}».` : provEstado.uso ? "Todavía ningún repuesto tiene proveedor cargado." : "No hay proveedores con esa letra."}</div>`;
     return;
   }
-  cont.innerHTML = (q ? "" : `<div class="dir-prov-cab">Los que ya se usan en repuestos</div>`) + lista.map((p, i) => {
-    const wa = numeroWhatsApp(p.telefono);
-    return `
-    <div class="dir-prov-item">
-      <div class="dir-prov-info">
-        <div class="dir-prov-nom">${p.nombre}${p.repuestos ? `<span class="dir-prov-uso">${p.repuestos} repuesto${p.repuestos === 1 ? "" : "s"}</span>` : ""}</div>
-        <div class="dir-prov-datos">
-          ${p.ruc ? `<span><i class="ti ti-id"></i> ${p.ruc}</span>` : ""}
-          ${p.telefono ? `<span><i class="ti ti-phone"></i> ${p.telefono}</span>` : ""}
-          ${p.contacto ? `<span><i class="ti ti-user"></i> ${p.contacto}</span>` : ""}
-          ${p.direccion ? `<span class="dir-prov-dir"><i class="ti ti-map-pin"></i> ${p.direccion}</span>` : ""}
-        </div>
-      </div>
-      <div class="dir-prov-acc">
-        ${wa ? `<a class="btn btn-ghost" target="_blank" rel="noopener" href="https://wa.me/${wa}" title="WhatsApp"><i class="ti ti-brand-whatsapp"></i></a>` : ""}
-        <button class="btn btn-ghost" onclick="dirProvEditar(${i})" title="Editar contacto"><i class="ti ti-edit"></i></button>
-      </div>
-    </div>`;
-  }).join("");
+  const desde = (provEstado.pagina - 1) * PROV_POR_PAGINA + 1;
+  cont.innerHTML = `
+    <div class="prov-conteo">${n.toLocaleString("es-PY")} proveedor${n === 1 ? "" : "es"} · mostrando ${desde}–${desde + lista.length - 1}</div>
+    <div class="card prov-tabla-card">
+      <table class="prov-tabla">
+        <thead><tr><th>N°</th><th>Proveedor</th><th>RUC</th><th>Teléfono</th><th>Contacto</th><th>Dirección</th><th></th></tr></thead>
+        <tbody>
+          ${lista.map((x, i) => {
+            const wa = numeroWhatsApp(x.telefono);
+            return `<tr onclick="dirProvEditar(${i})">
+              <td class="prov-num">${x.codigo || "—"}</td>
+              <td><div class="prov-nom">${x.nombre}</div>${x.repuestos ? `<span class="dir-prov-uso">${x.repuestos} repuesto${x.repuestos === 1 ? "" : "s"}</span>` : ""}</td>
+              <td class="prov-mono">${x.ruc || "—"}</td>
+              <td class="prov-mono">${x.telefono || "—"}</td>
+              <td>${x.contacto || `<span class="prov-vacio">—</span>`}</td>
+              <td class="prov-dir">${x.direccion || "—"}</td>
+              <td class="prov-acc" onclick="event.stopPropagation()">
+                ${wa ? `<a class="icon-btn" target="_blank" rel="noopener" href="https://wa.me/${wa}" title="WhatsApp"><i class="ti ti-brand-whatsapp"></i></a>` : ""}
+                <button class="icon-btn" onclick="dirProvEditar(${i})" title="Editar"><i class="ti ti-edit"></i></button>
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+    ${paginador(provEstado.pagina, paginas, "provPagina")}`;
 }
 
 function dirProvEditar(i) {
-  const p = (window._dirProv || [])[i];
+  const nuevo = i < 0;
+  const p = nuevo ? {} : (window._dirProv || [])[i];
   if (!p) return;
+  const puede = ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
   const esc = v => String(v || "").replace(/"/g, "&quot;");
+  const dis = puede ? "" : "disabled";
   const o = document.createElement("div");
   o.className = "rep-modal-overlay visible";
   o.style.zIndex = "1700";
   o.innerHTML = `
-    <div class="rep-mini-modal" style="max-width:460px">
-      <div class="rep-mini-titulo">${p.nombre}</div>
-      <label class="rep-mini-lbl">RUC</label><input id="dp-ruc" class="rep-mini-input" value="${esc(p.ruc)}">
-      <label class="rep-mini-lbl">Contacto (persona)</label><input id="dp-con" class="rep-mini-input" value="${esc(p.contacto)}" placeholder="ej: Carlos">
-      <label class="rep-mini-lbl">Teléfono / WhatsApp</label><input id="dp-tel" class="rep-mini-input" value="${esc(p.telefono)}" inputmode="tel">
-      <label class="rep-mini-lbl">Dirección</label><input id="dp-dir" class="rep-mini-input" value="${esc(p.direccion)}">
-      <label class="rep-mini-lbl">Email</label><input id="dp-ema" class="rep-mini-input" value="${esc(p.email)}" inputmode="email">
+    <div class="rep-mini-modal" style="max-width:480px">
+      <div class="rep-mini-titulo">${nuevo ? "Nuevo proveedor" : p.nombre}</div>
+      ${!nuevo && p.codigo ? `<p class="rep-mini-help">Proveedor N° ${p.codigo}${p.repuestos ? ` · usado en ${p.repuestos} repuesto${p.repuestos === 1 ? "" : "s"}` : ""}</p>` : ""}
+      ${nuevo ? `<label class="rep-mini-lbl">Nombre / razón social</label><input id="dp-nom" class="rep-mini-input" placeholder="ej: Repuestos del Este S.A.">` : ""}
+      <label class="rep-mini-lbl">RUC</label><input id="dp-ruc" class="rep-mini-input" value="${esc(p.ruc)}" ${dis}>
+      <label class="rep-mini-lbl">Contacto (persona)</label><input id="dp-con" class="rep-mini-input" value="${esc(p.contacto)}" placeholder="ej: Carlos" ${dis}>
+      <label class="rep-mini-lbl">Teléfono / WhatsApp</label><input id="dp-tel" class="rep-mini-input" value="${esc(p.telefono)}" inputmode="tel" ${dis}>
+      <label class="rep-mini-lbl">Dirección</label><input id="dp-dir" class="rep-mini-input" value="${esc(p.direccion)}" ${dis}>
+      <label class="rep-mini-lbl">Email</label><input id="dp-ema" class="rep-mini-input" value="${esc(p.email)}" inputmode="email" ${dis}>
       <div class="rep-mini-btns">
-        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
-        <button class="btn btn-primary" onclick="dirProvGuardar(${i}, this)"><i class="ti ti-check"></i> Guardar</button>
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">${puede ? "Cancelar" : "Cerrar"}</button>
+        ${puede ? `<button class="btn btn-primary" onclick="dirProvGuardar(${i}, this)"><i class="ti ti-check"></i> ${nuevo ? "Agregar" : "Guardar"}</button>` : ""}
       </div>
     </div>`;
   o.onclick = e => { if (e.target === o) o.remove(); };
   document.body.appendChild(o);
+  setTimeout(() => (nuevo ? $("#dp-nom") : $("#dp-con"))?.focus(), 50);
 }
 
 async function dirProvGuardar(i, btn) {
-  const p = (window._dirProv || [])[i];
+  const nuevo = i < 0;
+  const datos = { ruc: $("#dp-ruc").value, contacto: $("#dp-con").value, telefono: $("#dp-tel").value,
+                  direccion: $("#dp-dir").value, email: $("#dp-ema").value };
+  datos.nombre = nuevo ? $("#dp-nom").value.trim() : (window._dirProv || [])[i].nombre;
   const r = await api("/api/repuestos/proveedor", {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ nombre: p.nombre, ruc: $("#dp-ruc").value, contacto: $("#dp-con").value,
-      telefono: $("#dp-tel").value, direccion: $("#dp-dir").value, email: $("#dp-ema").value }),
+    method: nuevo ? "POST" : "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos),
   });
   if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
-  toast("Proveedor actualizado", "success");
+  toast(nuevo ? "Proveedor agregado" : "Proveedor actualizado", "success");
   btn.closest(".rep-modal-overlay").remove();
-  dirProvCargar(($("#dir-prov-q")?.value || "").trim());
+  if (nuevo) { provEstado.q = datos.nombre; provEstado.letra = ""; provEstado.uso = false; provEstado.pagina = 1; renderProveedores(); }
+  else provCargar();
 }
 
 // Número para WhatsApp: 0981 123 456 → 595981123456
