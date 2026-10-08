@@ -5378,7 +5378,7 @@ async function dirProvGuardar(i, btn) {
     body: JSON.stringify(datos),
   });
   if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
-  toast(nuevo ? "Proveedor agregado" : "Proveedor actualizado", "success");
+  toast(nuevo ? (r.msg || "Proveedor agregado") : "Proveedor actualizado", "success");
   btn.closest(".rep-modal-overlay").remove();
   if (nuevo) { provEstado.q = datos.nombre; provEstado.letra = ""; provEstado.uso = false; provEstado.pagina = 1; renderProveedores(); }
   else provCargar();
