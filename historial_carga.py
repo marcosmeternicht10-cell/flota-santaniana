@@ -207,6 +207,46 @@ def api_agregar_evento():
     return jsonify({"ok": True, **res})
 
 
+@bp_historial.route("/api/historial_carga/lote", methods=["POST"])
+def api_agregar_lote():
+    """Varios trabajos de un mismo papel: el sistema ya los separó y les puso
+    tipo y categoría. Comparten fecha, km y taller; el costo del papel va en
+    el primero, así el total gastado no se duplica."""
+    if not _puede_cargar():
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    d = request.json or {}
+    vid = d.get("vehiculo_id")
+    fecha = (d.get("fecha") or "").strip()
+    items = [x for x in (d.get("items") or []) if (x.get("descripcion") or "").strip()][:30]
+    if not vid or not fecha:
+        return jsonify({"ok": False, "msg": "Faltan coche o fecha"}), 400
+    if not items:
+        return jsonify({"ok": False, "msg": "Escribí qué se hizo"}), 400
+    usuario = session.get("nombre") or session.get("usuario") or ""
+    creados = []
+    for i, x in enumerate(items):
+        ok, res = agregar_evento(
+            int(vid), fecha, x.get("tipo", "otro"), x.get("descripcion", ""),
+            categoria=x.get("categoria", "") or "", km=d.get("km", 0),
+            costo=d.get("costo", 0) if i == 0 else 0, taller=d.get("taller", "") or "",
+            usuario=usuario)
+        if ok:
+            creados.append(res)
+    if not creados:
+        return jsonify({"ok": False, "msg": "No se pudo guardar"}), 400
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(
+            usuario=usuario or "?", rol=session.get("rol") or "",
+            accion=f"Cargó {len(creados)} evento(s) histórico(s) del {fecha}",
+            categoria="Historial",
+            detalle=" | ".join(x.get("descripcion", "") for x in items)[:200],
+            referencia=f"vehiculo:{vid}")
+    except Exception:
+        pass
+    return jsonify({"ok": True, "creados": creados})
+
+
 @bp_historial.route("/api/historial_carga/<origen>/<int:eid>", methods=["DELETE"])
 def api_eliminar_evento(origen, eid):
     if not _puede_cargar():
