@@ -3959,7 +3959,7 @@ async function renderOts() {
                     </span>
                   </td>
                   <td class="td-action">
-                    <button class="icon-btn" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>
+                    ${window.USUARIO_ROL === "admin" ? `<button class="icon-btn" title="Eliminar la OT" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>` : ""}
                   </td>
                 </tr>`;
               }).join("")}
@@ -4381,8 +4381,9 @@ async function reabrirOT(otId) {
 
 async function borrarOT(otId) {
   if (!confirm(`¿Eliminar la OT #${otId} completa? Se borrarán todos sus items.`)) return;
-  await api(`/api/ots/${otId}`, { method: "DELETE" });
-  toast("OT eliminada");
+  const r = await api(`/api/ots/${otId}`, { method: "DELETE" });
+  if (!r.ok) return;   // sin permiso: el aviso ya lo muestra api()
+  toast("OT eliminada", "success");
   renderOts();
 }
 
@@ -6486,12 +6487,13 @@ async function hiBorrar(origen, id, btn) {
   setTimeout(() => hiRefrescar(), _uiSinMovimiento ? 0 : 320);
 }
 
-// Vuelve a traer la ficha manteniendo los filtros; si se indica, marca un registro
+// Vuelve a traer la ficha manteniendo los filtros; si se indica, marca lo recién guardado
 async function hiRefrescar(marcar = null, fecha = "") {
+  const claves = [].concat(marcar || []);
   let d = await hiTraer(1);
   if (!d || d.error) return;
   // Si lo recién cargado no entra en lo que se ve (un papel viejo), se salta a su año
-  if (marcar && !d.items.some(e => `${e.origen}-${e.id}` === marcar) && fecha) {
+  if (claves.length && !d.items.some(e => claves.includes(`${e.origen}-${e.id}`)) && fecha) {
     hi.anio = fecha.slice(0, 4);
     d = await hiTraer(1);
   }
@@ -6501,24 +6503,149 @@ async function hiRefrescar(marcar = null, fecha = "") {
   hiPintarVida();
   hiPintarTipos();
   hiPintarLinea(false);
-  if (marcar) {
-    const p = document.querySelector(`.hi-parada[data-k="${marcar}"]`);
-    if (p) {
-      p.classList.add("recien");
-      p.scrollIntoView({ behavior: _uiSinMovimiento ? "auto" : "smooth", block: "center" });
-      setTimeout(() => p.classList.remove("recien"), 2400);
-    }
-  }
+  const marcadas = claves.map(k => document.querySelector(`.hi-parada[data-k="${k}"]`)).filter(Boolean);
+  marcadas.forEach(p => { p.classList.add("recien"); setTimeout(() => p.classList.remove("recien"), 2400); });
+  if (marcadas[0]) marcadas[0].scrollIntoView({ behavior: _uiSinMovimiento ? "auto" : "smooth", block: "center" });
 }
 
+// ─── Lectura automática de lo que se escribe en el historial ────────────
+// Se escribe como sale del papel ("cambio de aceite y tensor de correa") y
+// el sistema lo separa en trabajos y le pone a cada uno el tipo y la
+// categoría. Son reglas simples con el vocabulario del taller, no adivina:
+// si algo queda mal, se toca la etiqueta y cambia.
+
+const HI_SIN_TILDE = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// Palabras que arrancan un trabajo: "cambio de...", "se cambió...", "revisión de..."
+const HI_ACCION = /^(se\s+)?(cambi\w*|reemplaz\w*|recambio|repar\w*|arregl\w*|revis\w*|control\w*|coloc\w*|instal\w*|ajust\w*|limpi\w*|lavad\w*|lav[oóa]\w*|engras\w*|lubric\w*|rotaci\w*|rot[oó]|alineac\w*|aline\w*|balance\w*|sold\w*|rectific\w*|regul\w*|calibr\w*|purg\w*|carg\w*|service|servis|servicio|mantenimiento|inspecc\w*|chequeo|cheque\w*|pint\w*|recaucha\w*|desarm\w*|arm[oó]|rellen\w*|complet\w*|agreg\w*|reapret\w*|apret\w*|sustitu\w*|mont\w*|desmont\w*)\b/;
+
+// Un problema contado (el resto de la frase suele ser cómo se arregló):
+// con esto no se separa por coma ni por "y".
+const HI_SINTOMA = /(patin|pierde|perdida|fuga|gote|ruido|suena|vibra|recalient|humo|no arranca|no carga|no anda|no frena|no funciona|\bfalla|\broto\b|\brota\b|rotura|rompi|quebr|fisur|desgast\w* (de mas|excesiv)|\btraba\b|trabad|golpe|\bchoc|se cort|se solt|se quem|quemad|trancad)/;
+
+// Piezas y fluidos: alcanza para reconocer un trabajo escrito sin verbo ("aceite, filtro de aire")
+const HI_PIEZA = /(aceite|filtro|tensor|correa|pastilla|zapata|disco|campana|cinta|bomba|alternador|arranque|burro|embrague|crapodina|plato|amortiguador|pulmon|fuelle|elastico|resorte|buje|rodamiento|ruleman|cruceta|cardan|palier|junta|reten|manguera|radiador|termostato|electroventilador|turbo|inyector|compresor|sensor|valvula|fusible|lampara|foco|luz|luces|bateria|parabrisas|espejo|vidrio|cerradura|terminal|rotula|barra|extremo|neumatic|cubierta|goma|llanta|liquido|refrigerante|adblue|purificador|secador|motor|caja|diferencial|frenos?|direccion|escape|silenciador|cable|regulador|tapa|cilindro|piston|aros|cigüeñal|cigueñal|chapa|asiento|puerta|ventanilla|limpiaparabrisas|escobilla|bocina|tablero|tacografo|gps|camara|aire acondicionado)/;
+
+const HI_NEU = /(neumatic|cubierta|goma|llanta|rotacion|rotar|alineac|alinea|balanceo|balancea|pinch|parche|camara de aire|trucky|auxilio|recauchu|recapad)/;
+const HI_PREV = /(aceite|filtro|engras|lubric|purificador|liquido de frenos|calibraci|adblue|service|servis|revision|revisar|control|inspecc|chequeo|regulacion de valvulas|purga|refrigerante|anticongelante|preventiv)/;
+const HI_REPARA = /(repar|arregl|sold|rectific|reemplaz|recambio|desarm|correctiv)/;
+const HI_OTRO = /(lavad|lavar|limpieza|limpiar|viaje|traslado|documenta|habilitaci|seguro|patente|vtv)/;
+
+const HI_CATEGORIAS = [
+  [/(embrague|crapodina|plato de embrague|disco de embrague)/, "Embrague"],
+  [/(pastilla|zapata|freno|campana|cinta de freno|disco de freno|liquido de frenos|pulmon de freno)/, "Frenos"],
+  [/(aire acondicionado|a\/c\b|climatiz|carga de gas|gas refrigerante)/, "Aire acondicionado"],
+  [/(radiador|refrigera|anticongelante|termostato|electroventilador|bomba de agua|manguera)/, "Refrigeración"],
+  [/(rotacion|rotar)/, "Rotación"],
+  [/(alineac|alinea|balanceo|balancea)/, "Alineación y balanceo"],
+  [/(neumatic|cubierta|goma|llanta|pinch|parche|recauchu|auxilio|trucky)/, "Cambio de neumático"],
+  [/(alternador|arranque|burro|bateria|fusible|lampara|foco|\bluz\b|luces|electric|sensor|cable|regulador de voltaje|bocina|tablero)/, "Eléctrico"],
+  [/(amortiguador|pulmon|fuelle|elastico|resorte|buje|suspension|barra estabiliz)/, "Suspensión"],
+  [/(direccion|rotula|terminal|extremo|bieleta)/, "Dirección"],
+  [/(diferencial|cardan|cruceta|palier)/, "Diferencial"],
+  [/(caja de cambio|caja\b|palanca de cambio|retarder)/, "Caja"],
+  [/(lavado de motor|lavar el motor)/, "Lavado de motor"],
+  [/(filtro)/, "Filtros"],
+  [/(aceite)/, "Cambio de aceite"],
+  [/(engras|lubric)/, "Engrase"],
+  [/(carroceria|parabrisas|espejo|vidrio|cerradura|puerta|chapa|pintura|asiento|ventanilla|escobilla|limpiaparabrisas)/, "Carrocería"],
+  [/(motor|tensor|correa|junta|inyector|turbo|bomba|valvula|culata|piston|cigu|escape|silenciador|adblue|purificador)/, "Motor"],
+];
+
+function hiClasificar(texto) {
+  const t = HI_SIN_TILDE(texto);
+  let tipo;
+  if (HI_NEU.test(t)) tipo = "neumaticos";
+  else if (HI_SINTOMA.test(t) || HI_REPARA.test(t)) tipo = "correctivo";
+  else if (/\bviaje\b|traslado/.test(t)) tipo = "servicio";
+  else if (HI_PREV.test(t)) tipo = "preventivo";
+  else if (HI_OTRO.test(t)) tipo = "otro";
+  else if (HI_PIEZA.test(t)) tipo = "correctivo";     // se cambió una pieza que no es de rutina
+  else tipo = "otro";
+  let cat = (HI_CATEGORIAS.find(([re]) => re.test(t)) || [null, ""])[1];
+  // Una pérdida de aceite es un problema del motor, no un cambio de aceite
+  if (tipo === "correctivo" && cat === "Cambio de aceite") cat = "Motor";
+  return { tipo, categoria: cat };
+}
+
+// "Cambio de aceite" → "Cambio de"; "Se cambió el tensor" → "Cambio de"
+function hiAccionDe(frag) {
+  const m = frag.match(/^\s*(se\s+)?([A-Za-zÁÉÍÓÚáéíóúñÑ]+)(\s+(de(l)?|de la|de los|de las|a la|al)\b)?/i);
+  if (!m || !HI_ACCION.test(HI_SIN_TILDE(m[0]).trim())) return "";
+  if (m[1]) {   // "se cambió" → "Cambio de"
+    const v = HI_SIN_TILDE(m[2]);
+    const nombre = v.startsWith("cambi") ? "Cambio" : v.startsWith("repar") ? "Reparación"
+      : v.startsWith("revis") ? "Revisión" : v.startsWith("coloc") ? "Colocación" : v.startsWith("limpi") ? "Limpieza" : "";
+    return nombre ? nombre + " de" : "";
+  }
+  return (m[2] + (m[3] || "")).trim();
+}
+
+const hiMayus = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+// Separa en trabajos. Corta siempre por renglón, ";" y "+". Por "," o "y"
+// corta solo si los dos lados son trabajos (empiezan con una acción o
+// nombran una pieza) y no se está contando un problema.
+function hiSeparar(texto) {
+  const renglones = String(texto || "").split(/\n|;/).map(s => s.trim()).filter(Boolean);
+  const salida = [];
+  for (const r of renglones) {
+    if (HI_SINTOMA.test(HI_SIN_TILDE(r))) { salida.push(r); continue; }
+    const partes = r.split(/\s*,\s*|\s*\+\s*|\s+y\s+|\s+e\s+(?=[ih])|\s+más\s+/i).map(s => s.trim()).filter(Boolean);
+    const esTrabajo = p => { const t = HI_SIN_TILDE(p); return HI_ACCION.test(t) || HI_PIEZA.test(t); };
+    if (partes.length < 2 || !partes.every(esTrabajo)) { salida.push(r); continue; }
+    let accion = "", accionLarga = "";
+    for (const p of partes) {
+      const propia = hiAccionDe(p);
+      const limpio = p.replace(/^(el|la|los|las)\s+/i, "");
+      let frase;
+      if (propia) { accion = propia; frase = p; }
+      // "Cambio de aceite de caja y diferencial": el segundo es aceite de diferencial
+      else if (accionLarga && HI_LUGAR.test(HI_SIN_TILDE(limpio))) frase = `${accionLarga} ${limpio}`;
+      else frase = accion ? `${accion} ${limpio}` : p;
+      const m = hiNormalizar(frase).match(/^(.+?\b(aceite|filtros?|l[ií]quido)\s+(de|del|de la)\b)/i);
+      accionLarga = m ? m[1] : "";
+      salida.push(frase);
+    }
+  }
+  return salida.map(s => hiMayus(hiNormalizar(s.replace(/\s+/g, " ").replace(/[.,]+$/, "").trim()))).filter(Boolean);
+}
+
+// Partes del coche que llevan aceite o filtro propio
+const HI_LUGAR = /^(caja( de cambios?)?|diferencial(es)?|motor|direccion|retarder|transmision|cabina)$/;
+
+// "se cambió el tensor" → "Cambio de tensor", para que todo quede escrito igual
+function hiNormalizar(s) {
+  const m = s.match(/^se\s+((?:cambi|repar|revis|coloc|limpi|instal|ajust)[a-záéíóú]*)\s+(el\s+|la\s+|los\s+|las\s+)?(.*)$/i);
+  if (!m) return s;
+  const v = HI_SIN_TILDE(m[1]);
+  const nombre = v.startsWith("cambi") ? "Cambio de" : v.startsWith("repar") ? "Reparación de"
+    : v.startsWith("revis") ? "Revisión de" : v.startsWith("coloc") ? "Colocación de"
+    : v.startsWith("limpi") ? "Limpieza de" : v.startsWith("instal") ? "Instalación de" : "Ajuste de";
+  return `${nombre} ${m[3]}`;
+}
+
+function hiLeer(texto) {
+  return hiSeparar(texto).map(d => ({ descripcion: d, ...hiClasificar(d) }));
+}
+
+
 // ─── Cargar del papel / corregir ────────────────────────────────────────
+// Para cargar: fecha y lo que dice el papel, nada más. El sistema lo separa
+// en trabajos y le pone tipo y categoría a cada uno; abajo se ve cómo quedó
+// y, si alguna etiqueta está mal, se toca y cambia.
+
+const HI_CICLO_TIPO = ["preventivo", "correctivo", "neumaticos", "servicio", "otro"];
+const hiGrupoDe = t => (t === "servicio" || t === "otro" || t === "control") ? "otros" : t;
+let _hiLecturaT = null;
 
 function hiAbrirCarga(evento = null) {
   hiCerrarCarga(true);
   hi.editando = evento;
+  hi.lectura = [];
+  hi.forzado = {};
   const c = hi.d.coche;
   const v = evento || {};
-  const tipo = evento ? evento.tipo : (window._hiUltimoTipo || "preventivo");
   const fecha = evento ? String(evento.fecha).slice(0, 10) : (window._hiUltimaFecha || hiHoyLocal());
   const fondo = document.createElement("div");
   fondo.className = "hi-cajon-fondo";
@@ -6532,31 +6659,31 @@ function hiAbrirCarga(evento = null) {
     <header class="hi-cajon-cab">
       <div>
         <h2>${evento ? "Corregir registro" : "Cargar del papel"}</h2>
-        <p>${evento ? `Coche ${hiEsc(c.n_interno || c.patente)}.`
-          : `Coche ${hiEsc(c.n_interno || c.patente)}. Copiá cada anotación tal cual; la fecha y el tipo quedan para la siguiente.`}</p>
+        <p>Coche ${hiEsc(c.n_interno || c.patente)}</p>
       </div>
       <button class="firma-x" onclick="hiCerrarCarga()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
     </header>
     <div class="hi-cajon-cuerpo">
       <label class="hi-campo"><span>Fecha</span><input type="date" id="hi-f-fecha" value="${fecha}" max="${hiHoyLocal()}"></label>
-      <div class="hi-campo"><span>Tipo</span>
-        <div class="hi-tipos-sel">
-          ${TIPOS_HIST.map(t => {
-            const bloqueado = evento && (esCorr ? t.v !== "correctivo" : t.v === "correctivo");
-            const g = t.v === "servicio" || t.v === "otro" ? "otros" : t.v;
-            return `<button type="button" class="hi-tsel ${tipo === t.v ? "on" : ""}" data-t="${t.v}" style="--c:${hiColor(g)}"
-                      ${bloqueado ? "disabled" : ""} onclick="hiElegirTipo('${t.v}')"><i class="ti ti-${t.i}"></i>${t.l}</button>`;
-          }).join("")}
+      ${evento ? `
+        <div class="hi-campo"><span>Tipo</span>
+          <div class="hi-tipos-sel">
+            ${TIPOS_HIST.map(t => {
+              const bloqueado = esCorr ? t.v !== "correctivo" : t.v === "correctivo";
+              return `<button type="button" class="hi-tsel ${evento.tipo === t.v ? "on" : ""}" data-t="${t.v}" style="--c:${hiColor(hiGrupoDe(t.v))}"
+                        ${bloqueado ? "disabled" : ""} onclick="hiElegirTipo('${t.v}')"><i class="ti ti-${t.i}"></i>${t.l}</button>`;
+            }).join("")}
+          </div>
         </div>
-        ${!evento ? `<small class="hi-ayuda" id="hi-ayuda-tipo"></small>` : ""}
-      </div>
-      <label class="hi-campo"><span>Categoría <em>opcional</em></span>
-        <input id="hi-f-cat" list="hi-cat-lista" value="${hiEsc(v.categoria || "")}" placeholder="ej: Frenos, Cambio de aceite">
-        <datalist id="hi-cat-lista">${MT_CATEGORIAS.map(x => `<option value="${x}">`).join("")}</datalist>
-      </label>
+        <label class="hi-campo"><span>Categoría</span>
+          <input id="hi-f-cat" list="hi-cat-lista" value="${hiEsc(v.categoria || "")}">
+          <datalist id="hi-cat-lista">${MT_CATEGORIAS.map(x => `<option value="${x}">`).join("")}</datalist>
+        </label>` : ""}
       <label class="hi-campo"><span>Qué se hizo</span>
-        <textarea id="hi-f-desc" rows="3" placeholder="Lo que dice el papel">${hiEsc(v.descripcion || "")}</textarea>
+        <textarea id="hi-f-desc" rows="${evento ? 3 : 4}" ${evento ? "" : `oninput="hiLeerCampo()"`}
+          placeholder="${evento ? "" : "Escribí todo como está en el papel, ej: cambio de aceite y cambio de tensor de correa"}">${hiEsc(v.descripcion || "")}</textarea>
       </label>
+      ${evento ? "" : `<div class="hi-lectura" id="hi-lectura" aria-live="polite"></div>`}
       <div class="hi-campo-par">
         <label class="hi-campo"><span>Km <em>si figura</em></span><input id="hi-f-km" inputmode="numeric" value="${v.km ? Math.round(v.km) : ""}" placeholder="ej: 470500"></label>
         <label class="hi-campo"><span>Costo Gs. <em>si figura</em></span><input id="hi-f-costo" inputmode="numeric" value="${v.costo ? Math.round(v.costo) : ""}" placeholder="ej: 350000"></label>
@@ -6565,10 +6692,9 @@ function hiAbrirCarga(evento = null) {
     </div>
     <footer class="hi-cajon-pie">
       <span class="hi-sesion" id="hi-sesion">${!evento && hi.sesion ? `${hi.sesion} cargado${hi.sesion === 1 ? "" : "s"} ahora` : ""}</span>
-      <button class="btn btn-primary" id="hi-f-guardar" onclick="hiGuardar()"><i class="ti ti-check"></i> ${evento ? "Guardar cambios" : "Guardar"}</button>
+      <button class="btn btn-primary" id="hi-f-guardar" onclick="hiGuardar()"><i class="ti ti-check"></i> <span>${evento ? "Guardar cambios" : "Guardar"}</span></button>
     </footer>`;
   document.body.append(fondo, caj);
-  hiElegirTipo(tipo, true);
   caj.addEventListener("keydown", e => {
     if (e.key === "Escape") { e.preventDefault(); hiCerrarCarga(); }
     else if (e.key === "Enter" && !e.shiftKey && e.target.tagName !== "BUTTON") { e.preventDefault(); hiGuardar(); }
@@ -6577,13 +6703,36 @@ function hiAbrirCarga(evento = null) {
   setTimeout(() => $("#hi-f-desc")?.focus(), 260);
 }
 
-function hiElegirTipo(t, inicial = false) {
+// Mientras se escribe: cómo lo va a guardar el sistema
+function hiLeerCampo() {
+  clearTimeout(_hiLecturaT);
+  _hiLecturaT = setTimeout(hiPintarLectura, 120);
+}
+
+function hiPintarLectura() {
+  const cont = $("#hi-lectura");
+  if (!cont) return;
+  hi.lectura = hiLeer($("#hi-f-desc").value).map(x => ({ ...x, tipo: hi.forzado[x.descripcion] || x.tipo }));
+  const n = hi.lectura.length;
+  const lbl = document.querySelector("#hi-f-guardar span");
+  if (lbl) lbl.textContent = n > 1 ? `Guardar ${n} registros` : "Guardar";
+  cont.innerHTML = hi.lectura.map((x, i) => `
+    <div class="hi-lec" style="--c:${hiColor(hiGrupoDe(x.tipo))};--i:${i}">
+      <button type="button" class="hi-lec-tipo" onclick="hiCambiarTipoLectura(${i})" title="Tocá para cambiar el tipo">${HI_TIPO_NOMBRE[x.tipo]}</button>
+      <span class="hi-lec-txt">${hiEsc(x.descripcion)}${x.categoria && HI_SIN_TILDE(x.categoria) !== HI_SIN_TILDE(x.descripcion) ? `<small>${hiEsc(x.categoria)}</small>` : ""}</span>
+    </div>`).join("");
+}
+
+function hiCambiarTipoLectura(i) {
+  const x = hi.lectura[i];
+  if (!x) return;
+  x.tipo = HI_CICLO_TIPO[(HI_CICLO_TIPO.indexOf(x.tipo) + 1) % HI_CICLO_TIPO.length];
+  hi.forzado[x.descripcion] = x.tipo;
+  hiPintarLectura();
+}
+
+function hiElegirTipo(t) {
   document.querySelectorAll(".hi-tsel").forEach(b => b.classList.toggle("on", b.dataset.t === t));
-  const ay = $("#hi-ayuda-tipo");
-  if (ay) ay.textContent = t === "correctivo"
-    ? "Va a Correctivos como una falla ya resuelta: cuenta en los reportes de fallas."
-    : "Queda en el historial del coche sin contar como falla.";
-  if (!inicial) $("#hi-f-desc")?.focus();
 }
 
 function hiCerrarCarga(inmediato = false) {
@@ -6605,19 +6754,23 @@ async function hiGuardar() {
   if (!btn || btn.disabled) return;
   const fecha = $("#hi-f-fecha").value;
   const desc = $("#hi-f-desc").value.trim();
-  const tipo = document.querySelector(".hi-tsel.on")?.dataset.t || "otro";
   if (!fecha) { toast("Poné la fecha del papel", "error"); $("#hi-f-fecha").focus(); return; }
   if (fecha > hiHoyLocal()) { toast("La fecha no puede ser posterior a hoy", "error"); $("#hi-f-fecha").focus(); return; }
   if (!desc) { toast("Escribí qué se hizo", "error"); $("#hi-f-desc").focus(); return; }
   const num = id => parseFloat(($(id).value || "").replace(/\./g, "").replace(/,/g, ".")) || 0;
-  const datos = { fecha, tipo, descripcion: desc, categoria: $("#hi-f-cat").value.trim(),
-                  km: num("#hi-f-km"), costo: num("#hi-f-costo"), taller: $("#hi-f-taller").value.trim() };
-  btn.disabled = true;
+  const comunes = { fecha, km: num("#hi-f-km"), costo: num("#hi-f-costo"), taller: $("#hi-f-taller").value.trim() };
   const ed = hi.editando;
-  const r = ed
-    ? await api(`/api/historial_carga/${ed.origen}/${ed.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos) })
-    : await api("/api/historial_carga", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vehiculo_id: hi.coche, ...datos }) });
+  btn.disabled = true;
+  let r;
+  if (ed) {
+    r = await api(`/api/historial_carga/${ed.origen}/${ed.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...comunes, descripcion: desc, categoria: $("#hi-f-cat").value.trim(),
+                             tipo: document.querySelector(".hi-tsel.on")?.dataset.t || ed.tipo }) });
+  } else {
+    hiPintarLectura();   // por si se guardó antes de que termine de leer
+    r = await api("/api/historial_carga/lote", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vehiculo_id: hi.coche, ...comunes, items: hi.lectura }) });
+  }
   btn.disabled = false;
   if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
   hi.flotaVieja = true;
@@ -6627,15 +6780,17 @@ async function hiGuardar() {
     await hiRefrescar(`${ed.origen}-${ed.id}`, fecha);
     return;
   }
-  hi.sesion++;
+  const n = r.creados.length;
+  hi.sesion += n;
   window._hiUltimaFecha = fecha;
-  window._hiUltimoTipo = tipo;
-  toast("Guardado en el historial", "success");
-  // Queda abierto para el próximo papel: solo se limpia lo que cambia
+  toast(n > 1 ? `${n} registros guardados` : "Guardado en el historial", "success");
+  // Queda abierto para el próximo papel: la fecha se mantiene
   ["#hi-f-desc", "#hi-f-km", "#hi-f-costo", "#hi-f-taller"].forEach(id => $(id).value = "");
+  hi.forzado = {};
+  hiPintarLectura();
   $("#hi-sesion").textContent = `${hi.sesion} cargado${hi.sesion === 1 ? "" : "s"} ahora`;
   $("#hi-f-desc").focus();
-  await hiRefrescar(`${r.origen}-${r.id}`, fecha);
+  await hiRefrescar(r.creados.map(c => `${c.origen}-${c.id}`), fecha);
 }
 
 
