@@ -3441,3 +3441,58 @@ input:focus, select:focus, textarea:focus { box-shadow: 0 0 0 3px rgba(30,90,150
 .hi-lec-tipo:active { transform: scale(.94); }
 .hi-lec-txt { min-width: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; }
 .hi-lec-txt small { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   AZUL OSCURO DEL LOGO EN LUGAR DE NEGRO
+   ═══════════════════════════════════════════════════════════════════
+   Todo lo que era negro (el menú, el cartel de la ficha, los botones
+   activos, los avisos, el buscador) pasa a un azul oscuro sacado del azul
+   del logo: mismo tono, más profundo. Los textos grises del menú se aclaran
+   para que se sigan leyendo, y donde había una franja azul sobre ese fondo
+   pasa a celeste, si no desaparecería. */
+:root {
+  --azul-oscuro: #1D344E;                 /* el azul del logo, más profundo y apagado */
+  --azul-oscuro-2: #192B41;
+  --sb-bg: var(--azul-oscuro);
+  --sb-bg-2: var(--azul-oscuro-2);
+  --sb-hover: rgba(255,255,255,.08);
+  --sb-active: rgba(255,255,255,.14);
+  --sb-text: rgba(255,255,255,.85);
+  --sb-text-muted: rgba(255,255,255,.66);
+  --ruta: rgba(255,255,255,.26);
+  --celeste: #8CBDEB;
+}
+.brand { background: linear-gradient(180deg, var(--azul-oscuro-2) 0%, var(--azul-oscuro) 100%); border-bottom-color: rgba(255,255,255,.1); }
+.sidebar .nav-section { color: rgba(255,255,255,.66); }
+.sidebar .nav-section::before { border-color: rgba(255,255,255,.4); }
+.sidebar .nav-item::after { border-color: rgba(255,255,255,.4); }
+.sidebar .nav-item.active { background: linear-gradient(90deg, rgba(255,255,255,.16), rgba(255,255,255,.04)); }
+.sidebar .nav-item.active::after { border-color: #fff; background: var(--brand-red); }
+.coche-card { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.12); }
+.coche-card.has-coche { background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.26); }
+.user-box { background: rgba(0,0,0,.2); border-color: rgba(255,255,255,.1); }
+.destino-btn { background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.16); }
+.destino-btn:hover { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.3); }
+.destino-btn kbd { color: rgba(255,255,255,.75); border-color: rgba(255,255,255,.25); background: rgba(0,0,0,.2); }
+.nav-bus { box-shadow: 0 0 0 3px var(--sb-bg), 0 4px 14px rgba(220,38,65,.5); }
+.nav-bus.viaja { box-shadow: 0 0 0 3px var(--sb-bg), 0 0 20px rgba(220,38,65,.85); }
+
+/* Letras del título cuando giran: el letrero, en azul oscuro */
+.flap-c.girando { background: linear-gradient(#26405E 0 48%, #122030 48% 54%, #294565 54%); }
+
+/* Cartel de la ficha del coche y buscador: la franja de abajo, rojo a celeste */
+.hi-hero-cartel::after, .destino-linea { background: linear-gradient(90deg, var(--brand-red), var(--celeste)); }
+.hi-hero-id span { color: rgba(255,255,255,.75); }
+
+/* Avisos, botones activos y la tarjeta del odómetro */
+.toast, .toast.error, .toast.success { background: var(--azul-oscuro); }
+.toast .ti { background: rgba(255,255,255,.14); }
+.hi-tipos-ind { background: var(--azul-oscuro); }
+.odometer-card { background: linear-gradient(135deg, var(--azul-oscuro) 0%, var(--azul-oscuro-2) 100%); }
+.menu-toggle { background: var(--azul-oscuro); }
+
+/* Buscador: los atajos de un coche solo ocupan lugar en el elegido, así
+   los demás no se parten en dos renglones */
+.destino-item:not(.sel) .destino-atajos { display: none; }
+.destino-item.sel .destino-atajos { max-width: 62%; }
+.destino-txt b, .destino-txt small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
