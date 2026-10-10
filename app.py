@@ -103,6 +103,13 @@ app.register_blueprint(bp_limpieza)
 from turismo_agenda import bp_turismo, init_turismo_agenda
 init_turismo_agenda(app)
 app.register_blueprint(bp_turismo)
+
+# ─── Tráfico nacional ────────────────────────────────────────────────────────
+# Las salidas del día (lo que antes era el Excel del grupo de WhatsApp): se
+# arma acá, el sistema sabe dónde quedó cada coche y sale un PDF único.
+from trafico import bp_trafico, init_trafico
+init_trafico()
+app.register_blueprint(bp_trafico)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -1306,6 +1313,7 @@ def api_cerrar_ot(ot_id):
 
 
 @app.route("/api/ots/<int:ot_id>", methods=["DELETE"])
+@rol_requerido("admin")   # borrar una OT es solo de administración
 def api_eliminar_ot(ot_id):
     eliminar_ot(ot_id)
     auditar(f"Eliminó la OT #{ot_id}", "Órdenes de Trabajo")
