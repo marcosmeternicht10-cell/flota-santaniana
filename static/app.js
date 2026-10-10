@@ -2946,6 +2946,7 @@ function trResumen() {
       ${n(r.tripulantes || 0, "tripulantes")}
       ${r.a_confirmar ? n(r.a_confirmar, "a confirmar", "falta", "trIrAProblema('falta')") : n("✓", "todo asignado", "bien")}
       ${r.con_aviso ? n(r.con_aviso, r.con_aviso === 1 ? "con aviso" : "con avisos", "aviso", "trIrAProblema('aviso')") : ""}
+      ${r.refuerzos ? n(r.refuerzos, r.refuerzos === 1 ? "refuerzo" : "refuerzos", "ref") : ""}
       ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con papeles vencidos" : "coches con papeles vencidos", "doc", "trIrAProblema('doc')") : ""}
     </div>`;
 }
@@ -3098,6 +3099,7 @@ function trClasesFila(s, cambiada) {
   if (av.some(a => a.nivel === "error")) c.push("con-aviso", "error");
   else if (av.some(a => a.nivel === "aviso")) c.push("con-aviso");
   if (av.some(a => a.nivel === "doc")) c.push("papeles");
+  if ((s.destino_extras || []).includes("REFUERZO")) c.push("refuerzo");
   if (cambiada) c.push("cambiada");
   return c.join(" ");
 }
@@ -3128,7 +3130,10 @@ function trFila(s, lado, cambiada, k = 0) {
         <input class="tr-in tr-trip" ${v("trip1", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Primer tripulante"')}>
         <input class="tr-in tr-trip" ${v("trip2", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Segundo tripulante"')}>
       </span>
-      ${trPuede() ? `<button class="tr-quitar" onclick="trBorrarSalida(${s.id})" title="Quitar esta salida" tabindex="-1"><i class="ti ti-x"></i></button>` : "<span></span>"}
+      ${trPuede() ? `<span class="tr-acc-fila">
+          <button class="tr-ref" onclick="trRefuerzo(${s.id})" title="Agregar un refuerzo: otro coche a la misma hora y el mismo tramo" tabindex="-1"><i class="ti ti-copy-plus"></i></button>
+          <button class="tr-quitar" onclick="trBorrarSalida(${s.id})" title="Quitar esta salida" tabindex="-1"><i class="ti ti-x"></i></button>
+        </span>` : "<span></span>"}
       <div class="tr-avisos">${trAvisos(s)}</div>
     </div>`;
 }
@@ -3256,6 +3261,22 @@ async function trAgregarSalida(bid, lado) {
   const f = document.querySelector(`.tr-fila[data-id="${r.salida_id}"]`);
   if (f) { f.classList.add("nueva"); f.querySelector(".tr-hora")?.focus(); }
   trRefrescarDias();
+}
+
+// Refuerzo: otro coche a la misma hora y el mismo tramo (de noche es lo común).
+// Queda marcado REFUERZO en el tramo, y el coche que lo hace queda allá para
+// el día siguiente, como cualquier otro.
+async function trRefuerzo(sid) {
+  let s = null, lado = null, bid = null;
+  tr.d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(x => { if (x.id === sid) { s = x; lado = l; bid = b.id; } })));
+  if (!s) return;
+  const destino = (s.destino_extras || []).includes("REFUERZO") ? s.destino : `${s.destino || ""} REFUERZO`.trim();
+  const r = await trPedir(`/api/trafico/bloque/${bid}/salida`, "POST", { lado, hora: s.hora, destino });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar el refuerzo", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  const f = document.querySelector(`.tr-fila[data-id="${r.salida_id}"]`);
+  if (f) { f.classList.add("nueva"); f.querySelector(".tr-chapa")?.focus(); }
 }
 
 async function trBorrarSalida(sid) {
@@ -3491,7 +3512,7 @@ function trMarcarAsignar() {
 function trClickFila(e) {
   if (!tr.asignar) return;
   const fila = e.target.closest(".tr-fila");
-  if (!fila || e.target.closest(".tr-quitar")) return;
+  if (!fila || e.target.closest(".tr-acc-fila")) return;
   e.preventDefault();
   e.stopPropagation();
   const coche = tr.asignar;
