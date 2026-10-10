@@ -11,13 +11,12 @@ arma en el sistema y sale un PDF único para mandar. Cómo está pensado:
   - El sistema sabe dónde quedó cada coche: si ayer salió de ASU a COP, hoy
     está en COP. Con eso sugiere qué coche (y con qué tripulación) hace cada
     regreso, y avisa si se asigna un coche que está en otro lado.
-  - También avisa si el coche está en el taller (OT abierta), fuera de
-    servicio, con documentos vencidos o si no existe en la flota; si una
-    salida no tiene coche o tripulantes; y si un chofer o un coche está en
-    dos salidas a la misma hora. Avisa, no bloquea: decide quien arma.
+  - También avisa si el coche está fuera de servicio o si no existe en la
+    flota (y marca los papeles vencidos). Que una hora se repita no es aviso:
+    de noche hay refuerzos (REFUERZO en el tramo), y el coche del refuerzo
+    queda allá para el día siguiente. Avisa, no bloquea: decide quien arma.
   - Publicar guarda una versión. Si después se cambia algo, la versión
-    siguiente lleva la lista de cambios y las filas marcadas, así nadie se
-    queda con la vieja.
+    siguiente marca las filas que cambiaron, así nadie se queda con la vieja.
 
 Enganche en app.py:
     from trafico import bp_trafico, init_trafico
@@ -158,7 +157,7 @@ LUGARES = {
     "TACUATI": "TACUATI",
     "SAN VICENTE": "SAN VICENTE",
 }
-_CLASES = ("LEITO", "SEMI CAMA", "SEMICAMA", "CAMA", "EJECUTIVO", "DIRECTO")
+_CLASES = ("REFUERZO", "LEITO", "SEMI CAMA", "SEMICAMA", "CAMA", "EJECUTIVO", "DIRECTO")
 
 
 def partes_destino(destino):
@@ -170,9 +169,9 @@ def partes_destino(destino):
         if re.search(rf"\b{cl}\b", s):
             extras.append(cl)
             s = re.sub(rf"\s*\b{cl}\b", "", s).strip()
-    m = re.search(r"\s+X\s+(.+)$", s)
+    m = re.search(r"(^|\s+)X\s+(.+)$", s)
     if m:
-        extras.insert(0, "X " + m.group(1).strip())
+        extras.insert(0, "X " + m.group(2).strip())
         s = s[:m.start()].strip()
     s = re.sub(r"\s*/\s*", " / ", s).strip(" /")
     return s, extras
@@ -198,7 +197,10 @@ def tramo(destino, lado, corredor):
     base, _ = partes_destino(destino)
     base = _sin_tildes(base)
     if not base:
-        return "", ""
+        lugar_corr = lugar_del_corredor(corredor)
+        if not lugar_corr or lugar_corr == "ASU":
+            return "", ""
+        return ("ASU", lugar_corr) if lado == "ida" else (lugar_corr, "ASU")
     if "/" in base:
         o, d = [p.strip() for p in base.split("/", 1)]
         return _lugar(o), _lugar(d)
@@ -298,16 +300,6 @@ def _estado_coches(conn, fecha, numeros, flota):
             estado[ids[r["vehiculo_id"]]].append(("error", f"está fuera de servicio{m}"))
     except Exception:
         pass
-    # OT abierta: puede ser algo chico, que lo confirme quien arma (ámbar)
-    try:
-        for r in conn.execute(f"""SELECT id, vehiculo_id FROM ordenes_trabajo
-                                  WHERE vehiculo_id IN ({marcas}) AND COALESCE(estado,'') <> 'cerrada'
-                                  ORDER BY id""", list(ids)).fetchall():
-            n = ids[r["vehiculo_id"]]
-            if not any("OT #" in t for _, t in estado[n]):
-                estado[n].append(("aviso", f"tiene la OT #{r['id']} abierta en el taller"))
-    except Exception:
-        pass
     # Papeles vencidos: todos juntos en un solo aviso por coche
     try:
         venc = {}
@@ -354,18 +346,6 @@ def armar_dia(fecha, conn=None):
             por_bloque[s["bloque_id"]][s["lado"] if s["lado"] in LADOS else "ida"].append(s)
     nombres_bloque = {b["id"]: b["nombre"] for b in bloques}
 
-    # Choferes y coches que se repiten a la misma hora
-    por_hora_trip, por_hora_coche = {}, {}
-    for s in salidas:
-        if not s["hora"]:
-            continue
-        for t in (s["trip1"], s["trip2"]):
-            if t:
-                por_hora_trip.setdefault((s["hora"], limpiar(t)), []).append(s["id"])
-        c = limpiar(s["coche"])
-        if c.isdigit():
-            por_hora_coche.setdefault((s["hora"], c), []).append(s["id"])
-
     for s in salidas:
         avisos = []
         coche = limpiar(s["coche"])
@@ -389,14 +369,9 @@ def armar_dia(fecha, conn=None):
                     cuando = "hoy" if u["desde_fecha"] == fecha else _cuando(u["desde_fecha"], fecha)
                     avisos.append({"nivel": "aviso",
                                    "txt": f"El {coche} está en {u['lugar']} (salió {cuando} {u['desde_hora']} {u['destino']})"})
-            if s["hora"] and len(por_hora_coche.get((s["hora"], coche), [])) > 1:
-                avisos.append({"nivel": "error", "txt": f"El {coche} está en dos salidas a las {s['hora']}"})
         trips = [t for t in (s["trip1"], s["trip2"]) if t]
         if not trips:
             avisos.append({"nivel": "falta", "txt": "Faltan los tripulantes"})
-        for t in trips:
-            if s["hora"] and len(por_hora_trip.get((s["hora"], limpiar(t)), [])) > 1:
-                avisos.append({"nivel": "error", "txt": f"{t} está en dos salidas a las {s['hora']}"})
         if not s["hora"]:
             avisos.append({"nivel": "falta", "txt": "Falta la hora"})
         s["avisos"] = avisos
@@ -411,12 +386,14 @@ def armar_dia(fecha, conn=None):
     a_confirmar = sum(1 for s in salidas if any(a["nivel"] == "falta" for a in s["avisos"]))
     con_aviso = sum(1 for s in salidas if any(a["nivel"] in ("error", "aviso") for a in s["avisos"]))
     papeles = len({limpiar(s["coche"]) for s in salidas if any(a["nivel"] == "doc" for a in s["avisos"])})
+    refuerzos = sum(1 for s in salidas if "REFUERZO" in (s.get("destino_extras") or []))
 
     return {
         "existe": True, "fecha": fecha, "nombre_dia": nombre_dia(fecha), "dia": dia,
         "bloques": bloques,
         "resumen": {"salidas": len(salidas), "coches": len(con_coche), "tripulantes": len(trip_dia),
-                    "a_confirmar": a_confirmar, "con_aviso": con_aviso, "papeles": papeles},
+                    "a_confirmar": a_confirmar, "con_aviso": con_aviso, "papeles": papeles,
+                    "refuerzos": refuerzos},
         "ubicaciones": _ubicaciones_para_panel(inicio, salidas, flota),
     }
 

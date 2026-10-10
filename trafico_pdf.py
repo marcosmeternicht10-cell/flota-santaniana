@@ -584,6 +584,8 @@ def _celda(h, x0, y, s, lado, cambiada, i, primera, ultima):
 
 def _chip_extra(h, x, y, e):
     clases = ("LEITO", "SEMI CAMA", "SEMICAMA", "CAMA", "EJECUTIVO", "DIRECTO")
+    if e == "REFUERZO":                          # el coche extra de la noche, que se vea
+        return h.chip(x, y, e, "lleno", 5.9, ROJO)
     if e in clases:
         return h.chip(x, y, e, "lleno", 5.9, NAVY)
     if e.startswith("X "):
