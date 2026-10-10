@@ -1,16 +1,13 @@
 """
 trafico_pdf.py — El PDF del tráfico del día (La Santaniana)
 
-Un solo archivo para mandar al grupo, pensado para leerse en el celular:
-
-  1. Las salidas del día. Arriba la fecha bien grande, la versión y los
-     números del día. Si es la versión 2 o más, las filas que cambiaron
-     salen marcadas en rojo. Después cada corredor con sus idas a la
-     izquierda y sus regresos a la derecha, como siempre: hora, tramo (con
-     las siglas tal cual), coche y los dos tripulantes.
-  2. Buscá tu nombre: todos los tripulantes por orden alfabético con lo que
-     les toca, para que cada chofer se encuentre en dos segundos.
-  3. Los coches del día: qué hace cada coche y dónde amanece mañana.
+Una sola hoja para mandar al grupo, pensada para leerse en el celular: arriba
+la fecha bien grande, la versión y los números del día; después cada
+corredor con sus idas a la izquierda y sus regresos a la derecha, como
+siempre: hora, tramo (con las siglas tal cual), coche y los dos tripulantes.
+Si es la versión 2 o más, las filas que cambiaron salen marcadas en rojo.
+Si el día tiene muchas salidas, la hoja se alarga (no se parte en dos ni se
+achica la letra). También sale como imagen PNG (generar_imagen_trafico).
 
 Las fuentes (Barlow Semi Condensed e Inter, las mismas del sistema) van
 dentro del PDF desde static/fonts. Si faltan, se usa Helvetica y el PDF
@@ -19,7 +16,6 @@ sale igual.
 
 import io
 import os
-import unicodedata
 from datetime import date
 
 from reportlab.pdfgen import canvas as rl_canvas
@@ -33,7 +29,6 @@ W, H = A4
 M = 26                       # margen a los costados
 GAP = 14                     # entre la columna de idas y la de regresos
 CW = (W - 2 * M - GAP) / 2   # ancho de cada columna
-LIMITE = 800                 # hasta dónde baja el contenido (medido desde arriba)
 
 # ─── Colores de la marca ──────────────────────────────────────────────────
 NAVY = HexColor("#1D344E")
@@ -87,11 +82,6 @@ def _fuentes():
     return F
 
 
-def sin_tildes(s):
-    t = unicodedata.normalize("NFD", str(s or ""))
-    return "".join(ch for ch in t if unicodedata.category(ch) != "Mn")
-
-
 def es_coche(c):
     return str(c or "").strip().isdigit()
 
@@ -101,17 +91,16 @@ def es_coche(c):
 # ════════════════════════════════════════════════════════════════════════════
 
 class Hoja:
-    def __init__(self, info, total):
+    def __init__(self, info, alto=None):
         _fuentes()
         self.info = info
-        self.total = total
+        self.H = alto or H                     # el alto de la hoja: A4 o más larga si no entra
         self.buf = io.BytesIO()
-        self.c = rl_canvas.Canvas(self.buf, pagesize=A4)
+        self.c = rl_canvas.Canvas(self.buf, pagesize=(W, self.H))
         self.c.setTitle(f"Tráfico {info['nombre_dia']}")
         self.c.setAuthor("La Santaniana")
         self.c.setSubject(info.get("titulo") or "Horarios nacionales")
         self.c.setCreator("Sistema de gestión de flota — La Santaniana")
-        self.pagina = 0
         try:
             self.logo = ImageReader(_LOGO)
         except Exception:
@@ -146,9 +135,9 @@ class Hoja:
             x -= w / 2
         c.setFont(F[f], s)
         if cs:
-            c.drawString(x, H - y, t, charSpace=cs)
+            c.drawString(x, self.H - y, t, charSpace=cs)
         else:
-            c.drawString(x, H - y, t)
+            c.drawString(x, self.H - y, t)
         if alpha is not None:
             c.setFillAlpha(1)
         return w
@@ -160,11 +149,11 @@ class Hoja:
         c.setFillColor(color)
         c.setLineWidth(grosor)
         c.setLineCap(1)
-        c.line(x, H - y, x + w - cabeza * 0.8, H - y)
+        c.line(x, self.H - y, x + w - cabeza * 0.8, self.H - y)
         p = c.beginPath()
-        p.moveTo(x + w, H - y)
-        p.lineTo(x + w - cabeza * 1.5, H - y + cabeza)
-        p.lineTo(x + w - cabeza * 1.5, H - y - cabeza)
+        p.moveTo(x + w, self.H - y)
+        p.lineTo(x + w - cabeza * 1.5, self.H - y + cabeza)
+        p.lineTo(x + w - cabeza * 1.5, self.H - y - cabeza)
         p.close()
         c.drawPath(p, fill=1, stroke=0)
 
@@ -180,10 +169,10 @@ class Hoja:
         if alpha is not None:
             c.setFillAlpha(alpha)
         if r:
-            c.roundRect(x, H - y - h, w, h, r, fill=1 if fill is not None else 0,
+            c.roundRect(x, self.H - y - h, w, h, r, fill=1 if fill is not None else 0,
                         stroke=1 if stroke is not None else 0)
         else:
-            c.rect(x, H - y - h, w, h, fill=1 if fill is not None else 0,
+            c.rect(x, self.H - y - h, w, h, fill=1 if fill is not None else 0,
                    stroke=1 if stroke is not None else 0)
         if dash:
             c.setDash()
@@ -197,7 +186,7 @@ class Hoja:
         c.setLineCap(cap)
         if dash:
             c.setDash(*dash)
-        c.line(x1, H - y1, x2, H - y2)
+        c.line(x1, self.H - y1, x2, self.H - y2)
         if dash:
             c.setDash()
         c.setLineCap(0)
@@ -206,16 +195,16 @@ class Hoja:
         c = self.c
         if anillo is not None:
             c.setFillColor(anillo)
-            c.circle(x, H - y, r + anillo_w, fill=1, stroke=0)
+            c.circle(x, self.H - y, r + anillo_w, fill=1, stroke=0)
         c.setFillColor(fill)
-        c.circle(x, H - y, r, fill=1, stroke=0)
+        c.circle(x, self.H - y, r, fill=1, stroke=0)
 
     def poligono(self, puntos, fill, alpha=None):
         c = self.c
         p = c.beginPath()
-        p.moveTo(puntos[0][0], H - puntos[0][1])
+        p.moveTo(puntos[0][0], self.H - puntos[0][1])
         for x, y in puntos[1:]:
-            p.lineTo(x, H - y)
+            p.lineTo(x, self.H - y)
         p.close()
         c.setFillColor(fill)
         if alpha is not None:
@@ -307,19 +296,11 @@ class Hoja:
     def ancho_tramo(self, base, tam=9.5, f="D6"):
         return self.ancho(" / ".join(p.strip() for p in base.split("/")), f, tam)
 
-    # ── páginas ──
-    def nueva_pagina(self):
-        if self.pagina:
-            self.pie()
-            self.c.showPage()
-        self.pagina += 1
-        if self.info.get("borrador"):
-            self.marca_agua()
-
+    # ── la hoja ──
     def marca_agua(self):
         c = self.c
         c.saveState()
-        c.translate(W / 2, H / 2 - 40)
+        c.translate(W / 2, self.H / 2 - 40)
         c.rotate(32)
         c.setFillColor(NAVY)
         c.setFillAlpha(0.045)
@@ -329,12 +310,11 @@ class Hoja:
 
     def pie(self):
         info = self.info
-        self.linea(M, 812, W - M, 812, LINEA, 0.6)
+        self.linea(M, self.H - 30, W - M, self.H - 30, LINEA, 0.6)
         izq = f"LA SANTANIANA  ·  {info.get('titulo') or 'HORARIOS NACIONALES'}  ·  {info['nombre_dia']}"
-        self.texto(M, 824, izq, "I6", 6.2, GRIS2, cs=0.6)
+        self.texto(M, self.H - 18, izq, "I6", 6.2, GRIS2, cs=0.6)
         v = "BORRADOR" if info.get("borrador") else f"VERSIÓN {info.get('version') or 1}"
-        der = f"{v}  ·  PÁGINA {self.pagina} DE {self.total or '—'}"
-        self.texto(W - M, 824, der, "I6", 6.2, GRIS2, cs=0.6, align="r")
+        self.texto(W - M, self.H - 18, v, "I6", 6.2, GRIS2, cs=0.6, align="r")
 
     def franja(self, y, alto=4):
         """La franja roja y azul con el corte en diagonal, como el logo."""
@@ -348,7 +328,7 @@ class Hoja:
             iw, ih = self.logo.getSize()
             w = lado * 0.78
             h = w * ih / iw
-            self.c.drawImage(self.logo, x + (lado - w) / 2, H - y - lado + (lado - h) / 2, w, h, mask="auto")
+            self.c.drawImage(self.logo, x + (lado - w) / 2, self.H - y - lado + (lado - h) / 2, w, h, mask="auto")
 
     def version_txt(self):
         info = self.info
@@ -424,26 +404,6 @@ class Hoja:
         self.franja(alto)
         return alto + 4
 
-    def encabezado_chico(self):
-        """Hojas que siguen: una banda finita con lo justo."""
-        info = self.info
-        alto = 44
-        self.rect(0, 0, W, alto, fill=NAVY)
-        self.poligono([(W - 170, 0), (W - 110, 0), (W - 136, alto), (W - 196, alto)], NAVY3, alpha=0.25)
-        self.tile_logo(M, 8, 28, 6)
-        self.texto(M + 38, 21, "LA SANTANIANA", "I6", 5.8, CELESTE, cs=1.8)
-        titulo, s = self.ajustar(info.get("titulo") or "HORARIOS NACIONALES", "D9", 14, 240, 10)
-        self.texto(M + 38, 35, titulo, "D9", s, white, cs=0.2)
-        self.texto(W - M, 23, info["nombre_dia"], "D8", 12, white, cs=0.6, align="r")
-        self.texto(W - M, 35, self.version_txt(), "I6", 6, AMBAR_V if info.get("borrador") else CELESTE,
-                   cs=1.2, align="r")
-        self.franja(alto, 3)
-        return alto + 3
-
-    def titulo_seccion(self, y, titulo, bajada):
-        self.texto(M, y + 20, titulo, "D9", 21, NAVY, cs=0.4)
-        self.texto(M, y + 33, bajada, "I4", 8, GRIS)
-        return y + 46
 
 
 def _cuando_publico(info):
@@ -614,240 +574,66 @@ def _tiene_reserva(b):
 
 
 def hoja_salidas(h):
+    """Toda la grilla en una sola hoja. Devuelve hasta dónde llegó (desde arriba)."""
     info = h.info
     bloques = info["dia"]["bloques"]
     cambiadas = info.get("cambiadas") or set()
-    h.nueva_pagina()
     y = h.encabezado_grande()
     y = _encabezado_columnas(h, y + 12)
-
-    def salto():
-        h.nueva_pagina()
-        yy = h.encabezado_chico()
-        return _encabezado_columnas(h, yy + 12)
-
     if not bloques:
         h.texto(W / 2, y + 60, "Todavía no hay salidas cargadas.", "I5", 10, GRIS, align="c")
-        return
+        return y + 80
     for b in bloques:
         ida, reg = b.get("ida") or [], b.get("regreso") or []
         filas = max(len(ida), len(reg), 1)
-        alto_res = 18 if _tiene_reserva(b) else 0
-        alto = CAB_CORR + filas * FILA + alto_res
-        # El corredor entero en la hoja; si es más largo que una hoja, que arranque con al menos 3 filas
-        necesita = alto if alto < LIMITE - 120 else CAB_CORR + 3 * FILA
-        if y + necesita > LIMITE:
-            y = salto()
         y = _encabezado_corredor(h, y, b)
         for i in range(filas):
-            if y + FILA > LIMITE:
-                y = salto()
-                y = _encabezado_corredor(h, y, b, sigue=True)
             for lado, lista in (("ida", ida), ("regreso", reg)):
                 if i < len(lista):
                     s = lista[i]
                     _celda(h, _col_x(lado), y, s, lado, s.get("id") in cambiadas, i,
                            primera=(i == 0), ultima=(i == len(lista) - 1))
             y += FILA
-        if alto_res:
-            if y + alto_res > LIMITE:
-                y = salto()
+        if _tiene_reserva(b):
             y = _reserva(h, y, b)
         y += ENTRE_CORR
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# HOJA 2: BUSCÁ TU NOMBRE
-# ════════════════════════════════════════════════════════════════════════════
-
-def _todas(info):
-    for b in info["dia"]["bloques"]:
-        for lado in ("ida", "regreso"):
-            for s in b.get(lado) or []:
-                yield b, lado, s
-
-
-def hoja_tripulantes(h):
-    info = h.info
-    gente = {}
-    for b, lado, s in _todas(info):
-        for t in (s.get("trip1"), s.get("trip2")):
-            t = (t or "").strip()
-            if t:
-                gente.setdefault(t, []).append((s.get("hora") or "99:99", lado, s))
-    if not gente:
-        return
-    nombres = sorted(gente, key=lambda n: sin_tildes(n))
-
-    h.nueva_pagina()
-    y0 = h.encabezado_chico()
-    y0 = h.titulo_seccion(y0 + 16, "BUSCÁ TU NOMBRE",
-                          f"Los {len(nombres)} tripulantes del día por orden alfabético, con sus salidas.")
-    RENG = 12.2
-    col, y = 0, y0
-    letra_ant = None
-    x_tramos = CW - 132
-
-    for n in nombres:
-        legs = sorted(gente[n], key=lambda x: x[0])
-        alto = len(legs) * RENG + 5
-        letra = sin_tildes(n)[:1]
-        nueva_letra = letra != letra_ant
-        if y + alto + (6 if nueva_letra else 0) > LIMITE:
-            col += 1
-            y = y0
-            if col > 1:
-                h.nueva_pagina()
-                y0 = h.encabezado_chico() + 16
-                y, col = y0, 0
-            nueva_letra = True
-        x0 = M + col * (CW + GAP)
-        if nueva_letra:
-            if y > y0:
-                y += 5
-                h.linea(x0, y - 2.5, x0 + CW, y - 2.5, LINEA, 0.6)
-            h.texto(x0, y + 10.6, letra, "D9", 12.5, ROJO)
-            letra_ant = letra
-        # Nombre y puntitos hasta las salidas
-        nn, ss = h.ajustar(n, "D8", 9.4, x_tramos - 22, 7.2)
-        wn = h.texto(x0 + 15, y + 10, nn, "D8", ss, NAVY)
-        h.linea(x0 + 15 + wn + 4, y + 8.6, x0 + x_tramos - 6, y + 8.6, GRIS2, 0.8, dash=([0.1, 2.4], 0), cap=1)
-        yy = y
-        for hora, lado, s in legs:
-            xl = x0 + x_tramos
-            h.punto(xl + 2, yy + 6.9, 1.9, AZUL if lado == "ida" else ROJO)
-            h.texto(xl + 7.5, yy + 10, s.get("hora") or "--:--", "D8", 9.2, TINTA)
-            base = s.get("destino_base") or s.get("destino") or ""
-            extra = " ".join(s.get("destino_extras") or [])
-            tr = f"{base} {extra}".strip()
-            t, z = h.ajustar(tr, "D5", 8.2, 132 - 32 - 36, 6.3)
-            h.texto(xl + 33, yy + 9.8, t, "D5", z, TINTA)
-            h.chapa(x0 + CW - 31, yy + 1.6, 31, 11, s.get("coche"), 8)
-            yy += RENG
-        y += alto
-
-
-# ════════════════════════════════════════════════════════════════════════════
-# HOJA 3: LOS COCHES DEL DÍA
-# ════════════════════════════════════════════════════════════════════════════
-
-def hoja_coches(h):
-    info = h.info
-    flota = info.get("flota") or {}
-    coches = {}
-    for b, lado, s in _todas(info):
-        c = str(s.get("coche") or "").strip()
-        if es_coche(c):
-            coches.setdefault(c, []).append((s.get("hora") or "99:99", lado, s))
-    if not coches:
-        return
-    orden = sorted(coches, key=lambda c: (len(c), c))
-
-    h.nueva_pagina()
-    y0 = h.encabezado_chico()
-    y = h.titulo_seccion(y0 + 16, "COCHES DEL DÍA",
-                         f"Qué hace cada uno de los {len(orden)} coches y dónde amanece mañana.")
-    COLS, G = 5, 7
-    cw = (W - 2 * M - G * (COLS - 1)) / COLS
-    RENG = 11.4
-    terminan = {}
-
-    def alto_tarjeta(c):
-        return 30 + len(coches[c]) * RENG + 21
-
-    fila = [orden[i:i + COLS] for i in range(0, len(orden), COLS)]
-    for grupo in fila:
-        alto = max(alto_tarjeta(c) for c in grupo)
-        if y + alto > LIMITE:
-            h.nueva_pagina()
-            y = h.encabezado_chico() + 16
-        for k, c in enumerate(grupo):
-            x = M + k * (cw + G)
-            legs = sorted(coches[c], key=lambda l: l[0])
-            h.rect(x, y, cw, alto, fill=FONDO, r=5)
-            h.chapa(x + 7, y + 7, 40, 16, c, 11)
-            v = flota.get(c) or {}
-            modelo = f"{v.get('marca') or ''} {v.get('modelo') or ''}".strip()
-            if modelo:
-                t, z = h.ajustar(modelo.upper(), "I6", 5.6, cw - 56, 4.6)
-                h.texto(x + 52, y + 13.4, t, "I6", z, GRIS, cs=0.4)
-            vueltas = len(legs)
-            h.texto(x + 52, y + 21, f"{vueltas} SALIDA{'S' if vueltas != 1 else ''}", "I6", 5.2, GRIS2, cs=0.6)
-            yy = y + 33
-            for hora, lado, s in legs:
-                h.punto(x + 10, yy + 4.6, 1.8, AZUL if lado == "ida" else ROJO)
-                h.texto(x + 15, yy + 8, s.get("hora") or "--:--", "D8", 8.4, TINTA)
-                base = s.get("destino_base") or s.get("destino") or ""
-                extra = " ".join(s.get("destino_extras") or [])
-                t, z = h.ajustar(f"{base} {extra}".strip(), "D5", 7.6, cw - 46, 5.8)
-                h.texto(x + 40, yy + 7.9, t, "D5", z, TINTA)
-                yy += RENG
-            # Dónde amanece mañana: donde llega su último tramo
-            ultimo = legs[-1][2]
-            lugar = ultimo.get("llega") or "?"
-            terminan.setdefault(lugar, []).append(c)
-            h.linea(x + 7, y + alto - 19, x + cw - 7, y + alto - 19, LINEA, 0.6)
-            wl = h.texto(x + 7, y + alto - 7.6, "MAÑANA EN", "I6", 5.2, GRIS2, cs=0.8)
-            t, z = h.ajustar(lugar, "D9", 10, cw - 14 - wl - 5, 6.5, cs=0.4)
-            h.texto(x + cw - 7, y + alto - 7, t, "D9", z, ROJO if lugar != "ASU" else NAVY, align="r", cs=0.4)
-        y += alto + G
-
-    # Resumen: dónde amanecen los coches mañana (lo que necesita quien arma el
-    # día siguiente). Cada lugar con sus coches, uno al lado del otro.
-    lugares = sorted(terminan, key=lambda l: (l == "ASU", l))
-    ancho_util = W - 2 * M - 28
-    RL, CH, CG = 19, 30, 3.5          # alto de renglón, ancho de chapa, aire entre chapas
-    piezas, x, renglon = [], 0, 0
-    for l in lugares:
-        cs = sorted(terminan[l], key=lambda c: (len(c), c))
-        we = h.ancho(l, "D9", 8.6, 0.4) + 12
-        w_grupo = we + 5 + len(cs) * (CH + CG)
-        if x and x + w_grupo > ancho_util:
-            x, renglon = 0, renglon + 1
-        piezas.append(("lugar", x, renglon, l, we))
-        x += we + 5
-        for c in cs:
-            if x + CH > ancho_util:
-                x, renglon = we + 5, renglon + 1
-            piezas.append(("coche", x, renglon, c, CH))
-            x += CH + CG
-        x += 12
-    alto_res = 34 + (renglon + 1) * RL + 8
-    if y + alto_res + 8 > LIMITE:
-        h.nueva_pagina()
-        y = h.encabezado_chico() + 16
-    y += 8
-    h.rect(M, y, W - 2 * M, alto_res, fill=NAVY, r=6)
-    h.poligono([(W - M - 120, y), (W - M - 70, y), (W - M - 96, y + alto_res), (W - M - 146, y + alto_res)],
-               NAVY3, alpha=0.3)
-    wt = h.texto(M + 14, y + 19, "DÓNDE AMANECEN MAÑANA", "D9", 12, white, cs=0.9)
-    h.texto(M + 14 + wt + 10, y + 18.6,
-            "Para armar el tráfico de mañana: cada coche está donde terminó hoy.", "I4", 7.2, CELESTE)
-    for tipo, px, rg, txt, w in piezas:
-        xx, yy = M + 14 + px, y + 30 + rg * RL
-        if tipo == "lugar":
-            h.rect(xx, yy, w, 14, fill=ROJO if txt != "ASU" else AZUL, r=3)
-            h.texto(xx + w / 2, yy + 10.1, txt, "D9", 8.6, white, align="c", cs=0.4)
-        else:
-            h.rect(xx, yy + 1, w, 12, fill=NAVY2, r=2.5)
-            h.texto(xx + w / 2, yy + 9.9, txt, "D8", 8.3, white, align="c")
+    return y
 
 
 # ════════════════════════════════════════════════════════════════════════════
 
-def _dibujar(info, total):
-    h = Hoja(info, total)
-    hoja_salidas(h)
-    hoja_tripulantes(h)
-    hoja_coches(h)
+def _dibujar(info, alto):
+    h = Hoja(info, alto)
+    if info.get("borrador"):
+        h.marca_agua()
+    y = hoja_salidas(h)
     h.pie()
     h.c.showPage()
     h.c.save()
-    return h.buf.getvalue(), h.pagina
+    return h.buf.getvalue(), y
 
 
 def generar_pdf_trafico(info):
-    """info: lo que arma trafico.datos_para_pdf. Devuelve los bytes del PDF."""
-    _, paginas = _dibujar(info, None)      # primera pasada: contar las hojas
-    pdf, _ = _dibujar(info, paginas)
+    """info: lo que arma trafico.datos_para_pdf. Devuelve los bytes del PDF:
+    una sola hoja, del ancho de un A4 y tan larga como haga falta (si el día
+    tiene muchas salidas no se parte en dos ni se achica la letra)."""
+    _, y = _dibujar(info, 6000)                 # primera pasada: medir
+    pdf, _ = _dibujar(info, max(H, y + 46))
     return pdf
+
+
+def generar_imagen_trafico(info, ancho_px=1654):
+    """La misma hoja como imagen PNG, para mandarla al grupo y que se vea sin
+    abrir nada. 1654 px de ancho = un A4 a 200 ppp: nítida en el celular."""
+    import pypdfium2 as pdfium
+    pdf = pdfium.PdfDocument(generar_pdf_trafico(info))
+    try:
+        hoja = pdf[0]
+        imagen = hoja.render(scale=ancho_px / W).to_pil()
+        if imagen.mode != "RGB":
+            imagen = imagen.convert("RGB")
+        salida = io.BytesIO()
+        imagen.save(salida, format="PNG", optimize=True)
+        return salida.getvalue()
+    finally:
+        pdf.close()

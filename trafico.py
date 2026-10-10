@@ -1417,6 +1417,13 @@ def api_versiones(fecha):
     return jsonify(versiones(_fecha_ok(fecha)))
 
 
+def _nombre_archivo(fecha, info, ext):
+    d = date.fromisoformat(fecha)
+    nombre = f"Trafico-{DIAS_SEMANA[d.weekday()].capitalize()}-{d.strftime('%d-%m-%y')}"
+    nombre += f"-v{info['version']}" if not info["borrador"] and info["version"] else "-borrador"
+    return _sin_tildes(nombre) + ext
+
+
 @bp_trafico.route("/api/trafico/dia/<fecha>/pdf", methods=["GET"])
 def api_pdf(fecha):
     if not _puede_ver():
@@ -1427,9 +1434,25 @@ def api_pdf(fecha):
         return jsonify({"error": "No hay tráfico armado para ese día"}), 404
     from trafico_pdf import generar_pdf_trafico
     pdf = generar_pdf_trafico(info)
-    d = date.fromisoformat(fecha)
-    nombre = f"Trafico-{DIAS_SEMANA[d.weekday()].capitalize()}-{d.strftime('%d-%m-%y')}"
-    nombre += f"-v{info['version']}" if not info["borrador"] and info["version"] else "-borrador"
-    nombre = _sin_tildes(nombre) + ".pdf"
     return send_file(io.BytesIO(pdf), mimetype="application/pdf",
-                     as_attachment=request.args.get("descargar") == "1", download_name=nombre)
+                     as_attachment=request.args.get("descargar") == "1",
+                     download_name=_nombre_archivo(fecha, info, ".pdf"))
+
+
+@bp_trafico.route("/api/trafico/dia/<fecha>/imagen", methods=["GET"])
+def api_imagen(fecha):
+    """La misma hoja del PDF como imagen PNG (se ve directo en el chat)."""
+    if not _puede_ver():
+        return jsonify({"error": "Sin permiso"}), 403
+    fecha = _fecha_ok(fecha)
+    info = datos_para_pdf(fecha, request.args.get("v"))
+    if not info:
+        return jsonify({"error": "No hay tráfico armado para ese día"}), 404
+    try:
+        from trafico_pdf import generar_imagen_trafico
+        png = generar_imagen_trafico(info)
+    except ImportError:
+        return jsonify({"error": "Falta instalar pypdfium2 en el servidor (requirements-nube.txt)"}), 501
+    return send_file(io.BytesIO(png), mimetype="image/png",
+                     as_attachment=request.args.get("descargar") == "1",
+                     download_name=_nombre_archivo(fecha, info, ".png"))
