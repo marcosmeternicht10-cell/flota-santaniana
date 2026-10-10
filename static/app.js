@@ -3548,7 +3548,7 @@ async function trPublicar() {
             <b>Qué cambió desde la versión ${dia.version}</b>
             ${cambios.length ? `<ul>${cambios.map(c => `<li class="${c.tipo}">${trEsc(c.txt)}</li>`).join("")}</ul>`
               : `<p>No hay diferencias en las salidas.</p>`}
-            <small>Esto va arriba de todo en el PDF y esas filas salen marcadas, para que nadie se quede con la vieja.</small>
+            <small>En el PDF esas filas salen marcadas en rojo, para que nadie se quede con la vieja.</small>
           </div>` : ""}
       </div>
       <div class="tr-modal-pie" id="tr-pub-pie">
