@@ -2839,10 +2839,11 @@ function trTablero() {
       </div>
       <div class="tr-tab-acciones">
         ${dia.version ? `<button class="tr-tab-btn" onclick="trVersiones(this)" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
-        ${hayAlgo ? `<button class="tr-tab-btn" onclick="trVerPdf()" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>` : ""}
+        ${hayAlgo ? `<button class="tr-tab-btn" onclick="trVerPdf()" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
+          <button class="tr-tab-btn" onclick="trDescargar(${pendiente ? "null" : dia.version}, 'imagen', this)" title="Descargar la hoja como imagen${pendiente ? " (borrador)" : ""}"><i class="ti ti-photo-down"></i><span>Imagen</span></button>` : ""}
         ${trPuede() ? `<button class="tr-tab-btn" onclick="trMas(this)" title="Importar, copiar, vaciar"><i class="ti ti-dots"></i></button>` : ""}
         ${trPuede() && pendiente ? `<button class="tr-publicar" onclick="trPublicar()"><i class="ti ti-send"></i> Publicar versión ${(dia.version || 0) + 1}</button>`
-          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onclick="trCompartir(${dia.version}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
+          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onpointerenter="trPrecargar(${dia.version})" onpointerdown="trPrecargar(${dia.version})" onclick="trCompartir(${dia.version}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
       </div>
       <div class="tr-tab-dias">${dias.join("")}</div>
     </div>`;
@@ -3063,7 +3064,10 @@ function trBloque(b, i) {
         <div class="tr-filas">
           ${lista.map((s, k) => trFila(s, lado, pend.has(s.id), k)).join("") || `<div class="tr-sin">Sin salidas de ${lado === "ida" ? "ida" : "regreso"}</div>`}
         </div>
-        ${trPuede() ? `<button class="tr-mas" onclick="trAgregarSalida(${b.id}, '${lado}')"><i class="ti ti-plus"></i> Salida</button>` : ""}
+        ${trPuede() ? `<div class="tr-mas-fila">
+          <button class="tr-mas" onclick="trAgregarSalida(${b.id}, '${lado}')"><i class="ti ti-plus"></i> Salida</button>
+          ${lista.length ? `<button class="tr-mas ref" onclick="trElegirRefuerzo(${b.id}, '${lado}', this)"><i class="ti ti-copy-plus"></i> Refuerzo</button>` : ""}
+        </div>` : ""}
         ${trPuede() || b[`reserva_${lado}_coche`] || b[`reserva_${lado}_trip`] ? `
           <div class="tr-reserva">
             <span>Reserva</span>
@@ -3277,6 +3281,19 @@ async function trRefuerzo(sid) {
   trRefrescarDias();
   const f = document.querySelector(`.tr-fila[data-id="${r.salida_id}"]`);
   if (f) { f.classList.add("nueva"); f.querySelector(".tr-chapa")?.focus(); }
+}
+
+// "+ Refuerzo" abajo de cada columna: se elige a qué salida (las de la noche primero)
+function trElegirRefuerzo(bid, lado, btn) {
+  const b = tr.d.bloques.find(x => x.id === bid);
+  const lista = [...(b?.[lado] || [])].filter(s => !(s.destino_extras || []).includes("REFUERZO"))
+    .sort((a, c) => ((c.hora || "") >= "18:00") - ((a.hora || "") >= "18:00") || (c.hora || "").localeCompare(a.hora || ""));
+  if (!lista.length) { toast("Primero cargá la salida que lleva refuerzo", ""); return; }
+  trMenu(btn, lista.map(s => ({
+    icono: "copy-plus",
+    html: `<b>${trEsc(s.hora || "--:--")} ${trEsc(s.destino || "")}</b><span>${s.coche ? `Va el ${trEsc(s.coche)} · ` : ""}agregar otro coche a esta hora</span>`,
+    fn: () => trRefuerzo(s.id),
+  })));
 }
 
 async function trBorrarSalida(sid) {
@@ -3530,10 +3547,10 @@ function trCandDesdePanel(coche) {
 
 // ─── Ver, publicar y compartir ───────────────────────────────────────────
 
-function trNombrePdf(version) {
+function trNombreArchivo(version, ext = "pdf") {
   const d = trFecha(tr.fecha);
   const dia = TR_DIAS[d.getDay()].charAt(0) + TR_DIAS[d.getDay()].slice(1).toLowerCase();
-  return trSinTildes(`Trafico-${dia}-${trLargo(tr.fecha).split(" ")[1].replace(/\//g, "-")}-${version ? "v" + version : "borrador"}.pdf`);
+  return trSinTildes(`Trafico-${dia}-${trLargo(tr.fecha).split(" ")[1].replace(/\//g, "-")}-${version ? "v" + version : "borrador"}.${ext}`);
 }
 
 function trVerPdf(version) {
@@ -3591,10 +3608,8 @@ async function trConfirmarPublicar(btn) {
   trPintar();
   trRefrescarDias();
   const v = r.version;
-  // Se trae el PDF ya, así al tocar Compartir sale al instante (el celular lo pide)
-  tr.pdfListo = null;
-  const pedido = fetch(`/api/trafico/dia/${tr.fecha}/pdf?v=${v}`).then(x => x.ok ? x.blob() : null).catch(() => null);
-  pedido.then(b => { tr.pdfListo = b ? { v, fecha: tr.fecha, blob: b } : null; });
+  // Se arma la imagen ya, así al tocar Compartir sale al instante (el celular lo pide)
+  trPrecargar(v);
   const cuerpo = $("#tr-pub-cuerpo"), pie = $("#tr-pub-pie");
   if (cuerpo) cuerpo.innerHTML = `
     <div class="tr-listo">
@@ -3603,63 +3618,83 @@ async function trConfirmarPublicar(btn) {
       <span>Ahora mandalo al grupo de WhatsApp de los choferes.</span>
     </div>`;
   if (pie) pie.innerHTML = `
-    <button class="btn btn-ghost" onclick="trVerPdf(${v})"><i class="ti ti-eye"></i> Ver PDF</button>
-    <button class="btn btn-ghost" onclick="trDescargar(${v})"><i class="ti ti-download"></i> Descargar</button>
+    <button class="btn btn-ghost" onclick="trDescargar(${v}, 'pdf', this)"><i class="ti ti-file-type-pdf"></i> PDF</button>
+    <button class="btn btn-ghost" onclick="trDescargar(${v}, 'imagen', this)"><i class="ti ti-photo-down"></i> Imagen</button>
     <button class="tr-publicar compartir" onclick="trCompartir(${v}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir por WhatsApp</button>`;
 }
 
-async function trTraerPdf(v) {
-  if (tr.pdfListo && tr.pdfListo.v === v && tr.pdfListo.fecha === tr.fecha) return tr.pdfListo.blob;
-  const x = await fetch(`/api/trafico/dia/${tr.fecha}/pdf?v=${v}`);
-  if (!x.ok) return null;
+// La hoja del día como PDF o como imagen (PNG). Lo publicado se guarda en
+// memoria: al tocar Compartir sale al instante, que el celular lo exige.
+tr.archivos = {};
+async function trTraer(tipo, v) {
+  const clave = `${tr.fecha}|${tipo}|${v || "borrador"}`;
+  if (v && tr.archivos[clave]) return tr.archivos[clave];
+  const x = await fetch(`/api/trafico/dia/${tr.fecha}/${tipo}${v ? `?v=${v}` : ""}`).catch(() => null);
+  if (!x || !x.ok) {
+    if (x && x.status === 501) toast("Para la imagen falta instalar pypdfium2 en el servidor", "error");
+    return null;
+  }
   const b = await x.blob();
-  tr.pdfListo = { v, fecha: tr.fecha, blob: b };
+  if (v) tr.archivos[clave] = b;
   return b;
 }
+function trPrecargar(v) { if (v) trTraer("imagen", v); }
 
-async function trDescargar(v) {
-  const blob = await trTraerPdf(v);
-  if (!blob) { toast("No se pudo armar el PDF", "error"); return; }
+async function trConEspera(btn, fn) {
+  if (!btn) return fn();
+  const antes = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<i class="ti ti-loader-2 gira"></i>${btn.classList.contains("tr-tab-btn") ? "" : " Armando…"}`;
+  try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = antes; }
+}
+
+// tipo: "pdf" o "imagen". Sin versión: como está ahora (borrador si hay cambios)
+async function trDescargar(v, tipo = "pdf", btn = null) {
+  const blob = await trConEspera(btn, () => trTraer(tipo, v));
+  if (!blob) { toast(tipo === "imagen" ? "No se pudo armar la imagen" : "No se pudo armar el PDF", "error"); return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = trNombrePdf(v);
+  a.download = trNombreArchivo(v, tipo === "imagen" ? "png" : "pdf");
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
-// En el celular abre el menú de compartir con el PDF adjunto (WhatsApp
-// incluido). En la computadora lo descarga para adjuntarlo en el grupo.
-async function trCompartir(v, btn) {
-  const blob = await trTraerPdf(v);
-  if (!blob) { toast("No se pudo armar el PDF", "error"); return; }
-  const archivo = new File([blob], trNombrePdf(v), { type: "application/pdf" });
-  const cambios = v > 1 ? (await api(`/api/trafico/dia/${tr.fecha}/versiones`) || []).find(x => x.version === v) : null;
-  let texto = `Tráfico ${trLargo(tr.fecha)} · versión ${v}`;
-  try {
-    const lista = cambios ? JSON.parse(cambios.cambios || "[]") : [];
-    if (lista.length) texto += `\nCambios:\n` + lista.slice(0, 6).map(c => `• ${c.txt}`).join("\n") + (lista.length > 6 ? `\n• y ${lista.length - 6} más` : "");
-  } catch (e) { /* sin lista de cambios */ }
+// En el celular abre el menú de compartir con la imagen (WhatsApp la muestra
+// directo en el chat, sin abrir nada). En la computadora la descarga.
+async function trCompartir(v, btn, tipo = "imagen") {
+  const blob = await trConEspera(btn, () => trTraer(tipo, v));
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const ext = tipo === "imagen" ? "png" : "pdf";
+  const archivo = new File([blob], trNombreArchivo(v, ext), { type: tipo === "imagen" ? "image/png" : "application/pdf" });
+  const texto = `Tráfico ${trLargo(tr.fecha)} · versión ${v}`;
   if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
     try { await navigator.share({ files: [archivo], title: `Tráfico ${trLargo(tr.fecha)}`, text: texto }); return; }
     catch (e) { if (e.name === "AbortError") return; }
   }
-  trDescargar(v);
-  try { await navigator.clipboard.writeText(texto); } catch (e) { /* sin portapapeles */ }
-  toast("Se descargó el PDF: adjuntalo en el grupo (el texto quedó copiado)", "success");
+  trDescargar(v, tipo);
+  toast(`Se descargó ${tipo === "imagen" ? "la imagen" : "el PDF"}: adjuntala en el grupo de WhatsApp`, "success");
 }
 
+// Las versiones publicadas: cada una se puede ver en PDF o bajar como imagen
 async function trVersiones(btn) {
   const vs = await api(`/api/trafico/dia/${tr.fecha}/versiones`);
   if (!Array.isArray(vs)) return;
-  trMenu(btn, vs.map(v => {
+  const items = [];
+  vs.forEach(v => {
     let n = 0;
     try { n = JSON.parse(v.cambios || "[]").length; } catch (e) { /* nada */ }
     const p = String(v.publicado_el || "");
-    return {
-      html: `<b>Versión ${v.version}</b><span>${p.slice(8, 10)}/${p.slice(5, 7)} ${p.slice(11, 16)}${v.publicado_por ? " · " + trEsc(v.publicado_por.split(" ")[0]) : ""}${v.version > 1 ? ` · ${n} cambio${n === 1 ? "" : "s"}` : ""}</span>`,
+    const cuando = `${p.slice(8, 10)}/${p.slice(5, 7)} ${p.slice(11, 16)}${v.publicado_por ? " · " + trEsc(v.publicado_por.split(" ")[0]) : ""}`;
+    items.push({
+      html: `<b>Versión ${v.version} · ver PDF</b><span>${cuando}${v.version > 1 ? ` · ${n} cambio${n === 1 ? "" : "s"}` : ""}</span>`,
       icono: "file-type-pdf", fn: () => trVerPdf(v.version),
-    };
-  }));
+    });
+    items.push({
+      html: `<b>Versión ${v.version} · bajar imagen</b><span>Para mandar al grupo</span>`,
+      icono: "photo-down", fn: () => trDescargar(v.version, "imagen"),
+    });
+  });
+  trMenu(btn, items);
 }
 
 function trMas(btn) {
