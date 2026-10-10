@@ -4,8 +4,8 @@ trafico_pdf.py — El PDF del tráfico del día (La Santaniana)
 Un solo archivo para mandar al grupo, pensado para leerse en el celular:
 
   1. Las salidas del día. Arriba la fecha bien grande, la versión y los
-     números del día. Si es la versión 2 o más, un recuadro con lo que cambió
-     y esas filas marcadas en rojo. Después cada corredor con sus idas a la
+     números del día. Si es la versión 2 o más, las filas que cambiaron
+     salen marcadas en rojo. Después cada corredor con sus idas a la
      izquierda y sus regresos a la derecha, como siempre: hora, tramo (con
      las siglas tal cual), coche y los dos tripulantes.
   2. Buscá tu nombre: todos los tripulantes por orden alfabético con lo que
@@ -611,65 +611,12 @@ def _tiene_reserva(b):
     return any(b.get(f"reserva_{l}_{k}") for l in ("ida", "regreso") for k in ("coche", "trip"))
 
 
-def _caja_cambios(h, y):
-    """Qué cambió desde la versión anterior, para que nadie se quede con la vieja."""
-    info = h.info
-    cambios = info.get("cambios") or []
-    if not cambios:
-        return y
-    if info.get("borrador"):
-        titulo = f"CAMBIOS SIN PUBLICAR (DESDE LA VERSIÓN {info.get('version')})"
-    else:
-        titulo = f"QUÉ CAMBIÓ DESDE LA VERSIÓN {(info.get('version') or 2) - 1}"
-    col_w = (W - 2 * M - 34) / 2
-    items = []
-    for cb in cambios:
-        renglones = h.partir(cb["txt"], "I5", 7.2, col_w - 12)
-        items.append((cb.get("tipo"), renglones[:3]))
-    # Dos columnas, repartiendo por alto
-    maximo = 14
-    sobran = max(0, len(items) - maximo)
-    items = items[:maximo]
-    altos = [len(r) * 9.2 + 3.5 for _, r in items]
-    total = sum(altos)
-    corte, acum = len(items), 0
-    for k, a in enumerate(altos):
-        if acum + a > total / 2 + 0.1 and k:
-            corte = k
-            break
-        acum += a
-    cols = [items[:corte], items[corte:]] if len(items) > 3 else [items, []]
-    alto_cols = max(sum(len(r) * 9.2 + 3.5 for _, r in col) for col in cols if col) if items else 0
-    alto = 30 + alto_cols + (11 if sobran else 0) + 4
-    y += 10
-    h.rect(M, y, W - 2 * M, alto, fill=HexColor("#FFF7F8"), r=5)
-    h.rect(M, y, 3, alto, fill=ROJO)
-    h.texto(M + 14, y + 16, titulo, "D9", 10.5, ROJO, cs=0.8)
-    leyenda = "Las salidas que cambiaron están marcadas así"
-    h.texto(W - M - 12 - 22, y + 15.4, leyenda, "I5", 6.4, GRIS, align="r")
-    h.rect(W - M - 12 - 16, y + 8.6, 16, 9, fill=ROJO_F, stroke=ROJO_T, lw=0.5)
-    h.rect(W - M - 12 - 16, y + 8.6, 2, 9, fill=ROJO)
-    marcas = {"nueva": VERDE, "cambio": ROJO, "quitada": GRIS2, "reserva": NAVY}
-    for ci, col in enumerate(cols):
-        xx = M + 14 + ci * (col_w + 10)
-        yy = y + 30
-        for tipo, renglones in col:
-            h.punto(xx + 2, yy - 2.4, 2.1, marcas.get(tipo, ROJO))
-            for k, r in enumerate(renglones):
-                h.texto_flechas(xx + 9, yy + k * 9.2, r, "I5", 7.2, TINTA)
-            yy += len(renglones) * 9.2 + 3.5
-    if sobran:
-        h.texto(M + 14, y + alto - 7, f"y {sobran} cambio{'s' if sobran != 1 else ''} más", "I6", 6.6, GRIS)
-    return y + alto + 4
-
-
 def hoja_salidas(h):
     info = h.info
     bloques = info["dia"]["bloques"]
     cambiadas = info.get("cambiadas") or set()
     h.nueva_pagina()
     y = h.encabezado_grande()
-    y = _caja_cambios(h, y)
     y = _encabezado_columnas(h, y + 12)
 
     def salto():
