@@ -161,7 +161,9 @@ function aplicarSecciones() {
     : secs.find(s => !["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(s)) || secs[0];
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
   document.querySelector(`.nav-item[data-sec="${primera}"]`)?.classList.add("active");
-  irA(primera);
+  // Después de que termine de cargar todo el archivo (si no, las secciones
+  // que están más abajo todavía no existen)
+  setTimeout(() => irA(primera), 0);
 }
 
 function irA(sec) {
@@ -207,6 +209,7 @@ function irA(sec) {
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
     historial_carga: renderHistorialCarga,
+    trafico: renderTrafico,
   };
   map[sec]();
 }
@@ -2644,6 +2647,1127 @@ function generarReporteDocumentos(btn) {
   window.open(`/api/documentos_pdf?hasta=${hasta}`, "_blank");
   btn.closest(".modal-overlay").remove();
 }
+
+// ════════════════════════════════════════════════════════════════════════
+//  TRÁFICO — las salidas del día
+// ════════════════════════════════════════════════════════════════════════
+// Lo que antes era el Excel del grupo de WhatsApp. Se arma acá, casilla por
+// casilla, y todo se guarda solo al salir de cada una. El sistema sabe dónde
+// quedó cada coche (el que ayer fue a COP hoy amanece en COP): con eso
+// sugiere quién hace cada regreso y avisa si algo no cierra. Publicar guarda
+// una versión y arma el PDF único para mandar al grupo.
+
+const tr = { fecha: null, d: null, listas: null, dias: [], asignar: null, sug: null, deshacer: null, reordenar: new Set() };
+const TR_DIAS = ["DOMINGO", "LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO"];
+const TR_MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+
+const trQuieto = () => !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+const trEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const trIso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const trHoy = () => trIso(new Date());                       // la fecha de acá, no la de Londres
+const trFecha = f => { const [a, m, d] = f.split("-").map(Number); return new Date(a, m - 1, d); };
+const trSumar = (f, n) => { const d = trFecha(f); d.setDate(d.getDate() + n); return trIso(d); };
+const trCorto = f => { const d = trFecha(f); return `${TR_DIAS[d.getDay()].slice(0, 3)} ${d.getDate()}`; };
+const trLargo = f => { const d = trFecha(f); return `${TR_DIAS[d.getDay()]} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`; };
+const trPuede = () => !!tr.d?.puede_editar;
+const trEsCoche = c => /^\d+$/.test(String(c || "").trim());
+const trSinTildes = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// 930 → 09:30, 9.30 → 09:30, 0630 → 06:30. Si no se entiende queda como está.
+function trHora(v) {
+  const s = String(v || "").trim().replace(/[.,h ]/gi, ":").replace(/:+/g, ":");
+  if (!s) return "";
+  let m = s.match(/^(\d{1,2}):(\d{1,2})$/) || s.match(/^(\d{1,2})(\d{2})$/);
+  if (!m && /^\d{1,2}$/.test(s)) m = [s, s, "0"];
+  if (!m) return s;
+  const h = +m[1], mi = +m[2];
+  if (h > 23 || mi > 59) return s;
+  return `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}`;
+}
+
+async function trPedir(url, method = "GET", body) {
+  const opts = { method };
+  if (body !== undefined) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
+  return api(url, opts);
+}
+
+// ─── Entrada ─────────────────────────────────────────────────────────────
+
+async function renderTrafico() {
+  status("Tráfico: las salidas del día");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-route"></i> Tráfico</h1>
+      <p>Las salidas del día: se arma acá, el sistema sabe dónde quedó cada coche y sale el PDF para el grupo</p>
+    </div>
+    <div class="section tr-raiz" id="tr-raiz"><div class="dossier-loading"></div></div>
+    <div id="tr-listas" hidden></div>`;
+  tr.asignar = null;
+  trCerrarSug();
+  const primera = !tr.fecha;
+  if (primera) tr.fecha = trHoy();
+  const [listas] = await Promise.all([api("/api/trafico/listas"), trCargar(tr.fecha)]);
+  tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
+  trDatalists();
+}
+
+function trDatalists() {
+  const el = $("#tr-listas");
+  if (!el || !tr.listas) return;
+  el.innerHTML = `
+    <datalist id="tr-l-trip">${tr.listas.tripulantes.map(n => `<option value="${trEsc(n)}">`).join("")}</datalist>
+    <datalist id="tr-l-dest">${tr.listas.destinos.map(n => `<option value="${trEsc(n)}">`).join("")}</datalist>`;
+}
+
+// Suma a las listas lo que se acaba de escribir, para que aparezca la próxima vez
+function trAprender(campo, v) {
+  if (!tr.listas || !v) return;
+  const lista = campo === "destino" ? tr.listas.destinos : /^trip|reserva_.*_trip/.test(campo) ? tr.listas.tripulantes : null;
+  if (lista && !lista.includes(v) && v.length > 2) { lista.push(v); lista.sort(); trDatalists(); }
+}
+
+async function trCargar(fecha, dir = 0) {
+  const [d, dias] = await Promise.all([
+    api(`/api/trafico/dia/${fecha}`),
+    api(`/api/trafico/dias?hasta=${trSumar(fecha, 4)}`),
+  ]);
+  const raiz = $("#tr-raiz");
+  if (!raiz) return;
+  if (!d || d.error) { raiz.innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>No se pudo traer el tráfico. Probá de nuevo.</div>`; return; }
+  tr.fecha = fecha;
+  tr.d = d;
+  tr.dias = Array.isArray(dias) ? dias : [];
+  tr.asignar = null;
+  tr.reordenar.clear();
+  trCerrarSug();
+  if (dir && document.startViewTransition && !trQuieto()) {
+    document.documentElement.dataset.trDir = dir > 0 ? "sig" : "ant";
+    const t = document.startViewTransition(() => trPintar(true));
+    t.finished.finally(() => delete document.documentElement.dataset.trDir);
+  } else {
+    trPintar(true);
+  }
+}
+
+function trIr(paso) { trCargar(trSumar(tr.fecha, paso), paso); }
+function trIrA(fecha) {
+  if (!fecha || fecha === tr.fecha) return;
+  trCargar(fecha, fecha > tr.fecha ? 1 : -1);
+}
+
+// ─── Dibujo general ──────────────────────────────────────────────────────
+
+function trVacio() {
+  const d = tr.d;
+  return !d.existe || !(d.bloques || []).length;
+}
+
+function trPintar(entrada = false) {
+  const raiz = $("#tr-raiz");
+  if (!raiz) return;
+  const d = tr.d;
+  raiz.classList.toggle("solo-ver", !trPuede());
+  raiz.innerHTML = `
+    <div id="tr-tablero">${trTablero()}</div>
+    <div class="tr-cuerpo">
+    ${trVacio() ? trInicioVacio() : `
+      <div id="tr-resumen">${trResumen()}</div>
+      <div id="tr-donde">${trDonde()}</div>
+      <div class="tr-corredores ${entrada ? "entra" : ""}" id="tr-corredores">
+        ${d.bloques.map((b, i) => trBloque(b, i)).join("")}
+      </div>
+      ${trPuede() ? `
+        <form class="tr-nuevo-corr" onsubmit="event.preventDefault(); trAgregarBloque(this)">
+          <i class="ti ti-plus"></i>
+          <input name="nombre" placeholder="Agregar corredor (ej: CONCEPCION)" autocomplete="off" maxlength="60">
+          <button class="btn btn-ghost" type="submit">Agregar</button>
+        </form>` : ""}`}
+    </div>
+    <div class="tr-deshacer" id="tr-deshacer"></div>
+    <div class="tr-asignando" id="tr-asignando"></div>`;
+  if (entrada) trAnimarFecha();
+}
+
+// El tablero: la fecha en fichas, el estado y lo que se puede hacer
+function trTablero() {
+  const d = tr.d, f = tr.fecha, dia = d.dia || {};
+  const fe = trFecha(f);
+  const fichas = s => [...s].map((ch, i) => `<span class="tr-ficha" style="--k:${i}"><b>${ch}</b></span>`).join("");
+  const hayAlgo = !trVacio();
+  let chip, sub = "";
+  if (!hayAlgo) {
+    chip = `<span class="tr-estado-chip vacio"><i class="ti ti-circle-dashed"></i> Sin armar</span>`;
+  } else if (!dia.version) {
+    chip = `<span class="tr-estado-chip borrador"><i class="ti ti-pencil"></i> Borrador</span>`;
+    sub = "Todavía no se publicó";
+  } else if (dia.modificado) {
+    const n = (d.cambios_pendientes || []).length;
+    chip = `<span class="tr-estado-chip cambios"><i class="ti ti-pencil"></i> Versión ${dia.version} · ${n ? `${n} cambio${n === 1 ? "" : "s"} sin publicar` : "cambios sin publicar"}</span>`;
+    sub = trPublicada(dia);
+  } else {
+    chip = `<span class="tr-estado-chip publicado"><i class="ti ti-circle-check"></i> Versión ${dia.version} publicada</span>`;
+    sub = trPublicada(dia);
+  }
+  const pendiente = hayAlgo && (!dia.version || dia.modificado);
+  const dias = [];
+  for (let i = -3; i <= 3; i++) {
+    const g = trSumar(f, i);
+    const x = tr.dias.find(z => z.fecha === g);
+    let estado = "vacio", txt = "";
+    if (x && x.salidas) {
+      if (!x.version) { estado = "borrador"; txt = "borrador"; }
+      else { estado = x.modificado ? "cambios" : "publicado"; txt = `v${x.version}${x.modificado ? "*" : ""}`; }
+    }
+    dias.push(`<button class="tr-dia ${estado} ${g === f ? "on" : ""}" onclick="trIrA('${g}')" title="${trLargo(g)}">
+      <span>${g === trHoy() ? "HOY" : g === trSumar(trHoy(), 1) ? "MAÑANA" : trCorto(g).split(" ")[0]}</span>
+      <b>${trFecha(g).getDate()}</b><i>${txt}</i></button>`);
+  }
+  return `
+    <div class="tr-tablero">
+      <div class="tr-tab-fecha">
+        <button class="tr-flecha" onclick="trIr(-1)" aria-label="Día anterior"><i class="ti ti-chevron-left"></i></button>
+        <button class="tr-fecha-centro" onclick="trElegirFecha()" title="Elegir otra fecha">
+          <span class="tr-dia-nombre">${TR_DIAS[fe.getDay()]}</span>
+          <span class="tr-fichas">${fichas(String(fe.getDate()).padStart(2, "0"))}<i></i>${fichas(TR_MESES[fe.getMonth()])}</span>
+        </button>
+        <input type="date" id="tr-fecha-in" value="${f}" onchange="trIrA(this.value)" tabindex="-1" aria-hidden="true">
+        <button class="tr-flecha" onclick="trIr(1)" aria-label="Día siguiente"><i class="ti ti-chevron-right"></i></button>
+      </div>
+      <div class="tr-tab-estado">
+        ${chip}
+        ${sub ? `<small>${sub}</small>` : ""}
+      </div>
+      <div class="tr-tab-acciones">
+        ${dia.version ? `<button class="tr-tab-btn" onclick="trVersiones(this)" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
+        ${hayAlgo ? `<button class="tr-tab-btn" onclick="trVerPdf()" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>` : ""}
+        ${trPuede() ? `<button class="tr-tab-btn" onclick="trMas(this)" title="Importar, copiar, vaciar"><i class="ti ti-dots"></i></button>` : ""}
+        ${trPuede() && pendiente ? `<button class="tr-publicar" onclick="trPublicar()"><i class="ti ti-send"></i> Publicar versión ${(dia.version || 0) + 1}</button>`
+          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onclick="trCompartir(${dia.version}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
+      </div>
+      <div class="tr-tab-dias">${dias.join("")}</div>
+    </div>`;
+}
+
+function trPublicada(dia) {
+  const p = String(dia.publicado_el || "");
+  if (p.length < 16) return "";
+  const quien = (dia.publicado_por || "").trim().split(" ")[0];
+  return `Publicada el ${p.slice(8, 10)}/${p.slice(5, 7)} a las ${p.slice(11, 16)}${quien ? ` por ${trEsc(quien)}` : ""}`;
+}
+
+function trElegirFecha() {
+  const i = $("#tr-fecha-in");
+  if (!i) return;
+  try { i.showPicker(); } catch (e) { i.focus(); i.click(); }
+}
+
+// Las fichas de la fecha giran cuando cambia el día, como los carteles
+function trAnimarFecha() {
+  if (trQuieto()) return;
+  document.querySelectorAll(".tr-ficha").forEach(f => {
+    f.classList.remove("gira");
+    void f.offsetWidth;
+    f.classList.add("gira");
+  });
+}
+
+// ─── Día vacío: de dónde arrancar ────────────────────────────────────────
+
+function trInicioVacio() {
+  const ant = tr.d.dia_anterior;
+  if (!trPuede()) return `<div class="tr-vacio-solo"><i class="ti ti-calendar-off"></i>Todavía no se armó el tráfico de este día.</div>`;
+  const opciones = [];
+  if (ant) {
+    opciones.push(`
+      <button class="tr-op principal" onclick="trCopiar('${ant}', false, true)">
+        <i class="ti ti-wand"></i>
+        <b>Armar desde el ${trLargo(ant)}</b>
+        <span>Copia los horarios y en cada regreso pone el coche que quedó allá, con su tripulación. Las idas quedan para completar.</span>
+        <em>Recomendado</em>
+      </button>
+      <button class="tr-op" onclick="trCopiar('${ant}', true, false)">
+        <i class="ti ti-copy"></i>
+        <b>Copiar el ${trLargo(ant)} tal cual</b>
+        <span>Los mismos horarios, coches y tripulantes. Después se cambia lo que haga falta.</span>
+      </button>`);
+  }
+  opciones.push(`
+    <button class="tr-op" onclick="trImportar()">
+      <i class="ti ti-file-spreadsheet"></i>
+      <b>Importar el Excel</b>
+      <span>La planilla de siempre (HORARIOS NACIONALES): se lee tal cual, con las siglas como están.</span>
+    </button>
+    <button class="tr-op" onclick="document.querySelector('.tr-vacio-nuevo input')?.focus()">
+      <i class="ti ti-pencil-plus"></i>
+      <b>Empezar en blanco</b>
+      <span>Agregar los corredores y las salidas a mano.</span>
+    </button>`);
+  return `
+    <div class="tr-vacio">
+      <div class="tr-vacio-cab">
+        <h2>¿Cómo armamos el ${trLargo(tr.fecha)}?</h2>
+        <p>${ant ? "Lo más rápido es partir del último día cargado." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+      </div>
+      <div class="tr-ops">${opciones.join("")}</div>
+      <form class="tr-nuevo-corr tr-vacio-nuevo" onsubmit="event.preventDefault(); trAgregarBloque(this)">
+        <i class="ti ti-plus"></i>
+        <input name="nombre" placeholder="Primer corredor (ej: CONCEPCION)" autocomplete="off" maxlength="60">
+        <button class="btn btn-ghost" type="submit">Agregar</button>
+      </form>
+    </div>`;
+}
+
+async function trCopiar(desde, conAsignaciones, completar) {
+  if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)}. ¿Seguimos?`)) return;
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/copiar`, "POST",
+    { desde, con_asignaciones: conAsignaciones, completar });
+  if (!r.ok) { toast(r.msg || "No se pudo copiar", "error"); return; }
+  tr.d = r;
+  trPintar(true);
+  trRefrescarDias();
+  if (completar) {
+    toast(r.completadas ? `Listo: ${r.completadas} regreso${r.completadas === 1 ? "" : "s"} con el coche que está allá` : "Horarios copiados. No había coches allá para los regresos.", "success");
+    trVoltearLlenas();
+  } else toast("Día copiado", "success");
+}
+
+// ─── Resumen y dónde están los coches ────────────────────────────────────
+
+function trResumen() {
+  const r = tr.d.resumen || {};
+  const n = (v, txt, cls = "", accion = "") => `
+    <${accion ? "button" : "div"} class="tr-num ${cls}" ${accion ? `onclick="${accion}"` : ""}>
+      <b>${v}</b><span>${txt}</span>
+    </${accion ? "button" : "div"}>`;
+  return `
+    <div class="tr-resumen">
+      ${n(r.salidas || 0, r.salidas === 1 ? "salida" : "salidas")}
+      ${n(r.coches || 0, r.coches === 1 ? "coche" : "coches")}
+      ${n(r.tripulantes || 0, "tripulantes")}
+      ${r.a_confirmar ? n(r.a_confirmar, "a confirmar", "falta", "trIrAProblema('falta')") : n("✓", "todo asignado", "bien")}
+      ${r.con_aviso ? n(r.con_aviso, r.con_aviso === 1 ? "con aviso" : "con avisos", "aviso", "trIrAProblema('aviso')") : ""}
+      ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con papeles vencidos" : "coches con papeles vencidos", "doc", "trIrAProblema('doc')") : ""}
+    </div>`;
+}
+
+function trIrAProblema(tipo) {
+  const filas = [...document.querySelectorAll(`.tr-fila.${tipo === "falta" ? "falta" : tipo === "doc" ? "papeles" : "con-aviso"}`)];
+  if (!filas.length) return;
+  tr._prob = ((tr._prob ?? -1) + 1) % filas.length;
+  const f = filas[tr._prob];
+  f.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "center" });
+  f.classList.remove("ilumina"); void f.offsetWidth; f.classList.add("ilumina");
+}
+
+// Cuántas salidas del interior sin coche tienen un coche esperando allá
+function trVaciasInterior() {
+  return tr.d.completables || 0;
+}
+
+function trDonde() {
+  const grupos = tr.d.ubicaciones || [];
+  const vacias = trVaciasInterior();
+  const cabeza = `
+    <div class="tr-donde-cab">
+      <div>
+        <b><i class="ti ti-map-pin"></i> Dónde amanecen los coches</b>
+        <span>Donde terminó su último viaje. ${trPuede() ? "Tocá un coche y después la salida (o arrastralo)." : ""}</span>
+      </div>
+      ${trPuede() ? `<button class="tr-completar" onclick="trCompletar()" ${vacias ? "" : "disabled"}
+          title="Pone en cada salida del interior sin coche el que está en ese lugar, con su tripulación">
+          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} salida${vacias === 1 ? "" : "s"} con el coche que está allá` : "Nada para completar con lo que está allá"}
+        </button>` : ""}
+    </div>`;
+  if (!grupos.length) {
+    return `<div class="tr-donde">${cabeza}<div class="tr-donde-nada">Cuando haya días anteriores cargados, acá aparece dónde quedó cada coche.</div></div>`;
+  }
+  const chip = (c, lugar) => {
+    const usado = (c.hoy || []).filter(Boolean);
+    const llego = c.desde_fecha === trSumar(tr.fecha, -1) ? "ayer" : `el ${c.desde_fecha.slice(8, 10)}/${c.desde_fecha.slice(5, 7)}`;
+    const titulo = `Llegó ${llego} (salió ${c.desde_hora} ${c.destino})${c.trip1 ? ` · ${c.trip1}${c.trip2 ? " y " + c.trip2 : ""}` : ""}${usado.length ? ` · hoy sale ${usado.join(", ")}` : ""}`;
+    return `<button class="tr-cc ${usado.length ? "usado" : ""} ${tr.asignar === c.coche ? "sel" : ""}" data-coche="${trEsc(c.coche)}" data-lugar="${trEsc(lugar)}"
+              ${trPuede() ? `draggable="true" onclick="trTomarCoche('${trEsc(c.coche)}', '${trEsc(lugar)}')"` : ""} title="${trEsc(titulo)}">
+              <b>${trEsc(c.coche)}</b>${usado.length ? `<small>${usado[0]}</small>` : ""}</button>`;
+  };
+  return `
+    <div class="tr-donde">
+      ${cabeza}
+      <div class="tr-lugares">
+        ${grupos.map(g => `
+          <div class="tr-lugar ${g.lugar === "ASU" ? "asu" : ""}">
+            <span class="tr-lugar-nom">${trEsc(g.lugar)}<i>${g.coches.length}</i></span>
+            <div class="tr-lugar-coches">${g.coches.map(c => chip(c, g.lugar)).join("")}</div>
+          </div>`).join("")}
+      </div>
+    </div>`;
+}
+
+async function trCompletar() {
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/completar`, "POST", {});
+  if (!r.ok) { toast(r.msg || "No se pudo completar", "error"); return; }
+  const antes = trCochesPorFila();
+  trAplicar(r, { repintar: true });
+  if (r.completadas) {
+    toast(`${r.completadas} salida${r.completadas === 1 ? "" : "s"} completada${r.completadas === 1 ? "" : "s"} con el coche que está allá`, "success");
+    trVoltearLlenas(antes);
+  } else toast("No hay coches en esos lugares para completar", "");
+}
+
+function trCochesPorFila() {
+  const m = {};
+  document.querySelectorAll(".tr-fila").forEach(f => { m[f.dataset.id] = f.querySelector(".tr-chapa")?.value || ""; });
+  return m;
+}
+
+// Las chapas que recién se llenaron giran una atrás de otra
+function trVoltearLlenas(antes = {}) {
+  const filas = [...document.querySelectorAll(".tr-fila")].filter(f => {
+    const v = f.querySelector(".tr-chapa")?.value || "";
+    return v && trEsCoche(v) && !antes[f.dataset.id];
+  });
+  filas.forEach((f, i) => setTimeout(() => trVoltear(f.querySelector(".tr-chapa")), i * 90));
+}
+
+function trVoltear(input) {
+  if (!input) return;
+  const fin = input.value;
+  const caja = input.closest(".tr-chapa-c");
+  caja?.classList.remove("voltea"); void caja?.offsetWidth; caja?.classList.add("voltea");
+  if (trQuieto() || !trEsCoche(fin)) return;
+  let k = 0;
+  const t = setInterval(() => {
+    if (++k > 6 || document.activeElement === input) { clearInterval(t); input.value = fin; return; }
+    input.value = [...fin].map((ch, i) => i < k - 1 ? ch : Math.floor(Math.random() * 10)).join("");
+  }, 45);
+}
+
+// ─── Corredores y salidas ────────────────────────────────────────────────
+
+function trBloque(b, i) {
+  const pend = new Set((tr.d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
+  const ni = (b.ida || []).length, nr = (b.regreso || []).length;
+  const ro = trPuede() ? "" : "readonly";
+  const col = lado => {
+    const lista = b[lado] || [];
+    const nota = b[`nota_${lado}`] || "";
+    return `
+      <div class="tr-col ${lado}" data-bid="${b.id}" data-lado="${lado}">
+        <div class="tr-col-cab">
+          <b>${lado === "ida" ? "IDA" : "REGRESO"}</b>
+          <i class="ti ti-arrow-narrow-${lado === "ida" ? "right" : "left"}"></i>
+          ${trPuede() || nota ? `<input class="tr-nota ${nota ? "con" : ""}" data-bcampo="nota_${lado}" value="${trEsc(nota)}"
+                  placeholder="+ nota (ej: TRASBORDO BSAS)" ${ro} maxlength="40" data-v="${trEsc(nota)}">` : ""}
+        </div>
+        <div class="tr-etiquetas"><span></span><span>Hora</span><span>Tramo</span><span>Coche</span><span>Tripulantes</span><span></span></div>
+        <div class="tr-filas">
+          ${lista.map((s, k) => trFila(s, lado, pend.has(s.id), k)).join("") || `<div class="tr-sin">Sin salidas de ${lado === "ida" ? "ida" : "regreso"}</div>`}
+        </div>
+        ${trPuede() ? `<button class="tr-mas" onclick="trAgregarSalida(${b.id}, '${lado}')"><i class="ti ti-plus"></i> Salida</button>` : ""}
+        ${trPuede() || b[`reserva_${lado}_coche`] || b[`reserva_${lado}_trip`] ? `
+          <div class="tr-reserva">
+            <span>Reserva</span>
+            <input class="tr-res-coche" data-bcampo="reserva_${lado}_coche" value="${trEsc(b[`reserva_${lado}_coche`])}" data-v="${trEsc(b[`reserva_${lado}_coche`])}"
+                   placeholder="Coche" ${ro} maxlength="10" inputmode="numeric">
+            <input class="tr-res-trip" data-bcampo="reserva_${lado}_trip" value="${trEsc(b[`reserva_${lado}_trip`])}" data-v="${trEsc(b[`reserva_${lado}_trip`])}"
+                   placeholder="Tripulante" ${ro} list="tr-l-trip" maxlength="80">
+          </div>` : ""}
+      </div>`;
+  };
+  return `
+    <section class="tr-corr" data-bid="${b.id}" style="--i:${Math.min(i, 10)}">
+      <header class="tr-corr-cab">
+        <span class="tr-corr-marca"></span>
+        <input class="tr-corr-nombre" data-bcampo="nombre" value="${trEsc(b.nombre)}" data-v="${trEsc(b.nombre)}" ${ro} maxlength="60"
+               aria-label="Nombre del corredor" style="--n:${Math.max(6, b.nombre.length)}">
+        <span class="tr-corr-cuenta" id="tr-cuenta-${b.id}">${ni} ida${ni === 1 ? "" : "s"} · ${nr} regreso${nr === 1 ? "" : "s"}</span>
+        ${trPuede() ? `
+          <span class="tr-corr-acc">
+            <button onclick="trMoverBloque(${b.id}, -1)" title="Subir"><i class="ti ti-arrow-up"></i></button>
+            <button onclick="trMoverBloque(${b.id}, 1)" title="Bajar"><i class="ti ti-arrow-down"></i></button>
+            <button class="peligro" onclick="trBorrarBloque(${b.id})" title="Quitar el corredor"><i class="ti ti-trash"></i></button>
+          </span>` : ""}
+      </header>
+      <div class="tr-cols">${col("ida")}${col("regreso")}</div>
+    </section>`;
+}
+
+function trClasesFila(s, cambiada) {
+  const av = s.avisos || [];
+  const c = [];
+  if (av.some(a => a.nivel === "falta")) c.push("falta");
+  if (av.some(a => a.nivel === "error")) c.push("con-aviso", "error");
+  else if (av.some(a => a.nivel === "aviso")) c.push("con-aviso");
+  if (av.some(a => a.nivel === "doc")) c.push("papeles");
+  if (cambiada) c.push("cambiada");
+  return c.join(" ");
+}
+
+function trAvisos(s) {
+  return (s.avisos || []).filter(a => a.nivel === "error" || a.nivel === "aviso")
+    .map(a => `<span class="tr-av ${a.nivel}"><i class="ti ti-${a.nivel === "error" ? "alert-octagon" : "alert-triangle"}"></i>${trEsc(a.txt)}</span>`).join("");
+}
+
+function trDoc(s) {
+  const d = (s.avisos || []).find(a => a.nivel === "doc");
+  return d ? trEsc(d.txt) : "";
+}
+
+function trFila(s, lado, cambiada, k = 0) {
+  const ro = trPuede() ? "" : "readonly";
+  const v = (campo, extra = "") => `data-campo="${campo}" value="${trEsc(s[campo])}" data-v="${trEsc(s[campo])}" ${ro} ${extra}`;
+  const doc = trDoc(s);
+  return `
+    <div class="tr-fila ${trClasesFila(s, cambiada)}" data-id="${s.id}" data-lado="${lado}" data-origen="${trEsc(s.origen || "")}" style="--k:${Math.min(k, 8)}">
+      <span class="tr-parada"></span>
+      <input class="tr-in tr-hora" ${v("hora", 'placeholder="--:--" inputmode="numeric" maxlength="5" aria-label="Hora"')}>
+      <input class="tr-in tr-tramo" ${v("destino", `list="tr-l-dest" placeholder="Tramo" maxlength="60" aria-label="Tramo" title="${trEsc(s.destino)}"`)}>
+      <span class="tr-chapa-c ${doc ? "doc" : ""}" ${doc ? `title="${doc}"` : ""}>
+        <input class="tr-in tr-chapa" ${v("coche", 'placeholder="COCHE" autocomplete="off" maxlength="10" aria-label="Coche"')}>
+      </span>
+      <span class="tr-trips">
+        <input class="tr-in tr-trip" ${v("trip1", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Primer tripulante"')}>
+        <input class="tr-in tr-trip" ${v("trip2", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Segundo tripulante"')}>
+      </span>
+      ${trPuede() ? `<button class="tr-quitar" onclick="trBorrarSalida(${s.id})" title="Quitar esta salida" tabindex="-1"><i class="ti ti-x"></i></button>` : "<span></span>"}
+      <div class="tr-avisos">${trAvisos(s)}</div>
+    </div>`;
+}
+
+// Después de guardar: se actualiza lo que depende (avisos, resumen, tablero,
+// dónde están los coches) sin tocar las casillas, así no se pierde el lugar.
+function trAplicar(d, { repintar = false } = {}) {
+  if (!d || d.ok === false) return;
+  tr.d = d;
+  if (repintar || trVacio() || !$("#tr-corredores")) { trPintar(); return; }
+  $("#tr-tablero").innerHTML = trTablero();
+  $("#tr-resumen").innerHTML = trResumen();
+  $("#tr-donde").innerHTML = trDonde();
+  const pend = new Set((d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
+  d.bloques.forEach(b => {
+    const cuenta = $(`#tr-cuenta-${b.id}`);
+    const ni = (b.ida || []).length, nr = (b.regreso || []).length;
+    if (cuenta) cuenta.textContent = `${ni} ida${ni === 1 ? "" : "s"} · ${nr} regreso${nr === 1 ? "" : "s"}`;
+    ["ida", "regreso"].forEach(lado => {
+      (b[lado] || []).forEach(s => {
+        const f = document.querySelector(`.tr-fila[data-id="${s.id}"]`);
+        if (!f) return;
+        f.className = `tr-fila ${trClasesFila(s, pend.has(s.id))}`;
+        f.dataset.origen = s.origen || "";
+        f.querySelector(".tr-avisos").innerHTML = trAvisos(s);
+        const caja = f.querySelector(".tr-chapa-c");
+        const doc = trDoc(s);
+        caja.classList.toggle("doc", !!doc);
+        if (doc) caja.title = doc; else caja.removeAttribute("title");
+      });
+      // ¿Cambió el orden por la hora? Se acomoda cuando no se está escribiendo ahí
+      const col = document.querySelector(`.tr-col[data-bid="${b.id}"][data-lado="${lado}"]`);
+      if (!col) return;
+      const enPantalla = [...col.querySelectorAll(".tr-fila")].map(f => +f.dataset.id);
+      const enOrden = (b[lado] || []).map(s => s.id);
+      if (enPantalla.join() !== enOrden.join()) {
+        if (col.contains(document.activeElement)) tr.reordenar.add(`${b.id}-${lado}`);
+        else trRepintarColumna(b, lado);
+      }
+    });
+  });
+  if (tr.asignar) trMarcarAsignar();
+}
+
+function trRepintarColumna(b, lado) {
+  const col = document.querySelector(`.tr-col[data-bid="${b.id}"][data-lado="${lado}"] .tr-filas`);
+  if (!col) return;
+  const pend = new Set((tr.d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
+  // FLIP: cada fila se desliza de donde estaba a donde va
+  const antes = {};
+  col.querySelectorAll(".tr-fila").forEach(f => { antes[f.dataset.id] = f.getBoundingClientRect().top; });
+  col.innerHTML = (b[lado] || []).map((s, k) => trFila(s, lado, pend.has(s.id), k)).join("")
+    || `<div class="tr-sin">Sin salidas de ${lado}</div>`;
+  if (trQuieto()) return;
+  col.querySelectorAll(".tr-fila").forEach(f => {
+    f.style.animation = "none";
+    const a = antes[f.dataset.id];
+    if (a == null) return;
+    const dy = a - f.getBoundingClientRect().top;
+    if (!dy) return;
+    f.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" });
+  });
+}
+
+// ─── Guardar casilla por casilla ─────────────────────────────────────────
+
+async function trGuardarCampo(el) {
+  const campo = el.dataset.campo || el.dataset.bcampo;
+  if (!campo || !trPuede()) return;
+  let v = el.value.replace(/\s+/g, " ").trim().toUpperCase();
+  if (campo === "hora") {
+    v = trHora(v);
+    if (v && !/^\d{2}:\d{2}$/.test(v)) { toast("Escribí la hora así: 09:30 (o 930)", "error"); el.value = el.dataset.v || ""; return; }
+  }
+  el.value = v;
+  if (v === (el.dataset.v || "")) return;
+  if (campo === "nombre" && !v) { el.value = el.dataset.v; return; }
+  el.dataset.v = v;
+  el.classList.add("guardando");
+  let r;
+  if (el.dataset.campo) {
+    const id = el.closest(".tr-fila").dataset.id;
+    r = await trPedir(`/api/trafico/salida/${id}`, "PATCH", { [campo]: v });
+  } else {
+    const bid = el.closest("[data-bid]").dataset.bid;
+    r = await trPedir(`/api/trafico/bloque/${bid}`, "PATCH", { [campo]: v });
+  }
+  el.classList.remove("guardando");
+  if (!r || r.ok === false) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+  el.classList.remove("guardado"); void el.offsetWidth; el.classList.add("guardado");
+  if (campo === "nota_ida" || campo === "nota_regreso") el.classList.toggle("con", !!v);
+  if (campo === "nombre") el.style.setProperty("--n", Math.max(6, v.length));
+  trAprender(campo, v);
+  trAplicar(r);
+  trRefrescarDias();
+}
+
+// Teclado: Enter pasa a la casilla siguiente, como en la planilla
+function trTecla(e) {
+  const el = e.target;
+  if (!el.classList?.contains("tr-in")) return;
+  if (tr.sug && el.classList.contains("tr-chapa") && trTeclaSug(e)) return;
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const todos = [...document.querySelectorAll("#tr-corredores .tr-in:not([readonly])")];
+    const sig = todos[todos.indexOf(el) + 1];
+    el.blur();
+    if (sig) sig.focus();
+  } else if (e.key === "Escape") {
+    el.value = el.dataset.v || "";
+    el.blur();
+  }
+}
+
+async function trAgregarSalida(bid, lado) {
+  const b = tr.d.bloques.find(x => x.id === bid);
+  const lista = b?.[lado] || [];
+  // El tramo que más se repite en esa columna, para no escribirlo de nuevo
+  const cuenta = {};
+  lista.forEach(s => { if (s.destino) cuenta[s.destino] = (cuenta[s.destino] || 0) + 1; });
+  const destino = Object.entries(cuenta).sort((a, b2) => b2[1] - a[1])[0]?.[0] || "";
+  const r = await trPedir(`/api/trafico/bloque/${bid}/salida`, "POST", { lado, destino });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  const f = document.querySelector(`.tr-fila[data-id="${r.salida_id}"]`);
+  if (f) { f.classList.add("nueva"); f.querySelector(".tr-hora")?.focus(); }
+  trRefrescarDias();
+}
+
+async function trBorrarSalida(sid) {
+  let s = null, lado = null, bid = null;
+  tr.d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(x => { if (x.id === sid) { s = x; lado = l; bid = b.id; } })));
+  const fila = document.querySelector(`.tr-fila[data-id="${sid}"]`);
+  if (fila && !trQuieto()) {
+    fila.classList.add("sale");
+    await new Promise(res => setTimeout(res, 180));
+  }
+  const r = await trPedir(`/api/trafico/salida/${sid}`, "DELETE");
+  if (!r.ok) { fila?.classList.remove("sale"); toast(r.msg || "No se pudo quitar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  if (s) trOfrecerDeshacer(`Se quitó la salida ${s.hora || ""} ${s.destino || ""}`.trim(), async () => {
+    const r2 = await trPedir(`/api/trafico/bloque/${bid}/salida`, "POST",
+      { lado, hora: s.hora, destino: s.destino, coche: s.coche, trip1: s.trip1, trip2: s.trip2 });
+    if (r2.ok) { trAplicar(r2, { repintar: true }); trRefrescarDias(); }
+  });
+}
+
+function trOfrecerDeshacer(txt, fn) {
+  const el = $("#tr-deshacer");
+  if (!el) return;
+  clearTimeout(tr.deshacer);
+  el.innerHTML = `<span>${trEsc(txt)}</span><button>Deshacer</button>`;
+  el.classList.add("visible");
+  el.querySelector("button").onclick = () => { el.classList.remove("visible"); clearTimeout(tr.deshacer); fn(); };
+  tr.deshacer = setTimeout(() => el.classList.remove("visible"), 7000);
+}
+
+async function trAgregarBloque(form) {
+  const input = form.querySelector("input");
+  const nombre = input.value.trim().toUpperCase();
+  if (!nombre) { input.focus(); return; }
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/bloque`, "POST", { nombre });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  const sec = document.querySelector(`.tr-corr[data-bid="${r.bloque_id}"]`);
+  sec?.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "center" });
+  sec?.classList.add("nuevo");
+}
+
+async function trMoverBloque(bid, paso) {
+  const r = await trPedir(`/api/trafico/bloque/${bid}/mover`, "POST", { paso });
+  if (!r.ok) return;
+  const cards = [...document.querySelectorAll(".tr-corr")];
+  const antes = Object.fromEntries(cards.map(c => [c.dataset.bid, c.getBoundingClientRect().top]));
+  trAplicar(r, { repintar: true });
+  if (trQuieto()) return;
+  document.querySelectorAll(".tr-corr").forEach(c => {
+    c.style.animation = "none";
+    const dy = (antes[c.dataset.bid] ?? 0) - c.getBoundingClientRect().top;
+    if (dy) c.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 380, easing: "cubic-bezier(.2,.8,.2,1)" });
+  });
+}
+
+async function trBorrarBloque(bid) {
+  const b = tr.d.bloques.find(x => x.id === bid);
+  const n = (b?.ida?.length || 0) + (b?.regreso?.length || 0);
+  if (!confirm(`¿Quitar el corredor ${b?.nombre || ""}${n ? ` con sus ${n} salidas` : ""}?`)) return;
+  const r = await trPedir(`/api/trafico/bloque/${bid}`, "DELETE");
+  if (!r.ok) { toast(r.msg || "No se pudo quitar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  toast("Corredor quitado", "success");
+}
+
+async function trRefrescarDias() {
+  const dias = await api(`/api/trafico/dias?hasta=${trSumar(tr.fecha, 4)}`);
+  if (Array.isArray(dias)) { tr.dias = dias; const t = $("#tr-tablero"); if (t) t.innerHTML = trTablero(); }
+}
+
+// ─── Sugerencias de coche ────────────────────────────────────────────────
+// Al entrar en la casilla del coche aparecen los que pueden hacer esa salida:
+// primero los que están en el lugar, del que llegó antes al último.
+
+async function trAbrirSug(input) {
+  if (!trPuede()) return;
+  const fila = input.closest(".tr-fila");
+  const sid = +fila.dataset.id;
+  if (tr.sug?.sid === sid) return;
+  trCerrarSug();
+  const caja = document.createElement("div");
+  caja.className = "tr-sug";
+  caja.innerHTML = `<div class="tr-sug-cargando"><i class="ti ti-loader-2"></i> Buscando dónde están los coches…</div>`;
+  caja.addEventListener("mousedown", e => e.preventDefault());   // que no se vaya el foco de la casilla
+  document.body.appendChild(caja);
+  tr.sug = { sid, input, caja, datos: null, items: [], sel: -1 };
+  trUbicarSug();
+  const r = await api(`/api/trafico/salida/${sid}/sugerencias`);
+  if (tr.sug?.sid !== sid) return;
+  tr.sug.datos = r && !r.error ? r : { candidatos: [], salida: {} };
+  trPintarSug();
+}
+
+function trUbicarSug() {
+  const s = tr.sug;
+  if (!s) return;
+  const r = s.input.getBoundingClientRect();
+  const w = Math.min(360, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(r.left - 8, window.innerWidth - w - 8));
+  s.caja.style.width = w + "px";
+  s.caja.style.left = left + "px";
+  const alto = s.caja.offsetHeight || 260;
+  const abajo = window.innerHeight - r.bottom;
+  if (abajo < alto + 16 && r.top > abajo) { s.caja.style.top = ""; s.caja.style.bottom = (window.innerHeight - r.top + 6) + "px"; s.caja.classList.add("arriba"); }
+  else { s.caja.style.bottom = ""; s.caja.style.top = (r.bottom + 6) + "px"; s.caja.classList.remove("arriba"); }
+}
+
+function trPintarSug() {
+  const s = tr.sug;
+  if (!s || !s.datos) return;
+  const q = s.input.value.trim().toUpperCase();
+  const sal = s.datos.salida || {};
+  let cands = (s.datos.candidatos || []).filter(c => !q || c.coche.startsWith(q) || !trEsCoche(q));
+  if (q && trEsCoche(q) && q === s.input.dataset.v) cands = s.datos.candidatos || [];   // ya tiene uno: mostrar todos
+  const ya = new Set(cands.map(c => c.coche));
+  const otros = q && trEsCoche(q) && q !== s.input.dataset.v
+    ? (tr.listas?.coches || []).filter(c => c.coche.startsWith(q) && !ya.has(c.coche)).slice(0, 5) : [];
+  s.items = [...cands.map(c => ({ ...c, tipo: "cand" })), ...otros.map(c => ({ ...c, tipo: "flota" }))];
+  if (s.sel >= s.items.length) s.sel = s.items.length - 1;
+  const etiqueta = c => c.rango === 0 ? `<em class="alla">Está en ${trEsc(c.lugar)}</em>`
+    : c.rango === 1 ? `<em class="cerca">En ${trEsc(c.lugar)}, mismo corredor</em>`
+    : `<em class="tarde">En ${trEsc(c.lugar)} · sale más tarde (${trEsc((c.ya_hoy || []).join(", "))})</em>`;
+  const filas = s.items.map((c, k) => c.tipo === "cand" ? `
+      <button class="tr-sug-it ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-sug-chapa">${trEsc(c.coche)}</span>
+        <span class="tr-sug-txt">
+          ${etiqueta(c)}
+          <span>Llegó ${trEsc(c.cuando)} · salió ${trEsc(c.desde_hora)} ${trEsc(c.destino)}</span>
+          ${c.trip1 ? `<small><i class="ti ti-users"></i> ${trEsc(c.trip1)}${c.trip2 ? " · " + trEsc(c.trip2) : ""}</small>` : ""}
+        </span>
+      </button>` : `
+      <button class="tr-sug-it flota ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-sug-chapa borde">${trEsc(c.coche)}</span>
+        <span class="tr-sug-txt"><span>${trEsc(c.modelo || "De la flota")}</span><small>No sabemos dónde está</small></span>
+      </button>`).join("");
+  const total = s.datos.total || 0;
+  s.caja.innerHTML = `
+    <div class="tr-sug-cab">
+      <b>${trEsc(sal.hora || "")} ${trEsc(sal.destino || "")}</b>
+      <span>${sal.origen ? `Sale de ${trEsc(sal.origen)}` : "No se sabe de dónde sale"}${total > 12 ? ` · ${total} coches posibles, los que llegaron antes primero` : ""}</span>
+    </div>
+    ${filas || `<div class="tr-sug-nada">${sal.origen && sal.origen !== "ASU"
+      ? `Ningún coche quedó en ${trEsc(sal.origen)}. Escribí el número igual.` : "Escribí el número del coche."}</div>`}
+    <div class="tr-sug-pie"><kbd>↑</kbd><kbd>↓</kbd> elegir · <kbd>Enter</kbd> poner · <kbd>Esc</kbd> cerrar</div>`;
+  s.caja.querySelectorAll(".tr-sug-it").forEach(b => b.onclick = () => trElegirSug(+b.dataset.k));
+  trUbicarSug();
+}
+
+function trTeclaSug(e) {
+  const s = tr.sug;
+  if (!s || !s.items) return false;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = s.items.length;
+    if (!n) return true;
+    s.sel = e.key === "ArrowDown" ? (s.sel + 1) % n : (s.sel - 1 + n) % n;
+    trPintarSug();
+    s.caja.querySelector(".tr-sug-it.on")?.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+  if (e.key === "Enter" && s.sel >= 0) { e.preventDefault(); trElegirSug(s.sel); return true; }
+  if (e.key === "Escape") { trCerrarSug(); return false; }
+  return false;
+}
+
+async function trElegirSug(k) {
+  const s = tr.sug;
+  const c = s?.items[k];
+  if (!c) return;
+  const input = s.input;
+  trCerrarSug();
+  await trPonerCoche(input.closest(".tr-fila"), c.coche, c.tipo === "cand" ? c : null);
+  // y sigue con la casilla de al lado
+  const fila = document.querySelector(`.tr-fila[data-id="${input.closest(".tr-fila")?.dataset.id}"]`);
+  fila?.querySelector(".tr-trip")?.focus();
+}
+
+// Pone el coche en la salida y, si no tenía tripulantes, los que vinieron con él
+async function trPonerCoche(fila, coche, cand) {
+  if (!fila) return;
+  const id = fila.dataset.id;
+  const ins = fila.querySelectorAll(".tr-trip");
+  const datos = { coche };
+  if (cand && cand.trip1 && !ins[0].value.trim() && !ins[1].value.trim()) {
+    datos.trip1 = cand.trip1;
+    datos.trip2 = cand.trip2 || "";
+  }
+  const chapa = fila.querySelector(".tr-chapa");
+  chapa.value = coche; chapa.dataset.v = coche;
+  if (datos.trip1 !== undefined) {
+    ins[0].value = datos.trip1; ins[0].dataset.v = datos.trip1;
+    ins[1].value = datos.trip2; ins[1].dataset.v = datos.trip2;
+  }
+  trVoltear(chapa);
+  const r = await trPedir(`/api/trafico/salida/${id}`, "PATCH", datos);
+  if (!r || r.ok === false) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+  trAplicar(r);
+  trRefrescarDias();
+}
+
+function trCerrarSug() {
+  if (tr.sug?.caja) tr.sug.caja.remove();
+  tr.sug = null;
+}
+
+// ─── Tocar un coche de "dónde amanecen" y después la salida ──────────────
+
+function trTomarCoche(coche, lugar) {
+  tr.asignar = tr.asignar === coche ? null : coche;
+  tr.asignarLugar = lugar;
+  trMarcarAsignar();
+}
+
+function trMarcarAsignar() {
+  const raiz = $("#tr-raiz");
+  if (!raiz) return;
+  const c = tr.asignar;
+  raiz.classList.toggle("asignando", !!c);
+  document.querySelectorAll(".tr-cc").forEach(b => b.classList.toggle("sel", b.dataset.coche === c));
+  document.querySelectorAll(".tr-fila").forEach(f => f.classList.toggle("apta", !!c && f.dataset.origen === tr.asignarLugar));
+  const banda = $("#tr-asignando");
+  if (banda) {
+    banda.innerHTML = c ? `<i class="ti ti-hand-finger"></i> Tocá la salida que hace el <b>${trEsc(c)}</b> (está en ${trEsc(tr.asignarLugar)})
+      <button onclick="trTomarCoche(null)">Cancelar</button>` : "";
+    banda.classList.toggle("visible", !!c);
+  }
+}
+
+function trClickFila(e) {
+  if (!tr.asignar) return;
+  const fila = e.target.closest(".tr-fila");
+  if (!fila || e.target.closest(".tr-quitar")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const coche = tr.asignar;
+  const cand = trCandDesdePanel(coche);
+  tr.asignar = null;
+  trMarcarAsignar();
+  document.activeElement?.blur?.();
+  trPonerCoche(fila, coche, cand);
+}
+
+function trCandDesdePanel(coche) {
+  for (const g of tr.d.ubicaciones || []) for (const c of g.coches) if (c.coche === coche) return c;
+  return null;
+}
+
+// ─── Ver, publicar y compartir ───────────────────────────────────────────
+
+function trNombrePdf(version) {
+  const d = trFecha(tr.fecha);
+  const dia = TR_DIAS[d.getDay()].charAt(0) + TR_DIAS[d.getDay()].slice(1).toLowerCase();
+  return trSinTildes(`Trafico-${dia}-${trLargo(tr.fecha).split(" ")[1].replace(/\//g, "-")}-${version ? "v" + version : "borrador"}.pdf`);
+}
+
+function trVerPdf(version) {
+  window.open(`/api/trafico/dia/${tr.fecha}/pdf${version ? `?v=${version}` : ""}`, "_blank");
+}
+
+async function trPublicar() {
+  const d = tr.d, dia = d.dia || {}, r = d.resumen || {};
+  const nueva = (dia.version || 0) + 1;
+  const cambios = d.cambios_pendientes || [];
+  const conAviso = [];
+  d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(s =>
+    (s.avisos || []).filter(a => a.nivel === "error" || a.nivel === "aviso").forEach(a => conAviso.push(`${s.hora || "--:--"} ${s.destino}: ${a.txt}`)))));
+  const fondo = document.createElement("div");
+  fondo.className = "tr-modal-fondo";
+  fondo.innerHTML = `
+    <div class="tr-modal" role="dialog" aria-modal="true">
+      <div class="tr-modal-cab">
+        <span>Publicar el tráfico</span>
+        <b>${trLargo(tr.fecha)}</b>
+        <em>Versión ${nueva}</em>
+        <button class="tr-modal-x" onclick="this.closest('.tr-modal-fondo').remove()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="tr-modal-cuerpo" id="tr-pub-cuerpo">
+        <ul class="tr-checks">
+          <li class="ok"><i class="ti ti-circle-check"></i><span><b>${r.salidas} salidas</b> en ${d.bloques.length} corredor${d.bloques.length === 1 ? "" : "es"}, con ${r.coches} coches y ${r.tripulantes} tripulantes</span></li>
+          ${r.a_confirmar ? `<li class="falta"><i class="ti ti-alert-circle"></i><span><b>${r.a_confirmar} salida${r.a_confirmar === 1 ? "" : "s"} a confirmar.</b> Salen en el PDF como A CONFIRMAR.</span></li>` : ""}
+          ${conAviso.length ? `<li class="aviso"><i class="ti ti-alert-triangle"></i><span><b>${conAviso.length} aviso${conAviso.length === 1 ? "" : "s"}:</b>
+              <small>${conAviso.slice(0, 4).map(trEsc).join("<br>")}${conAviso.length > 4 ? `<br>y ${conAviso.length - 4} más` : ""}</small></span></li>` : ""}
+        </ul>
+        ${dia.version ? `
+          <div class="tr-pub-cambios">
+            <b>Qué cambió desde la versión ${dia.version}</b>
+            ${cambios.length ? `<ul>${cambios.map(c => `<li class="${c.tipo}">${trEsc(c.txt)}</li>`).join("")}</ul>`
+              : `<p>No hay diferencias en las salidas.</p>`}
+            <small>Esto va arriba de todo en el PDF y esas filas salen marcadas, para que nadie se quede con la vieja.</small>
+          </div>` : ""}
+      </div>
+      <div class="tr-modal-pie" id="tr-pub-pie">
+        <button class="btn btn-ghost" onclick="this.closest('.tr-modal-fondo').remove()">Seguir editando</button>
+        <button class="btn btn-ghost" onclick="trVerPdf()"><i class="ti ti-eye"></i> Ver cómo sale</button>
+        <button class="tr-publicar" onclick="trConfirmarPublicar(this)"><i class="ti ti-send"></i> Publicar versión ${nueva}</button>
+      </div>
+    </div>`;
+  fondo.addEventListener("click", e => { if (e.target === fondo) fondo.remove(); });
+  document.body.appendChild(fondo);
+}
+
+async function trConfirmarPublicar(btn) {
+  btn.disabled = true;
+  btn.innerHTML = `<i class="ti ti-loader-2 gira"></i> Publicando…`;
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/publicar`, "POST", {});
+  if (!r.ok) { btn.disabled = false; btn.innerHTML = `<i class="ti ti-send"></i> Publicar`; toast(r.msg || "No se pudo publicar", "error"); return; }
+  tr.d = r.estado;
+  trPintar();
+  trRefrescarDias();
+  const v = r.version;
+  // Se trae el PDF ya, así al tocar Compartir sale al instante (el celular lo pide)
+  tr.pdfListo = null;
+  const pedido = fetch(`/api/trafico/dia/${tr.fecha}/pdf?v=${v}`).then(x => x.ok ? x.blob() : null).catch(() => null);
+  pedido.then(b => { tr.pdfListo = b ? { v, fecha: tr.fecha, blob: b } : null; });
+  const cuerpo = $("#tr-pub-cuerpo"), pie = $("#tr-pub-pie");
+  if (cuerpo) cuerpo.innerHTML = `
+    <div class="tr-listo">
+      <svg viewBox="0 0 52 52" class="tr-listo-check"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
+      <b>${r.sin_cambios ? `La versión ${v} ya estaba publicada` : `Versión ${v} publicada`}</b>
+      <span>Ahora mandalo al grupo de WhatsApp de los choferes.</span>
+    </div>`;
+  if (pie) pie.innerHTML = `
+    <button class="btn btn-ghost" onclick="trVerPdf(${v})"><i class="ti ti-eye"></i> Ver PDF</button>
+    <button class="btn btn-ghost" onclick="trDescargar(${v})"><i class="ti ti-download"></i> Descargar</button>
+    <button class="tr-publicar compartir" onclick="trCompartir(${v}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir por WhatsApp</button>`;
+}
+
+async function trTraerPdf(v) {
+  if (tr.pdfListo && tr.pdfListo.v === v && tr.pdfListo.fecha === tr.fecha) return tr.pdfListo.blob;
+  const x = await fetch(`/api/trafico/dia/${tr.fecha}/pdf?v=${v}`);
+  if (!x.ok) return null;
+  const b = await x.blob();
+  tr.pdfListo = { v, fecha: tr.fecha, blob: b };
+  return b;
+}
+
+async function trDescargar(v) {
+  const blob = await trTraerPdf(v);
+  if (!blob) { toast("No se pudo armar el PDF", "error"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = trNombrePdf(v);
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+// En el celular abre el menú de compartir con el PDF adjunto (WhatsApp
+// incluido). En la computadora lo descarga para adjuntarlo en el grupo.
+async function trCompartir(v, btn) {
+  const blob = await trTraerPdf(v);
+  if (!blob) { toast("No se pudo armar el PDF", "error"); return; }
+  const archivo = new File([blob], trNombrePdf(v), { type: "application/pdf" });
+  const cambios = v > 1 ? (await api(`/api/trafico/dia/${tr.fecha}/versiones`) || []).find(x => x.version === v) : null;
+  let texto = `Tráfico ${trLargo(tr.fecha)} · versión ${v}`;
+  try {
+    const lista = cambios ? JSON.parse(cambios.cambios || "[]") : [];
+    if (lista.length) texto += `\nCambios:\n` + lista.slice(0, 6).map(c => `• ${c.txt}`).join("\n") + (lista.length > 6 ? `\n• y ${lista.length - 6} más` : "");
+  } catch (e) { /* sin lista de cambios */ }
+  if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    try { await navigator.share({ files: [archivo], title: `Tráfico ${trLargo(tr.fecha)}`, text: texto }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  trDescargar(v);
+  try { await navigator.clipboard.writeText(texto); } catch (e) { /* sin portapapeles */ }
+  toast("Se descargó el PDF: adjuntalo en el grupo (el texto quedó copiado)", "success");
+}
+
+async function trVersiones(btn) {
+  const vs = await api(`/api/trafico/dia/${tr.fecha}/versiones`);
+  if (!Array.isArray(vs)) return;
+  trMenu(btn, vs.map(v => {
+    let n = 0;
+    try { n = JSON.parse(v.cambios || "[]").length; } catch (e) { /* nada */ }
+    const p = String(v.publicado_el || "");
+    return {
+      html: `<b>Versión ${v.version}</b><span>${p.slice(8, 10)}/${p.slice(5, 7)} ${p.slice(11, 16)}${v.publicado_por ? " · " + trEsc(v.publicado_por.split(" ")[0]) : ""}${v.version > 1 ? ` · ${n} cambio${n === 1 ? "" : "s"}` : ""}</span>`,
+      icono: "file-type-pdf", fn: () => trVerPdf(v.version),
+    };
+  }));
+}
+
+function trMas(btn) {
+  const ant = tr.d.dia_anterior;
+  trMenu(btn, [
+    { icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar },
+    ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
+               { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
+    { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
+  ]);
+}
+
+function trMenu(btn, items) {
+  document.querySelectorAll(".tr-menu").forEach(m => m.remove());
+  const m = document.createElement("div");
+  m.className = "tr-menu";
+  m.innerHTML = items.map((it, k) => `<button data-k="${k}" class="${it.peligro ? "peligro" : ""}"><i class="ti ti-${it.icono}"></i><span>${it.html}</span></button>`).join("")
+    || `<div class="tr-menu-nada">Nada para mostrar</div>`;
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect();
+  m.style.top = (r.bottom + 6) + "px";
+  m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, window.innerWidth - m.offsetWidth - 8)) + "px";
+  m.querySelectorAll("button").forEach(b => b.onclick = () => { m.remove(); items[+b.dataset.k].fn(); });
+  setTimeout(() => document.addEventListener("click", function fuera(e) {
+    if (!m.contains(e.target)) { m.remove(); document.removeEventListener("click", fuera); }
+  }), 0);
+}
+
+function trImportar() {
+  const i = document.createElement("input");
+  i.type = "file";
+  i.accept = ".xlsx,.xlsm";
+  i.onchange = async () => {
+    const f = i.files[0];
+    if (!f) return;
+    if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)}. ¿Seguimos?`)) return;
+    const fd = new FormData();
+    fd.append("archivo", f);
+    fd.append("fecha", tr.fecha);
+    const r = await api("/api/trafico/importar", { method: "POST", body: fd });
+    if (!r.ok) { toast(r.msg || "No se pudo leer la planilla", "error"); return; }
+    tr.d = r;
+    trPintar(true);
+    trRefrescarDias();
+    let msg = `Planilla importada: ${r.importadas} salidas`;
+    if (r.fecha_excel && r.fecha_excel !== tr.fecha) msg += ` (la planilla decía ${trLargo(r.fecha_excel)})`;
+    toast(msg, "success");
+    const listas = await api("/api/trafico/listas");
+    if (listas && !listas.error) { tr.listas = listas; trDatalists(); }
+  };
+  i.click();
+}
+
+async function trVaciar() {
+  if (!confirm(`¿Vaciar el tráfico del ${trLargo(tr.fecha)}? Se quitan todos los corredores y salidas.`)) return;
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}`, "DELETE");
+  if (!r.ok) { toast(r.msg || "No se pudo vaciar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+}
+
+// ─── Eventos (uno solo para toda la pantalla) ────────────────────────────
+(function () {
+  const dentro = e => e.target.closest?.("#tr-raiz");
+  document.addEventListener("change", e => {
+    if (!dentro(e)) return;
+    if (e.target.matches(".tr-in, .tr-nota, .tr-corr-nombre, .tr-res-coche, .tr-res-trip")) trGuardarCampo(e.target);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && tr.asignar) { trTomarCoche(null); return; }
+    if (!dentro(e)) return;
+    if (e.target.matches(".tr-nota, .tr-corr-nombre, .tr-res-coche, .tr-res-trip") && e.key === "Enter") { e.preventDefault(); e.target.blur(); return; }
+    trTecla(e);
+  });
+  document.addEventListener("focusin", e => {
+    if (!dentro(e)) { if (tr.sug && !e.target.closest?.(".tr-sug")) trCerrarSug(); return; }
+    if (e.target.classList.contains("tr-chapa")) trAbrirSug(e.target);
+    else if (tr.sug && e.target !== tr.sug.input) trCerrarSug();
+  });
+  document.addEventListener("focusout", e => {
+    if (!dentro(e)) return;
+    if (tr.sug && e.target === tr.sug.input) setTimeout(() => { if (tr.sug && document.activeElement !== tr.sug.input) trCerrarSug(); }, 120);
+    // Si la columna quedó desordenada por una hora nueva, se acomoda al salir de ella
+    const col = e.target.closest(".tr-col");
+    if (col && tr.reordenar.size) setTimeout(() => {
+      if (col.contains(document.activeElement)) return;
+      const clave = `${col.dataset.bid}-${col.dataset.lado}`;
+      if (!tr.reordenar.has(clave)) return;
+      tr.reordenar.delete(clave);
+      const b = tr.d.bloques.find(x => x.id === +col.dataset.bid);
+      if (b) trRepintarColumna(b, col.dataset.lado);
+    }, 0);
+  });
+  document.addEventListener("input", e => {
+    if (tr.sug && e.target === tr.sug.input) { tr.sug.sel = -1; trPintarSug(); }
+  });
+  document.addEventListener("click", e => { if (dentro(e) && tr.asignar) trClickFila(e); }, true);
+  // Arrastrar un coche de "dónde amanecen" a una salida
+  document.addEventListener("dragstart", e => {
+    const cc = e.target.closest?.(".tr-cc");
+    if (!cc) return;
+    e.dataTransfer.setData("text/plain", cc.dataset.coche);
+    e.dataTransfer.effectAllowed = "copy";
+    tr.asignarLugar = cc.dataset.lugar;
+    document.querySelectorAll(".tr-fila").forEach(f => f.classList.toggle("apta", f.dataset.origen === cc.dataset.lugar));
+    $("#tr-raiz")?.classList.add("arrastrando");
+  });
+  document.addEventListener("dragend", () => {
+    $("#tr-raiz")?.classList.remove("arrastrando");
+    document.querySelectorAll(".tr-fila.apta, .tr-fila.encima").forEach(f => f.classList.remove("apta", "encima"));
+  });
+  document.addEventListener("dragover", e => {
+    const f = e.target.closest?.("#tr-raiz .tr-fila");
+    if (!f || !$("#tr-raiz")?.classList.contains("arrastrando")) return;
+    e.preventDefault();
+    document.querySelectorAll(".tr-fila.encima").forEach(x => x !== f && x.classList.remove("encima"));
+    f.classList.add("encima");
+  });
+  document.addEventListener("drop", e => {
+    const f = e.target.closest?.("#tr-raiz .tr-fila");
+    if (!f) return;
+    e.preventDefault();
+    const coche = e.dataTransfer.getData("text/plain");
+    if (coche) trPonerCoche(f, coche, trCandDesdePanel(coche));
+  });
+  // La ventanita de sugerencias acompaña a la casilla si se mueve la pantalla
+  window.addEventListener("resize", () => trUbicarSug());
+  document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); }, true);
+})();
 
 // ─── Arranque ───────────────────────────────────────────────────────────
 setCoche(null);
@@ -6356,7 +7480,7 @@ function hiMoverIndicador() {
   ind.style.transform = `translate(${act.offsetLeft}px, ${act.offsetTop}px)`;
   ind.style.width = act.offsetWidth + "px";
   ind.style.height = act.offsetHeight + "px";
-  ind.style.background = act.dataset.t ? hiColor(act.dataset.t) : "var(--text)";
+  ind.style.background = act.dataset.t ? hiColor(act.dataset.t) : "var(--azul-oscuro)";
 }
 
 async function hiFiltrarTipo(t) {
