@@ -2685,6 +2685,24 @@ function trHora(v) {
   return `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}`;
 }
 
+// Que un doble clic no haga dos veces lo mismo (importar tarda y uno vuelve
+// a tocar): mientras una acción está en marcha, la misma no arranca otra vez.
+tr.ocupado = new Set();
+async function trUnaVez(clave, fn, aviso) {
+  if (tr.ocupado.has(clave)) { if (aviso) toast(aviso); return; }
+  tr.ocupado.add(clave);
+  try { return await fn(); } finally { tr.ocupado.delete(clave); }
+}
+
+// Cartel que tapa la pantalla mientras trabaja: no se puede tocar nada más
+function trEspera(texto) {
+  const el = document.createElement("div");
+  el.className = "tr-espera";
+  el.innerHTML = `<div class="tr-espera-caja"><i class="ti ti-loader-2 gira"></i><b>${trEsc(texto)}</b><span>Un momento, no hace falta tocar de nuevo</span></div>`;
+  document.body.appendChild(el);
+  return () => { el.classList.add("sale"); setTimeout(() => el.remove(), 340); };
+}
+
 async function trPedir(url, method = "GET", body) {
   const opts = { method };
   if (body !== undefined) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
@@ -2918,10 +2936,17 @@ function trInicioVacio() {
     </div>`;
 }
 
-async function trCopiar(desde, conAsignaciones, completar) {
+function trCopiar(desde, conAsignaciones, completar) {
+  return trUnaVez("copiar", () => _trCopiar(desde, conAsignaciones, completar), "Ya se está armando el día");
+}
+async function _trCopiar(desde, conAsignaciones, completar) {
   if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)}. ¿Seguimos?`)) return;
-  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/copiar`, "POST",
-    { desde, con_asignaciones: conAsignaciones, completar });
+  const listo = trEspera(completar ? "Armando el día con los coches que están allá…" : "Copiando el día…");
+  let r;
+  try {
+    r = await trPedir(`/api/trafico/dia/${tr.fecha}/copiar`, "POST",
+      { desde, con_asignaciones: conAsignaciones, completar });
+  } finally { listo(); }
   if (!r.ok) { toast(r.msg || "No se pudo copiar", "error"); return; }
   tr.d = r;
   trPintar(true);
@@ -3004,7 +3029,8 @@ function trDonde() {
     </div>`;
 }
 
-async function trCompletar() {
+function trCompletar() { return trUnaVez("completar", () => _trCompletar()); }
+async function _trCompletar() {
   const r = await trPedir(`/api/trafico/dia/${tr.fecha}/completar`, "POST", {});
   if (!r.ok) { toast(r.msg || "No se pudo completar", "error"); return; }
   const antes = trCochesPorFila();
@@ -3027,7 +3053,7 @@ function trVoltearLlenas(antes = {}) {
     const v = f.querySelector(".tr-chapa")?.value || "";
     return v && trEsCoche(v) && !antes[f.dataset.id];
   });
-  filas.forEach((f, i) => setTimeout(() => trVoltear(f.querySelector(".tr-chapa")), i * 90));
+  filas.forEach((f, i) => setTimeout(() => trVoltear(f.querySelector(".tr-chapa")), i * 120));
 }
 
 function trVoltear(input) {
@@ -3040,7 +3066,7 @@ function trVoltear(input) {
   const t = setInterval(() => {
     if (++k > 6 || document.activeElement === input) { clearInterval(t); input.value = fin; return; }
     input.value = [...fin].map((ch, i) => i < k - 1 ? ch : Math.floor(Math.random() * 10)).join("");
-  }, 45);
+  }, 60);
 }
 
 // ─── Corredores y salidas ────────────────────────────────────────────────
@@ -3198,7 +3224,7 @@ function trRepintarColumna(b, lado) {
     if (a == null) return;
     const dy = a - f.getBoundingClientRect().top;
     if (!dy) return;
-    f.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 320, easing: "cubic-bezier(.2,.8,.2,1)" });
+    f.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 420, easing: "cubic-bezier(.22,.61,.36,1)" });
   });
 }
 
@@ -3252,7 +3278,8 @@ function trTecla(e) {
   }
 }
 
-async function trAgregarSalida(bid, lado) {
+function trAgregarSalida(bid, lado) { return trUnaVez(`salida-${bid}-${lado}`, () => _trAgregarSalida(bid, lado)); }
+async function _trAgregarSalida(bid, lado) {
   const b = tr.d.bloques.find(x => x.id === bid);
   const lista = b?.[lado] || [];
   // El tramo que más se repite en esa columna, para no escribirlo de nuevo
@@ -3270,7 +3297,8 @@ async function trAgregarSalida(bid, lado) {
 // Refuerzo: otro coche a la misma hora y el mismo tramo (de noche es lo común).
 // Queda marcado REFUERZO en el tramo, y el coche que lo hace queda allá para
 // el día siguiente, como cualquier otro.
-async function trRefuerzo(sid) {
+function trRefuerzo(sid) { return trUnaVez(`refuerzo-${sid}`, () => _trRefuerzo(sid)); }
+async function _trRefuerzo(sid) {
   let s = null, lado = null, bid = null;
   tr.d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(x => { if (x.id === sid) { s = x; lado = l; bid = b.id; } })));
   if (!s) return;
@@ -3302,7 +3330,7 @@ async function trBorrarSalida(sid) {
   const fila = document.querySelector(`.tr-fila[data-id="${sid}"]`);
   if (fila && !trQuieto()) {
     fila.classList.add("sale");
-    await new Promise(res => setTimeout(res, 180));
+    await new Promise(res => setTimeout(res, 235));
   }
   const r = await trPedir(`/api/trafico/salida/${sid}`, "DELETE");
   if (!r.ok) { fila?.classList.remove("sale"); toast(r.msg || "No se pudo quitar", "error"); return; }
@@ -3325,7 +3353,8 @@ function trOfrecerDeshacer(txt, fn) {
   tr.deshacer = setTimeout(() => el.classList.remove("visible"), 7000);
 }
 
-async function trAgregarBloque(form) {
+function trAgregarBloque(form) { return trUnaVez("bloque", () => _trAgregarBloque(form)); }
+async function _trAgregarBloque(form) {
   const input = form.querySelector("input");
   const nombre = input.value.trim().toUpperCase();
   if (!nombre) { input.focus(); return; }
@@ -3338,7 +3367,8 @@ async function trAgregarBloque(form) {
   sec?.classList.add("nuevo");
 }
 
-async function trMoverBloque(bid, paso) {
+function trMoverBloque(bid, paso) { return trUnaVez("mover", () => _trMoverBloque(bid, paso)); }
+async function _trMoverBloque(bid, paso) {
   const r = await trPedir(`/api/trafico/bloque/${bid}/mover`, "POST", { paso });
   if (!r.ok) return;
   const cards = [...document.querySelectorAll(".tr-corr")];
@@ -3348,7 +3378,7 @@ async function trMoverBloque(bid, paso) {
   document.querySelectorAll(".tr-corr").forEach(c => {
     c.style.animation = "none";
     const dy = (antes[c.dataset.bid] ?? 0) - c.getBoundingClientRect().top;
-    if (dy) c.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 380, easing: "cubic-bezier(.2,.8,.2,1)" });
+    if (dy) c.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 500, easing: "cubic-bezier(.22,.61,.36,1)" });
   });
 }
 
@@ -3724,18 +3754,22 @@ function trMenu(btn, items) {
 }
 
 function trImportar() {
+  if (tr.ocupado.has("importar")) { toast("Ya se está importando la planilla"); return; }
   const i = document.createElement("input");
   i.type = "file";
   i.accept = ".xlsx,.xlsm";
-  i.onchange = async () => {
+  i.onchange = () => trUnaVez("importar", async () => {
     const f = i.files[0];
     if (!f) return;
     if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)}. ¿Seguimos?`)) return;
     const fd = new FormData();
     fd.append("archivo", f);
     fd.append("fecha", tr.fecha);
-    const r = await api("/api/trafico/importar", { method: "POST", body: fd });
-    if (!r.ok) { toast(r.msg || "No se pudo leer la planilla", "error"); return; }
+    const listo = trEspera("Importando la planilla…");
+    let r;
+    try { r = await api("/api/trafico/importar", { method: "POST", body: fd }); }
+    finally { listo(); }
+    if (!r || !r.ok) { toast(r?.msg || "No se pudo leer la planilla", "error"); return; }
     tr.d = r;
     trPintar(true);
     trRefrescarDias();
@@ -3744,11 +3778,12 @@ function trImportar() {
     toast(msg, "success");
     const listas = await api("/api/trafico/listas");
     if (listas && !listas.error) { tr.listas = listas; trDatalists(); }
-  };
+  }, "Ya se está importando la planilla");
   i.click();
 }
 
-async function trVaciar() {
+function trVaciar() { return trUnaVez("vaciar", () => _trVaciar()); }
+async function _trVaciar() {
   if (!confirm(`¿Vaciar el tráfico del ${trLargo(tr.fecha)}? Se quitan todos los corredores y salidas.`)) return;
   const r = await trPedir(`/api/trafico/dia/${tr.fecha}`, "DELETE");
   if (!r.ok) { toast(r.msg || "No se pudo vaciar", "error"); return; }
@@ -12136,8 +12171,8 @@ function flapTitulo(h1) {
     const fin = s.textContent;
     if (!fin.trim()) return;
     const giros = 3 + Math.floor(Math.random() * 4);
-    const inicio = i * 24;
-    ultimo = Math.max(ultimo, inicio + giros * 42);
+    const inicio = i * 31;
+    ultimo = Math.max(ultimo, inicio + giros * 55);
     s.classList.add("girando");
     s.dataset.caja = /\d/.test(fin) ? "n" : fin === fin.toUpperCase() ? "M" : "m";
     const deCaja = () => { fuente = s.dataset.caja === "n" ? NUM : s.dataset.caja === "M" ? MAY : MIN; return azar(); };
@@ -12147,12 +12182,12 @@ function flapTitulo(h1) {
       if (!flap.isConnected) return;
       if (++k >= giros) { s.textContent = fin; s.classList.remove("girando"); s.classList.add("cae"); return; }
       s.textContent = deCaja();
-      setTimeout(paso, 42);
+      setTimeout(paso, 55);
     };
     setTimeout(paso, inicio);
   });
   // Al terminar vuelve a ser texto común (para copiar, buscar, imprimir)
-  setTimeout(() => { if (flap.isConnected) flap.replaceWith(document.createTextNode(texto)); }, ultimo + 320);
+  setTimeout(() => { if (flap.isConnected) flap.replaceWith(document.createTextNode(texto)); }, ultimo + 420);
 }
 (function () {
   const raiz = document.getElementById("content");
