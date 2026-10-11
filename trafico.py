@@ -514,6 +514,8 @@ def completar_con_ubicacion(fecha, simular=False):
         dia = _dia_por_fecha(conn, fecha)
         if not dia:
             return 0
+        if not simular:
+            _bloquear_dia(conn, dia["id"])
         filas = conn.execute("""SELECT s.*, b.nombre AS corredor FROM trafico_salidas s
                                 JOIN trafico_bloques b ON b.id=s.bloque_id
                                 WHERE s.dia_id=?""", (dia["id"],)).fetchall()
@@ -587,12 +589,21 @@ def crear_dia(fecha, conn=None):
         d = _dia_por_fecha(conn, fecha)
         if d:
             return d["id"]
-        conn.execute("INSERT INTO trafico_dias (fecha, actualizado) VALUES (?, ?)", (fecha, _ahora()))
+        conn.execute("""INSERT INTO trafico_dias (fecha, actualizado) VALUES (?, ?)
+                        ON CONFLICT (fecha) DO NOTHING""", (fecha, _ahora()))
         conn.commit()
         return _dia_por_fecha(conn, fecha)["id"]
     finally:
         if propia:
             conn.close()
+
+
+def _bloquear_dia(conn, dia_id):
+    """Si llegan dos pedidos para el mismo día (doble clic en Importar porque
+    tarda), el segundo espera a que termine el primero y después lo reemplaza:
+    nunca quedan las salidas dos veces. En SQLite la base ya escribe de a uno."""
+    if USE_POSTGRES:
+        conn.execute("SELECT id FROM trafico_dias WHERE id=? FOR UPDATE", (dia_id,))
 
 
 def agregar_bloque(fecha, nombre):
@@ -791,6 +802,7 @@ def copiar_dia(fecha, desde, con_asignaciones=True):
         if not origen:
             return False, "Ese día no tiene tráfico cargado."
         dia_id = crear_dia(fecha, conn)
+        _bloquear_dia(conn, dia_id)
         vaciar_dia(conn, dia_id)
         bloques = conn.execute("SELECT * FROM trafico_bloques WHERE dia_id=? ORDER BY orden, id",
                                (origen["id"],)).fetchall()
@@ -948,6 +960,7 @@ def importar_excel(contenido, fecha_forzada=None):
     conn = get_connection()
     try:
         dia_id = crear_dia(fecha, conn)
+        _bloquear_dia(conn, dia_id)
         vaciar_dia(conn, dia_id)
         conn.execute("UPDATE trafico_dias SET titulo=? WHERE id=?", (titulo or "HORARIOS NACIONALES", dia_id))
         n = 0
@@ -1370,6 +1383,7 @@ def api_vaciar(fecha):
     try:
         dia = _dia_por_fecha(conn, fecha)
         if dia:
+            _bloquear_dia(conn, dia["id"])
             vaciar_dia(conn, dia["id"])
             _marcar_modificado(conn, dia["id"])
             conn.commit()
