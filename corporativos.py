@@ -4116,108 +4116,29 @@ def generar_pdf_rendiciones(rends, nombre_chofer, desde, hasta):
 
 @bp_corp.route("/api/corp/combustible_excel", methods=["GET"])
 def api_corp_combustible_excel():
-    """El listado de cargas de corporativos en Excel, con los mismos filtros
-    de la pantalla (fechas y chofer)."""
+    """Las cargas de corporativos en Excel, con los mismos filtros de la
+    pantalla (fechas y chofer): resumen, detalle, por coche, por chofer y por
+    cliente. El armado está en excel_combustible.py."""
     if _rol_efectivo() not in ("admin", "auditor", "operador_corp"):
         return jsonify({"error": "Sin permiso"}), 403
-    from flask import send_file
-    from database import obtener_cargas_combustible
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils import get_column_letter
     import io
+    import os
+    from flask import send_file
+    from database import obtener_cargas_combustible, referencia_de_vehiculo
+    from excel_combustible import generar_excel_cargas
     desde = request.args.get("desde") or None
     hasta = request.args.get("hasta") or None
     chofer = request.args.get("chofer") or None
     cargas = obtener_cargas_combustible(desde=desde, hasta=hasta, origen="corporativo",
                                         chofer=chofer, limite=100000)
-    cargas.sort(key=lambda x: (x.get("fecha") or "", x.get("id") or 0), reverse=True)
-
-    def num(v):
-        try:
-            v = float(v or 0)
-        except (TypeError, ValueError):
-            return None
-        return v or None
-
-    def entero(v):
-        try:
-            return int(str(v).strip())
-        except (TypeError, ValueError):
-            return v or ""
-
-    lugares = {"taller": "Taller", "tercerizado": "Afuera"}
-    cols = [("Fecha", 12), ("Bus", 8), ("Patente", 11), ("Chofer", 26), ("Cliente", 22),
-            ("Lugar", 10), ("Emblema", 16), ("Odómetro", 12), ("Litros", 10),
-            ("Tanque lleno", 12), ("Km del tramo", 12), ("L cada 100 km", 13),
-            ("Gs. por litro", 13), ("Total Gs.", 14), ("Observaciones", 30), ("Cargó", 16)]
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Cargas corporativos"
-    titulo = "LA SANTANIANA · Cargas de combustible de corporativos"
-    periodo = f"Del {desde or 'inicio'} al {hasta or 'hoy'}" + (f" · Chofer: {chofer}" if chofer else "")
-    ws["A1"] = titulo
-    ws["A1"].font = Font(bold=True, size=14, color="1A2B4A")
-    ws["A2"] = periodo
-    ws["A2"].font = Font(size=10, color="667085")
-
-    fila0 = 4
-    navy = PatternFill("solid", fgColor="1A2B4A")
-    zebra = PatternFill("solid", fgColor="F3F5F8")
-    linea = Border(bottom=Side(style="thin", color="E2E6EC"))
-    for j, (nombre, ancho) in enumerate(cols, 1):
-        c = ws.cell(row=fila0, column=j, value=nombre)
-        c.font = Font(bold=True, color="FFFFFF")
-        c.fill = navy
-        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        ws.column_dimensions[get_column_letter(j)].width = ancho
-    ws.row_dimensions[fila0].height = 28
-
-    for i, c in enumerate(cargas, 1):
-        r = fila0 + i
-        valores = [
-            c.get("fecha") or "", entero(c.get("n_interno")), c.get("patente") or "",
-            c.get("chofer") or "", c.get("cliente") or "",
-            lugares.get((c.get("lugar_carga") or "").strip(), ""), c.get("emblema") or "",
-            num(c.get("odometro")), num(c.get("litros")),
-            "Sí" if c.get("tanque_lleno", 1) else "No",
-            c.get("km_recorridos") if c.get("consumo_valido") else None,
-            c.get("litros_100km") if c.get("consumo_valido") else None,
-            num(c.get("precio_litro")), num(c.get("costo_total")),
-            c.get("observaciones") or "", c.get("registrado_por") or "",
-        ]
-        for j, v in enumerate(valores, 1):
-            celda = ws.cell(row=r, column=j, value=v)
-            celda.border = linea
-            if i % 2 == 0:
-                celda.fill = zebra
-        ws.cell(row=r, column=8).number_format = "#,##0"
-        ws.cell(row=r, column=9).number_format = "#,##0.00"
-        ws.cell(row=r, column=11).number_format = "#,##0"
-        ws.cell(row=r, column=12).number_format = "0.00"
-        ws.cell(row=r, column=13).number_format = "#,##0"
-        ws.cell(row=r, column=14).number_format = "#,##0"
-
-    # Totales al pie
-    ult = fila0 + len(cargas)
-    tot = ult + 1
-    ws.cell(row=tot, column=1, value=f"Total: {len(cargas)} cargas").font = Font(bold=True)
-    if cargas:
-        ws.cell(row=tot, column=9, value=f"=SUM(I{fila0 + 1}:I{ult})").number_format = "#,##0.00"
-        ws.cell(row=tot, column=14, value=f"=SUM(N{fila0 + 1}:N{ult})").number_format = "#,##0"
-    for j in range(1, len(cols) + 1):
-        ws.cell(row=tot, column=j).font = Font(bold=True)
-        ws.cell(row=tot, column=j).border = Border(top=Side(style="thin", color="1A2B4A"))
-
-    ws.freeze_panes = ws.cell(row=fila0 + 1, column=1)
-    ws.auto_filter.ref = f"A{fila0}:{get_column_letter(len(cols))}{max(ult, fila0)}"
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    nombre = "cargas_corporativos"
+    logo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
+    contenido = generar_excel_cargas(
+        cargas, desde, hasta, chofer,
+        usuario=session.get("nombre") or session.get("usuario", ""),
+        logo=logo if os.path.exists(logo) else None,
+        referencia=referencia_de_vehiculo)
+    nombre = "Combustible corporativos"
     if desde or hasta:
-        nombre += f"_{desde or 'inicio'}_al_{hasta or 'hoy'}"
-    return send_file(buf, as_attachment=True, download_name=nombre + ".xlsx",
+        nombre += f" {desde or 'inicio'} al {hasta or 'hoy'}"
+    return send_file(io.BytesIO(contenido), as_attachment=True, download_name=nombre + ".xlsx",
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
