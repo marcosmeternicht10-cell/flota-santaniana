@@ -3929,7 +3929,6 @@ function svPintar(entrada) {
   c.innerHTML = `
     ${svHero()}
     <div class="sv-kpis">${svKpis()}</div>
-    ${svHallazgos()}
     <section class="sv-card ancho" id="sv-dias">
       ${svCabeza("Servicios por día", "Cada columna es un día. Tocá una para ver sus servicios y abrirla en Tráfico.", "dias",
         `<span class="sv-ley"><i class="sq" style="background:var(--sv-s1)"></i>Regulares</span><span class="sv-ley"><i class="sq" style="background:var(--sv-s2)"></i>Refuerzos</span>`)}
@@ -4074,43 +4073,7 @@ function svKpis() {
   ].join("");
 }
 
-// ─── Lo que dicen los números ────────────────────────────────────────────
-
-const SV_NIVEL = { good: ["Bien", "circle-check"], warning: ["Atención", "alert-triangle"], serious: ["Importante", "alert-octagon"],
-                   critical: ["Crítico", "alert-octagon"], info: ["Para mirar", "bulb"] };
-
-function svHallazgos() {
-  const h = sv.d.hallazgos || [];
-  if (!h.length) return `
-    <section class="sv-hallazgos vacio"><i class="ti ti-circle-check"></i><div><b>Todo en orden</b><span>No hay nada que llame la atención en este período.</span></div></section>`;
-  return `
-    <section class="sv-hallazgos" aria-label="Lo que dicen los números">
-      <h3><i class="ti ti-sparkles"></i> Lo que dicen los números</h3>
-      <div class="sv-hall-lista">
-        ${h.map((x, i) => {
-          const [nivel] = SV_NIVEL[x.nivel] || SV_NIVEL.info;
-          const acc = x.accion ? `onclick='svAccion(${svEsc(JSON.stringify(x.accion))})'` : "";
-          return `
-            <article class="sv-hall ${x.nivel}" style="--i:${i}">
-              <span class="sv-hall-ic"><i class="ti ti-${svEsc(x.icono)}"></i></span>
-              <div>
-                <span class="sv-hall-nivel">${nivel}</span>
-                <b>${svEsc(x.titulo)}</b>
-                <p>${svEsc(x.txt)}</p>
-                ${x.accion ? `<button class="sv-link" ${acc}>${x.accion.tipo === "corredor" ? "Ver ese corredor" : x.accion.tipo === "coche" ? "Ver sus servicios" : "Ver"} <i class="ti ti-arrow-right"></i></button>` : ""}
-              </div>
-            </article>`;
-        }).join("")}
-      </div>
-    </section>`;
-}
-
-function svAccion(a) {
-  if (!a) return;
-  if (a.tipo === "corredor") svElegirCorredor(a.valor);
-  else if (a.tipo === "coche") svAbrir("coche", a.valor);
-  else if (a.tipo === "ir") svIrA(a.valor);
-}
+// Lleva a una sección del panel y la ilumina un momento.
 function svIrA(id) {
   const el = document.getElementById(id);
   if (!el) return;
