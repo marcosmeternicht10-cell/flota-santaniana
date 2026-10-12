@@ -14,7 +14,7 @@ from flask import (Flask, render_template, request, jsonify, send_file,
 
 from database import (
     inicializar_db, agregar_vehiculo, actualizar_vehiculo, obtener_vehiculos, eliminar_vehiculo,
-    agregar_servicio, eliminar_servicio, obtener_servicios_vehiculo,
+    obtener_servicios_vehiculo,
     agregar_costo, eliminar_costo, obtener_costos,
     meses_con_servicios, resumen_por_mes,
     # Mantenimiento:
@@ -110,6 +110,13 @@ app.register_blueprint(bp_turismo)
 from trafico import bp_trafico, init_trafico
 init_trafico()
 app.register_blueprint(bp_trafico)
+
+# ─── Servicios ───────────────────────────────────────────────────────────────
+# Cada salida del tráfico es un servicio: los indicadores salen de ahí, sin
+# cargar nada aparte (reemplaza la carga a mano de servicios por coche).
+from servicios import bp_servicios, init_servicios
+init_servicios()
+app.register_blueprint(bp_servicios)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -664,34 +671,9 @@ def api_eliminar_vehiculo(vid):
     return jsonify({"ok": True})
 
 
-# ─── API: Servicios ───────────────────────────────────────────────────────────
-
-@app.route("/api/servicios/<int:vid>", methods=["GET"])
-def api_servicios(vid):
-    mes = request.args.get("mes")  # None o "2024-06"
-    mes = None if mes in (None, "", "todos") else mes
-    return jsonify(obtener_servicios_vehiculo(vid, mes))
-
-
-@app.route("/api/servicios", methods=["POST"])
-def api_agregar_servicio():
-    d = request.json
-    try:
-        agregar_servicio(
-            int(d["vehiculo_id"]), d["fecha"],
-            float(d.get("km", 0) or 0), float(d.get("horas", 0) or 0),
-            float(d.get("ingreso", 0) or 0), d.get("descripcion", "")
-        )
-        return jsonify({"ok": True})
-    except (KeyError, ValueError) as e:
-        return jsonify({"ok": False, "msg": str(e)}), 400
-
-
-@app.route("/api/servicios/<int:sid>", methods=["DELETE"])
-def api_eliminar_servicio(sid):
-    eliminar_servicio(sid)
-    return jsonify({"ok": True})
-
+# La carga manual de servicios por coche se reemplazó por la sección Servicios
+# (servicios.py), que sale directo del Tráfico. Lo cargado a mano antes sigue
+# en la base y lo siguen usando los KPIs por coche.
 
 @app.route("/api/meses/<int:vid>", methods=["GET"])
 def api_meses(vid):
