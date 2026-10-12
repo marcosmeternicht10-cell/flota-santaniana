@@ -14,8 +14,7 @@ indicadores para entender dónde estamos parados y qué mejorar:
   - Km y asientos ofrecidos: con la distancia de cada tramo (se carga una vez)
     y los asientos de cada coche (de la ficha del vehículo).
 
-Además arma frases cortas con lo más importante ("hallazgos") y un Excel con
-el detalle para liquidar o revisar.
+Además arma un Excel con el detalle para liquidar o revisar.
 
 Enganche en app.py:
     from servicios import bp_servicios, init_servicios
@@ -430,143 +429,6 @@ def _tramos_para_distancias(servs, distancias):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# HALLAZGOS: lo más importante, en frases cortas
-# ════════════════════════════════════════════════════════════════════════════
-
-def _num(n):
-    return f"{n:,.0f}".replace(",", ".")
-
-
-def _pl(n, uno, varios):
-    return uno if n == 1 else varios
-
-
-def _hallazgos(servs, tot, tot_ant, coches, tripulantes, parados, plan, tramos, fechas_con_trafico, dias_periodo):
-    h = []
-    dias = len(fechas_con_trafico)
-
-    # Refuerzos que se repiten: la demanda pide un horario fijo
-    rep = {}
-    for s in servs:
-        if s["refuerzo"] and s["hora"]:
-            k = (s["corredor"], s["lado"], s["hora"])
-            rep.setdefault(k, set()).add(s["fecha"])
-    for (corr, lado, hora), fs in sorted(rep.items(), key=lambda x: -len(x[1]))[:2]:
-        if len(fs) >= 3 and dias and len(fs) / dias >= 0.3:
-            h.append({"nivel": "info", "icono": "trending-up", "titulo": "Un refuerzo que ya es fijo",
-                      "txt": f"{corr} · {lado.upper()} {hora} tuvo refuerzo {len(fs)} de {dias} días. "
-                             f"La demanda ya pide un servicio fijo a esa hora.",
-                      "accion": {"tipo": "corredor", "valor": corr}})
-
-    # Coches parados
-    if parados:
-        en_taller = sum(1 for p in parados if p["estado"])
-        n = len(parados)
-        txt = (f"{n} {_pl(n, 'coche que hace', 'coches que hacen')} nacionales "
-               f"{_pl(n, 'no salió', 'no salieron')} en el período")
-        txt += (f" ({en_taller} con OT abierta o fuera de servicio). Los demás son plata parada: ¿qué los frena?"
-                if en_taller else ". Son plata parada: ¿qué los frena?")
-        h.append({"nivel": "warning", "icono": "bus-off", "titulo": "Coches parados", "txt": txt,
-                  "accion": {"tipo": "ir", "valor": "sv-flota"}})
-
-    # Carga desigual entre coches
-    if len(coches) >= 5:
-        med = statistics.median([c["servicios"] for c in coches])
-        top = coches[0]
-        if med and top["servicios"] >= 2 * med:
-            h.append({"nivel": "warning", "icono": "scale", "titulo": "Un coche carga mucho más",
-                      "txt": f"El {top['coche']} hizo {top['servicios']} servicios; la mitad de la flota hizo "
-                             f"{_num(med)} o menos. Repartir los viajes pareja el desgaste y el mantenimiento.",
-                      "accion": {"tipo": "coche", "valor": top["coche"]}})
-
-    # Tripulación
-    if len(tripulantes) >= 8:
-        vals = [p["servicios"] for p in tripulantes]
-        med = statistics.median(vals)
-        n10 = max(1, len(vals) // 10)
-        top_prom = sum(vals[:n10]) / n10
-        if med and top_prom >= 1.8 * med:
-            quienes = ", ".join(p["nombre"] for p in tripulantes[:min(n10, 3)])
-            veces = str(round(top_prom / med, 1)).replace(".", ",")
-            h.append({"nivel": "info", "icono": "users", "titulo": "Reparto de la tripulación",
-                      "txt": f"Los {n10} que más trabajan ({quienes}{'…' if n10 > 3 else ''}) hicieron "
-                             f"{veces} veces lo que hace la mitad del plantel (mediana {_num(med)} servicios).",
-                      "accion": {"tipo": "ir", "valor": "sv-trip"}})
-
-    # Día de la semana que más sale (con dos semanas de datos)
-    if dias >= 14 and tot["servicios"]:
-        por_dia = [0] * 7
-        cuenta = [0] * 7
-        for f in fechas_con_trafico:
-            cuenta[date.fromisoformat(f).weekday()] += 1
-        for s in servs:
-            por_dia[date.fromisoformat(s["fecha"]).weekday()] += 1
-        prom = tot["servicios"] / dias
-        medias = [(por_dia[i] / cuenta[i]) if cuenta[i] else 0 for i in range(7)]
-        i = max(range(7), key=lambda k: medias[k])
-        if prom and medias[i] >= prom * 1.15:
-            h.append({"nivel": "info", "icono": "calendar-stats", "titulo": "El día más cargado",
-                      "txt": f"Los {DIAS_SEMANA[i].lower()} salen {round((medias[i] / prom - 1) * 100)}% más "
-                             f"servicios que el promedio ({str(round(medias[i], 1)).replace('.', ',')} contra "
-                             f"{str(round(prom, 1)).replace('.', ',')}).",
-                      "accion": {"tipo": "ir", "valor": "sv-horas"}})
-
-    # Cómo se arma el tráfico
-    if plan["versiones_promedio"] and plan["versiones_promedio"] >= 2:
-        h.append({"nivel": "warning", "icono": "versions", "titulo": "Muchas versiones por día",
-                  "txt": f"Cada día se publicó en promedio {str(plan['versiones_promedio']).replace('.', ',')} versiones "
-                         f"({plan['cambios']} cambios después de mandar la grilla). Cada cambio es un aviso más a los choferes.",
-                  "accion": {"tipo": "ir", "valor": "sv-plan"}})
-    if plan["a_confirmar_pct"] is not None and plan["a_confirmar_pct"] >= 10:
-        h.append({"nivel": "warning", "icono": "help-circle", "titulo": "Salidas A CONFIRMAR",
-                  "txt": f"El {str(plan['a_confirmar_pct']).replace('.', ',')}% de las salidas se publicó sin coche "
-                         f"o sin tripulantes.", "accion": {"tipo": "ir", "valor": "sv-plan"}})
-    if plan["anticipacion_mediana"] is not None:
-        a = plan["anticipacion_mediana"]
-        if a < 3:
-            h.append({"nivel": "serious", "icono": "clock-exclamation", "titulo": "Se publica sobre la hora",
-                      "txt": f"La grilla sale en promedio {str(max(a, 0)).replace('.', ',')} h antes de la primera salida"
-                             f"{' (a veces después)' if a < 0 else ''}. Con más anticipación se evitan llamadas y cambios.",
-                      "accion": {"tipo": "ir", "valor": "sv-plan"}})
-        elif a >= 10:
-            h.append({"nivel": "good", "icono": "clock-check", "titulo": "Se publica con tiempo",
-                      "txt": f"La grilla sale en promedio {str(a).replace('.', ',')} h antes de la primera salida.",
-                      "accion": {"tipo": "ir", "valor": "sv-plan"}})
-    if plan["dias_sin_publicar"]:
-        n = plan["dias_sin_publicar"]
-        h.append({"nivel": "warning", "icono": "send-off", "titulo": "Días sin publicar",
-                  "txt": f"{n} {_pl(n, 'día se armó pero nunca se publicó', 'días se armaron pero nunca se publicaron')}: "
-                         f"los choferes no recibieron esa grilla por el sistema.",
-                  "accion": {"tipo": "ir", "valor": "sv-plan"}})
-
-    # Datos que faltan
-    if tot["sin_coche"]:
-        n = tot["sin_coche"]
-        h.append({"nivel": "warning", "icono": "bus", "titulo": "Servicios sin coche",
-                  "txt": f"{_num(n)} {_pl(n, 'servicio quedó', 'servicios quedaron')} sin coche cargado "
-                         f"({str(round(n / tot['servicios'] * 100, 1)).replace('.', ',')}%). Completalos en Tráfico "
-                         f"para que los números cierren.", "accion": {"tipo": "ir", "valor": "sv-dias"}})
-    faltan = [t for t in tramos if t["km"] is None]
-    if faltan:
-        h.append({"nivel": "info", "icono": "ruler-measure", "titulo": "Faltan distancias",
-                  "txt": f"Cargá una sola vez la distancia de {len(faltan)} {_pl(len(faltan), 'tramo', 'tramos')} y "
-                         f"el sistema calcula solo los km de cada coche y de cada corredor.",
-                  "accion": {"tipo": "ir", "valor": "sv-dist"}})
-
-    # Cómo viene contra el período anterior
-    if tot_ant["servicios"] and tot["servicios"]:
-        d = _delta(tot["por_dia"], tot_ant["por_dia"])
-        if d is not None and abs(d) >= 5:
-            h.append({"nivel": "good" if d > 0 else "info", "icono": "trending-up" if d > 0 else "trending-down",
-                      "titulo": "Contra el período anterior",
-                      "txt": f"Salen {str(abs(d)).replace('.', ',')}% {'más' if d > 0 else 'menos'} servicios por día "
-                             f"que en los {dias_periodo} días anteriores.", "accion": None})
-    orden = {"serious": 0, "warning": 1, "info": 2, "good": 3}
-    h.sort(key=lambda x: orden.get(x["nivel"], 9))
-    return h[:8]
-
-
-# ════════════════════════════════════════════════════════════════════════════
 # EL PANEL
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -636,8 +498,6 @@ def panel(desde, hasta, corredor=None):
         "tripulantes": tripulantes,
         "planificacion": plan,
         "tramos": tramos,
-        "hallazgos": _hallazgos(servs, tot, tot_ant, coches, tripulantes, parados if not corredor else [],
-                                plan, tramos, con_trafico, n_dias),
         "hay_datos": bool(servs),
         "primer_dia": _primer_dia(),
         "puede_editar": _puede_editar(),
