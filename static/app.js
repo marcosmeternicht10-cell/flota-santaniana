@@ -10570,6 +10570,7 @@ async function renderCorpCombustible() {
           <button class="btn btn-ghost" onclick="abrirReferencias()"><i class="ti ti-adjustments"></i> Consumos de referencia</button>
           <button class="btn btn-ghost" onclick="descargarPorBusPDF()"><i class="ti ti-bus"></i> Informe por coche</button>
           <button class="btn btn-ghost" onclick="descargarCombCorpPDF()"><i class="ti ti-download"></i> PDF completo</button>
+          <button class="btn btn-ghost" onclick="descargarCombCorpExcel()"><i class="ti ti-file-spreadsheet"></i> Excel</button>
         </div>
       </div>
       <div id="cbc-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
@@ -10896,6 +10897,11 @@ function panelComb(tab, r, cargas, agrup) {
 
 function descargarCombCorpPDF() {
   window.open(`/api/corp/combustible_pdf?${paramsCombCorp().toString()}`, "_blank");
+}
+
+// El listado de cargas en Excel, con los mismos filtros (fechas y chofer).
+function descargarCombCorpExcel() {
+  window.location = `/api/corp/combustible_excel?${paramsCombCorp().toString()}`;
 }
 
 // Informe de una sola cosa: cuánto consume cada coche. Sin el resto del
