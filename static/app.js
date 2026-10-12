@@ -158,7 +158,7 @@ function aplicarSecciones() {
   });
   // Arranca en la primera sección que tiene (el dashboard si lo tiene)
   const primera = secs.includes("dashboard") ? "dashboard"
-    : secs.find(s => !["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(s)) || secs[0];
+    : secs.find(s => !["costos", "kpis", "mantenimiento", "neumaticos"].includes(s)) || secs[0];
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
   document.querySelector(`.nav-item[data-sec="${primera}"]`)?.classList.add("active");
   // Después de que termine de cargar todo el archivo (si no, las secciones
@@ -172,7 +172,7 @@ function irA(sec) {
     toast("No tenés acceso a esa sección", "error");
     return;
   }
-  if (["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(sec) && !cocheActual) {
+  if (["costos", "kpis", "mantenimiento", "neumaticos"].includes(sec) && !cocheActual) {
     elegirCocheYIr(sec);
     return;
   }
@@ -389,7 +389,7 @@ async function renderDashboard() {
 
 // Ventanita para elegir de qué coche ver una sección (Servicios, Costos, KPIs,
 // Preventivo, Neumáticos), con el mismo buscador que el resto del sistema.
-const NOMBRE_SECCION_COCHE = { servicios: "Servicios", costos: "Costos", kpis: "KPIs",
+const NOMBRE_SECCION_COCHE = { costos: "Costos", kpis: "KPIs",
                                mantenimiento: "Preventivo", neumaticos: "Neumáticos" };
 async function elegirCocheYIr(sec) {
   const vs = await api("/api/vehiculos");
@@ -675,101 +675,6 @@ async function bajaVehiculo(id, pat) {
 // ════════════════════════════════════════════════════════════════════════
 //  SERVICIOS
 // ════════════════════════════════════════════════════════════════════════
-async function renderServicios() {
-  const v = cocheActual;
-  status(`Servicios del coche ${v.patente}`);
-  content.innerHTML = `
-    <div class="page-header">
-      <h1><i class="ti ti-clipboard-list"></i> Servicios · ${v.patente}</h1>
-      <p>${v.marca} ${v.modelo} — cargá y administrá los servicios de este coche</p>
-    </div>
-    <div class="section">
-      <div class="card">
-        <div class="card-head"><i class="ti ti-plus"></i> Cargar nuevo servicio</div>
-        <div class="card-body">
-          <div class="form-row">
-            <div class="field"><label>Fecha</label><input id="s-fecha" type="date" value="${hoy()}"></div>
-            <div class="field"><label>KM recorridos</label><input id="s-km" placeholder="900" style="width:120px"></div>
-            <div class="field"><label>Horas</label><input id="s-hs" placeholder="48" style="width:90px"></div>
-            <div class="field"><label>Ingreso (Gs.)</label><input id="s-ing" placeholder="7000000" style="width:150px"></div>
-            <div class="field" style="flex:1;min-width:200px"><label>Descripción</label><input id="s-desc" placeholder="Recorrido..."></div>
-            <button class="btn btn-primary" onclick="guardarServicio()"><i class="ti ti-device-floppy"></i> Guardar</button>
-          </div>
-        </div>
-      </div>
-      <div class="toolbar">
-        <label style="font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase">Ver mes:</label>
-        <select id="s-mes" onchange="cargarServicios()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:13px"></select>
-        <span class="resumen-tag" id="s-resumen"></span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Fecha</th><th class="num">KM</th><th class="num">Horas</th>
-            <th class="num">Ingreso</th><th>Descripción</th><th class="td-action"></th>
-          </tr></thead>
-          <tbody id="s-body"></tbody>
-        </table>
-      </div>
-    </div>`;
-  await cargarMesesServicios();
-  cargarServicios();
-}
-
-async function cargarMesesServicios() {
-  const meses = await api(`/api/meses/${cocheActual.id}`);
-  $("#s-mes").innerHTML = `<option value="todos">Todos los meses</option>` +
-    meses.map(m => `<option value="${m}">${mesLegible(m)}</option>`).join("");
-}
-
-async function cargarServicios() {
-  const mes = $("#s-mes").value;
-  const servicios = await api(`/api/servicios/${cocheActual.id}?mes=${mes}`);
-  const body = $("#s-body");
-  if (!servicios.length) {
-    body.innerHTML = `<tr><td colspan="6" class="empty"><i class="ti ti-clipboard-off"></i>Sin servicios en este período</td></tr>`;
-    $("#s-resumen").textContent = "";
-    return;
-  }
-  let totIng = 0, totKm = 0;
-  body.innerHTML = servicios.map(s => {
-    totIng += s.ingreso; totKm += s.km;
-    return `<tr>
-      <td>${s.fecha}</td><td class="num">${fmtNum(s.km)}</td>
-      <td class="num">${s.horas}</td><td class="num">${gs(s.ingreso)}</td>
-      <td>${s.descripcion || "—"}</td>
-      <td class="td-action"><button class="icon-btn" onclick="borrarServicio(${s.id},'${s.fecha}')"><i class="ti ti-trash"></i></button></td>
-    </tr>`;
-  }).join("");
-  $("#s-resumen").innerHTML = `<i class="ti ti-calculator" style="vertical-align:-2px"></i> <b>${servicios.length}</b> servicios · <b>${fmtNum(totKm)}</b> km · <b>${gs(totIng)}</b>`;
-}
-
-async function guardarServicio() {
-  const ing = $("#s-ing").value.replace(/\./g, "").replace(/,/g, ".");
-  const r = await api("/api/servicios", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      vehiculo_id: cocheActual.id, fecha: $("#s-fecha").value,
-      km: $("#s-km").value || 0, horas: $("#s-hs").value || 0,
-      ingreso: ing || 0, descripcion: $("#s-desc").value
-    })
-  });
-  if (r.ok) {
-    toast("Servicio cargado", "success");
-    ["s-km", "s-hs", "s-ing", "s-desc"].forEach(id => $("#" + id).value = "");
-    await cargarMesesServicios();
-    cargarServicios();
-  } else toast("Error al guardar", "error");
-}
-
-async function borrarServicio(id, fecha) {
-  if (!confirm(`¿Eliminar el servicio del ${fecha}?`)) return;
-  await api(`/api/servicios/${id}`, { method: "DELETE" });
-  toast("Servicio eliminado");
-  await cargarMesesServicios();
-  cargarServicios();
-}
-
 // ════════════════════════════════════════════════════════════════════════
 //  COSTOS
 // ════════════════════════════════════════════════════════════════════════
@@ -1677,7 +1582,7 @@ async function cargarKpis() {
   const k = await api(url);
   const res = $("#k-result");
   if (!k || !k.cantidad_servicios) {
-    res.innerHTML = `<div class="empty"><i class="ti ti-chart-area-line"></i>Sin datos para mostrar. Cargá servicios y costos primero.</div>`;
+    res.innerHTML = `<div class="empty"><i class="ti ti-chart-area-line"></i>Sin datos para mostrar en este período.</div>`;
     if (chartBarras) { chartBarras.destroy(); chartBarras = null; }
     if (chartTorta) { chartTorta.destroy(); chartTorta = null; }
     return;
@@ -2856,6 +2761,7 @@ function trTablero() {
         ${sub ? `<small>${sub}</small>` : ""}
       </div>
       <div class="tr-tab-acciones">
+        ${puedeVerSeccion("servicios") ? `<button class="tr-tab-btn" onclick="destNavegar('servicios')" title="Indicadores de los servicios, sacados del tráfico"><i class="ti ti-chart-histogram"></i><span>Servicios</span></button>` : ""}
         ${dia.version ? `<button class="tr-tab-btn" onclick="trVersiones(this)" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
         ${hayAlgo ? `<button class="tr-tab-btn" onclick="trVerPdf()" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
           <button class="tr-tab-btn" onclick="trDescargar(${pendiente ? "null" : dia.version}, 'imagen', this)" title="Descargar la hoja como imagen${pendiente ? " (borrador)" : ""}"><i class="ti ti-photo-down"></i><span>Imagen</span></button>` : ""}
@@ -3858,6 +3764,811 @@ async function _trVaciar() {
   // La ventanita de sugerencias acompaña a la casilla si se mueve la pantalla
   window.addEventListener("resize", () => trUbicarSug());
   document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); }, true);
+})();
+
+// ════════════════════════════════════════════════════════════════════════
+//  SERVICIOS — lo que salió de verdad, sacado del tráfico
+// ════════════════════════════════════════════════════════════════════════
+// Cada salida del tráfico de un día que ya llegó es un servicio: no se carga
+// nada aparte. Arriba el período (una sola fila de filtros que manda sobre
+// todo lo de abajo), después el número del período, los indicadores, lo que
+// dicen los números y cada gráfico con su tabla al lado (tocá "Tabla").
+
+const sv = { preset: "30", desde: null, hasta: null, corredor: "", d: null, pedido: 0, redibujar: null };
+const SV_PRESETS = [["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"], ["mesant", "Mes pasado"], ["90", "90 días"]];
+const SV_DIAS = ["LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM"];
+const SV_DIAS_LARGOS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+// Escala de un solo azul para magnitudes (mapa de horarios); de claro a oscuro
+const SV_RAMPA = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+// Escala ordinal (versiones por día): el escalón más claro igual se ve sobre blanco
+const SV_ORDINAL = ["#86b6ef", "#2a78d6", "#184f95"];
+
+const svEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// 12.345 y 3,5: punto para los miles y coma para los decimales, siempre
+function svNum(v, dec = 0) {
+  const n = Number(v);
+  if (v == null || !isFinite(n)) return "—";
+  let [ent, frac] = Math.abs(n).toFixed(dec).split(".");
+  ent = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return (n < 0 && +Math.abs(n).toFixed(dec) ? "-" : "") + ent + (frac ? "," + frac : "");
+}
+const svFechaCorta = f => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+const svDiaSemana = f => { const d = trFecha(f).getDay(); return (d + 6) % 7; };       // 0 = lunes
+const svTip = obj => svEsc(JSON.stringify(obj));
+
+function svPeriodo(preset) {
+  const hoy = trHoy();
+  const d = trFecha(hoy);
+  if (preset === "7") return [trSumar(hoy, -6), hoy];
+  if (preset === "30") return [trSumar(hoy, -29), hoy];
+  if (preset === "90") return [trSumar(hoy, -89), hoy];
+  if (preset === "mes") return [`${hoy.slice(0, 8)}01`, hoy];
+  if (preset === "mesant") {
+    const ini = new Date(d.getFullYear(), d.getMonth() - 1, 1), fin = new Date(d.getFullYear(), d.getMonth(), 0);
+    return [trIso(ini), trIso(fin)];
+  }
+  return [sv.desde, sv.hasta];
+}
+
+// ─── Entrada ─────────────────────────────────────────────────────────────
+
+async function renderServicios() {
+  status("Servicios: lo que salió de verdad, sacado del tráfico");
+  if (!sv.desde) [sv.desde, sv.hasta] = svPeriodo(sv.preset);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-chart-histogram"></i> Servicios</h1>
+      <p>Lo que salió de verdad, sacado del tráfico de cada día: para ver dónde estamos parados y qué mejorar</p>
+    </div>
+    <div class="section sv-raiz" id="sv-raiz">
+      <div class="sv-filtros" id="sv-filtros"></div>
+      <div id="sv-cuerpo"><div class="dossier-loading"></div></div>
+    </div>`;
+  svPintarFiltros();
+  await svCargar(true);
+}
+
+function svPintarFiltros() {
+  const f = $("#sv-filtros");
+  if (!f) return;
+  const corredores = sv.d?.corredores_disponibles || [];
+  f.innerHTML = `
+    <div class="sv-periodos" role="group" aria-label="Período">
+      ${SV_PRESETS.map(([k, t]) => `<button class="sv-chip ${sv.preset === k ? "on" : ""}" onclick="svElegirPreset('${k}')">${t}</button>`).join("")}
+    </div>
+    <label class="sv-fechas ${sv.preset === "custom" ? "on" : ""}" title="Elegir las fechas">
+      <i class="ti ti-calendar"></i>
+      <input type="date" id="sv-desde" value="${sv.desde}" max="${trHoy()}" onchange="svFechasPropias()">
+      <span>al</span>
+      <input type="date" id="sv-hasta" value="${sv.hasta}" max="${trHoy()}" onchange="svFechasPropias()">
+    </label>
+    <div class="sv-corr-sel ${sv.corredor ? "on" : ""}">
+      <i class="ti ti-route"></i>
+      <select id="sv-corredor" onchange="svElegirCorredor(this.value)" aria-label="Corredor">
+        <option value="">Todos los corredores</option>
+        ${corredores.map(c => `<option value="${svEsc(c)}" ${c === sv.corredor ? "selected" : ""}>${svEsc(c)}</option>`).join("")}
+        ${sv.corredor && !corredores.includes(sv.corredor) ? `<option value="${svEsc(sv.corredor)}" selected>${svEsc(sv.corredor)}</option>` : ""}
+      </select>
+      ${sv.corredor ? `<button class="sv-quitar" onclick="svElegirCorredor('')" title="Ver todos los corredores"><i class="ti ti-x"></i></button>` : ""}
+    </div>
+    <span class="sv-esp"></span>
+    <button class="sv-btn" onclick="svExcel()" title="El detalle de cada servicio, por tripulante, por coche y por corredor">
+      <i class="ti ti-file-spreadsheet"></i><span>Excel</span>
+    </button>`;
+}
+
+function svElegirPreset(k) {
+  sv.preset = k;
+  [sv.desde, sv.hasta] = svPeriodo(k);
+  svPintarFiltros();
+  svCargar();
+}
+function svFechasPropias() {
+  let a = $("#sv-desde").value, b = $("#sv-hasta").value;
+  if (!a || !b) return;
+  if (a > b) [a, b] = [b, a];
+  sv.preset = "custom";
+  sv.desde = a; sv.hasta = b;
+  svPintarFiltros();
+  svCargar();
+}
+function svElegirCorredor(c) {
+  sv.corredor = c || "";
+  svPintarFiltros();
+  svCargar();
+  $("#sv-raiz")?.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "start" });
+}
+function svQuery() {
+  return `desde=${sv.desde}&hasta=${sv.hasta}${sv.corredor ? `&corredor=${encodeURIComponent(sv.corredor)}` : ""}`;
+}
+function svExcel() { window.location = `/api/servicios/excel?${svQuery()}`; }
+
+// Al cambiar el filtro, lo de antes queda a media luz hasta que llega lo nuevo
+async function svCargar(primera = false) {
+  const cuerpo = $("#sv-cuerpo");
+  if (!cuerpo) return;
+  const yo = ++sv.pedido;
+  if (!primera) cuerpo.classList.add("recargando");
+  const d = await api(`/api/servicios/panel?${svQuery()}`);
+  if (yo !== sv.pedido || !$("#sv-cuerpo")) return;
+  cuerpo.classList.remove("recargando");
+  if (!d || d.error) { cuerpo.innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>No se pudieron traer los servicios. Probá de nuevo.</div>`; return; }
+  sv.d = d;
+  sv.desde = d.desde; sv.hasta = d.hasta;
+  svPintarFiltros();
+  svPintar(primera);
+}
+
+// ─── Dibujo ──────────────────────────────────────────────────────────────
+
+function svPintar(entrada) {
+  const d = sv.d, c = $("#sv-cuerpo");
+  if (!d.hay_datos && d.corredor) {
+    c.innerHTML = `
+      <div class="sv-vacio">
+        <i class="ti ti-route"></i>
+        <b>No hay servicios de ${svEsc(d.corredor)} en estas fechas</b>
+        <span>Puede que el corredor tenga otro nombre en esos días. Probá con todos los corredores.</span>
+        <button class="btn btn-primary" onclick="svElegirCorredor('')">Ver todos los corredores</button>
+      </div>`;
+    return;
+  }
+  if (!d.hay_datos) {
+    const primero = d.primer_dia;
+    c.innerHTML = `
+      <div class="sv-vacio">
+        <i class="ti ti-chart-histogram"></i>
+        <b>${primero ? "No hay servicios en estas fechas" : "Todavía no hay tráfico cargado"}</b>
+        <span>${primero ? `El tráfico empieza el ${svFechaCorta(primero)}/${primero.slice(2, 4)}. Elegí otro período.`
+          : "Cada salida del tráfico de un día es un servicio: cuando se arme el tráfico, acá aparecen solos."}</span>
+        ${primero ? `<button class="btn btn-primary" onclick="sv.preset='custom'; sv.desde='${primero}'; sv.hasta=trHoy(); svPintarFiltros(); svCargar()">Ver desde el ${svFechaCorta(primero)}</button>`
+          : `<button class="btn btn-primary" onclick="destNavegar('trafico')"><i class="ti ti-route"></i> Ir a Tráfico</button>`}
+      </div>`;
+    return;
+  }
+  c.innerHTML = `
+    ${svHero()}
+    <div class="sv-kpis">${svKpis()}</div>
+    ${svHallazgos()}
+    <section class="sv-card ancho" id="sv-dias">
+      ${svCabeza("Servicios por día", "Cada columna es un día. Tocá una para ver sus servicios y abrirla en Tráfico.", "dias",
+        `<span class="sv-ley"><i class="sq" style="background:var(--sv-s1)"></i>Regulares</span><span class="sv-ley"><i class="sq" style="background:var(--sv-s2)"></i>Refuerzos</span>`)}
+      <div class="sv-graf" id="sv-g-dias"></div>
+      <div class="sv-tabla">${svTablaDias()}</div>
+    </section>
+    <div class="sv-dos">
+      <section class="sv-card" id="sv-corr">
+        ${svCabeza("Corredores", d.corredor ? `Solo ${svEsc(d.corredor)}. Tocá de nuevo para ver todos.` : "Cuántos servicios tiene cada corredor. Tocá uno para ver solo ese.", "corr",
+          `<span class="sv-ley"><i class="sq" style="background:var(--sv-s1)"></i>Regulares</span><span class="sv-ley"><i class="sq" style="background:var(--sv-s2)"></i>Refuerzos</span>`)}
+        <div class="sv-graf">${svCorredores()}</div>
+        <div class="sv-tabla">${svTablaCorredores()}</div>
+      </section>
+      <section class="sv-card" id="sv-horas">
+        ${svCabeza("Cuándo salen", "Servicios por día de la semana y hora, en promedio. Más oscuro, más salidas.", "horas")}
+        <div class="sv-graf">${svMapa()}</div>
+        <div class="sv-tabla">${svTablaMapa()}</div>
+      </section>
+    </div>
+    <div class="sv-dos">
+      <section class="sv-card" id="sv-flota">
+        ${svCabeza("La flota", "Cuántos coches trabajan, cuáles cargan más y cuáles no salieron.", "flota")}
+        <div class="sv-graf">${svFlota()}</div>
+        <div class="sv-tabla">${svTablaCoches()}</div>
+      </section>
+      <section class="sv-card" id="sv-trip">
+        ${svCabeza("La tripulación", "Cuántos servicios hizo cada uno. Tocá un nombre para ver sus viajes.", "trip")}
+        <div class="sv-graf">${svTripulacion()}</div>
+        <div class="sv-tabla">${svTablaTrip()}</div>
+      </section>
+    </div>
+    <section class="sv-card ancho" id="sv-plan">
+      ${svCabeza("Cómo se arma el tráfico", "Con cuánto tiempo se publica la grilla, cuántas veces se cambia y cuánto sale A CONFIRMAR.", "plan")}
+      <div class="sv-graf">${svPlan()}</div>
+      <div class="sv-tabla">${svTablaPlan()}</div>
+    </section>
+    ${svDistancias()}`;
+  svDibujarDias();
+  if (entrada) svAnimarEntrada();
+  svContar();
+}
+
+function svCabeza(titulo, bajada, clave, leyenda = "") {
+  return `
+    <header class="sv-card-cab">
+      <div>
+        <h3>${titulo}</h3>
+        <p>${bajada}</p>
+      </div>
+      <div class="sv-card-acc">
+        ${leyenda ? `<div class="sv-leyenda">${leyenda}</div>` : ""}
+        <button class="sv-vista" onclick="svVerTabla(this)" aria-pressed="false" title="Ver los mismos datos en una tabla">
+          <i class="ti ti-table"></i><span>Tabla</span>
+        </button>
+      </div>
+    </header>`;
+}
+
+function svVerTabla(btn) {
+  const card = btn.closest(".sv-card");
+  const on = card.classList.toggle("ver-tabla");
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  btn.querySelector("span").textContent = on ? "Gráfico" : "Tabla";
+  btn.querySelector("i").className = `ti ti-${on ? "chart-bar" : "table"}`;
+}
+
+// ─── El número del período ───────────────────────────────────────────────
+
+function svDeltaHtml(v, sentido = "neutro", sufijo = "") {
+  if (v == null) return "";
+  const sube = v > 0, cero = Math.abs(v) < 0.05;
+  const clase = cero ? "igual" : sentido === "neutro" ? "neutro" : (sube === (sentido === "arriba")) ? "bien" : "mal";
+  const flecha = cero ? "ti-equal" : sube ? "ti-arrow-up-right" : "ti-arrow-down-right";
+  return `<span class="sv-delta ${clase}"><i class="ti ${flecha}"></i>${svNum(Math.abs(v), 1)}%${sufijo}</span>`;
+}
+
+function svHero() {
+  const d = sv.d, t = d.totales, del = d.deltas;
+  const max = Math.max(1, ...d.serie.map(x => x.servicios));
+  const barras = d.serie.map((x, i) => `<i style="--h:${x.con_trafico ? Math.max(4, x.servicios / max * 100) : 0}%;--i:${i}" class="${x.con_trafico ? "" : "sin"}"></i>`).join("");
+  const rango = `del ${svFechaCorta(d.desde)} al ${svFechaCorta(d.hasta)}`;
+  return `
+    <section class="sv-hero">
+      <div class="sv-hero-num">
+        <span class="sv-hero-et">${d.corredor ? `Servicios · ${svEsc(d.corredor)}` : "Servicios del período"}</span>
+        <b data-contar="${t.servicios}">${svNum(t.servicios)}</b>
+        <span class="sv-hero-sub">${svNum(t.por_dia, 1)} por día · ${t.dias} ${t.dias === 1 ? "día" : "días"} con tráfico · ${rango}</span>
+        ${del.servicios != null ? `<span class="sv-hero-delta">${svDeltaHtml(del.servicios, "arriba")} <em>por día, contra los ${d.dias_periodo} días anteriores</em></span>` : ""}
+      </div>
+      <div class="sv-hero-barras" aria-hidden="true">${barras}</div>
+    </section>`;
+}
+
+function svSpark(valores, color = "var(--sv-de)") {
+  const v = valores.map(x => x == null ? null : +x);
+  const nums = v.filter(x => x != null);
+  if (nums.length < 2) return "";
+  const W = 150, H = 26, max = Math.max(...nums), min = Math.min(...nums, 0), rango = (max - min) || 1;
+  let pts = [], ultimo = null;
+  v.forEach((x, i) => {
+    if (x == null) return;
+    const px = i / (v.length - 1) * (W - 6) + 3, py = H - 3 - (x - min) / rango * (H - 6);
+    pts.push(`${px.toFixed(1)},${py.toFixed(1)}`);
+    ultimo = [px, py];
+  });
+  return `<svg class="sv-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    ${ultimo ? `<circle cx="${ultimo[0]}" cy="${ultimo[1]}" r="3.2" fill="var(--sv-s1)" stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke"/>` : ""}
+  </svg>`;
+}
+
+function svKpis() {
+  const d = sv.d, t = d.totales, del = d.deltas, s = d.serie.filter(x => x.con_trafico);
+  const sinComp = del.comparable === false;
+  const tile = (et, valor, sub, delta, spark, extra = "") => `
+    <div class="sv-kpi ${extra}">
+      <span class="sv-kpi-et">${et}</span>
+      <b>${valor}</b>
+      <span class="sv-kpi-sub">${sub}</span>
+      <div class="sv-kpi-pie">${delta || `<span class="sv-delta vacio">${sinComp ? "sin período anterior completo" : ""}</span>`}${spark}</div>
+    </div>`;
+  const kmFaltan = (d.tramos || []).filter(x => x.km == null).length;
+  return [
+    tile("Refuerzos", `<span data-contar="${t.refuerzos}">${svNum(t.refuerzos)}</span>`,
+      `${svNum(t.servicios ? t.refuerzos / t.servicios * 100 : 0, 1)}% de los servicios`,
+      svDeltaHtml(del.refuerzos, "neutro", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.refuerzos : null))),
+    tile("Coches por día", `<span data-contar="${t.coches_por_dia}" data-dec="1">${svNum(t.coches_por_dia, 1)}</span>`,
+      `${t.uso_flota != null ? `${svNum(t.uso_flota, 0)}% de los ${t.flota_base} que hacen nacionales` : "—"}`,
+      svDeltaHtml(del.coches_por_dia, "neutro"), svSpark(d.serie.map(x => x.con_trafico ? x.coches : null))),
+    tile("Coches distintos", `<span data-contar="${t.coches}">${svNum(t.coches)}</span>`,
+      "salieron al menos una vez", svDeltaHtml(del.coches, "neutro"), ""),
+    tile("Tripulantes", `<span data-contar="${t.tripulantes}">${svNum(t.tripulantes)}</span>`,
+      "hicieron al menos un servicio", svDeltaHtml(del.tripulantes, "neutro"), ""),
+    tile("Asientos ofrecidos", `<span data-contar="${t.asientos}">${svNum(t.asientos)}</span>`,
+      `${svNum(t.dias ? t.asientos / t.dias : 0)} por día${t.sin_coche ? " (sin contar los servicios sin coche)" : ""}`,
+      svDeltaHtml(del.asientos, "arriba", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.asientos : null))),
+    t.km ? tile("Km recorridos", `<span data-contar="${t.km}">${svNum(t.km)}</span>`,
+      `${svNum(t.dias ? t.km / t.dias : 0)} por día${t.km_cubiertos < t.servicios ? ` · faltan distancias de ${svNum(t.servicios - t.km_cubiertos)} servicios` : ""}`,
+      svDeltaHtml(del.km, "neutro", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.km : null)))
+      : tile("Km recorridos", "—", kmFaltan ? `Cargá la distancia de ${kmFaltan} ${kmFaltan === 1 ? "tramo" : "tramos"} y aparecen solos` : "Sin distancias",
+        `<button class="sv-link" onclick="svIrA('sv-dist')">Cargar distancias <i class="ti ti-arrow-right"></i></button>`, "", "falta"),
+  ].join("");
+}
+
+// ─── Lo que dicen los números ────────────────────────────────────────────
+
+const SV_NIVEL = { good: ["Bien", "circle-check"], warning: ["Atención", "alert-triangle"], serious: ["Importante", "alert-octagon"],
+                   critical: ["Crítico", "alert-octagon"], info: ["Para mirar", "bulb"] };
+
+function svHallazgos() {
+  const h = sv.d.hallazgos || [];
+  if (!h.length) return `
+    <section class="sv-hallazgos vacio"><i class="ti ti-circle-check"></i><div><b>Todo en orden</b><span>No hay nada que llame la atención en este período.</span></div></section>`;
+  return `
+    <section class="sv-hallazgos" aria-label="Lo que dicen los números">
+      <h3><i class="ti ti-sparkles"></i> Lo que dicen los números</h3>
+      <div class="sv-hall-lista">
+        ${h.map((x, i) => {
+          const [nivel] = SV_NIVEL[x.nivel] || SV_NIVEL.info;
+          const acc = x.accion ? `onclick='svAccion(${svEsc(JSON.stringify(x.accion))})'` : "";
+          return `
+            <article class="sv-hall ${x.nivel}" style="--i:${i}">
+              <span class="sv-hall-ic"><i class="ti ti-${svEsc(x.icono)}"></i></span>
+              <div>
+                <span class="sv-hall-nivel">${nivel}</span>
+                <b>${svEsc(x.titulo)}</b>
+                <p>${svEsc(x.txt)}</p>
+                ${x.accion ? `<button class="sv-link" ${acc}>${x.accion.tipo === "corredor" ? "Ver ese corredor" : x.accion.tipo === "coche" ? "Ver sus servicios" : "Ver"} <i class="ti ti-arrow-right"></i></button>` : ""}
+              </div>
+            </article>`;
+        }).join("")}
+      </div>
+    </section>`;
+}
+
+function svAccion(a) {
+  if (!a) return;
+  if (a.tipo === "corredor") svElegirCorredor(a.valor);
+  else if (a.tipo === "coche") svAbrir("coche", a.valor);
+  else if (a.tipo === "ir") svIrA(a.valor);
+}
+function svIrA(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "start" });
+  el.classList.remove("ilumina"); void el.offsetWidth; el.classList.add("ilumina");
+}
+
+// ─── Servicios por día (columnas) ────────────────────────────────────────
+
+function svEscala(max, n = 4) {
+  if (max <= 0) return { tope: 1, paso: 1, marcas: [0, 1] };
+  const crudo = max / n, mag = Math.pow(10, Math.floor(Math.log10(crudo)));
+  const paso = [1, 2, 2.5, 5, 10].map(m => m * mag).find(p => p >= crudo) || 10 * mag;
+  const tope = Math.ceil(max / paso) * paso;
+  const marcas = [];
+  for (let v = 0; v <= tope + 1e-9; v += paso) marcas.push(+v.toFixed(6));
+  return { tope, paso, marcas };
+}
+
+// Columna con la punta redondeada (4px) y la base recta
+function svPathCol(x, y, w, h, r = 4) {
+  if (h <= 0) return "";
+  r = Math.min(r, h, w / 2);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+function svDibujarDias() {
+  const caja = $("#sv-g-dias");
+  if (!caja || !sv.d) return;
+  const serie = sv.d.serie;
+  const W = Math.max(300, caja.clientWidth), H = 250;
+  const pad = { l: 38, r: 64, t: 16, b: 34 };
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  const max = Math.max(1, ...serie.map(x => x.servicios));
+  const esc = svEscala(max);
+  const banda = pw / serie.length;
+  const bw = Math.max(2, Math.min(24, banda * 0.64));
+  const y = v => pad.t + ph - v / esc.tope * ph;
+  const prom = sv.d.totales.por_dia;
+  let g = "";
+  // grilla y marcas del eje
+  esc.marcas.forEach(m => {
+    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(m)}" y2="${y(m)}" class="${m === 0 ? "sv-base" : "sv-grid"}"/>`;
+    g += `<text x="${pad.l - 8}" y="${y(m) + 4}" class="sv-eje" text-anchor="end">${svNum(m)}</text>`;
+  });
+  // fines de semana, apenas marcados para leer la semana
+  serie.forEach((x, i) => {
+    if (x.dia_semana >= 5) g += `<rect x="${pad.l + i * banda}" y="${pad.t}" width="${banda}" height="${ph}" class="sv-finde"/>`;
+  });
+  // las columnas
+  const cada = Math.max(1, Math.ceil(26 / banda));
+  serie.forEach((x, i) => {
+    const cx = pad.l + i * banda + (banda - bw) / 2;
+    const reg = x.servicios - x.refuerzos;
+    let marcas = "";
+    if (!x.con_trafico) {
+      marcas = `<circle cx="${cx + bw / 2}" cy="${y(0) - 4}" r="2.5" class="sv-sindato"/>`;
+    } else {
+      const hReg = reg / esc.tope * ph, hRef = x.refuerzos / esc.tope * ph;
+      const gap = x.refuerzos && reg ? 2 : 0;
+      marcas += `<path d="${svPathCol(cx, y(reg), bw, hReg, x.refuerzos ? 0 : 4)}" class="sv-m1"/>`;
+      if (x.refuerzos) marcas += `<path d="${svPathCol(cx, y(x.servicios), bw, Math.max(1, hRef - gap), 4)}" class="sv-m2"/>`;
+    }
+    const nombre = `${SV_DIAS_LARGOS[x.dia_semana]} ${svFechaCorta(x.fecha)}`;
+    const tip = x.con_trafico
+      ? { t: nombre, f: [[svNum(x.servicios), "servicios"], [svNum(reg), "regulares"], [svNum(x.refuerzos), "refuerzos"], [svNum(x.coches), "coches"]], p: "Tocá para ver el día" }
+      : { t: nombre, f: [["—", "sin tráfico cargado"]] };
+    g += `<g class="sv-col ${x.con_trafico ? "" : "vacia"}" style="--i:${i}" data-tip="${svTip(tip)}" tabindex="0" role="button"
+             aria-label="${svEsc(nombre)}: ${x.con_trafico ? `${x.servicios} servicios` : "sin tráfico"}" ${x.con_trafico ? `onclick="svAbrir('dia','${x.fecha}')" onkeydown="if(event.key==='Enter')svAbrir('dia','${x.fecha}')"` : ""}>
+            <rect x="${pad.l + i * banda}" y="${pad.t}" width="${banda}" height="${ph + 6}" class="sv-hit"/>${marcas}</g>`;
+    if (i % cada === 0 || i === serie.length - 1) {
+      const lab = x.fecha.slice(8, 10) === "01" || i === 0 ? svFechaCorta(x.fecha) : x.fecha.slice(8, 10).replace(/^0/, "");
+      g += `<text x="${pad.l + i * banda + banda / 2}" y="${H - pad.b + 16}" class="sv-eje ${x.dia_semana >= 5 ? "finde" : ""}" text-anchor="middle">${lab}</text>`;
+      if (banda >= 16) g += `<text x="${pad.l + i * banda + banda / 2}" y="${H - pad.b + 28}" class="sv-eje sv-eje-dia" text-anchor="middle">${SV_DIAS[x.dia_semana][0]}</text>`;
+    }
+  });
+  // promedio
+  if (prom) g += `<line x1="${pad.l}" x2="${W - pad.r + 4}" y1="${y(prom)}" y2="${y(prom)}" class="sv-prom"/>
+                  <text x="${W - pad.r + 8}" y="${y(prom) - 3}" class="sv-prom-t">Promedio</text>
+                  <text x="${W - pad.r + 8}" y="${y(prom) + 11}" class="sv-prom-v">${svNum(prom, 1)}</text>`;
+  caja.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="sv-svg" role="img" aria-label="Servicios por día">${g}</svg>`;
+}
+
+function svTablaDias() {
+  return `<table class="sv-t"><thead><tr><th>Día</th><th class="n">Servicios</th><th class="n">Regulares</th><th class="n">Refuerzos</th><th class="n">Coches</th></tr></thead><tbody>
+    ${sv.d.serie.filter(x => x.con_trafico).map(x => `<tr><td>${SV_DIAS_LARGOS[x.dia_semana]} ${svFechaCorta(x.fecha)}</td><td class="n">${x.servicios}</td><td class="n">${x.servicios - x.refuerzos}</td><td class="n">${x.refuerzos}</td><td class="n">${x.coches}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Corredores (barras horizontales) ────────────────────────────────────
+
+function svCorredores() {
+  const cs = sv.d.corredores;
+  const max = Math.max(1, ...cs.map(c => c.servicios));
+  return `<div class="sv-barras">${cs.map((c, i) => {
+    const reg = c.servicios - c.refuerzos;
+    const tip = { t: c.corredor, f: [[svNum(c.servicios), "servicios"], [`${svNum(c.parte, 1)}%`, "del total"], [svNum(c.refuerzos), "refuerzos"],
+      [svNum(c.ida), "idas"], [svNum(c.regreso), "regresos"], [svNum(c.coches), "coches distintos"], [svNum(c.asientos), "asientos ofrecidos"]]
+      .concat(c.km ? [[svNum(c.km), "km"]] : []), p: sv.corredor ? "Tocá para ver todos" : "Tocá para ver solo este corredor" };
+    return `
+      <button class="sv-fila-barra ${sv.corredor === c.corredor ? "on" : ""}" style="--i:${i}" data-tip="${svTip(tip)}"
+              onclick="svElegirCorredor(sv.corredor === this.dataset.c ? '' : this.dataset.c)" data-c="${svEsc(c.corredor)}">
+        <span class="sv-fb-nom">${svEsc(c.corredor)}</span>
+        <span class="sv-fb-pista">
+          <i class="sv-fb-a" style="--w:${reg / max * 100}%"></i>${c.refuerzos ? `<i class="sv-fb-b" style="--w:${c.refuerzos / max * 100}%"></i>` : ""}
+        </span>
+        <span class="sv-fb-val"><b>${svNum(c.servicios)}</b> ${svNum(c.parte, 0)}%</span>
+      </button>`;
+  }).join("")}</div>`;
+}
+
+function svTablaCorredores() {
+  return `<table class="sv-t"><thead><tr><th>Corredor</th><th class="n">Servicios</th><th class="n">%</th><th class="n">Idas</th><th class="n">Regresos</th><th class="n">Refuerzos</th><th class="n">Coches</th><th class="n">Asientos</th><th class="n">Km</th></tr></thead><tbody>
+    ${sv.d.corredores.map(c => `<tr><td>${svEsc(c.corredor)}</td><td class="n">${c.servicios}</td><td class="n">${svNum(c.parte, 1)}</td><td class="n">${c.ida}</td><td class="n">${c.regreso}</td><td class="n">${c.refuerzos}</td><td class="n">${c.coches}</td><td class="n">${svNum(c.asientos)}</td><td class="n">${c.km ? svNum(c.km) : "—"}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Mapa de horarios ────────────────────────────────────────────────────
+
+function svMapa() {
+  const { celdas, dias } = sv.d.horario;
+  const prom = celdas.map((fila, i) => fila.map(v => dias[i] ? v / dias[i] : 0));
+  const max = Math.max(0.0001, ...prom.flat());
+  let pico = [0, 0];
+  prom.forEach((f, i) => f.forEach((v, h) => { if (v > prom[pico[0]][pico[1]]) pico = [i, h]; }));
+  const color = v => v <= 0 ? "" : SV_RAMPA[Math.min(SV_RAMPA.length - 1, Math.floor(v / max * SV_RAMPA.length - 1e-9))];
+  const filas = prom.map((f, i) => `
+    <span class="sv-mapa-dia">${SV_DIAS[i]}</span>
+    ${f.map((v, h) => {
+      const tip = { t: `${SV_DIAS_LARGOS[i]} ${String(h).padStart(2, "0")}:00 a ${String(h).padStart(2, "0")}:59`,
+        f: [[svNum(v, 1), "servicios en promedio"], [svNum(celdas[i][h]), "en total"]], p: dias[i] ? `${dias[i]} ${SV_DIAS_LARGOS[i]}${dias[i] === 1 ? "" : (SV_DIAS_LARGOS[i].endsWith("s") ? "" : "s")} en el período` : "" };
+      return `<i class="sv-celda ${v ? "" : "cero"}" style="${v ? `background:${color(v)};` : ""}--i:${h}" data-tip="${svTip(tip)}"></i>`;
+    }).join("")}`).join("");
+  const horas = Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`).join("");
+  const hp = String(pico[1]).padStart(2, "0");
+  return `
+    <div class="sv-mapa">
+      ${filas}
+      <span></span>${horas}
+    </div>
+    <div class="sv-mapa-pie">
+      <span class="sv-escala"><em>0</em><i style="background:linear-gradient(90deg, ${SV_RAMPA.join(",")})"></i><em>${svNum(max, 1)} por hora</em></span>
+      ${prom[pico[0]][pico[1]] ? `<span class="sv-pico"><i class="ti ti-flame"></i>El momento más cargado: <b>${SV_DIAS_LARGOS[pico[0]]} de ${hp}:00 a ${hp}:59</b></span>` : ""}
+    </div>`;
+}
+
+function svTablaMapa() {
+  const { celdas, dias } = sv.d.horario;
+  return `<table class="sv-t sv-t-mapa"><thead><tr><th>Hora</th>${SV_DIAS.map(d => `<th class="n">${d}</th>`).join("")}</tr></thead><tbody>
+    ${Array.from({ length: 24 }, (_, h) => `<tr><td>${String(h).padStart(2, "0")}:00</td>${celdas.map((f, i) => `<td class="n">${dias[i] && f[h] ? svNum(f[h] / dias[i], 1) : ""}</td>`).join("")}</tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── La flota ────────────────────────────────────────────────────────────
+
+function svFlota() {
+  const d = sv.d, t = d.totales, cs = d.coches;
+  const max = Math.max(1, ...cs.map(c => c.servicios));
+  const mediana = cs.length ? cs.map(c => c.servicios).sort((a, b) => a - b)[Math.floor(cs.length / 2)] : 0;
+  const top = cs.slice(0, 10);
+  const uso = t.uso_flota ?? 0;
+  return `
+    <div class="sv-medidor" data-tip="${svTip({ t: "Coches en uso por día", f: [[svNum(t.coches_por_dia, 1), "en promedio"], [svNum(t.flota_base), "hacen nacionales"], [`${svNum(uso, 1)}%`, "en uso"]] })}">
+      <div class="sv-med-txt"><b>${svNum(t.coches_por_dia, 1)}</b> de <b>${t.flota_base}</b> coches en uso por día <em>${svNum(uso, 0)}%</em></div>
+      <div class="sv-med-pista"><i style="--w:${Math.min(100, uso)}%"></i></div>
+      <small>Los que hacen nacionales son los que salieron alguna vez en Tráfico (turismo y corporativos no cuentan).</small>
+    </div>
+    <h4 class="sv-sub">Los que más salieron <span>mediana: ${mediana} servicios</span></h4>
+    <div class="sv-barras chico">${top.map((c, i) => {
+      const tip = { t: `Coche ${c.coche}${c.modelo ? ` · ${c.modelo}` : ""}`, f: [[svNum(c.servicios), "servicios"], [svNum(c.dias), "días con salida"], [svNum(c.refuerzos), "refuerzos"]].concat(c.km ? [[svNum(c.km), "km"]] : []).concat([[c.corredor, "corredor principal"]]), p: "Tocá para ver sus servicios" };
+      return `
+        <button class="sv-fila-barra" style="--i:${i}" data-tip="${svTip(tip)}" onclick="svAbrir('coche','${svEsc(c.coche)}')">
+          <span class="sv-fb-nom"><span class="sv-chapa">${svEsc(c.coche)}</span></span>
+          <span class="sv-fb-pista"><i class="sv-fb-a" style="--w:${c.servicios / max * 100}%"></i>
+            ${mediana ? `<i class="sv-mediana" style="--x:${mediana / max * 100}%" title="Mediana"></i>` : ""}</span>
+          <span class="sv-fb-val"><b>${c.servicios}</b></span>
+        </button>`;
+    }).join("")}</div>
+    ${cs.length > 10 ? `<button class="sv-link" onclick="svVerTabla(this.closest('.sv-card').querySelector('.sv-vista'))">Ver los ${cs.length} coches <i class="ti ti-arrow-right"></i></button>` : ""}
+    <h4 class="sv-sub">No salieron en el período <span>${d.parados.length || "ninguno"}</span></h4>
+    ${d.parados.length ? `<div class="sv-parados">${d.parados.map(p => {
+      const est = p.estado || [];
+      return `<div class="sv-parado ${est.length ? "con-estado" : ""}">
+          <span class="sv-chapa ${est.length ? "gris" : ""}">${svEsc(p.coche)}</span>
+          <span class="sv-parado-txt">
+            <b>${est.length ? est.map(e => `<i class="ti ti-${e.tipo === "taller" ? "tool" : "ban"}"></i> ${svEsc(e.txt)}`).join(" · ") : "Sin motivo cargado"}</b>
+            <em>${p.ultimo ? `Último servicio: ${svFechaCorta(p.ultimo.slice(0, 10))}` : "Nunca salió"}${p.modelo ? ` · ${svEsc(p.modelo)}` : ""}</em>
+          </span>
+        </div>`;
+    }).join("")}</div>` : `<p class="sv-nada"><i class="ti ti-circle-check"></i> Todos los coches que hacen nacionales salieron al menos una vez.</p>`}`;
+}
+
+function svTablaCoches() {
+  return `<table class="sv-t"><thead><tr><th>Coche</th><th>Modelo</th><th class="n">Servicios</th><th class="n">Días</th><th class="n">Refuerzos</th><th>Corredor principal</th><th class="n">Km</th></tr></thead><tbody>
+    ${sv.d.coches.map(c => `<tr class="clic" onclick="svAbrir('coche','${svEsc(c.coche)}')"><td><b>${svEsc(c.coche)}</b></td><td>${svEsc(c.modelo)}</td><td class="n">${c.servicios}</td><td class="n">${c.dias}</td><td class="n">${c.refuerzos}</td><td>${svEsc(c.corredor)}</td><td class="n">${c.km ? svNum(c.km) : "—"}</td></tr>`).join("")}
+    ${sv.d.parados.map(p => `<tr><td><b>${svEsc(p.coche)}</b></td><td>${svEsc(p.modelo)}</td><td class="n">0</td><td class="n">0</td><td class="n">0</td><td>${(p.estado || []).map(e => svEsc(e.txt)).join(", ") || "—"}</td><td class="n">—</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── La tripulación ──────────────────────────────────────────────────────
+
+function svTripulacion() {
+  const ps = sv.d.tripulantes;
+  if (!ps.length) return `<p class="sv-nada">No hay tripulantes cargados en este período.</p>`;
+  const max = Math.max(1, ...ps.map(p => p.servicios));
+  const ord = ps.map(p => p.servicios).sort((a, b) => a - b);
+  const mediana = ord[Math.floor(ord.length / 2)];
+  const top = ps.slice(0, 14);
+  const prom = ord.reduce((a, b) => a + b, 0) / ord.length;
+  return `
+    <div class="sv-trip-res">
+      <div><b>${ps.length}</b><span>tripulantes</span></div>
+      <div><b>${svNum(prom, 1)}</b><span>servicios en promedio</span></div>
+      <div><b>${mediana}</b><span>la mitad hizo esto o menos</span></div>
+    </div>
+    <h4 class="sv-sub">Los que más servicios hicieron <span>la rayita es la mediana</span></h4>
+    <div class="sv-barras chico">${top.map((p, i) => {
+      const tip = { t: p.nombre, f: [[svNum(p.servicios), "servicios"], [svNum(p.dias), "días con salida"], [svNum(p.coches), "coches distintos"], [svNum(p.refuerzos), "refuerzos"]].concat(p.km ? [[svNum(p.km), "km"]] : []), p: "Tocá para ver sus viajes" };
+      return `
+        <button class="sv-fila-barra" style="--i:${i}" data-tip="${svTip(tip)}" data-n="${svEsc(p.nombre)}" onclick="svAbrir('tripulante', this.dataset.n)">
+          <span class="sv-fb-nom">${svEsc(p.nombre)}</span>
+          <span class="sv-fb-pista"><i class="sv-fb-a" style="--w:${p.servicios / max * 100}%"></i>
+            <i class="sv-mediana" style="--x:${mediana / max * 100}%"></i></span>
+          <span class="sv-fb-val"><b>${p.servicios}</b></span>
+        </button>`;
+    }).join("")}</div>
+    ${ps.length > 14 ? `<button class="sv-link" onclick="svVerTabla(this.closest('.sv-card').querySelector('.sv-vista'))">Ver los ${ps.length} tripulantes <i class="ti ti-arrow-right"></i></button>` : ""}`;
+}
+
+function svTablaTrip() {
+  return `<table class="sv-t"><thead><tr><th>Tripulante</th><th class="n">Servicios</th><th class="n">Días</th><th class="n">Refuerzos</th><th class="n">Coches</th><th class="n">Km</th><th>Último</th></tr></thead><tbody>
+    ${sv.d.tripulantes.map(p => `<tr class="clic" data-n="${svEsc(p.nombre)}" onclick="svAbrir('tripulante', this.dataset.n)"><td>${svEsc(p.nombre)}</td><td class="n">${p.servicios}</td><td class="n">${p.dias}</td><td class="n">${p.refuerzos}</td><td class="n">${p.coches}</td><td class="n">${p.km ? svNum(p.km) : "—"}</td><td>${p.ultimo ? svFechaCorta(p.ultimo.slice(0, 10)) + " " + p.ultimo.slice(11) : ""}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Cómo se arma el tráfico ─────────────────────────────────────────────
+
+function svPlan() {
+  const p = sv.d.planificacion;
+  const ant = p.anticipacion_mediana;
+  const tile = (et, valor, sub, nivel = "") => `
+    <div class="sv-ptile ${nivel}">
+      <span class="sv-pet">${et}</span><b>${valor}</b><em>${sub}</em>
+      ${nivel ? `<span class="sv-ptag ${nivel}"><i class="ti ti-${nivel === "bien" ? "circle-check" : "alert-triangle"}"></i>${nivel === "bien" ? "Bien" : "A mejorar"}</span>` : ""}
+    </div>`;
+  const nivelAnt = ant == null ? "" : ant < 3 ? "mal" : ant >= 10 ? "bien" : "";
+  const nivelConf = p.a_confirmar_pct == null ? "" : p.a_confirmar_pct >= 10 ? "mal" : p.a_confirmar_pct <= 2 ? "bien" : "";
+  const nivelVer = p.versiones_promedio == null ? "" : p.versiones_promedio >= 2 ? "mal" : p.versiones_promedio <= 1.2 ? "bien" : "";
+  const dias = p.dias.map((x, i) => {
+    const v = x.versiones;
+    const fondo = !x.publicado ? "" : SV_ORDINAL[Math.min(v, 3) - 1];
+    const tip = { t: `${SV_DIAS_LARGOS[svDiaSemana(x.fecha)]} ${svFechaCorta(x.fecha)}`,
+      f: x.publicado ? [[String(v), v === 1 ? "versión" : "versiones"], [x.anticipacion != null ? `${svNum(x.anticipacion, 1)} h` : "—", "antes de la primera salida"],
+        [String(x.cambios), "cambios después de publicar"], [String(x.a_confirmar), "salidas publicadas A CONFIRMAR"]] : [["—", "nunca se publicó"]] };
+    return `<i class="sv-pdia ${x.publicado ? "" : "sin"}" style="${fondo ? `background:${fondo};` : ""}--i:${i}" data-tip="${svTip(tip)}">${x.publicado ? (v > 1 ? v : "") : "–"}</i>`;
+  }).join("");
+  return `
+    <div class="sv-ptiles">
+      ${tile("Se publica", ant == null ? "—" : ant < 0 ? "Después" : `${svNum(ant, 1)} h`, ant == null ? "sin publicaciones" : "antes de la primera salida (mediana)", nivelAnt)}
+      ${tile("Versiones por día", p.versiones_promedio == null ? "—" : svNum(p.versiones_promedio, 1), `${svNum(p.cambios)} cambios después de publicar`, nivelVer)}
+      ${tile("Salen A CONFIRMAR", p.a_confirmar_pct == null ? "—" : `${svNum(p.a_confirmar_pct, 1)}%`, "de las salidas, al publicar", nivelConf)}
+      ${tile("Días sin publicar", svNum(p.dias_sin_publicar), `de ${p.dias.length} días con tráfico`, p.dias_sin_publicar ? "mal" : "bien")}
+    </div>
+    <h4 class="sv-sub">Día por día <span class="sv-pley"><i style="background:${SV_ORDINAL[0]}"></i>1 versión <i style="background:${SV_ORDINAL[1]}"></i>2 <i style="background:${SV_ORDINAL[2]}"></i>3 o más <i class="sin"></i>sin publicar</span></h4>
+    <div class="sv-pdias">${dias}</div>`;
+}
+
+function svTablaPlan() {
+  return `<table class="sv-t"><thead><tr><th>Día</th><th class="n">Versiones</th><th class="n">Horas antes</th><th class="n">Cambios</th><th class="n">A confirmar</th></tr></thead><tbody>
+    ${sv.d.planificacion.dias.map(x => `<tr><td>${SV_DIAS_LARGOS[svDiaSemana(x.fecha)]} ${svFechaCorta(x.fecha)}</td><td class="n">${x.publicado ? x.versiones : "sin publicar"}</td><td class="n">${x.anticipacion != null ? svNum(x.anticipacion, 1) : "—"}</td><td class="n">${x.cambios}</td><td class="n">${x.a_confirmar}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Distancias por tramo ────────────────────────────────────────────────
+
+function svDistancias() {
+  const ts = sv.d.tramos || [];
+  if (!ts.length) return "";
+  const faltan = ts.filter(t => t.km == null).length;
+  const ed = sv.d.puede_editar;
+  return `
+    <section class="sv-card ancho sv-dist ${faltan ? "" : "completo"}" id="sv-dist">
+      <header class="sv-card-cab">
+        <div>
+          <h3>Distancias por tramo</h3>
+          <p>${faltan ? `Se cargan una sola vez: con ${faltan === 1 ? "la que falta" : `las ${faltan} que faltan`} el sistema calcula solo los km de cada coche, corredor y día.`
+            : "Con estas distancias se calculan los km. Los dos sentidos de un tramo usan la misma."}</p>
+        </div>
+        ${faltan ? `<span class="sv-falta"><i class="ti ti-ruler-measure"></i> Faltan ${faltan}</span>` : `<span class="sv-ok"><i class="ti ti-circle-check"></i> Completas</span>`}
+      </header>
+      <div class="sv-tramos">
+        ${ts.map(t => `
+          <label class="sv-tramo ${t.km == null ? "falta" : ""}">
+            <span class="sv-tramo-nom">${svEsc(t.nombre)}</span>
+            <span class="sv-tramo-n">${svNum(t.servicios)} servicios</span>
+            <span class="sv-tramo-km">
+              <input type="text" inputmode="numeric" value="${t.km != null ? svNum(t.km) : ""}" placeholder="—" ${ed ? "" : "readonly"}
+                     data-clave="${svEsc(t.clave)}" data-v="${t.km != null ? svNum(t.km) : ""}" onchange="svGuardarDistancia(this)"
+                     onkeydown="if(event.key==='Enter')this.blur()" aria-label="Kilómetros de ${svEsc(t.nombre)}">
+              <em>km</em>
+            </span>
+          </label>`).join("")}
+      </div>
+    </section>`;
+}
+
+async function svGuardarDistancia(inp) {
+  const v = inp.value.trim();
+  if (v === (inp.dataset.v || "")) return;
+  inp.classList.add("guardando");
+  const r = await api("/api/servicios/distancia", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clave: inp.dataset.clave, km: v }) });
+  inp.classList.remove("guardando");
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo guardar", "error"); inp.value = inp.dataset.v || ""; return; }
+  inp.dataset.v = v;
+  inp.closest(".sv-tramo")?.classList.toggle("falta", !v);
+  inp.classList.remove("guardado"); void inp.offsetWidth; inp.classList.add("guardado");
+  clearTimeout(sv._distT);
+  sv._distT = setTimeout(() => svCargar(), 900);          // los km se recalculan solos
+}
+
+// ─── El cajón con el detalle ─────────────────────────────────────────────
+
+async function svAbrir(tipo, clave) {
+  svCerrarCajon(true);
+  const fondo = document.createElement("div");
+  fondo.className = "sv-cajon-fondo";
+  fondo.innerHTML = `<aside class="sv-cajon" role="dialog" aria-modal="true"><div class="sv-cajon-cab"><div class="dossier-loading"></div></div></aside>`;
+  fondo.addEventListener("click", e => { if (e.target === fondo) svCerrarCajon(); });
+  document.body.appendChild(fondo);
+  const d = await api(`/api/servicios/detalle?tipo=${tipo}&clave=${encodeURIComponent(clave)}&desde=${sv.desde}&hasta=${sv.hasta}`);
+  const caja = fondo.querySelector(".sv-cajon");
+  if (!caja || !fondo.isConnected) return;
+  if (!d || d.error) { caja.innerHTML = `<div class="empty">No se pudo traer el detalle.</div>`; return; }
+  const r = d.resumen;
+  const titulo = tipo === "coche" ? `<span class="sv-chapa grande">${svEsc(clave)}</span>`
+    : tipo === "dia" ? `${SV_DIAS_LARGOS[svDiaSemana(clave)]} ${svFechaCorta(clave)}`
+    : svEsc(clave);
+  const etiqueta = { coche: "Coche", tripulante: "Tripulante", corredor: "Corredor", dia: "Día" }[tipo];
+  const porFecha = {};
+  d.servicios.forEach(s => (porFecha[s.fecha] = porFecha[s.fecha] || []).push(s));
+  const coche = (sv.d?.coches || []).find(c => c.coche === clave);
+  caja.innerHTML = `
+    <div class="sv-cajon-cab">
+      <span>${tipo === "dia" ? "Servicios del día" : `${etiqueta} · del ${svFechaCorta(d.desde)} al ${svFechaCorta(d.hasta)}`}</span>
+      <h3>${titulo}</h3>
+      <div class="sv-cajon-num">
+        <div><b>${svNum(r.servicios)}</b><em>servicios</em></div>
+        ${tipo !== "dia" ? `<div><b>${svNum(r.dias)}</b><em>días</em></div>` : `<div><b>${svNum(r.coches)}</b><em>coches</em></div>`}
+        <div><b>${svNum(r.refuerzos)}</b><em>refuerzos</em></div>
+        ${r.km ? `<div><b>${svNum(r.km)}</b><em>km</em></div>` : ""}
+      </div>
+      <button class="sv-cajon-x" onclick="svCerrarCajon()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="sv-cajon-cuerpo">
+      ${Object.entries(porFecha).map(([f, lista]) => `
+        <div class="sv-cj-dia">
+          ${tipo !== "dia" ? `<h5>${SV_DIAS_LARGOS[svDiaSemana(f)]} ${svFechaCorta(f)}</h5>` : ""}
+          ${lista.map(s => `
+            <div class="sv-cj-serv">
+              <span class="sv-cj-hora">${svEsc(s.hora || "--:--")}</span>
+              <span class="sv-cj-tramo"><b>${svEsc(s.destino || s.corredor)}</b>${s.refuerzo ? `<em class="ref">REFUERZO</em>` : ""}<small>${s.lado === "regreso" ? "Regreso" : "Ida"} · ${svEsc(s.corredor)}</small></span>
+              ${tipo !== "coche" ? `<span class="sv-chapa ${s.coche ? "" : "falta"}">${s.coche ? svEsc(s.coche) : "A CONF."}</span>` : ""}
+              <span class="sv-cj-trip">${s.trips.length ? s.trips.map(t => svEsc(t)).join("<br>") : `<em>sin tripulantes</em>`}</span>
+            </div>`).join("")}
+        </div>`).join("") || `<div class="empty">Sin servicios en el período.</div>`}
+    </div>
+    <div class="sv-cajon-pie">
+      ${tipo === "dia" ? `<button class="btn btn-primary" onclick="svIrTrafico('${clave}')"><i class="ti ti-route"></i> Abrir en Tráfico</button>` : ""}
+      ${tipo === "coche" && coche?.vid && puedeVerSeccion("historial_carga") ? `<button class="btn btn-ghost" onclick="svIrHistorial(${coche.vid})"><i class="ti ti-timeline-event"></i> Historial del coche</button>` : ""}
+      ${tipo === "corredor" ? `<button class="btn btn-ghost" onclick="svCerrarCajon(); svElegirCorredor(${svEsc(JSON.stringify(clave))})"><i class="ti ti-filter"></i> Ver solo este corredor</button>` : ""}
+      <button class="btn btn-ghost" onclick="svCerrarCajon()">Cerrar</button>
+    </div>`;
+  caja.querySelector(".sv-cajon-x")?.focus();
+}
+
+function svCerrarCajon(ya = false) {
+  document.querySelectorAll(".sv-cajon-fondo").forEach(f => {
+    if (ya || trQuieto()) { f.remove(); return; }
+    f.classList.add("sale");
+    setTimeout(() => f.remove(), 420);
+  });
+}
+function svIrTrafico(fecha) { svCerrarCajon(true); tr.fecha = fecha; destNavegar("trafico"); }
+function svIrHistorial(vid) { svCerrarCajon(true); window._hiAbrirCoche = vid; destNavegar("historial_carga"); }
+
+// ─── Movimiento: columnas que crecen y números que cuentan ───────────────
+
+function svAnimarEntrada() {
+  if (trQuieto()) return;
+  $("#sv-cuerpo")?.classList.add("entra");
+  setTimeout(() => $("#sv-cuerpo")?.classList.remove("entra"), 2600);
+}
+
+function svContar() {
+  const els = document.querySelectorAll("#sv-cuerpo [data-contar]");
+  if (trQuieto()) return;
+  const dur = 1100;
+  els.forEach(el => {
+    const fin = +el.dataset.contar, dec = +(el.dataset.dec || 0);
+    if (!isFinite(fin) || fin === 0) return;
+    const t0 = performance.now();
+    const paso = t => {
+      if (!el.isConnected) return;
+      const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      el.textContent = svNum(fin * e, dec);
+      if (k < 1) requestAnimationFrame(paso);
+    };
+    requestAnimationFrame(paso);
+  });
+}
+
+// ─── Globito con los datos al pasar o enfocar ────────────────────────────
+(function () {
+  let caja = null;
+  const crear = () => {
+    caja = document.createElement("div");
+    caja.id = "sv-tip";
+    caja.setAttribute("role", "tooltip");
+    document.body.appendChild(caja);
+  };
+  const mostrar = (el, x, y) => {
+    let info;
+    try { info = JSON.parse(el.dataset.tip); } catch (e) { return; }
+    if (!caja) crear();
+    caja.replaceChildren();
+    const t = document.createElement("div"); t.className = "sv-tip-t"; t.textContent = info.t || ""; caja.appendChild(t);
+    (info.f || []).forEach(([v, et]) => {
+      const fila = document.createElement("div"); fila.className = "sv-tip-f";
+      const b = document.createElement("b"); b.textContent = v;
+      const s = document.createElement("span"); s.textContent = et;
+      fila.append(b, s); caja.appendChild(fila);
+    });
+    if (info.p) { const p = document.createElement("div"); p.className = "sv-tip-p"; p.textContent = info.p; caja.appendChild(p); }
+    caja.classList.add("visible");
+    const w = caja.offsetWidth, h = caja.offsetHeight;
+    let left = x + 14, top = y - h - 12;
+    if (left + w > window.innerWidth - 8) left = x - w - 14;
+    if (top < 8) top = y + 18;
+    caja.style.left = Math.max(8, left) + "px";
+    caja.style.top = top + "px";
+  };
+  const ocultar = () => caja?.classList.remove("visible");
+  document.addEventListener("pointermove", e => {
+    const el = e.target.closest?.("#sv-raiz [data-tip], .sv-medidor[data-tip]");
+    if (el) mostrar(el, e.clientX, e.clientY); else ocultar();
+  }, { passive: true });
+  document.addEventListener("focusin", e => {
+    const el = e.target.closest?.("#sv-raiz [data-tip]");
+    if (!el) { ocultar(); return; }
+    const r = el.getBoundingClientRect();
+    mostrar(el, r.left + r.width / 2, r.top);
+  });
+  document.addEventListener("scroll", ocultar, true);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { ocultar(); svCerrarCajon(); } });
+  // El gráfico de columnas se rehace al cambiar el ancho
+  let t = null;
+  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => { if ($("#sv-g-dias")) svDibujarDias(); }, 180); });
 })();
 
 // ─── Arranque ───────────────────────────────────────────────────────────
@@ -12200,7 +12911,7 @@ function flapTitulo(h1) {
 })();
 
 // ─── ¿A dónde vamos? — ir a cualquier coche o sección escribiendo ───
-const DEST_COCHE_SECCIONES = [["historial_carga", "Historial"], ["mantenimientos", "Mantenimientos"], ["servicios", "Servicios"], ["costos", "Costos"],
+const DEST_COCHE_SECCIONES = [["historial_carga", "Historial"], ["mantenimientos", "Mantenimientos"], ["costos", "Costos"],
                               ["kpis", "KPIs"], ["mantenimiento", "Preventivo"]];
 let _dest = { sel: 0, items: [], coches: null, cochesAt: 0 };
 
@@ -12376,7 +13087,7 @@ function destNavegar(sec) {
 function destIr(it, secCoche = null) {
   cerrarDestino();
   if (it.tipo === "seccion") {
-    if (["servicios", "costos", "kpis", "mantenimiento", "neumaticos"].includes(it.sec) && !cocheActual) {
+    if (["costos", "kpis", "mantenimiento", "neumaticos"].includes(it.sec) && !cocheActual) {
       elegirCocheYIr(it.sec);
       return;
     }
@@ -12386,8 +13097,8 @@ function destIr(it, secCoche = null) {
   const v = it.v;
   setCoche(v);
   let sec = secCoche || (puedeVerSeccion("historial_carga") ? "historial_carga"
-    : puedeVerSeccion("mantenimientos") ? "mantenimientos" : "servicios");
-  if (!puedeVerSeccion(sec)) sec = "servicios";
+    : puedeVerSeccion("mantenimientos") ? "mantenimientos" : "costos");
+  if (!puedeVerSeccion(sec)) sec = "costos";
   if (sec === "mantenimientos") window._mtAbrirCoche = v.id;
   if (sec === "historial_carga") window._hiAbrirCoche = v.id;
   destNavegar(sec);
