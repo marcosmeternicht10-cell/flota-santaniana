@@ -3945,6 +3945,14 @@ html[data-tr-dir="ant"]::view-transition-new(tr-dia) { animation: trVtEntraIzq .
 @keyframes trVtEntraIzq { from { opacity: 0; transform: translateX(-36px); } }
 
 /* ── Pantallas más chicas ── */
+.tr-estado-chip { white-space: nowrap; }
+/* Con el menú abierto y todos los botones, el estado quedaba aplastado en un
+   círculo: los botones pasan a su propia fila antes de que pase eso. */
+@media (max-width: 1500px) and (min-width: 861px) {
+  .tr-tablero { grid-template-columns: auto 1fr; grid-template-areas: "fecha estado" "acciones acciones" "dias dias"; }
+  .tr-tab-acciones { justify-content: flex-start; }
+  .tr-tab-acciones .tr-publicar { margin-left: auto; }
+}
 @media (max-width: 1180px) {
   .tr-cols { grid-template-columns: 1fr; }
   .tr-col + .tr-col { border-left: 0; border-top: 1px solid var(--border); }
@@ -3989,7 +3997,7 @@ html[data-tr-dir="ant"]::view-transition-new(tr-dia) { animation: trVtEntraIzq .
   .tr-fila.refuerzo::after { top: 0; }
   .tr-chapa-c { grid-area: c; }
   .tr-trips { grid-area: n; }
-  .tr-avisos { grid-area: a; grid-column: auto; }
+  .tr-avisos { grid-area: a; }
   .tr-mas-fila { margin-left: 18px; }
   .tr-asignando { left: 12px; right: 12px; transform: translateY(160%); }
   .tr-asignando.visible { transform: none; }
@@ -4477,3 +4485,34 @@ html[data-tr-dir="ant"]::view-transition-new(tr-dia) { animation: trVtEntraIzq .
 .odo-verif { font-size: 12.5px; color: rgba(255,255,255,.78); margin: 4px 0 6px; display: flex; align-items: center; gap: 5px; }
 .odo-verif .ti-circle-check { color: #7FD29B; }
 @media (max-width: 640px) { .ot-km { flex-wrap: wrap; } .ot-km > .btn { width: 100%; } .ot-km-btns { width: 100%; justify-content: flex-end; } }
+
+/* ── Tráfico: Nacional / Internacional ── */
+.tr-tipo-sw {
+  position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; padding: 4px; border-radius: 14px;
+  background: var(--surface2); border: 1px solid var(--border); box-shadow: inset 0 1px 2px rgba(15,28,46,.05);
+}
+.tr-tipo-sw button {
+  position: relative; z-index: 1; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 9px 18px; border: 0; background: none; border-radius: 10px; cursor: pointer;
+  font: 600 14px var(--display); letter-spacing: .03em; color: var(--muted); transition: color .35s var(--ui-suave, ease);
+}
+.tr-tipo-sw button .ti { font-size: 17px; }
+.tr-tipo-sw button.on { color: #fff; }
+.tr-tipo-fondo {
+  position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc(50% - 4px); border-radius: 10px;
+  background: linear-gradient(135deg, var(--azul-oscuro, #10233F) 0%, var(--brand-blue) 100%);
+  box-shadow: 0 6px 16px -6px rgba(16,35,63,.6); transition: transform .5s var(--ui-resorte, ease), background .5s;
+}
+.tr-tipo-sw.int .tr-tipo-fondo { transform: translateX(100%); background: linear-gradient(135deg, #7A1530 0%, var(--brand-red) 100%); box-shadow: 0 6px 16px -6px rgba(122,21,48,.55); }
+.tr-hora-c { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tr-in.tr-escala { padding: 1px 7px 2px; font: 600 10.5px "Inter", sans-serif; letter-spacing: 0; color: var(--brand-red); }
+.tr-in.tr-escala::placeholder { color: #D8D6CF; font-weight: 500; }
+.solo-ver .tr-in.tr-escala:placeholder-shown { display: none; }
+@media (max-width: 720px) { .tr-tipo-sw { width: 100%; } }
+@media (max-width: 640px) { .tr-hora-c { grid-area: h; } }
+
+/* Internacional: la columna de la hora es un poco más ancha (lleva "00:20 CDE" abajo) */
+.tr-raiz.int { --tr-grid: 12px 78px minmax(120px, 1.4fr) 80px minmax(140px, 1fr) 26px; }
+.tr-in.tr-escala:placeholder-shown { opacity: 0; transition: opacity .2s; }
+.tr-fila:hover .tr-in.tr-escala:placeholder-shown, .tr-in.tr-escala:focus { opacity: 1; }
+@media (max-width: 640px) { .tr-raiz.int .tr-fila { grid-template-columns: 12px 78px 1fr 28px; } .tr-in.tr-escala:placeholder-shown { opacity: 1; } }

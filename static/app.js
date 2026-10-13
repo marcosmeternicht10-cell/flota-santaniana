@@ -2549,7 +2549,12 @@ function generarReporteDocumentos(btn) {
 // sugiere quién hace cada regreso y avisa si algo no cierra. Publicar guarda
 // una versión y arma el PDF único para mandar al grupo.
 
-const tr = { fecha: null, d: null, listas: null, dias: [], asignar: null, sug: null, deshacer: null, reordenar: new Set() };
+const tr = { fecha: null, d: null, listas: null, dias: [], asignar: null, sug: null, deshacer: null, reordenar: new Set(),
+             tipo: (() => { try { return localStorage.getItem("tr-tipo") === "internacional" ? "internacional" : "nacional"; } catch (e) { return "nacional"; } })() };
+// Nacional o internacional (Buenos Aires): la misma fórmula, cada uno con sus
+// días, sus versiones y su PDF. El tipo viaja en cada pedido.
+const trT = () => `tipo=${tr.tipo}`;
+const trInt = () => tr.tipo === "internacional";
 const TR_DIAS = ["DOMINGO", "LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO"];
 const TR_MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
 
@@ -2603,12 +2608,40 @@ async function trPedir(url, method = "GET", body) {
 
 // ─── Entrada ─────────────────────────────────────────────────────────────
 
+function trTipoSwitch() {
+  const b = (t, ico, txt) => `<button role="tab" class="${tr.tipo === t ? "on" : ""}" aria-selected="${tr.tipo === t}" onclick="trCambiarTipo('${t}')"><i class="ti ti-${ico}"></i>${txt}</button>`;
+  return `<div class="tr-tipo-sw ${trInt() ? "int" : ""}" role="tablist" aria-label="Tráfico">
+    <span class="tr-tipo-fondo"></span>${b("nacional", "map-2", "Nacional")}${b("internacional", "world", "Internacional")}</div>`;
+}
+
+function trSubtitulo() {
+  return trInt()
+    ? "Los viajes a Buenos Aires: se arma igual que el nacional, cada día con su versión y su PDF"
+    : "Las salidas del día: se arma acá, el sistema sabe dónde quedó cada coche y sale el PDF para el grupo";
+}
+
+async function trCambiarTipo(t) {
+  if (t === tr.tipo) return;
+  tr.tipo = t;
+  try { localStorage.setItem("tr-tipo", t); } catch (e) { /* sin almacenamiento: queda en memoria */ }
+  const sw = $("#tr-tipo-sw");
+  if (sw) sw.innerHTML = trTipoSwitch();
+  const sub = $("#tr-sub");
+  if (sub) sub.textContent = trSubtitulo();
+  status(trInt() ? "Tráfico internacional" : "Tráfico: las salidas del día");
+  tr.archivos = {};
+  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha, 0, true)]);
+  tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
+  trDatalists();
+}
+
 async function renderTrafico() {
-  status("Tráfico: las salidas del día");
+  status(trInt() ? "Tráfico internacional" : "Tráfico: las salidas del día");
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-route"></i> Tráfico</h1>
-      <p>Las salidas del día: se arma acá, el sistema sabe dónde quedó cada coche y sale el PDF para el grupo</p>
+      <p id="tr-sub">${trSubtitulo()}</p>
+      <div class="page-actions" id="tr-tipo-sw">${trTipoSwitch()}</div>
     </div>
     <div class="section tr-raiz" id="tr-raiz"><div class="dossier-loading"></div></div>
     <div id="tr-listas" hidden></div>`;
@@ -2616,7 +2649,7 @@ async function renderTrafico() {
   trCerrarSug();
   const primera = !tr.fecha;
   if (primera) tr.fecha = trHoy();
-  const [listas] = await Promise.all([api("/api/trafico/listas"), trCargar(tr.fecha)]);
+  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha)]);
   tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
   trDatalists();
 }
@@ -2636,11 +2669,13 @@ function trAprender(campo, v) {
   if (lista && !lista.includes(v) && v.length > 2) { lista.push(v); lista.sort(); trDatalists(); }
 }
 
-async function trCargar(fecha, dir = 0) {
+async function trCargar(fecha, dir = 0, cambioTipo = false) {
+  const tipo = tr.tipo;
   const [d, dias] = await Promise.all([
-    api(`/api/trafico/dia/${fecha}`),
-    api(`/api/trafico/dias?hasta=${trSumar(fecha, 4)}`),
+    api(`/api/trafico/dia/${fecha}?${trT()}`),
+    api(`/api/trafico/dias?hasta=${trSumar(fecha, 4)}&${trT()}`),
   ]);
+  if (tipo !== tr.tipo) return;            // se cambió de tráfico mientras llegaba
   const raiz = $("#tr-raiz");
   if (!raiz) return;
   if (!d || d.error) { raiz.innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>No se pudo traer el tráfico. Probá de nuevo.</div>`; return; }
@@ -2650,8 +2685,8 @@ async function trCargar(fecha, dir = 0) {
   tr.asignar = null;
   tr.reordenar.clear();
   trCerrarSug();
-  if (dir && document.startViewTransition && !trQuieto()) {
-    document.documentElement.dataset.trDir = dir > 0 ? "sig" : "ant";
+  if ((dir || cambioTipo) && document.startViewTransition && !trQuieto()) {
+    document.documentElement.dataset.trDir = cambioTipo ? (trInt() ? "sig" : "ant") : dir > 0 ? "sig" : "ant";
     const t = document.startViewTransition(() => trPintar(true));
     t.finished.finally(() => delete document.documentElement.dataset.trDir);
   } else {
@@ -2677,6 +2712,7 @@ function trPintar(entrada = false) {
   if (!raiz) return;
   const d = tr.d;
   raiz.classList.toggle("solo-ver", !trPuede());
+  raiz.classList.toggle("int", trInt());
   raiz.innerHTML = `
     <div id="tr-tablero">${trTablero()}</div>
     <div class="tr-cuerpo">
@@ -2689,7 +2725,7 @@ function trPintar(entrada = false) {
       ${trPuede() ? `
         <form class="tr-nuevo-corr" onsubmit="event.preventDefault(); trAgregarBloque(this)">
           <i class="ti ti-plus"></i>
-          <input name="nombre" placeholder="Agregar corredor (ej: CONCEPCION)" autocomplete="off" maxlength="60">
+          <input name="nombre" placeholder="Agregar corredor (ej: ${trInt() ? "LA PLATA" : "CONCEPCION"})" autocomplete="off" maxlength="60">
           <button class="btn btn-ghost" type="submit">Agregar</button>
         </form>` : ""}`}
     </div>
@@ -2803,12 +2839,23 @@ function trInicioVacio() {
         <span>Los mismos horarios, coches y tripulantes. Después se cambia lo que haga falta.</span>
       </button>`);
   }
+  if (trInt()) {
+    opciones.push(`
+      <button class="tr-op ${ant ? "" : "principal"}" onclick="trAgregarBloque('BUENOS AIRES')">
+        <i class="ti ti-world"></i>
+        <b>Empezar con BUENOS AIRES</b>
+        <span>Las idas (de acá a Retiro, Liniers, San Justo, La Plata) a la izquierda y los regresos a la derecha.</span>
+        ${ant ? "" : "<em>Para empezar</em>"}
+      </button>`);
+  } else {
+    opciones.push(`
+      <button class="tr-op" onclick="trImportar()">
+        <i class="ti ti-file-spreadsheet"></i>
+        <b>Importar el Excel</b>
+        <span>La planilla de siempre (HORARIOS NACIONALES): se lee tal cual, con las siglas como están.</span>
+      </button>`);
+  }
   opciones.push(`
-    <button class="tr-op" onclick="trImportar()">
-      <i class="ti ti-file-spreadsheet"></i>
-      <b>Importar el Excel</b>
-      <span>La planilla de siempre (HORARIOS NACIONALES): se lee tal cual, con las siglas como están.</span>
-    </button>
     <button class="tr-op" onclick="document.querySelector('.tr-vacio-nuevo input')?.focus()">
       <i class="ti ti-pencil-plus"></i>
       <b>Empezar en blanco</b>
@@ -2817,13 +2864,13 @@ function trInicioVacio() {
   return `
     <div class="tr-vacio">
       <div class="tr-vacio-cab">
-        <h2>¿Cómo armamos el ${trLargo(tr.fecha)}?</h2>
-        <p>${ant ? "Lo más rápido es partir del último día cargado." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+        <h2>¿Cómo armamos el ${trInt() ? "internacional del " : ""}${trLargo(tr.fecha)}?</h2>
+        <p>${ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: se arma a mano, una vez, y después se parte del anterior." : "Es el primer día: importá la planilla o empezá a mano."}</p>
       </div>
       <div class="tr-ops">${opciones.join("")}</div>
       <form class="tr-nuevo-corr tr-vacio-nuevo" onsubmit="event.preventDefault(); trAgregarBloque(this)">
         <i class="ti ti-plus"></i>
-        <input name="nombre" placeholder="Primer corredor (ej: CONCEPCION)" autocomplete="off" maxlength="60">
+        <input name="nombre" placeholder="Primer corredor (ej: ${trInt() ? "BUENOS AIRES" : "CONCEPCION"})" autocomplete="off" maxlength="60">
         <button class="btn btn-ghost" type="submit">Agregar</button>
       </form>
     </div>`;
@@ -2837,7 +2884,7 @@ async function _trCopiar(desde, conAsignaciones, completar) {
   const listo = trEspera(completar ? "Armando el día con los coches que están allá…" : "Copiando el día…");
   let r;
   try {
-    r = await trPedir(`/api/trafico/dia/${tr.fecha}/copiar`, "POST",
+    r = await trPedir(`/api/trafico/dia/${tr.fecha}/copiar?${trT()}`, "POST",
       { desde, con_asignaciones: conAsignaciones, completar });
   } finally { listo(); }
   if (!r.ok) { toast(r.msg || "No se pudo copiar", "error"); return; }
@@ -2895,7 +2942,7 @@ function trDonde() {
       </div>
       ${trPuede() ? `<button class="tr-completar" onclick="trCompletar()" ${vacias ? "" : "disabled"}
           title="Pone en cada salida del interior sin coche el que está en ese lugar, con su tripulación">
-          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} salida${vacias === 1 ? "" : "s"} con el coche que está allá` : "Nada para completar con lo que está allá"}
+          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} ${trInt() ? `regreso${vacias === 1 ? "" : "s"} con el coche que está en Buenos Aires` : `salida${vacias === 1 ? "" : "s"} con el coche que está allá`}` : "Nada para completar con lo que está allá"}
         </button>` : ""}
     </div>`;
   if (!grupos.length) {
@@ -2924,7 +2971,7 @@ function trDonde() {
 
 function trCompletar() { return trUnaVez("completar", () => _trCompletar()); }
 async function _trCompletar() {
-  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/completar`, "POST", {});
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/completar?${trT()}`, "POST", {});
   if (!r.ok) { toast(r.msg || "No se pudo completar", "error"); return; }
   const antes = trCochesPorFila();
   trAplicar(r, { repintar: true });
@@ -2977,7 +3024,7 @@ function trBloque(b, i) {
           <b>${lado === "ida" ? "IDA" : "REGRESO"}</b>
           <i class="ti ti-arrow-narrow-${lado === "ida" ? "right" : "left"}"></i>
           ${trPuede() || nota ? `<input class="tr-nota ${nota ? "con" : ""}" data-bcampo="nota_${lado}" value="${trEsc(nota)}"
-                  placeholder="+ nota (ej: TRASBORDO BSAS)" ${ro} maxlength="40" data-v="${trEsc(nota)}">` : ""}
+                  placeholder="+ nota (ej: ${trInt() ? (lado === "ida" ? "26300 LASTRE A ASU" : "SIN RESERVA") : "TRASBORDO BSAS"})" ${ro} maxlength="40" data-v="${trEsc(nota)}">` : ""}
         </div>
         <div class="tr-etiquetas"><span></span><span>Hora</span><span>Tramo</span><span>Coche</span><span>Tripulantes</span><span></span></div>
         <div class="tr-filas">
@@ -2991,7 +3038,7 @@ function trBloque(b, i) {
           <div class="tr-reserva">
             <span>Reserva</span>
             <input class="tr-res-coche" data-bcampo="reserva_${lado}_coche" value="${trEsc(b[`reserva_${lado}_coche`])}" data-v="${trEsc(b[`reserva_${lado}_coche`])}"
-                   placeholder="Coche" ${ro} maxlength="10" inputmode="numeric">
+                   placeholder="Coche" ${ro} maxlength="15" ${trInt() ? "" : 'inputmode="numeric"'}>
             <input class="tr-res-trip" data-bcampo="reserva_${lado}_trip" value="${trEsc(b[`reserva_${lado}_trip`])}" data-v="${trEsc(b[`reserva_${lado}_trip`])}"
                    placeholder="Tripulante" ${ro} list="tr-l-trip" maxlength="80">
           </div>` : ""}
@@ -3044,7 +3091,10 @@ function trFila(s, lado, cambiada, k = 0) {
   return `
     <div class="tr-fila ${trClasesFila(s, cambiada)}" data-id="${s.id}" data-lado="${lado}" data-origen="${trEsc(s.origen || "")}" style="--k:${Math.min(k, 8)}">
       <span class="tr-parada"></span>
-      <input class="tr-in tr-hora" ${v("hora", 'placeholder="--:--" inputmode="numeric" maxlength="5" aria-label="Hora"')}>
+      ${trInt() ? `<span class="tr-hora-c">
+          <input class="tr-in tr-hora" ${v("hora", 'placeholder="--:--" inputmode="numeric" maxlength="5" aria-label="Hora"')}>
+          <input class="tr-in tr-escala" ${v("nota", 'placeholder="+ antes" maxlength="24" aria-label="Sale antes de otro lado (ej: 00:20 CDE)" title="Si antes sale de otro lado, ej: 00:20 CDE"')}>
+        </span>` : `<input class="tr-in tr-hora" ${v("hora", 'placeholder="--:--" inputmode="numeric" maxlength="5" aria-label="Hora"')}>`}
       <input class="tr-in tr-tramo" ${v("destino", `list="tr-l-dest" placeholder="Tramo" maxlength="60" aria-label="Tramo" title="${trEsc(s.destino)}"`)}>
       <span class="tr-chapa-c ${doc ? "doc" : ""}" ${doc ? `title="${doc}"` : ""}>
         <input class="tr-in tr-chapa" ${v("coche", 'placeholder="COCHE" autocomplete="off" maxlength="10" aria-label="Coche"')}>
@@ -3248,10 +3298,11 @@ function trOfrecerDeshacer(txt, fn) {
 
 function trAgregarBloque(form) { return trUnaVez("bloque", () => _trAgregarBloque(form)); }
 async function _trAgregarBloque(form) {
-  const input = form.querySelector("input");
-  const nombre = input.value.trim().toUpperCase();
-  if (!nombre) { input.focus(); return; }
-  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/bloque`, "POST", { nombre });
+  // Viene el formulario, o directo el nombre (botón "Empezar con BUENOS AIRES")
+  const input = typeof form === "string" ? null : form.querySelector("input");
+  const nombre = (input ? input.value : form).trim().toUpperCase();
+  if (!nombre) { input?.focus(); return; }
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/bloque?${trT()}`, "POST", { nombre });
   if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
   trAplicar(r, { repintar: true });
   trRefrescarDias();
@@ -3287,7 +3338,7 @@ async function trBorrarBloque(bid) {
 }
 
 async function trRefrescarDias() {
-  const dias = await api(`/api/trafico/dias?hasta=${trSumar(tr.fecha, 4)}`);
+  const dias = await api(`/api/trafico/dias?hasta=${trSumar(tr.fecha, 4)}&${trT()}`);
   if (Array.isArray(dias)) { tr.dias = dias; const t = $("#tr-tablero"); if (t) t.innerHTML = trTablero(); }
 }
 
@@ -3473,11 +3524,11 @@ function trCandDesdePanel(coche) {
 function trNombreArchivo(version, ext = "pdf") {
   const d = trFecha(tr.fecha);
   const dia = TR_DIAS[d.getDay()].charAt(0) + TR_DIAS[d.getDay()].slice(1).toLowerCase();
-  return trSinTildes(`Trafico-${dia}-${trLargo(tr.fecha).split(" ")[1].replace(/\//g, "-")}-${version ? "v" + version : "borrador"}.${ext}`);
+  return trSinTildes(`Trafico-${trInt() ? "Internacional-" : ""}${dia}-${trLargo(tr.fecha).split(" ")[1].replace(/\//g, "-")}-${version ? "v" + version : "borrador"}.${ext}`);
 }
 
 function trVerPdf(version) {
-  window.open(`/api/trafico/dia/${tr.fecha}/pdf${version ? `?v=${version}` : ""}`, "_blank");
+  window.open(`/api/trafico/dia/${tr.fecha}/pdf?${trT()}${version ? `&v=${version}` : ""}`, "_blank");
 }
 
 async function trPublicar() {
@@ -3492,7 +3543,7 @@ async function trPublicar() {
   fondo.innerHTML = `
     <div class="tr-modal" role="dialog" aria-modal="true">
       <div class="tr-modal-cab">
-        <span>Publicar el tráfico</span>
+        <span>Publicar el tráfico${trInt() ? " internacional" : ""}</span>
         <b>${trLargo(tr.fecha)}</b>
         <em>Versión ${nueva}</em>
         <button class="tr-modal-x" onclick="this.closest('.tr-modal-fondo').remove()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
@@ -3525,7 +3576,7 @@ async function trPublicar() {
 async function trConfirmarPublicar(btn) {
   btn.disabled = true;
   btn.innerHTML = `<i class="ti ti-loader-2 gira"></i> Publicando…`;
-  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/publicar`, "POST", {});
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/publicar?${trT()}`, "POST", {});
   if (!r.ok) { btn.disabled = false; btn.innerHTML = `<i class="ti ti-send"></i> Publicar`; toast(r.msg || "No se pudo publicar", "error"); return; }
   tr.d = r.estado;
   trPintar();
@@ -3550,9 +3601,9 @@ async function trConfirmarPublicar(btn) {
 // memoria: al tocar Compartir sale al instante, que el celular lo exige.
 tr.archivos = {};
 async function trTraer(tipo, v) {
-  const clave = `${tr.fecha}|${tipo}|${v || "borrador"}`;
+  const clave = `${tr.tipo}|${tr.fecha}|${tipo}|${v || "borrador"}`;
   if (v && tr.archivos[clave]) return tr.archivos[clave];
-  const x = await fetch(`/api/trafico/dia/${tr.fecha}/${tipo}${v ? `?v=${v}` : ""}`).catch(() => null);
+  const x = await fetch(`/api/trafico/dia/${tr.fecha}/${tipo}?${trT()}${v ? `&v=${v}` : ""}`).catch(() => null);
   if (!x || !x.ok) {
     if (x && x.status === 501) toast("Para la imagen falta instalar pypdfium2 en el servidor", "error");
     return null;
@@ -3589,9 +3640,10 @@ async function trCompartir(v, btn, tipo = "imagen") {
   if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
   const ext = tipo === "imagen" ? "png" : "pdf";
   const archivo = new File([blob], trNombreArchivo(v, ext), { type: tipo === "imagen" ? "image/png" : "application/pdf" });
-  const texto = `Tráfico ${trLargo(tr.fecha)} · versión ${v}`;
+  const nombre = `Tráfico${trInt() ? " internacional" : ""} ${trLargo(tr.fecha)}`;
+  const texto = `${nombre} · versión ${v}`;
   if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
-    try { await navigator.share({ files: [archivo], title: `Tráfico ${trLargo(tr.fecha)}`, text: texto }); return; }
+    try { await navigator.share({ files: [archivo], title: nombre, text: texto }); return; }
     catch (e) { if (e.name === "AbortError") return; }
   }
   trDescargar(v, tipo);
@@ -3600,7 +3652,7 @@ async function trCompartir(v, btn, tipo = "imagen") {
 
 // Las versiones publicadas: cada una se puede ver en PDF o bajar como imagen
 async function trVersiones(btn) {
-  const vs = await api(`/api/trafico/dia/${tr.fecha}/versiones`);
+  const vs = await api(`/api/trafico/dia/${tr.fecha}/versiones?${trT()}`);
   if (!Array.isArray(vs)) return;
   const items = [];
   vs.forEach(v => {
@@ -3623,7 +3675,7 @@ async function trVersiones(btn) {
 function trMas(btn) {
   const ant = tr.d.dia_anterior;
   trMenu(btn, [
-    { icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar },
+    ...(trInt() ? [] : [{ icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar }]),
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
@@ -3669,7 +3721,7 @@ function trImportar() {
     let msg = `Planilla importada: ${r.importadas} salidas`;
     if (r.fecha_excel && r.fecha_excel !== tr.fecha) msg += ` (la planilla decía ${trLargo(r.fecha_excel)})`;
     toast(msg, "success");
-    const listas = await api("/api/trafico/listas");
+    const listas = await api(`/api/trafico/listas?${trT()}`);
     if (listas && !listas.error) { tr.listas = listas; trDatalists(); }
   }, "Ya se está importando la planilla");
   i.click();
@@ -3678,7 +3730,7 @@ function trImportar() {
 function trVaciar() { return trUnaVez("vaciar", () => _trVaciar()); }
 async function _trVaciar() {
   if (!confirm(`¿Vaciar el tráfico del ${trLargo(tr.fecha)}? Se quitan todos los corredores y salidas.`)) return;
-  const r = await trPedir(`/api/trafico/dia/${tr.fecha}`, "DELETE");
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}?${trT()}`, "DELETE");
   if (!r.ok) { toast(r.msg || "No se pudo vaciar", "error"); return; }
   trAplicar(r, { repintar: true });
   trRefrescarDias();
@@ -3761,7 +3813,7 @@ async function _trVaciar() {
 // todo lo de abajo), después el número del período, los indicadores, lo que
 // dicen los números y cada gráfico con su tabla al lado (tocá "Tabla").
 
-const sv = { preset: "30", desde: null, hasta: null, corredor: "", d: null, pedido: 0, redibujar: null };
+const sv = { preset: "30", desde: null, hasta: null, corredor: "", trafico: "", d: null, pedido: 0, redibujar: null };
 const SV_PRESETS = [["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"], ["mesant", "Mes pasado"], ["90", "90 días"]];
 const SV_DIAS = ["LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM"];
 const SV_DIAS_LARGOS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
@@ -3829,6 +3881,11 @@ function svPintarFiltros() {
       <span>al</span>
       <input type="date" id="sv-hasta" value="${sv.hasta}" max="${trHoy()}" onchange="svFechasPropias()">
     </label>
+    ${sv.d?.hay_internacional || sv.trafico ? `
+    <div class="sv-periodos sv-trafico" role="group" aria-label="Tráfico">
+      ${[["", "Todo"], ["nacional", "Nacional"], ["internacional", "Internacional"]].map(([k, t]) =>
+        `<button class="sv-chip ${sv.trafico === k ? "on" : ""}" onclick="svElegirTrafico('${k}')">${t}</button>`).join("")}
+    </div>` : ""}
     <div class="sv-corr-sel ${sv.corredor ? "on" : ""}">
       <i class="ti ti-route"></i>
       <select id="sv-corredor" onchange="svElegirCorredor(this.value)" aria-label="Corredor">
@@ -3865,8 +3922,21 @@ function svElegirCorredor(c) {
   svCargar();
   $("#sv-raiz")?.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "start" });
 }
+// "hacen nacionales", "hacen internacionales" o "hacen línea" (los dos juntos)
+function svHacen() {
+  return sv.trafico === "internacional" ? "hacen internacionales" : sv.trafico === "nacional" ? "hacen nacionales" : "hacen línea";
+}
 function svQuery() {
-  return `desde=${sv.desde}&hasta=${sv.hasta}${sv.corredor ? `&corredor=${encodeURIComponent(sv.corredor)}` : ""}`;
+  return `desde=${sv.desde}&hasta=${sv.hasta}${sv.corredor ? `&corredor=${encodeURIComponent(sv.corredor)}` : ""}${sv.trafico ? `&trafico=${sv.trafico}` : ""}`;
+}
+// Nacional, internacional o los dos juntos. Al cambiar, el corredor elegido
+// puede no existir en el otro: se vuelve a "todos".
+function svElegirTrafico(t) {
+  if (t === sv.trafico) return;
+  sv.trafico = t;
+  sv.corredor = "";
+  svPintarFiltros();
+  svCargar();
 }
 function svExcel() { window.location = `/api/servicios/excel?${svQuery()}`; }
 
@@ -4043,7 +4113,7 @@ function svKpis() {
       `${svNum(t.servicios ? t.refuerzos / t.servicios * 100 : 0, 1)}% de los servicios`,
       svDeltaHtml(del.refuerzos, "neutro", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.refuerzos : null))),
     tile("Coches por día", `<span data-contar="${t.coches_por_dia}" data-dec="1">${svNum(t.coches_por_dia, 1)}</span>`,
-      `${t.uso_flota != null ? `${svNum(t.uso_flota, 0)}% de los ${t.flota_base} que hacen nacionales` : "—"}`,
+      `${t.uso_flota != null ? `${svNum(t.uso_flota, 0)}% de los ${t.flota_base} que ${svHacen()}` : "—"}`,
       svDeltaHtml(del.coches_por_dia, "neutro"), svSpark(d.serie.map(x => x.con_trafico ? x.coches : null))),
     tile("Coches distintos", `<span data-contar="${t.coches}">${svNum(t.coches)}</span>`,
       "salieron al menos una vez", svDeltaHtml(del.coches, "neutro"), ""),
@@ -4223,10 +4293,10 @@ function svFlota() {
   const top = cs.slice(0, 10);
   const uso = t.uso_flota ?? 0;
   return `
-    <div class="sv-medidor" data-tip="${svTip({ t: "Coches en uso por día", f: [[svNum(t.coches_por_dia, 1), "en promedio"], [svNum(t.flota_base), "hacen nacionales"], [`${svNum(uso, 1)}%`, "en uso"]] })}">
+    <div class="sv-medidor" data-tip="${svTip({ t: "Coches en uso por día", f: [[svNum(t.coches_por_dia, 1), "en promedio"], [svNum(t.flota_base), svHacen()], [`${svNum(uso, 1)}%`, "en uso"]] })}">
       <div class="sv-med-txt"><b>${svNum(t.coches_por_dia, 1)}</b> de <b>${t.flota_base}</b> coches en uso por día <em>${svNum(uso, 0)}%</em></div>
       <div class="sv-med-pista"><i style="--w:${Math.min(100, uso)}%"></i></div>
-      <small>Los que hacen nacionales son los que salieron alguna vez en Tráfico (turismo y corporativos no cuentan).</small>
+      <small>Los que ${svHacen()} son los que salieron alguna vez en ese tráfico (turismo y corporativos no cuentan).</small>
     </div>
     <h4 class="sv-sub">Los que más salieron <span>mediana: ${mediana} servicios</span></h4>
     <div class="sv-barras chico">${top.map((c, i) => {
@@ -4250,7 +4320,7 @@ function svFlota() {
             <em>${p.ultimo ? `Último servicio: ${svFechaCorta(p.ultimo.slice(0, 10))}` : "Nunca salió"}${p.modelo ? ` · ${svEsc(p.modelo)}` : ""}</em>
           </span>
         </div>`;
-    }).join("")}</div>` : `<p class="sv-nada"><i class="ti ti-circle-check"></i> Todos los coches que hacen nacionales salieron al menos una vez.</p>`}`;
+    }).join("")}</div>` : `<p class="sv-nada"><i class="ti ti-circle-check"></i> Todos los coches que ${svHacen()} salieron al menos una vez.</p>`}`;
 }
 
 function svTablaCoches() {
@@ -4391,7 +4461,7 @@ async function svAbrir(tipo, clave) {
   fondo.innerHTML = `<aside class="sv-cajon" role="dialog" aria-modal="true"><div class="sv-cajon-cab"><div class="dossier-loading"></div></div></aside>`;
   fondo.addEventListener("click", e => { if (e.target === fondo) svCerrarCajon(); });
   document.body.appendChild(fondo);
-  const d = await api(`/api/servicios/detalle?tipo=${tipo}&clave=${encodeURIComponent(clave)}&desde=${sv.desde}&hasta=${sv.hasta}`);
+  const d = await api(`/api/servicios/detalle?tipo=${tipo}&clave=${encodeURIComponent(clave)}&desde=${sv.desde}&hasta=${sv.hasta}${sv.trafico ? `&trafico=${sv.trafico}` : ""}`);
   const caja = fondo.querySelector(".sv-cajon");
   if (!caja || !fondo.isConnected) return;
   if (!d || d.error) { caja.innerHTML = `<div class="empty">No se pudo traer el detalle.</div>`; return; }
@@ -4444,7 +4514,16 @@ function svCerrarCajon(ya = false) {
     setTimeout(() => f.remove(), 420);
   });
 }
-function svIrTrafico(fecha) { svCerrarCajon(true); tr.fecha = fecha; destNavegar("trafico"); }
+function svIrTrafico(fecha, trafico) {
+  svCerrarCajon(true);
+  tr.fecha = fecha;
+  const t = trafico || sv.trafico;
+  if (t === "nacional" || t === "internacional") {
+    tr.tipo = t;
+    try { localStorage.setItem("tr-tipo", t); } catch (e) { /* queda en memoria */ }
+  }
+  destNavegar("trafico");
+}
 function svIrHistorial(vid) { svCerrarCajon(true); window._hiAbrirCoche = vid; destNavegar("historial_carga"); }
 
 // ─── Movimiento: columnas que crecen y números que cuentan ───────────────
