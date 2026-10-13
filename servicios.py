@@ -78,27 +78,40 @@ def _clave_persona(n):
     return _sin_tildes(limpiar(n))
 
 
-def _filas(conn, desde, hasta):
-    return conn.execute("""
+TRAFICOS = ("nacional", "internacional")
+
+
+def trafico_ok(t):
+    """'' = los dos juntos; si no, nacional o internacional."""
+    t = str(t or "").strip().lower()
+    return t if t in TRAFICOS else ""
+
+
+def _filas(conn, desde, hasta, trafico=""):
+    extra, params = "", [desde, hasta]
+    if trafico:
+        extra = " AND COALESCE(d.tipo,'nacional') = ?"
+        params.append(trafico)
+    return conn.execute(f"""
         SELECT s.id, s.lado, s.hora, s.destino, s.coche, s.trip1, s.trip2,
-               b.nombre AS corredor, d.fecha, d.id AS dia_id
+               b.nombre AS corredor, d.fecha, d.id AS dia_id, COALESCE(d.tipo,'nacional') AS trafico
         FROM trafico_salidas s
         JOIN trafico_bloques b ON b.id = s.bloque_id
         JOIN trafico_dias d ON d.id = s.dia_id
-        WHERE d.fecha >= ? AND d.fecha <= ?
-        ORDER BY d.fecha, s.hora, s.id""", (desde, hasta)).fetchall()
+        WHERE d.fecha >= ? AND d.fecha <= ?{extra}
+        ORDER BY d.fecha, s.hora, s.id""", params).fetchall()
 
 
-def leer_servicios(conn, desde, hasta, flota=None, distancias=None):
+def leer_servicios(conn, desde, hasta, flota=None, distancias=None, trafico=""):
     """Las salidas del período convertidas en servicios, con lo que hace
     falta para medir: tramo en siglas, si es refuerzo, coche, tripulantes,
     km (si se conoce la distancia) y asientos (si se conoce el coche)."""
     flota = flota if flota is not None else _flota(conn)
     distancias = distancias if distancias is not None else _distancias(conn)
     salida = []
-    for f in _filas(conn, desde, hasta):
+    for f in _filas(conn, desde, hasta, trafico):
         corredor = limpiar(f["corredor"])
-        origen, llega = tramo(f["destino"], f["lado"], corredor)
+        origen, llega = tramo(f["destino"], f["lado"], corredor, f["trafico"])
         base, extras = partes_destino(f["destino"])
         via = next((e for e in extras if e.startswith("X ")), "")
         clave = clave_tramo(origen, llega, via)
@@ -111,7 +124,8 @@ def leer_servicios(conn, desde, hasta, flota=None, distancias=None):
         trips = [limpiar(t) for t in (f["trip1"], f["trip2"]) if limpiar(t)]
         hora = f["hora"] or ""
         salida.append({
-            "id": f["id"], "fecha": f["fecha"], "hora": hora, "lado": f["lado"] if f["lado"] in ("ida", "regreso") else "ida",
+            "id": f["id"], "fecha": f["fecha"], "hora": hora, "trafico": f["trafico"],
+            "lado": f["lado"] if f["lado"] in ("ida", "regreso") else "ida",
             "corredor": corredor, "destino": limpiar(f["destino"]), "tramo_base": base, "extras": extras,
             "origen": origen, "llega": llega, "clave_tramo": clave, "km": km,
             "refuerzo": "REFUERZO" in extras, "coche": coche,
@@ -313,13 +327,18 @@ def _por_tripulante(servs):
     return lista
 
 
-def _flota_base(conn, hasta):
-    """Los coches que hacen nacionales: los que aparecieron alguna vez en el
-    tráfico. Así los de turismo o corporativos no cuentan como 'parados'."""
+def _flota_base(conn, hasta, trafico=""):
+    """Los coches de línea: los que aparecieron alguna vez en el tráfico (en
+    el que se está mirando). Así los de turismo o corporativos no cuentan
+    como 'parados'."""
     base, ultimo = set(), {}
-    for r in conn.execute("""SELECT s.coche, MAX(d.fecha || ' ' || COALESCE(s.hora, '')) AS ult
+    extra, params = "", [hasta]
+    if trafico:
+        extra = " AND COALESCE(d.tipo,'nacional') = ?"
+        params.append(trafico)
+    for r in conn.execute(f"""SELECT s.coche, MAX(d.fecha || ' ' || COALESCE(s.hora, '')) AS ult
                              FROM trafico_salidas s JOIN trafico_dias d ON d.id = s.dia_id
-                             WHERE d.fecha <= ? AND s.coche <> '' GROUP BY s.coche""", (hasta,)).fetchall():
+                             WHERE d.fecha <= ? AND s.coche <> ''{extra} GROUP BY s.coche""", params).fetchall():
         c = limpiar(r["coche"])
         if c.isdigit():
             base.add(c)
@@ -354,21 +373,29 @@ def _estado_parados(conn, numeros, flota, fecha):
     return estado
 
 
-def _planificacion(conn, desde, hasta, servs):
+def _planificacion(conn, desde, hasta, servs, trafico=""):
     """Cómo se arma el tráfico: anticipación de la primera publicación, versiones
-    por día, cambios después de publicar y salidas que se mandaron A CONFIRMAR."""
+    por día, cambios después de publicar y salidas que se mandaron A CONFIRMAR.
+    Cada tráfico (nacional e internacional) se mide por separado; la tira de
+    días junta los dos."""
     primera_salida = {}
     for s in servs:
         if s["hora"]:
-            primera_salida[s["fecha"]] = min(primera_salida.get(s["fecha"], "99:99"), s["hora"])
+            k = (s["fecha"], s.get("trafico", "nacional"))
+            primera_salida[k] = min(primera_salida.get(k, "99:99"), s["hora"])
     dias = {}
-    for r in conn.execute("""SELECT d.fecha, d.version, d.modificado, v.version AS v, v.publicado_el,
+    extra, params = "", [desde, hasta]
+    if trafico:
+        extra = " AND COALESCE(d.tipo,'nacional') = ?"
+        params.append(trafico)
+    for r in conn.execute(f"""SELECT d.fecha, COALESCE(d.tipo,'nacional') AS trafico, d.version, d.modificado,
+                                    v.version AS v, v.publicado_el,
                                     CASE WHEN v.version = 1 THEN v.datos ELSE NULL END AS datos, v.cambios
                              FROM trafico_dias d LEFT JOIN trafico_versiones v ON v.dia_id = d.id
-                             WHERE d.fecha >= ? AND d.fecha <= ?
-                             ORDER BY d.fecha, v.version""", (desde, hasta)).fetchall():
-        d = dias.setdefault(r["fecha"], {"fecha": r["fecha"], "versiones": 0, "cambios": 0, "primera": None,
-                                         "a_confirmar": 0, "publicadas": 0})
+                             WHERE d.fecha >= ? AND d.fecha <= ?{extra}
+                             ORDER BY d.fecha, v.version""", params).fetchall():
+        d = dias.setdefault((r["fecha"], r["trafico"]), {"fecha": r["fecha"], "versiones": 0, "cambios": 0, "primera": None,
+                                                         "a_confirmar": 0, "publicadas": 0})
         if r["v"] is None:
             continue
         d["versiones"] += 1
@@ -387,28 +414,40 @@ def _planificacion(conn, desde, hasta, servs):
                 d["cambios"] += len(json.loads(r["cambios"] or "[]"))
             except Exception:
                 pass
-    con_salidas = {s["fecha"] for s in servs}
-    lista = []
-    for f in sorted(con_salidas):
-        d = dias.get(f) or {"fecha": f, "versiones": 0, "cambios": 0, "primera": None, "a_confirmar": 0, "publicadas": 0}
+    con_salidas = {(s["fecha"], s.get("trafico", "nacional")) for s in servs}
+    unidades = []
+    for k in sorted(con_salidas):
+        f = k[0]
+        d = dias.get(k) or {"fecha": f, "versiones": 0, "cambios": 0, "primera": None, "a_confirmar": 0, "publicadas": 0}
         anticip = None
-        if d["primera"] and primera_salida.get(f):
+        if d["primera"] and primera_salida.get(k):
             try:
                 pub = datetime.fromisoformat(str(d["primera"])[:19])
-                sale = datetime.fromisoformat(f"{f}T{primera_salida[f]}:00")
+                sale = datetime.fromisoformat(f"{f}T{primera_salida[k]}:00")
                 anticip = round((sale - pub).total_seconds() / 3600, 1)
             except ValueError:
                 anticip = None
-        lista.append({"fecha": f, "versiones": d["versiones"], "cambios": d["cambios"],
-                      "anticipacion": anticip, "a_confirmar": d["a_confirmar"], "publicadas": d["publicadas"],
-                      "publicado": bool(d["versiones"])})
-    publicados = [d for d in lista if d["publicado"]]
+        unidades.append({"fecha": f, "trafico": k[1], "versiones": d["versiones"], "cambios": d["cambios"],
+                         "anticipacion": anticip, "a_confirmar": d["a_confirmar"], "publicadas": d["publicadas"],
+                         "publicado": bool(d["versiones"])})
+    # La tira de días: uno por fecha (si hay los dos tráficos, el que esté peor)
+    por_fecha = {}
+    for u in unidades:
+        x = por_fecha.get(u["fecha"])
+        if not x:
+            por_fecha[u["fecha"]] = dict(u)
+        else:
+            x["versiones"] = max(x["versiones"], u["versiones"])
+            x["cambios"] += u["cambios"]
+            x["publicado"] = x["publicado"] and u["publicado"]
+    lista = [por_fecha[f] for f in sorted(por_fecha)]
+    publicados = [d for d in unidades if d["publicado"]]
     anticip = [d["anticipacion"] for d in publicados if d["anticipacion"] is not None]
     tot_pub = sum(d["publicadas"] for d in publicados)
     return {
         "dias": lista,
         "dias_publicados": len(publicados),
-        "dias_sin_publicar": len(lista) - len(publicados),
+        "dias_sin_publicar": len(unidades) - len(publicados),
         "anticipacion_mediana": _redondo(statistics.median(anticip)) if anticip else None,
         "versiones_promedio": round(sum(d["versiones"] for d in publicados) / len(publicados), 1) if publicados else None,
         "cambios": sum(d["cambios"] for d in publicados),
@@ -432,7 +471,7 @@ def _tramos_para_distancias(servs, distancias):
 # EL PANEL
 # ════════════════════════════════════════════════════════════════════════════
 
-def panel(desde, hasta, corredor=None):
+def panel(desde, hasta, corredor=None, trafico=""):
     hoy = _hoy()
     hasta = min(hasta, hoy)
     if desde > hasta:
@@ -445,19 +484,21 @@ def panel(desde, hasta, corredor=None):
     try:
         flota = _flota(conn)
         distancias = _distancias(conn)
-        servs_todos = leer_servicios(conn, desde, hasta, flota, distancias)
-        ant_todos = leer_servicios(conn, ant_desde, ant_hasta, flota, distancias)
+        servs_todos = leer_servicios(conn, desde, hasta, flota, distancias, trafico)
+        ant_todos = leer_servicios(conn, ant_desde, ant_hasta, flota, distancias, trafico)
         corredores_todos = sorted({s["corredor"] for s in servs_todos})
         if corredor:
             servs = [s for s in servs_todos if s["corredor"] == corredor]
             ant = [s for s in ant_todos if s["corredor"] == corredor]
         else:
             servs, ant = servs_todos, ant_todos
-        base, ultimo_global = _flota_base(conn, hasta)
+        base, ultimo_global = _flota_base(conn, hasta, trafico)
         usados = {s["coche"] for s in servs_todos if s["coche"]}
         parados_n = sorted(base - usados, key=lambda c: (ultimo_global.get(c, ""), c))
         estado = _estado_parados(conn, parados_n, flota, hasta)
-        plan = _planificacion(conn, desde, hasta, servs)
+        plan = _planificacion(conn, desde, hasta, servs, trafico)
+        hay_internacional = bool(trafico == "internacional" or any(s["trafico"] == "internacional" for s in servs_todos)
+                                 or conn.execute("SELECT 1 FROM trafico_dias WHERE tipo='internacional' LIMIT 1").fetchone())
     finally:
         conn.close()
 
@@ -489,6 +530,7 @@ def panel(desde, hasta, corredor=None):
         "desde": desde, "hasta": hasta, "dias_periodo": n_dias,
         "anterior": {"desde": ant_desde, "hasta": ant_hasta, **tot_ant},
         "corredor": corredor or "", "corredores_disponibles": corredores_todos,
+        "trafico": trafico, "hay_internacional": hay_internacional,
         "totales": tot, "deltas": deltas,
         "serie": serie,
         "corredores": _por_corredor(servs),
@@ -514,12 +556,12 @@ def _primer_dia():
         conn.close()
 
 
-def detalle(tipo, clave, desde, hasta):
+def detalle(tipo, clave, desde, hasta, trafico=""):
     """Los servicios de un coche, un tripulante, un corredor o un día."""
     hasta = min(hasta, _hoy())
     conn = get_connection()
     try:
-        servs = leer_servicios(conn, desde, hasta)
+        servs = leer_servicios(conn, desde, hasta, trafico=trafico)
     finally:
         conn.close()
     if tipo == "coche":
@@ -538,14 +580,14 @@ def detalle(tipo, clave, desde, hasta):
     resumen = _totales(lista, len({s["fecha"] for s in lista}))
     return {"tipo": tipo, "clave": clave, "desde": desde, "hasta": hasta, "resumen": resumen,
             "servicios": [{k: s[k] for k in ("fecha", "hora", "lado", "corredor", "destino", "coche", "trips",
-                                             "refuerzo", "km", "origen", "llega")} for s in lista]}
+                                             "refuerzo", "km", "origen", "llega", "trafico")} for s in lista]}
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # EXCEL
 # ════════════════════════════════════════════════════════════════════════════
 
-def excel(desde, hasta, corredor=None):
+def excel(desde, hasta, corredor=None, trafico=""):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -554,7 +596,7 @@ def excel(desde, hasta, corredor=None):
     conn = get_connection()
     try:
         flota = _flota(conn)
-        servs = leer_servicios(conn, desde, hasta, flota)
+        servs = leer_servicios(conn, desde, hasta, flota, trafico=trafico)
     finally:
         conn.close()
     if corredor:
@@ -573,7 +615,8 @@ def excel(desde, hasta, corredor=None):
         ws["A1"] = "LA SANTANIANA · Servicios" + ("" if nombre == "Servicios" else f" · {nombre}")
         ws["A1"].font = titulo
         rango = f"Del {desde[8:10]}/{desde[5:7]}/{desde[:4]} al {hasta[8:10]}/{hasta[5:7]}/{hasta[:4]}"
-        ws["A2"] = rango + (f" · Corredor {corredor}" if corredor else "") + " · Sacado del tráfico de cada día"
+        ws["A2"] = (rango + (f" · Tráfico {trafico}" if trafico else "") + (f" · Corredor {corredor}" if corredor else "")
+                    + " · Sacado del tráfico de cada día")
         ws["A2"].font = sub
         fila0 = 4
         for i, (enc, ancho) in enumerate(zip(encabezados, anchos), start=1):
@@ -597,13 +640,14 @@ def excel(desde, hasta, corredor=None):
     filas = []
     for s in servs:
         d = date.fromisoformat(s["fecha"])
-        filas.append([d.strftime("%d/%m/%Y"), DIAS_SEMANA[d.weekday()].capitalize(), s["hora"], s["corredor"],
+        filas.append([d.strftime("%d/%m/%Y"), DIAS_SEMANA[d.weekday()].capitalize(), s["hora"],
+                      "Internacional" if s["trafico"] == "internacional" else "Nacional", s["corredor"],
                       "Ida" if s["lado"] == "ida" else "Regreso", s["destino"], "Sí" if s["refuerzo"] else "",
                       int(s["coche"]) if s["coche"] else "A CONFIRMAR", s["trips"][0] if s["trips"] else "",
                       s["trips"][1] if len(s["trips"]) > 1 else "", s["km"] or None, s["asientos"] or None])
-    hoja(wb.active, "Servicios", ["Fecha", "Día", "Hora", "Corredor", "Sentido", "Tramo", "Refuerzo", "Coche",
+    hoja(wb.active, "Servicios", ["Fecha", "Día", "Hora", "Tráfico", "Corredor", "Sentido", "Tramo", "Refuerzo", "Coche",
                                   "Tripulante 1", "Tripulante 2", "Km", "Asientos"],
-         filas, [12, 11, 8, 26, 10, 28, 10, 12, 26, 26, 9, 10])
+         filas, [12, 11, 8, 13, 26, 10, 28, 10, 12, 26, 26, 9, 10])
     hoja(wb.create_sheet(), "Por tripulante", ["Tripulante", "Servicios", "Días", "Refuerzos", "Coches distintos", "Km"],
          [[p["nombre"], p["servicios"], p["dias"], p["refuerzos"], p["coches"], p["km"] or None]
           for p in _por_tripulante(servs)], [30, 11, 8, 11, 16, 10])
@@ -684,7 +728,8 @@ def api_panel():
     desde, hasta = _periodo()
     if not desde:
         return jsonify({"error": "Fechas inválidas"}), 400
-    return jsonify(panel(desde, hasta, limpiar(request.args.get("corredor")) or None))
+    return jsonify(panel(desde, hasta, limpiar(request.args.get("corredor")) or None,
+                         trafico_ok(request.args.get("trafico"))))
 
 
 @bp_servicios.route("/api/servicios/detalle", methods=["GET"])
@@ -692,7 +737,8 @@ def api_detalle():
     if not _puede_ver():
         return jsonify({"error": "Sin permiso"}), 403
     desde, hasta = _periodo()
-    r = detalle(request.args.get("tipo", ""), request.args.get("clave", ""), desde, hasta) if desde else None
+    r = (detalle(request.args.get("tipo", ""), request.args.get("clave", ""), desde, hasta,
+                 trafico_ok(request.args.get("trafico"))) if desde else None)
     return jsonify(r) if r else (jsonify({"error": "No encontrado"}), 404)
 
 
@@ -703,8 +749,9 @@ def api_excel():
     desde, hasta = _periodo()
     if not desde:
         return jsonify({"error": "Fechas inválidas"}), 400
-    contenido = excel(desde, hasta, limpiar(request.args.get("corredor")) or None)
-    nombre = f"Servicios-{desde}-al-{hasta}.xlsx"
+    trafico = trafico_ok(request.args.get("trafico"))
+    contenido = excel(desde, hasta, limpiar(request.args.get("corredor")) or None, trafico)
+    nombre = f"Servicios-{trafico + '-' if trafico else ''}{desde}-al-{hasta}.xlsx"
     return send_file(io.BytesIO(contenido), as_attachment=True, download_name=nombre,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 

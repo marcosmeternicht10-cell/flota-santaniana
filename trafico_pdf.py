@@ -618,7 +618,10 @@ def generar_pdf_trafico(info):
     una sola hoja, del ancho de un A4 y tan larga como haga falta (si el día
     tiene muchas salidas no se parte en dos ni se achica la letra)."""
     _, y = _dibujar(info, 6000)                 # primera pasada: medir
-    pdf, _ = _dibujar(info, max(H, y + 46))
+    # El internacional tiene pocas salidas: la hoja se ajusta a lo que hay
+    # (sin medio A4 en blanco abajo), con un mínimo para que no quede una tira.
+    minimo = 420 if info.get("tipo") == "internacional" else H
+    pdf, _ = _dibujar(info, max(minimo, y + 46))
     return pdf
 
 
