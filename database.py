@@ -481,6 +481,17 @@ def inicializar_db():
             conn.execute("ALTER TABLE usuarios ADD COLUMN secciones TEXT DEFAULT ''")
     except Exception:
         pass
+    # Quién puede eliminar órdenes de trabajo además de administración. La
+    # primera vez que aparece la columna se le habilita a Celeste, que fue
+    # quien lo pidió; después se maneja desde el panel de Usuarios.
+    try:
+        if "borra_ots" not in columnas_de_tabla(conn, "usuarios"):
+            conn.execute("ALTER TABLE usuarios ADD COLUMN borra_ots INTEGER DEFAULT 0")
+            conn.execute("""UPDATE usuarios SET borra_ots=1
+                            WHERE LOWER(COALESCE(nombre,'')) LIKE ? OR LOWER(usuario) LIKE ?""",
+                         ("%celeste%", "%celeste%"))
+    except Exception:
+        pass
 
     conn.commit()
 
@@ -1991,6 +2002,8 @@ def actualizar_item_ot(item_id, **kwargs):
 
 def eliminar_item_ot(item_id):
     conn = get_connection()
+    # El correctivo que se generó solo al completar este ítem se va con él
+    conn.execute("DELETE FROM correctivos WHERE observaciones LIKE ?", (f"%-item{int(item_id)}]%",))
     conn.execute("DELETE FROM ot_items WHERE id=?", (item_id,))
     conn.commit()
     conn.close()
@@ -2021,8 +2034,20 @@ def cerrar_ot(ot_id, fecha_cierre=None):
 
 
 def eliminar_ot(ot_id):
+    """Borra la OT con todo lo que colgaba de ella, esté en la fase que esté
+    (abierta, en proceso, cerrada, en Compras, presupuestada, en camino o
+    entregada): fotos, ítems, la foto de entrega de Compras y los correctivos
+    que se generaron solos al completar sus ítems correctivos (si no, quedaban
+    fallas sueltas de una OT que ya no existe y seguían contando en los
+    reportes). Los movimientos de stock de repuestos no se tocan: lo que salió
+    del depósito salió, aunque se borre la OT."""
     conn = get_connection()
     conn.execute("DELETE FROM ot_fotos WHERE ot_id=?", (ot_id,))
+    try:
+        conn.execute("DELETE FROM compras_evidencia WHERE ot_id=?", (ot_id,))
+    except Exception:
+        pass
+    conn.execute("DELETE FROM correctivos WHERE observaciones LIKE ?", (f"%[OT#{ot_id}-item%",))
     conn.execute("DELETE FROM ot_items WHERE ot_id=?", (ot_id,))
     conn.execute("DELETE FROM ordenes_trabajo WHERE id=?", (ot_id,))
     conn.commit()
@@ -2372,7 +2397,8 @@ def obtener_usuarios():
     conn = get_connection()
     rows = conn.execute("""SELECT id, usuario, nombre, rol, activo,
                            fecha_creacion, ultimo_acceso,
-                           COALESCE(secciones, '') AS secciones FROM usuarios
+                           COALESCE(secciones, '') AS secciones,
+                           COALESCE(borra_ots, 0) AS borra_ots FROM usuarios
                            ORDER BY usuario""").fetchall()
     conn.close()
     from permisos import desde_texto
@@ -2380,8 +2406,29 @@ def obtener_usuarios():
     for r in rows:
         d = dict(r)
         d["secciones"] = desde_texto(d.get("secciones"))
+        d["borra_ots"] = 1 if (d.get("rol") == "admin" or d.get("borra_ots")) else 0
         salida.append(d)
     return salida
+
+
+def puede_borrar_ots(uid, rol=None):
+    """Si ese usuario puede eliminar órdenes de trabajo: administración
+    siempre; el resto, solo si se lo habilitaron en el panel de Usuarios.
+    Se lee de la base en cada pedido, así el cambio rige al instante."""
+    if rol == "admin":
+        return True
+    if not uid:
+        return False
+    conn = get_connection()
+    try:
+        r = conn.execute("""SELECT rol, COALESCE(activo, 1) AS activo, COALESCE(borra_ots, 0) AS b
+                            FROM usuarios WHERE id=?""", (uid,)).fetchone()
+    except Exception:
+        r = None
+    conn.close()
+    if not r or not r["activo"]:
+        return False
+    return r["rol"] == "admin" or bool(r["b"])
 
 
 def secciones_de_usuario(uid):
@@ -2401,7 +2448,7 @@ def secciones_de_usuario(uid):
 
 # Lo único que se puede modificar de un usuario. Antes el SQL se armaba con
 # los nombres de campo que vinieran en el pedido, sin filtrar.
-CAMPOS_USUARIO = {"nombre", "rol", "activo", "password_hash", "secciones"}
+CAMPOS_USUARIO = {"nombre", "rol", "activo", "password_hash", "secciones", "borra_ots"}
 
 
 def actualizar_usuario(uid, **kwargs):
@@ -2413,6 +2460,8 @@ def actualizar_usuario(uid, **kwargs):
     if "secciones" in kwargs:
         from permisos import a_texto
         kwargs["secciones"] = a_texto(kwargs["secciones"])
+    if "borra_ots" in kwargs:
+        kwargs["borra_ots"] = 1 if kwargs["borra_ots"] in (1, True, "1", "true", "si", "sí") else 0
     kwargs = {k: v for k, v in kwargs.items() if k in CAMPOS_USUARIO}
     if not kwargs:
         return

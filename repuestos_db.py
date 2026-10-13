@@ -140,6 +140,13 @@ def inicializar_repuestos():
     except Exception as e:
         print("[proveedores] no se pudo importar el listado:", e)
 
+    # Un repuesto, varios proveedores (cada uno con su precio)
+    try:
+        import repuestos_multi
+        repuestos_multi.inicializar()
+    except Exception as e:
+        print("[repuestos] no se pudo preparar la lista de proveedores por repuesto:", e)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # PROVEEDORES
@@ -290,6 +297,13 @@ def obtener_proveedores(q=None, limite=30, pagina=0, letra="", solo_uso=False):
     usos = {r["k"]: r["n"] for r in conn.execute(
         """SELECT LOWER(TRIM(proveedor)) AS k, COUNT(*) AS n FROM repuestos
            WHERE activo=1 AND proveedor<>'' GROUP BY LOWER(TRIM(proveedor))""").fetchall()}
+    # Cuenta también los repuestos donde figura como proveedor no principal
+    try:
+        import repuestos_multi
+        for k, n in repuestos_multi.usos_por_clave(conn).items():
+            usos[k] = max(usos.get(k, 0), n)
+    except Exception:
+        pass
     cols = ", ".join(CAMPOS_PROV) + ", clave"
     q = _sin_tildes(" ".join(str(q or "").split()))
     donde, params = [], []
@@ -585,8 +599,13 @@ def obtener_repuestos(categoria=None, buscar=None, solo_bajos=False, incluir_ina
               " OR LOWER(aplicacion) LIKE ? OR LOWER(proveedor) LIKE ?"
               # también por el nombre de fantasía del proveedor
               " OR LOWER(TRIM(proveedor)) IN (SELECT clave FROM repuestos_proveedores"
-              f" WHERE {_col_sin_tildes('fantasia')} LIKE ?))")
-        params += [like, like, like, like, like, like, f"%{_sin_tildes(buscar.strip())}%"]
+              f" WHERE {_col_sin_tildes('fantasia')} LIKE ?)"
+              # y por cualquiera de sus otros proveedores o el código con que lo venden
+              " OR id IN (SELECT x.repuesto_id FROM repuestos_por_proveedor x"
+              " LEFT JOIN repuestos_proveedores p ON p.clave = x.clave"
+              f" WHERE x.clave LIKE ? OR LOWER(x.codigo_prov) LIKE ? OR {_col_sin_tildes('p.fantasia')} LIKE ?))")
+        sin = f"%{_sin_tildes(buscar.strip())}%"
+        params += [like, like, like, like, like, like, sin, like, like, sin]
     q += " ORDER BY categoria, descripcion"
     rows = conn.execute(q, params).fetchall()
     contactos = _contactos_por_clave(conn, [r["proveedor"] for r in rows])

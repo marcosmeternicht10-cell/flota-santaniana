@@ -204,6 +204,21 @@ def auditar(accion, categoria="", detalle="", referencia=""):
 # Rutas que NO requieren login
 RUTAS_PUBLICAS = {"/login", "/api/login", "/static"}
 
+def _puede_borrar_ots_sesion():
+    try:
+        from database import puede_borrar_ots
+        return puede_borrar_ots(session.get("usuario_id"), session.get("rol"))
+    except Exception:
+        return session.get("rol") == "admin"
+
+
+@app.route("/api/me/permisos", methods=["GET"])
+def api_mis_permisos():
+    """Permisos de acción del usuario, leídos de la base al momento (si el
+    administrador se los cambia, rigen sin volver a entrar)."""
+    return jsonify({"borra_ots": _puede_borrar_ots_sesion()})
+
+
 @app.before_request
 def proteger_rutas():
     """Exige login para todo, excepto las rutas públicas y archivos estáticos."""
@@ -270,7 +285,7 @@ def proteger_rutas():
             p == "/" or
             p.startswith("/api/compras/") or
             p.startswith("/static/") or
-            p == "/api/logout" or p == "/api/me" or
+            p == "/api/logout" or p == "/api/me" or p == "/api/me/permisos" or
             p.startswith("/api/ots") or          # ver y CREAR OTs (compras carga las órdenes)
             p.startswith("/api/ot_items") or     # asignar el técnico y anotar el material
             p.startswith("/api/vehiculos") or    # lista de coches para el formulario de OT
@@ -319,6 +334,7 @@ def index():
                            rol=session.get("rol"),
                            secciones=(session.get("secciones") or []
                                       if session.get("rol") == "taller" else []),
+                           borra_ots=_puede_borrar_ots_sesion(),
                            v=version_assets())
     resp = make_response(html)
     # El HTML NUNCA se cachea: siempre se pide fresco, así trae la versión
@@ -530,6 +546,8 @@ def api_actualizar_usuario(uid):
         detalle = "secciones: " + (", ".join(secs) if secs else "acceso completo")
     elif nuevo_nombre:
         detalle = f"nombre: {nuevo_nombre}"
+    elif "borra_ots" in d:
+        detalle = "puede eliminar OTs: " + ("sí" if d.get("borra_ots") in (1, True, "1", "true") else "no")
     auditar(f"Modificó un usuario (ID {uid})", "Usuarios", detalle)
     msg = "Usuario actualizado."
     if filas_corp:
@@ -1295,10 +1313,22 @@ def api_cerrar_ot(ot_id):
 
 
 @app.route("/api/ots/<int:ot_id>", methods=["DELETE"])
-@rol_requerido("admin")   # borrar una OT es solo de administración
 def api_eliminar_ot(ot_id):
+    """Elimina una OT en cualquier fase. Lo puede hacer administración y los
+    usuarios a los que se les habilitó en el panel de Usuarios."""
+    from database import puede_borrar_ots
+    if not puede_borrar_ots(session.get("usuario_id"), session.get("rol")):
+        return jsonify({"ok": False, "error": "No tenés permiso para eliminar órdenes de trabajo"}), 403
+    ot = obtener_ot(ot_id)
+    if not ot:
+        return jsonify({"ok": False, "error": "Esa OT ya no existe"}), 404
     eliminar_ot(ot_id)
-    auditar(f"Eliminó la OT #{ot_id}", "Órdenes de Trabajo")
+    fase = ot.get("estado") or ""
+    if ot.get("estado_compras"):
+        fase += f" · compras: {ot['estado_compras']}"
+    auditar(f"Eliminó la OT #{ot_id}", "Órdenes de Trabajo",
+            f"Coche {ot.get('n_interno') or ''} {ot.get('patente') or ''} · {ot.get('fecha_apertura') or ''}"
+            f" · {len(ot.get('items') or [])} ítem(s) · {fase}")
     return jsonify({"ok": True})
 
 
