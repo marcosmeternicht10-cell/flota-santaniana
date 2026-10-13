@@ -5454,6 +5454,7 @@ const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestad
 
 async function renderCompras() {
   status("Compras / Depósito");
+  await refrescarPermisoOTs();
   const todas = await api("/api/compras/ots");
   const enEspera = todas.filter(o => o.estado_compras === "en_espera");
   const presup = todas.filter(o => o.estado_compras === "presupuestado");
@@ -5553,7 +5554,9 @@ function tarjetaCompra(o) {
           </tbody>
         </table></div>
         ${o.estado_compras !== "en_espera" ? `<div style="text-align:right;margin-top:8px;font-weight:700;color:var(--brand-blue)">Total: ${gs(totalPresup)}</div>` : ''}
-        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">${acciones}</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
+          ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${o.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
+          ${acciones}</div>
       </div>
     </div>`;
 }
@@ -5760,6 +5763,7 @@ function badgeSalida(horario) {
 
 async function renderOts() {
   status("Órdenes de Trabajo");
+  await refrescarPermisoOTs();
   const filtro = otFiltroEstado ? `?estado=${otFiltroEstado}` : "";
   const ots = await api("/api/ots" + filtro);
   const counts = { abierta: 0, en_proceso: 0, cerrada: 0 };
@@ -5848,7 +5852,7 @@ async function renderOts() {
                     </span>
                   </td>
                   <td class="td-action">
-                    ${window.USUARIO_ROL === "admin" ? `<button class="icon-btn" title="Eliminar la OT" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>` : ""}
+                    ${puedeBorrarOTs() ? `<button class="icon-btn ot-borrar" title="Eliminar la OT" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>` : ""}
                   </td>
                 </tr>`;
               }).join("")}
@@ -6167,7 +6171,8 @@ async function abrirOT(otId) {
           <button class="btn btn-ghost" onclick="agregarItemOT(${ot.id})"><i class="ti ti-plus"></i> Agregar</button>
         </div>
 
-        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+        <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+          ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${ot.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
           <button class="btn btn-ghost" onclick="window.open('/api/ots/${ot.id}/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir PDF</button>
           ${!ot.estado_compras ?
             `<button class="btn btn-primary" onclick="enviarACompras(${ot.id})"><i class="ti ti-shopping-cart"></i> Enviar a Compras</button>` :
@@ -6268,12 +6273,47 @@ async function reabrirOT(otId) {
   cerrarModalOTDetalle();
 }
 
+// Eliminar OTs: administración siempre; el resto, si se lo habilitaron en
+// Usuarios. Se puede en cualquier fase (abierta, en proceso, cerrada, en
+// Compras, presupuestada, en camino o entregada) y desde la lista, el detalle
+// o la bandeja de Compras.
+function puedeBorrarOTs() {
+  return window.USUARIO_ROL === "admin" || window.PUEDE_BORRAR_OTS === true;
+}
+// Se relee al entrar a OTs o a Compras: si el admin lo cambia, rige sin
+// volver a iniciar sesión.
+async function refrescarPermisoOTs() {
+  try {
+    const r = await fetch("/api/me/permisos", { credentials: "same-origin" });
+    if (!r.ok) return;
+    const d = await r.json();
+    window.PUEDE_BORRAR_OTS = !!d.borra_ots;
+  } catch (e) { /* sin conexión: queda lo que había */ }
+}
+
 async function borrarOT(otId) {
-  if (!confirm(`¿Eliminar la OT #${otId} completa? Se borrarán todos sus items.`)) return;
+  const ot = await api(`/api/ots/${otId}`);
+  if (!ot || ot.error) return;
+  const FASE = { abierta: "abierta", en_proceso: "en proceso", cerrada: "cerrada" };
+  const COMPRAS = { en_espera: "esperando a Compras", presupuestado: "presupuestada", en_camino: "con repuestos en camino", entregado: "con repuestos entregados" };
+  const coche = ot.n_interno ? `coche ${ot.n_interno}` : ot.patente;
+  const fase = [FASE[ot.estado] || ot.estado, COMPRAS[ot.estado_compras]].filter(Boolean).join(", ");
+  const n = (ot.items || []).length;
+  const msg = `¿Eliminar la OT #${otId} (${coche}, ${fase})?\n\n`
+    + `Se borra completa: ${n} ítem${n === 1 ? "" : "s"}, fotos, el presupuesto y la entrega de Compras, `
+    + `y los correctivos que se cargaron solos desde esta OT.\n\nNo se puede deshacer.`;
+  if (!confirm(msg)) return;
   const r = await api(`/api/ots/${otId}`, { method: "DELETE" });
-  if (!r.ok) return;   // sin permiso: el aviso ya lo muestra api()
-  toast("OT eliminada", "success");
-  renderOts();
+  if (!r || !r.ok) return;   // sin permiso: el aviso ya lo muestra api()
+  toast(`OT #${otId} eliminada`, "success");
+  const modal = document.getElementById("modal-ot-detalle");
+  if (modal) modal.remove();
+  // Se refresca la pantalla en la que se está
+  const enCompras = document.querySelector('.nav-item[data-sec="compras"].active');
+  const enCorrectivos = document.querySelector('.nav-item[data-sec="correctivos"].active');
+  if (enCompras) renderCompras();
+  else if (enCorrectivos && typeof renderCorrectivos === "function") renderCorrectivos();
+  else renderOts();
 }
 
 
@@ -6554,6 +6594,7 @@ async function renderUsuarios() {
         <table>
           <thead><tr>
             <th>Usuario</th><th>Nombre</th><th class="center">Rol</th><th>Acceso</th>
+            <th class="center" title="Puede eliminar órdenes de trabajo en cualquier fase">Elimina OTs</th>
             <th class="center">Estado</th><th>Último acceso</th><th class="td-action"></th>
           </tr></thead>
           <tbody>
@@ -6563,9 +6604,10 @@ async function renderUsuarios() {
                 <td>${u.nombre || "—"}</td>
                 <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span></td>
                 <td style="font-size:12px">${textoAcceso(u)}</td>
+                <td class="center">${celdaBorraOTs(u)}</td>
                 <td class="center">${u.activo ? '<span class="badge success">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
                 <td style="font-size:12px;color:var(--muted)">${u.ultimo_acceso ? u.ultimo_acceso.replace('T',' ') : 'Nunca'}</td>
-                <td class="td-action">
+                <td class="td-action" style="white-space:nowrap">
                   <button class="icon-btn" onclick="editarNombreUsuario(${u.id}, '${u.usuario}', '${(u.nombre || '').replace(/'/g, "\\'")}')" title="Corregir nombre"><i class="ti ti-pencil"></i></button>
                   <button class="icon-btn" onclick="cambiarRolUsuario(${u.id}, '${u.usuario}', '${u.rol}')" title="Cambiar rol"><i class="ti ti-user-cog"></i></button>
                   ${u.rol === "taller" ? `<button class="icon-btn" onclick="editarSeccionesUsuario(${u.id})" title="Qué secciones ve"><i class="ti ti-layout-sidebar"></i></button>` : ""}
@@ -6577,6 +6619,32 @@ async function renderUsuarios() {
         </table>
       </div>
     </div>`;
+}
+
+// Quién puede eliminar OTs: administración siempre; a taller y compras se
+// les habilita con el interruptor. Rige al instante, sin volver a entrar.
+function celdaBorraOTs(u) {
+  if (u.rol === "admin") return '<span style="font-size:12px;color:var(--muted)">Siempre</span>';
+  if (!["taller", "compras"].includes(u.rol)) return '<span style="color:var(--light)">—</span>';
+  return `<label class="plus-toggle" title="Puede eliminar órdenes de trabajo">
+    <input type="checkbox" ${u.borra_ots ? "checked" : ""} onchange="cambiarBorraOTs(${u.id}, this)">
+    <span class="plus-switch"></span></label>`;
+}
+async function cambiarBorraOTs(uid, el) {
+  const quiere = el.checked;
+  el.disabled = true;
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ borra_ots: quiere ? 1 : 0 })
+  });
+  el.disabled = false;
+  if (r && r.ok) {
+    const u = (window._usuarios || []).find(x => x.id === uid);
+    if (u) u.borra_ots = quiere ? 1 : 0;
+    toast(quiere ? `${u ? (u.nombre || u.usuario) : "El usuario"} ya puede eliminar OTs` : "Ya no puede eliminar OTs", "success");
+  } else {
+    el.checked = !quiere;
+  }
 }
 
 // ─── Selector de secciones ───
@@ -6964,7 +7032,7 @@ function renderListaRepuestos(reps) {
         <div class="rep-card-main">
           <div class="rep-card-info">
             <div class="rep-card-titulo">${r.descripcion}</div>
-            <div class="rep-card-sub">${[r.aplicacion, r.codigo].filter(Boolean).join(" · ")}</div>
+            <div class="rep-card-sub">${[r.aplicacion, r.codigo].filter(Boolean).join(" · ")}${r.n_proveedores > 1 ? ` <span class="rep-card-nprov"><i class="ti ti-building-store"></i> ${r.n_proveedores} proveedores</span>` : ""}</div>
           </div>
           <div class="rep-stock-badge ${stkClass}">
             <i class="ti ti-${stkIcon}"></i> ${stkTxt}
@@ -7080,11 +7148,11 @@ function repToggleAdmin() {
 // teléfono). Al escribir se busca en el servidor —son miles— y al elegir uno
 // se completan el contacto y el teléfono.
 let _provBuscarT = null;
-function camposProveedor(px, r = {}) {
+function camposProveedor(px, r = {}, titulo = "Proveedor") {
   const esc = v => String(v || "").replace(/"/g, "&quot;");
   return `
     <div class="rep-prov-form">
-      <div class="rep-ubic-form-label"><i class="ti ti-building-store"></i> Proveedor</div>
+      <div class="rep-ubic-form-label"><i class="ti ti-building-store"></i> ${titulo}</div>
       <div class="form-row">
         <div class="field"><label>Proveedor <span class="rep-prov-ayuda">(nombre, fantasía o RUC)</span></label>
           <input id="${px}-prov" list="${px}-prov-lista" value="${esc(r.proveedor)}" placeholder="Escribí para buscar"
@@ -7288,23 +7356,205 @@ function numeroWhatsApp(tel) {
   return /^9\d{8}$/.test(d) ? "595" + d : "";
 }
 
-function tarjetaProveedor(r) {
-  const wa = numeroWhatsApp(r.proveedor_telefono);
+// ─── Proveedores de un repuesto ───
+// El mismo código se le puede comprar a varios proveedores: el repuesto es
+// uno solo (un stock) y acá se ve quién lo vende y a cuánto. El principal es
+// al que se le pide primero; el más barato se marca solo.
+function puedeProveedoresRep() {
+  return ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+}
+
+function seccionProveedores(r) {
+  const provs = r.proveedores || [];
+  const puede = puedeProveedoresRep();
   const pedir = r.estado_stock !== "ok";
-  const msj = encodeURIComponent(`Hola${r.proveedor_contacto ? " " + r.proveedor_contacto : ""}, te escribo de La Santaniana. ` +
-    `Necesitamos ${r.descripcion} (código ${r.codigo})${r.aplicacion ? " para " + r.aplicacion : ""}. ¿Tenés disponible?`);
+  const fecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) + "/" + f.slice(2, 4) : "";
+  const filas = provs.map(p => {
+    const wa = numeroWhatsApp(p.telefono);
+    const msj = encodeURIComponent(`Hola${p.contacto ? " " + p.contacto : ""}, te escribo de La Santaniana. ` +
+      `Necesitamos ${r.descripcion} (código ${p.codigo_prov || r.codigo})${r.aplicacion ? " para " + r.aplicacion : ""}. ¿Tenés disponible y a qué precio?`);
+    const tags = [
+      p.principal && provs.length > 1 ? `<span class="rep-pv-tag principal"><i class="ti ti-star-filled"></i> principal</span>` : "",
+      p.mas_barato ? `<span class="rep-pv-tag barato"><i class="ti ti-arrow-down"></i> más barato</span>` : "",
+    ].join("");
+    return `
+      <div class="rep-pv ${pedir && p.principal ? "pedir" : ""}">
+        <div class="rep-d-prov-ico"><i class="ti ti-building-store"></i></div>
+        <div class="rep-d-prov-info">
+          <div class="rep-d-prov-nom">${hiEsc(p.fantasia || p.proveedor)} ${tags}</div>
+          ${p.fantasia ? `<div class="rep-d-prov-razon">${hiEsc(p.proveedor)}</div>` : ""}
+          <div class="rep-d-prov-sub">${[p.contacto, p.telefono, p.ruc ? "RUC " + p.ruc : "", p.codigo_prov ? "lo vende como " + hiEsc(p.codigo_prov) : ""].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
+        </div>
+        <div class="rep-pv-precio">
+          <b>${p.precio > 0 ? gs(p.precio) : "sin precio"}</b>
+          ${p.actualizado ? `<small>${fecha(p.actualizado)}</small>` : ""}
+        </div>
+        <div class="rep-pv-acc">
+          ${wa ? `<a class="btn ${pedir && p.principal ? "btn-primary" : "btn-ghost"} rep-pv-wa" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${msj}" title="Pedir por WhatsApp"><i class="ti ti-brand-whatsapp"></i>${pedir && p.principal ? " Pedir" : ""}</a>` : ""}
+          ${p.telefono ? `<a class="icon-btn" href="tel:${String(p.telefono).replace(/[^\d+]/g, "")}" title="Llamar"><i class="ti ti-phone"></i></a>` : ""}
+          ${puede && !p.principal ? `<button class="icon-btn" title="Hacerlo el principal" onclick="principalProvRep(${p.id}, ${r.id})"><i class="ti ti-star"></i></button>` : ""}
+          ${puede ? `<button class="icon-btn" title="Cambiar precio" onclick="editarProvRep(${p.id}, ${r.id})"><i class="ti ti-pencil"></i></button>` : ""}
+          ${puede ? `<button class="icon-btn rep-pv-quitar" title="Sacar este proveedor" onclick="quitarProvRep(${p.id}, ${r.id})"><i class="ti ti-x"></i></button>` : ""}
+        </div>
+      </div>`;
+  }).join("");
   return `
-    <div class="rep-d-section-lbl" style="margin-top:22px">Proveedor</div>
-    <div class="rep-d-prov ${pedir ? "pedir" : ""}">
-      <div class="rep-d-prov-ico"><i class="ti ti-building-store"></i></div>
-      <div class="rep-d-prov-info">
-        <div class="rep-d-prov-nom">${hiEsc(r.proveedor_fantasia || r.proveedor)}</div>
-        ${r.proveedor_fantasia ? `<div class="rep-d-prov-razon">${hiEsc(r.proveedor)}</div>` : ""}
-        <div class="rep-d-prov-sub">${[r.proveedor_contacto, r.proveedor_telefono, r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
+    <div class="rep-pv-cab">
+      <div class="rep-d-section-lbl" style="margin:0">Proveedores${provs.length ? ` (${provs.length})` : ""}</div>
+      ${puede ? `<button class="btn btn-ghost rep-pv-add" onclick="agregarProvRep(${r.id})"><i class="ti ti-plus"></i> Agregar proveedor</button>` : ""}
+    </div>
+    ${provs.length ? `<div class="rep-pv-lista">${filas}</div>`
+      : `<div class="rep-d-sin-mov">Todavía no tiene proveedor cargado.</div>`}`;
+}
+
+// Sumar un proveedor al repuesto (o actualizarle el precio). Si se pone una
+// cantidad, además entra ese stock como compra a ese proveedor.
+function agregarProvRep(rid, pre = {}) {
+  const r = window._repActual || {};
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  const esc = v => String(v || "").replace(/"/g, "&quot;");
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:560px">
+      <div class="rep-mini-titulo">Agregar proveedor</div>
+      <p class="rep-mini-help">${hiEsc(r.descripcion || "")}${r.codigo ? ` · código <b>${hiEsc(r.codigo)}</b>` : ""}. Es el mismo repuesto y el mismo stock: solo se anota que este proveedor también lo vende.</p>
+      ${camposProveedor("ap", pre)}
+      <div class="form-row" style="margin-top:12px">
+        <div class="field"><label>Precio c/u (Gs.)</label><input id="ap-precio" value="${esc(pre.precio)}" placeholder="85000" inputmode="numeric" style="width:140px"></div>
+        <div class="field"><label>Código del proveedor <span class="rep-mini-opc">si lo vende con otro</span></label><input id="ap-cod" value="${esc(pre.codigo_prov)}" placeholder="opcional" style="width:150px"></div>
+        <div class="field"><label>Entran ahora <span class="rep-mini-opc">opcional</span></label><input id="ap-cant" value="${esc(pre.cantidad)}" placeholder="0" inputmode="decimal" style="width:110px"></div>
       </div>
-      ${r.proveedor_telefono ? `<a class="btn btn-ghost" href="tel:${String(r.proveedor_telefono).replace(/[^\d+]/g, "")}"><i class="ti ti-phone"></i></a>` : ""}
-      ${wa ? `<a class="btn ${pedir ? "btn-primary" : "btn-ghost"}" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${msj}"><i class="ti ti-brand-whatsapp"></i> ${pedir ? "Pedir" : "WhatsApp"}</a>` : ""}
+      <div class="rep-mini-btns" style="margin-top:16px">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarProvRep(${rid}, this)"><i class="ti ti-check"></i> Agregar</button>
+      </div>
     </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => $("#ap-prov")?.focus(), 50);
+}
+
+async function confirmarProvRep(rid, btn) {
+  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
+  const proveedor = ($("#ap-prov").value || "").trim();
+  if (!proveedor) { toast("Poné el proveedor", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/repuestos/${rid}/proveedores`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      proveedor, contacto: $("#ap-pcon").value, telefono: $("#ap-ptel").value,
+      precio: parseFloat(limpiar($("#ap-precio").value)) || 0,
+      codigo_prov: $("#ap-cod").value,
+      cantidad: parseFloat(limpiar($("#ap-cant").value)) || 0,
+    })
+  });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+  const cant = parseFloat(limpiar($("#ap-cant").value)) || 0;
+  toast(`${r.nuevo ? "Proveedor agregado" : "Precio actualizado"}${cant ? ` · entraron ${fmtNum(cant)}` : ""}${r.reactivado ? " · el repuesto volvió al depósito" : ""}`, "success");
+  btn.closest(".rep-modal-overlay").remove();
+  refrescarTrasMovimiento(rid);
+}
+
+function editarProvRep(pid, rid) {
+  const p = ((window._repActual || {}).proveedores || []).find(x => x.id === pid);
+  if (!p) return;
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal">
+      <div class="rep-mini-titulo">${hiEsc(p.fantasia || p.proveedor)}</div>
+      <label class="rep-mini-lbl">Precio c/u (Gs.)</label>
+      <input id="ep-precio" class="rep-mini-input" inputmode="numeric" value="${p.precio || ""}" placeholder="85000">
+      <label class="rep-mini-lbl">Código del proveedor <span class="rep-mini-opc">si lo vende con otro</span></label>
+      <input id="ep-cod" class="rep-mini-input" value="${String(p.codigo_prov || "").replace(/"/g, "&quot;")}" placeholder="opcional">
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarEditarProvRep(${pid}, ${rid}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => $("#ep-precio")?.select(), 50);
+}
+
+async function confirmarEditarProvRep(pid, rid, btn) {
+  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api(`/api/repuestos/oferta/${pid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ precio: parseFloat(limpiar($("#ep-precio").value)) || 0, codigo_prov: $("#ep-cod").value })
+  });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast("Precio actualizado", "success");
+  btn.closest(".rep-modal-overlay").remove();
+  refrescarTrasMovimiento(rid);
+}
+
+async function quitarProvRep(pid, rid) {
+  const p = ((window._repActual || {}).proveedores || []).find(x => x.id === pid);
+  if (!confirm(`¿Sacar a ${p ? (p.fantasia || p.proveedor) : "este proveedor"} de este repuesto? El stock no cambia.`)) return;
+  const r = await api(`/api/repuestos/oferta/${pid}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo sacar", "error"); return; }
+  toast("Proveedor sacado", "success");
+  refrescarTrasMovimiento(rid);
+}
+
+async function principalProvRep(pid, rid) {
+  const r = await api(`/api/repuestos/oferta/${pid}/principal`, { method: "POST" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo cambiar", "error"); return; }
+  toast("Ahora es el proveedor principal", "success");
+  refrescarTrasMovimiento(rid);
+}
+
+// El código ya estaba cargado: en vez de rebotar, se muestra cuál es y se
+// ofrece sumarle el proveedor que se estaba escribiendo.
+function codigoYaCargado(ex, datos) {
+  const prov = (datos.proveedor || "").trim();
+  const yaLoVende = prov && (ex.proveedores || []).some(n => n.toLowerCase() === prov.toLowerCase());
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:480px">
+      <div class="rep-mini-titulo"><i class="ti ti-copy" style="color:var(--brand-blue)"></i> Ese código ya está cargado</div>
+      <div class="rep-ya-box">
+        <b>${hiEsc(ex.descripcion)}</b>
+        <span>${[ex.codigo, ex.aplicacion].filter(Boolean).map(hiEsc).join(" · ")}</span>
+        <span>${ex.activo ? `En stock: ${fmtNum(ex.stock_actual || 0)} ${ex.unidad || ""}` : "Estaba dado de baja"}</span>
+        ${(ex.proveedores || []).length ? `<div class="rep-ya-provs">${ex.proveedores.map(n => `<span>${hiEsc(n)}</span>`).join("")}</div>` : `<span>Sin proveedor cargado</span>`}
+      </div>
+      <p class="rep-mini-help" style="margin:14px 0">${prov
+        ? (yaLoVende
+            ? `<b>${hiEsc(prov)}</b> ya figura como proveedor de este repuesto: se le actualiza el precio${datos.cantidad ? " y entra el stock" : ""}.`
+            : `Es el mismo repuesto: no se crea otro, se le suma <b>${hiEsc(prov)}</b> como proveedor con su precio${datos.cantidad ? `, y entran ${fmtNum(datos.cantidad)} al mismo stock` : ""}.`)
+        : "Para sumarle otro proveedor, escribilo en el formulario y volvé a guardar, o abrí el repuesto y agregalo desde ahí."}
+        ${!ex.activo ? " Al sumarlo vuelve a aparecer en el depósito." : ""}</p>
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove(); abrirRepuesto(${ex.id})"><i class="ti ti-eye"></i> Ver el repuesto</button>
+        ${prov ? `<button class="btn btn-primary" id="ya-sumar"><i class="ti ti-plus"></i> ${yaLoVende ? "Actualizar precio" : "Sumar proveedor"}</button>` : ""}
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  const b = o.querySelector("#ya-sumar");
+  if (b) b.onclick = async () => {
+    b.disabled = true;
+    const r = await api(`/api/repuestos/${ex.id}/proveedores`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proveedor: prov, contacto: datos.proveedor_contacto, telefono: datos.proveedor_telefono,
+                             precio: datos.costo_unitario || 0, cantidad: datos.cantidad || 0 })
+    });
+    b.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo sumar", "error"); return; }
+    toast(`${r.nuevo ? `${prov} sumado como proveedor` : "Precio actualizado"}${datos.cantidad ? ` · entraron ${fmtNum(datos.cantidad)}` : ""}`, "success");
+    o.remove();
+    repVistaAdmin = false;
+    await renderRepuestos();
+    abrirRepuesto(ex.id);
+  };
 }
 
 async function guardarRepuesto() {
@@ -7330,6 +7580,13 @@ async function guardarRepuesto() {
     })
   });
   if (r.ok) { toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
+  else if (r.existe && r.repuesto) {
+    codigoYaCargado(r.repuesto, {
+      proveedor: $("#r-prov").value, proveedor_contacto: $("#r-pcon").value, proveedor_telefono: $("#r-ptel").value,
+      costo_unitario: parseFloat(limpiar($("#r-cos").value)) || 0,
+      cantidad: parseFloat(limpiar($("#r-stk").value)) || 0,
+    });
+  }
   else toast(r.msg, "error");
 }
 
@@ -7340,6 +7597,7 @@ async function guardarRepuesto() {
 async function abrirRepuesto(id) {
   const r = await api(`/api/repuestos/${id}`);
   if (!r || r.error) { toast("No se encontró el repuesto", "error"); return; }
+  window._repActual = r;
   const puedeEditar = (window.USUARIO_ROL === "admin" || window.USUARIO_ROL === "taller");
   const puedeEntrada = puedeEditar || window.USUARIO_ROL === "compras";
   const col = colorZona(r.ubic_pasillo);
@@ -7430,7 +7688,7 @@ async function abrirRepuesto(id) {
           </div>
         ` : ""}
 
-        ${r.proveedor ? tarjetaProveedor(r) : ""}
+        ${seccionProveedores(r)}
 
         <div class="rep-d-section-lbl" style="margin-top:22px">Últimos movimientos</div>
         ${r.movimientos.length === 0
@@ -7490,6 +7748,12 @@ function movimientoManual(rid, tipo) {
       <input id="mm-cant" class="rep-mini-input" type="text" inputmode="decimal" placeholder="1" autofocus>
       <label class="rep-mini-lbl">Motivo (opcional)</label>
       <input id="mm-mot" class="rep-mini-input" placeholder="${esEntrada ? "Compra, devolución..." : "Uso en coche 47, rotura..."}">
+      ${esEntrada && ((window._repActual || {}).id === rid) && (window._repActual.proveedores || []).length ? `
+        <label class="rep-mini-lbl">¿De qué proveedor? <span class="rep-mini-opc">actualiza su precio</span></label>
+        <select id="mm-prov" class="rep-mini-input" onchange="const p=(window._repActual.proveedores||[]).find(x=>x.proveedor===this.value); if(p&&p.precio) $('#mm-cos').value=p.precio">
+          <option value="">— sin indicar —</option>
+          ${window._repActual.proveedores.map(p => `<option value="${String(p.proveedor).replace(/"/g, "&quot;")}">${hiEsc(p.fantasia || p.proveedor)}${p.precio ? " · " + gs(p.precio) : ""}</option>`).join("")}
+        </select>` : ""}
       ${esEntrada ? `<label class="rep-mini-lbl">Precio c/u (opcional)</label><input id="mm-cos" class="rep-mini-input" placeholder="Gs.">` : ""}
       <div class="rep-mini-btns">
         <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
@@ -7509,9 +7773,11 @@ async function confirmarMovManual(rid, tipo, btn) {
   const mot = document.getElementById("mm-mot").value;
   const cosEl = document.getElementById("mm-cos");
   const cos = cosEl ? parseFloat((cosEl.value || "0").replace(/\./g, "").replace(/,/g, ".")) : 0;
+  const provEl = document.getElementById("mm-prov");
   const r = await api(`/api/repuestos/${rid}/movimiento`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tipo, cantidad: cant, motivo: mot, costo_unitario: cos || 0 })
+    body: JSON.stringify({ tipo, cantidad: cant, motivo: mot, costo_unitario: cos || 0,
+                           proveedor: provEl ? provEl.value : "" })
   });
   if (r.ok) {
     toast(`Hecho, queda ${fmtNum(r.stock_actual)}`, "success");
@@ -7616,7 +7882,7 @@ async function editarRepuesto(id) {
           <div class="field"><label>Posición</label><input id="e-uo" value="${r.ubic_posicion||''}" maxlength="3" style="width:60px;text-align:center;font-size:17px;font-weight:600"></div>
         </div>
       </div>
-      ${camposProveedor("e", r)}
+      ${camposProveedor("e", r, "Proveedor principal")}
       <div class="form-row" style="margin-top:12px">
         <div class="field"><label>Avisar bajo de</label><input id="e-min" value="${r.stock_minimo||0}" style="width:120px"></div>
         <div class="field"><label>Precio c/u (Gs.)</label><input id="e-cos" value="${r.costo_unitario||0}" style="width:140px"></div>
