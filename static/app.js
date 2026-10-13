@@ -1721,29 +1721,16 @@ function renderOdometro(p) {
   return `<div class="odometer-card">
     <div>
       <div class="odo-label">Odómetro estimado</div>
-      <div class="odo-value">${fmtNum(p.km_actual)} km
-        <button class="icon-btn" title="Corregir km a mano" onclick="corregirKm(${v.id}, ${p.km_actual})" style="vertical-align:middle;margin-left:6px"><i class="ti ti-edit"></i></button>
-      </div>
+      <div class="odo-value">${fmtNum(p.km_actual)} km</div>
+      <div class="odo-verif">${p.km_verif
+        ? `<i class="ti ti-circle-check"></i> Verificado en la OT #${p.km_verif.ot} · ${otFechaHora(p.km_verif.fecha)}${p.km_verif.por ? " · " + hiEsc(p.km_verif.por) : ""}`
+        : `<i class="ti ti-info-circle"></i> El km se verifica al abrir una OT del coche`}</div>
       <div class="odo-plan"><i class="ti ti-bus"></i> Coche: <b>${coche}</b></div>
     </div>
     <div id="odo-resumen" class="odo-resumen"></div>
   </div>`;
 }
 
-// Corregir manualmente el odómetro de un vehículo
-function corregirKm(vid, kmActual) {
-  const nuevo = prompt(`Odómetro actual: ${fmtNum(kmActual)} km\n\nIngresá el km correcto del tablero:`, Math.round(kmActual));
-  if (nuevo === null) return;
-  const km = parseFloat(String(nuevo).replace(/\./g, "").replace(/,/g, "."));
-  if (isNaN(km) || km < 0) { toast("Km inválido", "error"); return; }
-  api(`/api/vehiculos/${vid}/km_manual`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ km })
-  }).then(r => {
-    if (r.ok) { toast("Odómetro corregido", "success"); renderMantenimiento(); }
-    else toast(r.msg || "Error", "error");
-  });
-}
 function renderSinPlan(planes, v) {
   return `<div class="card">
     <div class="card-head"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Sin plan asignado</div>
@@ -6107,6 +6094,8 @@ async function abrirOT(otId) {
           ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
         </div>
 
+        <div id="ot-km-box">${otKmCaja(ot)}</div>
+
         ${ot.fotos && ot.fotos.length ? `
           <div style="margin-bottom:18px">
             <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px"><i class="ti ti-camera"></i> Fotos del chofer</div>
@@ -6198,6 +6187,84 @@ function guardarPendientesOT() {
   if (activo && activo.tagName === "INPUT" && activo.closest("#modal-ot-detalle")) {
     activo.blur();
   }
+}
+
+// ─── Kilometraje verificado en la OT ───
+// Cuando el coche entra al taller se mira el tablero: acá se confirma o se
+// corrige, y esa lectura pasa a ser el km del coche (Preventivo incluido).
+function otFechaHora(t) {
+  if (!t) return "";
+  const [f, h] = String(t).replace("T", " ").split(" ");
+  return `${f.slice(8, 10)}/${f.slice(5, 7)}${h ? " " + h.slice(0, 5) : ""}`;
+}
+function otKmCaja(ot) {
+  window._otKm = ot;
+  const v = ot.km_verif;
+  const aca = v && v.ot === ot.id;
+  const coche = Math.round(ot.km_coche || 0);
+  const kmOt = Math.round(ot.km || 0);
+  let sub;
+  if (aca) sub = `<span class="ot-km-ok"><i class="ti ti-circle-check"></i> Verificado${v.por ? " por " + hiEsc(v.por) : ""} el ${otFechaHora(v.fecha)}</span>`;
+  else {
+    const partes = ["Sin verificar en esta OT"];
+    if (coche && coche !== kmOt) partes.push(`el sistema tiene ${fmtNum(coche)} km`);
+    if (v) partes.push(`última verificación: OT #${v.ot}, ${otFechaHora(v.fecha)}`);
+    sub = partes.join(" · ");
+  }
+  return `
+    <div class="ot-km ${aca ? "ok" : ""}">
+      <div class="ot-km-ic"><i class="ti ti-gauge"></i></div>
+      <div class="ot-km-info">
+        <div class="ot-km-lbl">Kilometraje del tablero</div>
+        <div class="ot-km-num">${kmOt ? fmtNum(kmOt) + " km" : "sin cargar"}</div>
+        <div class="ot-km-sub">${sub}</div>
+      </div>
+      ${ot.puede_verificar_km ? `<button class="btn ${aca ? "btn-ghost" : "btn-primary"}" onclick="otKmEditar()"><i class="ti ti-${aca ? "pencil" : "gauge"}"></i> ${aca ? "Corregir" : "Verificar km"}</button>` : ""}
+    </div>`;
+}
+function otKmEditar() {
+  const ot = window._otKm; if (!ot) return;
+  const valor = Math.round(ot.km || ot.km_coche || 0);
+  $("#ot-km-box").innerHTML = `
+    <div class="ot-km editando">
+      <div class="ot-km-ic"><i class="ti ti-gauge"></i></div>
+      <div class="ot-km-info">
+        <div class="ot-km-lbl">¿Qué marca el tablero?</div>
+        <div class="ot-km-edit">
+          <input id="ot-km-in" inputmode="numeric" value="${valor ? fmtNum(valor) : ""}" placeholder="ej: 245.300"
+                 onkeydown="if(event.key==='Enter')otKmGuardar(); if(event.key==='Escape')otKmCancelar()">
+          <span>km</span>
+        </div>
+        <div class="ot-km-sub">Queda como km de esta OT y del coche, también para el Preventivo.</div>
+      </div>
+      <div class="ot-km-btns">
+        <button class="btn btn-ghost" onclick="otKmCancelar()">Cancelar</button>
+        <button class="btn btn-primary" onclick="otKmGuardar(this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  const i = $("#ot-km-in"); i.focus(); i.select();
+}
+function otKmCancelar() { $("#ot-km-box").innerHTML = otKmCaja(window._otKm); }
+async function otKmGuardar(btn) {
+  const ot = window._otKm; if (!ot) return;
+  const km = parseFloat(String($("#ot-km-in").value || "").replace(/\./g, "").replace(/,/g, ".").replace(/[^\d.]/g, ""));
+  if (!km || km <= 0) { toast("Poné el kilometraje del tablero", "error"); return; }
+  const antes = Math.round(ot.km_coche || 0);
+  if (antes && km < antes &&
+      !confirm(`El sistema tenía ${fmtNum(antes)} km y ponés ${fmtNum(km)} km.\n\n¿Corregir a ${fmtNum(km)}? Desde ahora manda esta lectura.`)) return;
+  if (btn) btn.disabled = true;
+  const r = await api(`/api/ots/${ot.id}/km`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ km })
+  });
+  if (btn) btn.disabled = false;
+  if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo guardar", "error"); return; }
+  toast(`Km verificado: ${fmtNum(km)} km`, "success");
+  // Se vuelve a abrir la OT para que el km quede igual en todos lados
+  // (encabezado incluido) y la lista de fondo también se actualiza.
+  document.getElementById("modal-ot-detalle")?.remove();
+  if (document.querySelector('.nav-item[data-sec="ots"].active')) renderOts();
+  await abrirOT(ot.id);
+  document.querySelector("#ot-km-box .ot-km")?.classList.add("recien");
 }
 
 function cerrarModalOTDetalle() {

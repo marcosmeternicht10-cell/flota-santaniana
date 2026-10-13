@@ -4451,3 +4451,29 @@ html[data-tr-dir="ant"]::view-transition-new(tr-dia) { animation: trVtEntraIzq .
   .rep-pv-precio { text-align: left; margin-left: 50px; }
   .rep-pv-acc { margin-left: auto; }
 }
+
+/* ── Kilometraje verificado en la OT ── */
+.ot-km {
+  display: flex; align-items: center; gap: 14px; margin: 0 0 16px; padding: 12px 14px;
+  border: 1px solid var(--warning-bd, #EBCB8B); background: var(--warning-bg); border-radius: 12px;
+  transition: background .4s var(--ui-suave, ease), border-color .4s;
+}
+.ot-km.ok { border-color: var(--success-bd); background: var(--success-bg); }
+.ot-km.editando { border-color: var(--info-bd); background: var(--info-bg); flex-wrap: wrap; }
+.ot-km.recien { animation: otKmBrillo 1.4s var(--ui-suave, ease); }
+@keyframes otKmBrillo { 0% { box-shadow: 0 0 0 0 rgba(47,124,70,.45); } 100% { box-shadow: 0 0 0 12px rgba(47,124,70,0); } }
+.ot-km-ic { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; background: var(--surface); font-size: 21px; color: var(--warning); flex-shrink: 0; }
+.ot-km.ok .ot-km-ic { color: var(--success); }
+.ot-km.editando .ot-km-ic { color: var(--brand-blue); }
+.ot-km-info { flex: 1; min-width: 180px; }
+.ot-km-lbl { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.ot-km-num { font: 700 22px var(--display, "Inter"); color: var(--azul-oscuro, var(--text)); line-height: 1.2; }
+.ot-km-sub { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+.ot-km-ok { color: var(--success); font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+.ot-km-edit { display: flex; align-items: baseline; gap: 8px; margin: 4px 0 2px; }
+.ot-km-edit input { width: 170px; padding: 8px 12px; border: 1.5px solid var(--brand-blue); border-radius: 10px; font: 700 20px var(--display, "Inter"); color: var(--text); background: var(--surface); outline: none; }
+.ot-km-edit span { font-weight: 600; color: var(--muted); }
+.ot-km-btns { display: flex; gap: 8px; }
+.odo-verif { font-size: 12.5px; color: rgba(255,255,255,.78); margin: 4px 0 6px; display: flex; align-items: center; gap: 5px; }
+.odo-verif .ti-circle-check { color: #7FD29B; }
+@media (max-width: 640px) { .ot-km { flex-wrap: wrap; } .ot-km > .btn { width: 100%; } .ot-km-btns { width: 100%; justify-content: flex-end; } }
