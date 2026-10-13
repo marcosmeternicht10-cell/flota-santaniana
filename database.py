@@ -52,6 +52,12 @@ def inicializar_db():
         # distinto que sus hermanos por la ruta que hace, los años o el estado.
         # Va aparte del de Turismo para no mover los presupuestos sin querer.
         ("consumo_referencia_propia", "REAL DEFAULT 0"),
+        # Kilometraje verificado en una OT: el taller mira el tablero al abrir
+        # la orden y lo confirma o corrige. Desde ahí esa lectura manda (ver
+        # km_actual_vehiculo). km_manual guarda la lectura; estos, dónde y quién.
+        ("km_verif_ot",    "INTEGER DEFAULT 0"),
+        ("km_verif_fecha", "TEXT DEFAULT ''"),
+        ("km_verif_por",   "TEXT DEFAULT ''"),
     ]:
         if col not in columnas_existentes:
             try:
@@ -832,9 +838,24 @@ def desasignar_plan(vehiculo_id):
 
 # ── Kilometraje del vehículo ─────────────────────────────────────────────
 
+def _km_resuelto(km_servicios, km_ots, km_manual, verif_ot, km_ots_despues):
+    """La regla del km actual, en un solo lugar (la usan el coche suelto y el
+    dashboard de toda la flota).
+
+    Si el kilometraje se verificó en una OT, esa lectura manda: el km es esa
+    lectura o el de una OT posterior, si es más alto. Así una corrección hacia
+    abajo (alguien tipeó 500.000 en vez de 250.000) se respeta, cosa que con
+    "el más alto de todos" era imposible.
+    Sin verificación sigue la regla de siempre: el más alto de lo registrado."""
+    if int(verif_ot or 0) > 0:
+        return max(float(km_manual or 0), float(km_ots_despues or 0))
+    return max(float(km_servicios or 0), float(km_ots or 0), float(km_manual or 0))
+
+
 def km_actual_vehiculo(vehiculo_id):
     """
     Calcula el km actual del coche como el ODÓMETRO MÁS ALTO registrado.
+    (Si se verificó en una OT, manda esa lectura: ver _km_resuelto.)
     Toma el mayor entre:
       - km_inicial del plan + suma de servicios (cálculo histórico)
       - el odómetro más alto de las OT (lo que ponen los choferes)
@@ -851,14 +872,52 @@ def km_actual_vehiculo(vehiculo_id):
             COALESCE((SELECT MAX(km) FROM ordenes_trabajo WHERE vehiculo_id=?), 0)
           AS km_ots,
             COALESCE((SELECT km_manual FROM vehiculos WHERE id=?), 0)
-          AS km_manual
-    """, (vehiculo_id, vehiculo_id, vehiculo_id, vehiculo_id)).fetchone()
+          AS km_manual,
+            COALESCE((SELECT km_verif_ot FROM vehiculos WHERE id=?), 0)
+          AS verif_ot,
+            COALESCE((SELECT MAX(o.km) FROM ordenes_trabajo o WHERE o.vehiculo_id=?
+                      AND o.id > COALESCE((SELECT km_verif_ot FROM vehiculos WHERE id=?), 0)), 0)
+          AS km_ots_despues
+    """, (vehiculo_id, vehiculo_id, vehiculo_id, vehiculo_id,
+          vehiculo_id, vehiculo_id, vehiculo_id)).fetchone()
     conn.close()
-    km_servicios = float(fila["km_servicios"] or 0)
-    km_ots = float(fila["km_ots"] or 0)
-    km_manual = float(fila["km_manual"] or 0)
-    # El km actual es el más alto de los tres
-    return max(km_servicios, km_ots, km_manual)
+    return _km_resuelto(fila["km_servicios"], fila["km_ots"], fila["km_manual"],
+                        fila["verif_ot"], fila["km_ots_despues"])
+
+
+def verificar_km_en_ot(ot_id, km, usuario=""):
+    """El taller miró el tablero al abrir la OT: se guarda como km de la OT y
+    como lectura verificada del coche (manda desde ahora). Devuelve
+    (ok, datos o mensaje)."""
+    from hora_local import ahora_iso
+    conn = get_connection()
+    try:
+        ot = conn.execute("SELECT id, vehiculo_id, km FROM ordenes_trabajo WHERE id=?", (ot_id,)).fetchone()
+        if not ot:
+            return False, "La OT no existe."
+        vid = ot["vehiculo_id"]
+        conn.execute("UPDATE ordenes_trabajo SET km=? WHERE id=?", (float(km), ot_id))
+        conn.execute("""UPDATE vehiculos SET km_manual=?, km_verif_ot=?, km_verif_fecha=?, km_verif_por=?
+                        WHERE id=?""", (float(km), ot_id, ahora_iso(con_segundos=False), usuario or "", vid))
+        conn.commit()
+    finally:
+        conn.close()
+    return True, {"vehiculo_id": vid, "km_actual": km_actual_vehiculo(vid)}
+
+
+def km_verificacion(vehiculo_id):
+    """Dónde y cuándo se verificó por última vez el km del coche."""
+    conn = get_connection()
+    try:
+        r = conn.execute("""SELECT COALESCE(km_verif_ot,0) AS ot, COALESCE(km_verif_fecha,'') AS fecha,
+                                   COALESCE(km_verif_por,'') AS por, COALESCE(km_manual,0) AS km
+                            FROM vehiculos WHERE id=?""", (vehiculo_id,)).fetchone()
+    except Exception:
+        r = None
+    conn.close()
+    if not r or not int(r["ot"] or 0):
+        return None
+    return {"ot": int(r["ot"]), "fecha": r["fecha"], "por": r["por"], "km": float(r["km"] or 0)}
 
 
 def guardar_horario_salida(vehiculo_id, horario):
@@ -1275,14 +1334,14 @@ def dashboard_resumen():
             COALESCE((SELECT km_inicial FROM vehiculo_plan WHERE vehiculo_id=v.id), 0)
               + COALESCE((SELECT SUM(km) FROM servicios WHERE vehiculo_id=v.id), 0) AS km_servicios,
             COALESCE((SELECT MAX(km) FROM ordenes_trabajo WHERE vehiculo_id=v.id), 0) AS km_ots,
-            COALESCE(v.km_manual, 0) AS km_manual
+            COALESCE(v.km_manual, 0) AS km_manual,
+            COALESCE(v.km_verif_ot, 0) AS verif_ot,
+            COALESCE((SELECT MAX(o.km) FROM ordenes_trabajo o WHERE o.vehiculo_id=v.id
+                      AND o.id > COALESCE(v.km_verif_ot, 0)), 0) AS km_ots_despues
         FROM vehiculos v WHERE v.activo=1
     """).fetchall():
-        km_por_veh[r["id"]] = max(
-            float(r["km_servicios"] or 0),
-            float(r["km_ots"] or 0),
-            float(r["km_manual"] or 0),
-        )
+        km_por_veh[r["id"]] = _km_resuelto(r["km_servicios"], r["km_ots"], r["km_manual"],
+                                           r["verif_ot"], r["km_ots_despues"])
 
     # 3. Plan de cada vehículo (1 consulta con JOIN)
     plan_por_veh = {}

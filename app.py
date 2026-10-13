@@ -790,9 +790,11 @@ def api_eliminar_tarea(tid):
 @app.route("/api/vehiculos/<int:vid>/plan", methods=["GET"])
 def api_plan_vehiculo(vid):
     plan = obtener_plan_vehiculo(vid)
+    from database import km_verificacion
     return jsonify({
         "plan": plan,
-        "km_actual": km_actual_vehiculo(vid)
+        "km_actual": km_actual_vehiculo(vid),
+        "km_verif": km_verificacion(vid),
     })
 
 
@@ -1134,7 +1136,39 @@ def api_ot(ot_id):
         return jsonify({"error": "no encontrada"}), 404
     # Incluir las fotos (cantidad y datos) para mostrarlas en el taller
     ot["fotos"] = obtener_fotos_ot(ot_id, incluir_datos=True)
+    # Kilometraje: lo que tiene el coche en el sistema y la última verificación
+    from database import km_verificacion
+    ot["km_coche"] = km_actual_vehiculo(ot["vehiculo_id"])
+    ot["km_verif"] = km_verificacion(ot["vehiculo_id"])
+    ot["puede_verificar_km"] = session.get("rol") in ("admin", "taller")
     return jsonify(ot)
+
+
+@app.route("/api/ots/<int:ot_id>/km", methods=["POST"])
+@rol_requerido("admin", "taller")
+def api_verificar_km_ot(ot_id):
+    """El taller miró el tablero al abrir la OT y confirma o corrige el km.
+    Esa lectura pasa a ser el km del coche (también para el Preventivo)."""
+    from database import verificar_km_en_ot
+    d = request.json or {}
+    try:
+        km = float(str(d.get("km", "")).replace(".", "").replace(",", ".") if isinstance(d.get("km"), str) else d.get("km"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Poné el kilometraje en números."}), 400
+    if km <= 0:
+        return jsonify({"ok": False, "msg": "Poné el kilometraje del tablero."}), 400
+    if km > 5_000_000:
+        return jsonify({"ok": False, "msg": "Ese kilometraje no es posible: revisá el número."}), 400
+    ot = obtener_ot(ot_id)
+    if not ot:
+        return jsonify({"ok": False, "msg": "La OT no existe."}), 404
+    antes = km_actual_vehiculo(ot["vehiculo_id"])
+    ok, res = verificar_km_en_ot(ot_id, km, session.get("nombre") or session.get("usuario") or "")
+    if not ok:
+        return jsonify({"ok": False, "msg": res}), 400
+    auditar(f"Verificó el km en la OT #{ot_id}", "Órdenes de Trabajo",
+            f"Coche {ot.get('n_interno') or ot.get('patente')}: {int(antes):,} → {int(km):,} km".replace(",", "."))
+    return jsonify({"ok": True, "km_actual": res["km_actual"], "antes": antes})
 
 
 @app.route("/api/ots", methods=["POST"])
