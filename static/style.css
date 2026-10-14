@@ -5888,3 +5888,21 @@ tr.pv-it-fila:has(.pv-it:empty) { display: none; }
   .pv-ficha-acc .btn { flex: 1; justify-content: center; }
   .pv-ot { flex-wrap: wrap; }
 }
+
+/* ── Buscador de coche en la lista de OTs ── */
+.ot-buscar { margin-left: auto; flex: 1 1 220px; min-width: 220px; max-width: 360px; }
+.ot-buscar input { font-size: 14px; }
+.ot-buscar-x { flex-shrink: 0; width: 26px; height: 26px; border: 0; border-radius: 7px; display: grid; place-items: center; cursor: pointer; background: var(--surface3); color: var(--muted); }
+.ot-buscar-x:hover { color: var(--text); }
+.ot-buscar-x[hidden], .ot-buscar-res[hidden], #ot-q-vacio[hidden], .table-wrap[hidden], tr.ot-fila[hidden] { display: none !important; }
+.ot-buscar-res { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: -6px 0 12px; padding: 8px 12px; border-radius: 10px;
+  background: var(--info-bg); color: var(--brand-blue); font-size: 13px; }
+.ot-buscar-res b { font-weight: 700; }
+.ot-buscar-res .pv-link { margin-left: auto; }
+@media (max-width: 760px) {
+  .ot-buscar { margin-left: 0; flex: 1 1 auto; min-width: 0; max-width: none; }
+  /* En el celular la barra va en columna: que nada se salga de la pantalla
+     (las pestañas se deslizan de costado) */
+  .toolbar:has(.ot-buscar) { flex-wrap: nowrap; }
+  .toolbar:has(.ot-buscar) .tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+}

@@ -5172,6 +5172,7 @@ const LABEL_ESTADO_OT = {
 };
 
 let otFiltroEstado = "";
+let otBusqueda = "";     // el coche que se está buscando en la lista de OTs (queda al volver)
 
 // ═══════════════ PANTALLA DE COMPRAS / DEPÓSITO ═══════════════
 let comprasTab = "en_espera";
@@ -5542,7 +5543,14 @@ async function renderOts() {
           <button class="tab-btn ${otFiltroEstado==='en_proceso'?'active':''}" onclick="filtrarOTs('en_proceso')"><i class="ti ti-tool"></i> En proceso</button>
           <button class="tab-btn ${otFiltroEstado==='cerrada'?'active':''}" onclick="filtrarOTs('cerrada')"><i class="ti ti-circle-check"></i> Cerradas</button>
         </div>
+        <label class="rv-buscar ot-buscar" title="N° de coche, patente, marca o N° de OT (#45)">
+          <i class="ti ti-search"></i>
+          <input id="ot-q" value="${trEsc(otBusqueda)}" placeholder="Buscar coche: N°, patente o marca" autocomplete="off"
+                 oninput="otBusqueda=this.value;otFiltrarLista()" onkeydown="if(event.key==='Escape'){this.value='';otBusqueda='';otFiltrarLista()}">
+          <button class="ot-buscar-x" id="ot-q-x" onclick="event.preventDefault();otBusqueda='';$('#ot-q').value='';otFiltrarLista();$('#ot-q').focus()" aria-label="Borrar búsqueda" ${otBusqueda ? "" : "hidden"}><i class="ti ti-x"></i></button>
+        </label>
       </div>
+      <div class="ot-buscar-res" id="ot-q-res" hidden></div>
 
       ${ots.length === 0 ? `<div class="empty"><i class="ti ti-clipboard-off"></i>Sin OTs ${otFiltroEstado ? 'en este filtro' : 'todavía'}.<br>Tocá <b>Nueva OT</b> para cargar la primera.</div>` : `
         <div class="table-wrap">
@@ -5556,7 +5564,9 @@ async function renderOts() {
             <tbody>
               ${ots.map(o => {
                 const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
-                return `<tr class="clickable" onclick="abrirOT(${o.id})">
+                const datos = [o.n_interno, o.patente, o.marca, o.modelo].map(x => String(x || "").toLowerCase()).join(" ");
+                return `<tr class="clickable ot-fila" onclick="abrirOT(${o.id})" data-id="${o.id}" data-n="${trEsc(String(o.n_interno || "").toLowerCase())}"
+                            data-p="${trEsc(String(o.patente || "").toLowerCase().replace(/[^a-z0-9]/g, ""))}" data-t="${trEsc(datos)}">
                   <td><b>#${o.id}</b></td>
                   <td class="center">${badgeSalida(o.horario_salida)}</td>
                   <td>${o.fecha_apertura}</td>
@@ -5584,8 +5594,52 @@ async function renderOts() {
             </tbody>
           </table>
         </div>
+        <div class="empty" id="ot-q-vacio" hidden><i class="ti ti-search-off"></i><span></span></div>
       `}
     </div>`;
+  otFiltrarLista();
+}
+
+// Buscador de coche en la lista de OTs. Si el número coincide justo con un
+// coche, muestra solo ese (escribir "1700" no trae también el 21700); si no,
+// busca por parte del número, la patente, la marca o el modelo. "#45" busca
+// la OT 45.
+function otFiltrarLista() {
+  const filas = [...document.querySelectorAll("tr.ot-fila")];
+  const q = (otBusqueda || "").trim().toLowerCase();
+  const x = $("#ot-q-x"), res = $("#ot-q-res"), vacio = $("#ot-q-vacio");
+  if (x) x.hidden = !q;
+  if (!filas.length) { if (res) res.hidden = true; return; }
+  let ver;
+  if (!q) ver = () => true;
+  else if (/^#\s*\d+$/.test(q) || /^ot\s*#?\s*\d+$/.test(q)) {
+    const id = q.replace(/\D/g, "");
+    ver = f => f.dataset.id === id;
+  } else {
+    const qp = q.replace(/[^a-z0-9]/g, "");
+    const exacto = filas.some(f => f.dataset.n === q);
+    ver = exacto ? (f => f.dataset.n === q)
+      : (f => f.dataset.n.includes(q) || (qp && f.dataset.p.includes(qp)) || f.dataset.t.includes(q));
+  }
+  let n = 0;
+  const coches = new Set();
+  filas.forEach(f => {
+    const si = ver(f);
+    f.hidden = !si;
+    if (si) { n++; coches.add(f.dataset.n || f.dataset.p); }
+  });
+  const tabla = filas[0].closest(".table-wrap");
+  if (tabla) tabla.hidden = q && !n;
+  if (vacio) {
+    vacio.hidden = !(q && !n);
+    if (q && !n) vacio.querySelector("span").innerHTML = `Ninguna OT ${otFiltroEstado ? "en este filtro " : ""}de «${trEsc(otBusqueda.trim())}».<br>Probá con el N° de coche o la patente.`;
+  }
+  if (res) {
+    res.hidden = !q || !n;
+    if (q && n) res.innerHTML = `<i class="ti ti-filter"></i> ${n} OT${n === 1 ? "" : "s"}${coches.size === 1
+      ? ` del coche <b>${trEsc([...coches][0].toUpperCase())}</b>` : ` de ${coches.size} coches`}
+      <button class="pv-link" onclick="otBusqueda='';$('#ot-q').value='';otFiltrarLista()">ver todas</button>`;
+  }
 }
 
 function filtrarOTs(estado) {
