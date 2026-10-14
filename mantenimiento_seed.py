@@ -284,6 +284,14 @@ def cargar_plan(plan_def):
     conn.close()
     if existe:
         return False, existe["id"]
+    # Si el plan de fábrica se renombró o se borró desde la pantalla, no se
+    # vuelve a crear al arrancar.
+    try:
+        import plan_preventivo
+        if plan_preventivo.plan_omitido(plan_def["nombre"]):
+            return False, None
+    except Exception:
+        pass
 
     ok, plan_id = crear_plan(plan_def["nombre"], plan_def["descripcion"])
     if not ok:
@@ -337,7 +345,7 @@ def cargar_planes_default():
 
         # Configurar neumáticos para este plan
         nc = configs_neumaticos.get(plan["nombre"])
-        if nc:
+        if nc and plan_id:
             crear_config_neumaticos(
                 plan_id, nc["config"], nc["medida"],
                 nc["presion_dir"], nc["presion_trac"], nc["vida_km"]

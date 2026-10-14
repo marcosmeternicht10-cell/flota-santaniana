@@ -959,7 +959,7 @@ _GRAD_COLORES = {
     "vencido":  ("#DC2626", "#FEE2E2"),
 }
 _LABEL_ESTADO_MANT = {
-    "ok": "Al día", "pronto": "Pronto", "vencido": "Vencido", "nunca": "Sin registro",
+    "ok": "Al día", "pronto": "Pronto", "vencido": "Vencido", "nunca": "Sin dato",
 }
 
 
@@ -981,6 +981,14 @@ def _barra_progreso(pct, estado_grad, ancho_mm=42):
         ("ROUNDEDCORNERS", [2, 2, 2, 2]),
     ]))
     return barra
+
+
+def _casillero():
+    """Un cuadradito vacío para tildar a mano (el carácter ☐ no existe en
+    la fuente del PDF y salía como un cuadrado negro)."""
+    c = Table([[""]], colWidths=[3.6*mm], rowHeights=[3.6*mm])
+    c.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.8, colors.HexColor("#5A6B80"))]))
+    return c
 
 
 def generar_plan_preventivo_pdf(vehiculo, plan, tareas, ruta_salida):
@@ -1033,12 +1041,16 @@ def generar_plan_preventivo_pdf(vehiculo, plan, tareas, ruta_salida):
 
     # ── Datos del vehículo y plan ──
     km_actual = tareas[0]["km_actual"] if tareas else 0
+    fdm = lambda f: f"{str(f)[8:10]}/{str(f)[5:7]}" if f else ""
+    turno = plan.get("turno") or {}
     datos = [[
         Paragraph(f"<b>Plan:</b> {plan.get('plan_nombre','—')}", small),
-        Paragraph(f"<b>Km actual:</b> {kmf(km_actual)} km", small),
-        Paragraph(f"<b>Fecha:</b> {datetime.date.today().isoformat()}", small),
+        Paragraph(f"<b>Km actual:</b> {kmf(km_actual)} km"
+                  + (f" &nbsp;·&nbsp; anda {kmf(plan.get('km_dia'))} km/día" if plan.get("km_dia") else ""), small),
+        Paragraph(f"<b>Fecha:</b> {datetime.date.today().isoformat()}"
+                  + (f"<br/><b>Turno:</b> {fdm(turno.get('fecha'))} {turno.get('hora') or ''}" if turno.get("fecha") else ""), small),
     ]]
-    td = Table(datos, colWidths=[80*mm, 56*mm, 46*mm])
+    td = Table(datos, colWidths=[72*mm, 64*mm, 46*mm])
     td.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,-1), colors.HexColor(GRIS_CLARO)),
         ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#D9E2EE")),
@@ -1055,25 +1067,34 @@ def generar_plan_preventivo_pdf(vehiculo, plan, tareas, ruta_salida):
             Paragraph("<b>Cada</b>", small),
             Paragraph("<b>Último</b>", small),
             Paragraph("<b>Próximo</b>", small),
-            Paragraph("<b>Faltan</b>", small),
+            Paragraph("<b>Faltan / día</b>", small),
             Paragraph("<b>Progreso</b>", small),
             Paragraph("<b>Estado</b>", small),
-            Paragraph("<b>Hecho ✓</b>", small),
+            Paragraph("<b>Hecho</b>", small),
         ]]
         for t in tareas:
             ultimo = kmf(t["ultimo_km"]) + " km" if t["ultimo_km"] is not None else "—"
+            if t.get("ultimo_km") is not None and t.get("ultima_fecha"):
+                ultimo += f"<br/>{fdm(t['ultima_fecha'])}/{str(t['ultima_fecha'])[2:4]}"
             restantes = t["km_restantes"]
-            faltan = (kmf(restantes) + " km") if restantes >= 0 else ("VENCIDO " + kmf(abs(restantes)))
+            if restantes is None:
+                faltan = "Cargar último"
+            else:
+                faltan = (kmf(restantes) + " km") if restantes >= 0 else ("VENCIDO " + kmf(abs(restantes)))
+                if t.get("fecha_estimada") and restantes >= 0:
+                    faltan += f"<br/>aprox. {fdm(t['fecha_estimada'])}"
             color_estado = _GRAD_COLORES.get(t["estado_grad"], ("#999",""))[0]
+            proximo = kmf(t["proximo_km"]) + " km" if t.get("proximo_km") is not None else "—"
+            cada = kmf(t["intervalo_km"]) + ("*" if t.get("propio") else "")
             filas.append([
                 Paragraph(t["tarea"], small),
-                Paragraph(kmf(t["intervalo_km"]), micro),
+                Paragraph(cada, micro),
                 Paragraph(ultimo, micro),
-                Paragraph(kmf(t["proximo_km"]) + " km", micro),
+                Paragraph(proximo, micro),
                 Paragraph(f"<font color='{color_estado}'>{faltan}</font>", micro),
-                _barra_progreso(t["porcentaje_visual"], t["estado_grad"]),
+                _barra_progreso(t["porcentaje_visual"], t["estado_grad"], ancho_mm=23),
                 Paragraph(f"<font color='{color_estado}'><b>{_LABEL_ESTADO_MANT.get(t['estado'], t['estado'])}</b></font>", micro),
-                Paragraph("☐", small),  # casillero para tildar a mano
+                _casillero(),  # casillero para tildar a mano
             ])
         tabla = Table(filas, colWidths=[42*mm, 16*mm, 22*mm, 22*mm, 26*mm, 26*mm, 18*mm, 12*mm])
         tabla.setStyle(TableStyle([
@@ -1099,6 +1120,8 @@ def generar_plan_preventivo_pdf(vehiculo, plan, tareas, ruta_salida):
         ]], colWidths=[40*mm, 50*mm, 50*mm, 40*mm])
         leyenda.setStyle(TableStyle([("TOPPADDING",(0,0),(-1,-1),2),("BOTTOMPADDING",(0,0),(-1,-1),2)]))
         story.append(leyenda)
+        if any(t.get("propio") for t in tareas):
+            story.append(Paragraph("* Este coche tiene su propio \"cada cuánto\" para esa tarea (distinto al del plan).", micro))
     else:
         story.append(Paragraph("<i>Este vehículo no tiene un plan de mantenimiento asignado.</i>", small))
 
