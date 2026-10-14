@@ -187,6 +187,7 @@ function irA(sec) {
     oee: renderOEE,
     turismo: renderTurismo,
     turismo_agenda: renderAgendaTurismo,
+    turismo_rendiciones: renderRendicionesTurismo,
     historial: renderHistorial,
     combustible: renderCombustible,
     mantenimiento: renderMantenimiento,
@@ -4619,13 +4620,13 @@ if (window.USUARIO_ROL === "compras") {
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible",
                             "corp_resumen", "corp_historial", "corp_empresas",
-                            "corp_combustible", "corp_cargas"];
+                            "corp_combustible", "corp_cargas", "turismo_rendiciones"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Auditoría" && t !== "Corporativos") s.style.display = "none";
+    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="corp_resumen"]')?.classList.add("active");
   renderCorpResumen();
@@ -13490,3 +13491,1234 @@ document.addEventListener("keydown", e => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); abrirDestino(); }
   else if (e.key === "/" && !escribiendo) { e.preventDefault(); abrirDestino(); }
 });
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  RENDICIONES DE VIAJE (Turismo)
+// ════════════════════════════════════════════════════════════════════════
+// Antes del viaje se le da al chofer un anticipo; a la vuelta trae los
+// comprobantes y la oficina los carga acá (sin foto). Administración la
+// aprueba y después se registra si el chofer devolvió o si se le pagó.
+//
+//     anticipos − gastos = saldo      saldo > 0 → devuelve · saldo < 0 → se le paga
+//
+// Lista: arriba lo gastado en viajes (90 días) por rubro y los pendientes;
+// abajo cada viaje como un pasaje, con lo gastado contra el anticipo.
+// Detalle: el pasaje grande con los pasos, la cuenta, y la carga rápida de
+// comprobantes (rubro → monto → Enter).
+
+const rv = {
+  filtro: "activas", q: "", datos: null, id: null, det: null,
+  cat: "combustible", moneda: "GS", fecha: "", cot: {},
+  puedeCargar: false, esAdmin: false,
+  viajes: [], presus: null, nuevo: { modo: "agenda", sel: null, presuTocado: false },
+};
+
+const RV_CATS = [
+  { clave: "combustible", nombre: "Combustible", corto: "Combustible", icono: "gas-station", ph: "Estación y ciudad (ej. Petropar Coronel Oviedo)" },
+  { clave: "combustible_ext", nombre: "Combustible en el exterior", corto: "Combustible exterior", icono: "world", ph: "Estación y ciudad (ej. YPF Resistencia)" },
+  { clave: "peajes", nombre: "Peajes", corto: "Peajes", icono: "road", ph: "Qué peajes (ej. Ruta 2, ida)" },
+  { clave: "comida", nombre: "Comida / viáticos", corto: "Comida / viáticos", icono: "tools-kitchen-2", ph: "Comidas o viático de quién" },
+  { clave: "hotel", nombre: "Hotel / estadía", corto: "Hotel / estadía", icono: "bed", ph: "Hotel y noches" },
+  { clave: "estacionamiento", nombre: "Estacionamiento", corto: "Estacionamiento", icono: "parking", ph: "Dónde" },
+  { clave: "lavado", nombre: "Lavado", corto: "Lavado", icono: "droplets", ph: "Dónde y qué se lavó" },
+  { clave: "dinatran", nombre: "DINATRAN", corto: "DINATRAN", icono: "building-bank", ph: "Permiso, habilitación…" },
+  { clave: "carta_azul", nombre: "Carta azul", corto: "Carta azul", icono: "file-certificate", ph: "Carta azul" },
+  { clave: "otros", nombre: "Otros", corto: "Otros", icono: "dots", ph: "Qué fue" },
+];
+const RV_CAT = Object.fromEntries(RV_CATS.map(c => [c.clave, c]));
+const RV_MONEDAS = { GS: "Gs.", USD: "US$", ARS: "AR$", BRL: "R$" };
+const RV_ESTADOS = {
+  abierta: { txt: "Cargando", icono: "pencil", clase: "e-abierta" },
+  presentada: { txt: "Para aprobar", icono: "hourglass-high", clase: "e-presentada" },
+  aprobada: { txt: "Por saldar", icono: "checks", clase: "e-aprobada" },
+  saldada: { txt: "Saldada", icono: "circle-check", clase: "e-saldada" },
+};
+const RV_FILTROS = [["activas", "Activas"], ["abierta", "Cargando"], ["presentada", "Para aprobar"],
+                    ["aprobada", "Por saldar"], ["saldada", "Saldadas"], ["todas", "Todas"]];
+const RV_DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+const RV_MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+const RV_MESES_L = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+// ─── Utilidades ───
+const rvEsc = s => trEsc(s);
+// "1.250.000" → 1250000 · "50,5" → 50.5 · "12.50" → 12.5 (igual que el servidor)
+function rvNum(v) {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return v;
+  let s = String(v).trim().replace(/\s/g, "");
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else if ((s.match(/\./g) || []).length > 1 || /^\d*\.\d{3}$/.test(s)) s = s.replace(/\./g, "");
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+// 1234.5 → "1.234,5"
+function rvDec(n, dec = 2) {
+  n = Number(n) || 0;
+  const neg = n < 0;
+  let [ent, fr] = Math.abs(n).toFixed(dec).split(".");
+  ent = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  fr = (fr || "").replace(/0+$/, "");
+  return (neg ? "-" : "") + ent + (fr ? "," + fr : "");
+}
+const rvCot = v => (Number(v) < 100 ? rvDec(v, 2) : rvDec(v, 0));
+const rvMon = (monto, moneda) => `${RV_MONEDAS[moneda] || moneda} ${rvDec(monto, 2)}`;
+const rvD = f => (f ? new Date(String(f).slice(0, 10) + "T12:00:00") : null);
+const rvF = f => (f ? `${String(f).slice(8, 10)}/${String(f).slice(5, 7)}` : "—");
+const rvDiaSem = (f, corto) => { const d = rvD(f); if (!d) return ""; const n = RV_DIAS[d.getDay()]; return corto ? n.slice(0, 3) : n; };
+const rvDiasEntre = (a, b) => Math.round((rvD(b) - rvD(a)) / 86400000);
+const rvPl = (n, s, p) => `${n} ${n === 1 ? s : (p || s + "s")}`;
+// "JUAN CARLOS AYALA" → "Juan Carlos Ayala"
+function rvNombre(s) {
+  const chicas = new Set(["de", "del", "la", "las", "los", "y"]);
+  return String(s || "").toLowerCase().split(/(\s+|\/)/).map((p, i) =>
+    (i > 0 && chicas.has(p)) ? p : p.charAt(0).toUpperCase() + p.slice(1)).join("");
+}
+const rvCorto = s => rvNombre(String(s || "").split(/\s+/).slice(0, 2).join(" "));
+// La moneda que más se usa en el destino (para el combustible del exterior)
+function rvMonedaDestino(dest) {
+  const t = String(dest || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (/BUENOS AIRES|CLORINDA|FORMOSA|POSADAS|RESISTENCIA|CORRIENTES|ROSARIO|CORDOBA|MENDOZA|SALTA|BARILOCHE|MAR DEL PLATA|SANTA FE|TUCUMAN|PUERTO IGUAZU|ARGENTINA/.test(t)) return "ARS";
+  if (/FOZ|FLORIANOPOLIS|CAMBORIU|RIO DE JANEIRO|SAO PAULO|CURITIBA|PORTO ALEGRE|GRAMADO|BRASIL|BRAZIL|PONTA PORA|GUAIRA|CASCAVEL|BOMBINHAS/.test(t)) return "BRL";
+  return null;
+}
+function rvSaldoDe(r) {
+  return (r.estado === "aprobada" || r.estado === "saldada") ? r.saldo_ref : r.saldo;
+}
+// Cómo se dice el saldo según en qué paso está
+function rvSaldoTxt(r) {
+  const s = rvSaldoDe(r);
+  if (r.estado === "saldada") {
+    if (s > 0) return { clase: "cerrado", txt: `Devolvió ${gs(s)}` };
+    if (s < 0) return { clase: "cerrado", txt: `Se le pagó ${gs(-s)}` };
+    return { clase: "cerrado", txt: "Cerró justo" };
+  }
+  if (r.estado === "abierta") {
+    if (!r.gastos) return { clase: "parcial", txt: "Sin gastos cargados" };
+    if (s > 0) return { clase: "parcial", txt: `Devolvería ${gs(s)}` };
+    if (s < 0) return { clase: "parcial debe", txt: `Habría que pagarle ${gs(-s)}` };
+    return { clase: "parcial", txt: "Cerraría justo" };
+  }
+  if (s > 0) return { clase: "dev", txt: `Devuelve ${gs(s)}` };
+  if (s < 0) return { clase: "debe", txt: `Hay que pagarle ${gs(-s)}` };
+  return { clase: "justo", txt: "Cierra justo" };
+}
+// La barrita de lo gastado contra el anticipo. La escala es lo mayor entre los
+// dos: si no se pasó, la barra entera es el anticipo; si se pasó, donde termina
+// el azul es el anticipo y lo rojo es lo que puso el chofer de su bolsillo.
+function rvMedidor(anticipos, gastos, clase = "") {
+  const max = Math.max(anticipos, gastos) || 1;
+  const pasa = gastos > anticipos;
+  const wAz = (pasa ? anticipos : gastos) / max * 100;
+  const wRo = pasa ? (gastos - anticipos) / max * 100 : 0;
+  const ro = wRo <= 0 ? "" : wAz > 0
+    ? `<i class="ro" style="left:calc(${wAz}% + 2px);width:calc(${wRo}% - 2px)"></i>`
+    : `<i class="ro" style="left:0;width:${wRo}%"></i>`;
+  return `<div class="rv-medidor ${clase}" role="img" aria-label="Gastado ${gs(gastos)} de ${gs(anticipos)} de anticipo">
+    ${wAz > 0 ? `<i class="az" style="width:${wAz}%"></i>` : ""}${ro}
+  </div>`;
+}
+// Las cotizaciones que vienen del servidor (solo monedas conocidas)
+function rvCotLimpia(c) {
+  const out = {};
+  if (c && typeof c === "object") Object.keys(RV_MONEDAS).forEach(k => { if (k !== "GS" && Number(c[k]) > 0) out[k] = Number(c[k]); });
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  LISTA
+// ════════════════════════════════════════════════════════════════════════
+async function renderRendicionesTurismo() {
+  status("Rendiciones de viaje: anticipos y gastos de los viajes de turismo");
+  rv.id = null;
+  rv.presus = null;
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-receipt-2"></i> Rendiciones de viaje</h1>
+      <p>Anticipo contra gastos de cada viaje: la oficina carga los comprobantes y administración aprueba</p>
+      <div class="page-actions" id="rv-acciones"></div>
+    </div>
+    <div class="section rv-raiz" id="rv-raiz">
+      <div id="rv-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  const d = await api("/api/turismo/rendiciones");
+  if (!d || !d.rendiciones) {
+    $("#rv-cuerpo").innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer las rendiciones</b><span>Probá de nuevo en un rato.</span></div>`;
+    return;
+  }
+  rv.datos = d;
+  rv.puedeCargar = !!d.puede_cargar;
+  rv.esAdmin = !!d.es_admin;
+  const acc = $("#rv-acciones");
+  if (acc && rv.puedeCargar && d.total) acc.innerHTML = `<button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>`;
+  rvPintarLista();
+}
+
+function rvPintarLista() {
+  const cuerpo = $("#rv-cuerpo");
+  if (!cuerpo || !rv.datos) return;
+  const d = rv.datos, r = d.resumen;
+  if (!d.total) {
+    cuerpo.innerHTML = `
+      <div class="rv-vacio grande">
+        <span class="rv-vacio-ic"><i class="ti ti-receipt-2"></i></span>
+        <b>Todavía no hay rendiciones de viaje</b>
+        <span>Se arma a partir del viaje de la agenda: se carga el anticipo que se le dio al chofer y, a la vuelta, sus comprobantes.</span>
+        ${rv.puedeCargar ? `<button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>` : ""}
+      </div>`;
+    return;
+  }
+  cuerpo.innerHTML = `
+    ${rvHero(r)}
+    ${rvKpis(r)}
+    <div class="rv-barra">
+      <div class="rv-filtros" role="group" aria-label="Qué rendiciones ver" id="rv-filtros"></div>
+      <label class="rv-buscar">
+        <i class="ti ti-search"></i>
+        <input id="rv-q" type="search" value="${rvEsc(rv.q)}" placeholder="Buscar OT, cliente, destino, coche o chofer" oninput="rvBuscar(this.value)" autocomplete="off">
+      </label>
+    </div>
+    <div id="rv-lista"></div>`;
+  rvPintarFiltrosYLista();
+}
+
+function rvHero(r) {
+  const cats = r.categorias_90 || [];
+  const total = r.gastado_90 || 0;
+  if (!total) {
+    return `<section class="rv-hero solo">
+      <div class="rv-hero-num">
+        <span class="rv-hero-et">Gastos de viaje · últimos 90 días</span>
+        <b>${gs(0)}</b>
+        <span class="rv-hero-sub">Cuando se carguen los comprobantes de los viajes, acá se ve en qué se gasta.</span>
+      </div></section>`;
+  }
+  const top = cats.slice(0, 5);
+  const resto = cats.slice(5);
+  const filas = top.concat(resto.length ? [{ nombre: `Otros ${resto.length} rubros`, icono: "dots", total: resto.reduce((a, c) => a + c.total, 0) }] : []);
+  const max = Math.max(...filas.map(c => c.total)) || 1;
+  return `
+    <section class="rv-hero">
+      <div class="rv-hero-num">
+        <span class="rv-hero-et">Gastos de viaje · últimos 90 días</span>
+        <b>${gs(total)}</b>
+        <span class="rv-hero-sub">en ${rvPl(r.viajes_90, "viaje")} · promedio <strong>${gs(r.promedio_viaje_90)}</strong> por viaje</span>
+        <span class="rv-hero-sub"><strong>${gs(r.por_dia_90)}</strong> por día de viaje</span>
+      </div>
+      <div class="rv-hero-rubros">
+        <span class="rv-hero-et">En qué se gasta</span>
+        ${filas.map((c, i) => `
+          <div class="rv-hr" title="${rvEsc(c.nombre)}: ${gs(c.total)}">
+            <i class="ti ti-${c.icono}"></i>
+            <span class="rv-hr-n">${rvEsc(c.nombre)}</span>
+            <span class="rv-hr-bar"><i style="width:${Math.max(c.total / max * 100, 1.5)}%;animation-delay:${i * 60}ms"></i></span>
+            <span class="rv-hr-v">${gs(c.total)}</span>
+            <span class="rv-hr-p">${Math.round(c.total / total * 100)}%</span>
+          </div>`).join("")}
+      </div>
+    </section>`;
+}
+
+function rvKpis(r) {
+  const tile = (f, icono, et, num, sub, extra = "") => {
+    const dentro = `
+      <span class="rv-kpi-ic"><i class="ti ti-${icono}"></i></span>
+      <span class="rv-kpi-et">${et}</span>
+      <b>${num}</b>
+      <span class="rv-kpi-sub">${sub}</span>`;
+    return f
+      ? `<button class="rv-kpi ${RV_ESTADOS[f].clase} ${rv.filtro === f ? "on" : ""} ${extra}" data-f="${f}" onclick="rvFiltrar('${f}')" aria-pressed="${rv.filtro === f}">${dentro}</button>`
+      : `<div class="rv-kpi e-calle ${extra}">${dentro}</div>`;
+  };
+  const pend = r.para_aprobar;
+  const saldar = [];
+  if (r.devuelven) saldar.push(`<span class="rv-k-dev">Devuelven ${gs(r.devuelven)}</span>`);
+  if (r.se_les_debe) saldar.push(`<span class="rv-k-debe">Se les debe ${gs(r.se_les_debe)}</span>`);
+  return `<div class="rv-kpis">
+    ${tile("abierta", "pencil", "Cargando", r.cargando, r.cargando ? "viajes con comprobantes por cargar" : "nada a medio cargar")}
+    ${tile("presentada", "hourglass-high", "Para aprobar", pend,
+           pend ? (rv.esAdmin ? "esperan tu aprobación" : "esperando a administración") : "nada esperando aprobación",
+           pend && rv.esAdmin ? "alerta" : "")}
+    ${tile("aprobada", "checks", "Por saldar", r.por_saldar, saldar.length ? saldar.join("") : "nada por devolver ni pagar")}
+    ${tile(null, "wallet", "Anticipos sin rendir", gs(r.en_la_calle), "lo que tienen los choferes de viajes que todavía no se aprobaron", "plata")}
+  </div>`;
+}
+
+function rvFiltrar(f) {
+  rv.filtro = f;
+  document.querySelectorAll(".rv-kpi[data-f]").forEach(k => { k.classList.toggle("on", k.dataset.f === f); k.setAttribute("aria-pressed", k.dataset.f === f); });
+  rvPintarFiltrosYLista();
+}
+let _rvBuscarT = null;
+function rvBuscar(q) {
+  clearTimeout(_rvBuscarT);
+  _rvBuscarT = setTimeout(() => { rv.q = q.trim(); rvPintarFiltrosYLista(); }, 120);
+}
+
+function rvFiltradas() {
+  const todas = rv.datos?.rendiciones || [];
+  const Q = rv.q.toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return todas.filter(x => {
+    if (rv.filtro === "activas" && x.estado === "saldada") return false;
+    if (RV_ESTADOS[rv.filtro] && x.estado !== rv.filtro) return false;
+    if (!Q) return true;
+    const txt = [x.agenda_ot, x.cliente, x.salida, x.destino, x.coche, x.chofer, x.tripulacion, `#${x.id}`]
+      .join(" ").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return Q.split(/\s+/).every(p => txt.includes(p));
+  });
+}
+
+function rvPintarFiltrosYLista() {
+  const todas = rv.datos?.rendiciones || [];
+  const cuenta = k => k === "todas" ? todas.length : k === "activas" ? todas.filter(x => x.estado !== "saldada").length
+    : todas.filter(x => x.estado === k).length;
+  const f = $("#rv-filtros");
+  if (f) f.innerHTML = RV_FILTROS.map(([k, t]) =>
+    `<button class="sv-chip ${rv.filtro === k ? "on" : ""}" onclick="rvFiltrar('${k}')">${t}<span class="rv-cuenta">${cuenta(k)}</span></button>`).join("");
+  const lista = $("#rv-lista");
+  if (!lista) return;
+  const sel = rvFiltradas();
+  if (!sel.length) {
+    const nombre = { activas: "activas", abierta: "cargándose", presentada: "esperando aprobación", aprobada: "por saldar", saldada: "saldadas", todas: "" }[rv.filtro];
+    lista.innerHTML = `<div class="rv-vacio">
+      <i class="ti ti-${rv.q ? "search-off" : "mood-happy"}"></i>
+      <b>${rv.q ? `Nada con “${rvEsc(rv.q)}”` : `No hay rendiciones ${nombre}`}</b>
+      <span>${rv.q ? "Probá con otra parte del nombre, el número de OT o el coche." : rv.filtro === "presentada" ? "Todo lo que se presentó ya está aprobado." : "Elegí otro filtro para ver las demás."}</span>
+    </div>`;
+    return;
+  }
+  // Agrupadas por mes de salida
+  const grupos = [];
+  sel.forEach(x => {
+    const k = (x.fecha_salida || "").slice(0, 7);
+    let g = grupos[grupos.length - 1];
+    if (!g || g.k !== k) { g = { k, items: [] }; grupos.push(g); }
+    g.items.push(x);
+  });
+  lista.innerHTML = grupos.map(g => {
+    const [a, m] = g.k.split("-");
+    const gastado = g.items.reduce((s, x) => s + x.gastos, 0);
+    return `<div class="rv-mes">
+        <h3>${m ? RV_MESES_L[+m - 1] + " " + a : "Sin fecha"}</h3>
+        <span>${rvPl(g.items.length, "viaje")} · ${gs(gastado)} gastado</span>
+      </div>
+      ${g.items.map(rvTarjeta).join("")}`;
+  }).join("");
+}
+
+function rvTarjeta(x) {
+  const e = RV_ESTADOS[x.estado] || RV_ESTADOS.abierta;
+  const s = rvSaldoTxt(x);
+  const d = rvD(x.fecha_salida);
+  const pct = x.anticipos ? Math.round(x.gastos / x.anticipos * 100) : null;
+  const pasa = x.anticipos && x.gastos > x.anticipos;
+  let pie;
+  if (!x.anticipos) pie = x.gastos ? "Sin anticipo: todo lo puso el chofer" : "Sin anticipo cargado";
+  else if (pasa) pie = `Se pasó ${gs(x.gastos - x.anticipos)} (${pct}%)`;
+  else if (!x.gastos) pie = "Todavía no se cargó ningún gasto";
+  else pie = `Se gastó el ${pct}% del anticipo`;
+  const regreso = x.fecha_regreso && x.fecha_regreso !== x.fecha_salida ? ` al ${rvF(x.fecha_regreso)}` : "";
+  return `
+    <article class="rv-card ${e.clase}" tabindex="0" role="link" onclick="rvAbrir(${x.id})"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();rvAbrir(${x.id})}"
+             aria-label="Rendición ${x.id}: ${rvEsc(x.salida)} a ${rvEsc(x.destino)}, ${e.txt}">
+      <div class="rv-cal" title="${rvDiaSem(x.fecha_salida)} ${rvF(x.fecha_salida)}${regreso}">
+        <b>${d ? String(d.getDate()).padStart(2, "0") : "—"}</b>
+        <span>${d ? RV_MESES[d.getMonth()] : ""}</span>
+        <small>${rvPl(x.dias || 1, "día")}</small>
+      </div>
+      <div class="rv-info">
+        <div class="rv-ruta"><span>${rvEsc(x.salida || "—")}</span><i class="ti ti-arrow-narrow-right"></i><span>${rvEsc(x.destino || "—")}</span></div>
+        <div class="rv-cli"><span>${rvEsc(x.cliente || "Sin cliente")}</span>${x.agenda_ot ? `<span class="rv-ot">OT ${rvEsc(x.agenda_ot)}</span>` : `<span class="rv-ot">#${x.id}</span>`}</div>
+        <div class="rv-datos">
+          ${x.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(x.coche)}</span>` : ""}
+          ${x.chofer ? `<span><i class="ti ti-steering-wheel"></i>${rvEsc(rvNombre(x.chofer))}</span>` : ""}
+          <span><i class="ti ti-receipt"></i>${rvPl(x.n_gastos || 0, "comprobante")}</span>
+        </div>
+      </div>
+      <div class="rv-plata">
+        <div class="rv-plata-txt"><span>Gastado <b>${gs(x.gastos)}</b></span><span class="rv-plata-ant" title="Anticipo">${x.anticipos ? `de ${gs(x.anticipos)}` : "sin anticipo"}</span></div>
+        ${rvMedidor(x.anticipos, x.gastos)}
+        <div class="rv-plata-pie ${pasa ? "pasa" : ""}">${pie}</div>
+      </div>
+      <div class="rv-lado">
+        <span class="rv-estado ${e.clase}"><i class="ti ti-${e.icono}"></i>${e.txt}</span>
+        <span class="rv-saldo ${s.clase}">${s.txt}</span>
+      </div>
+    </article>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  NUEVA RENDICIÓN
+// ════════════════════════════════════════════════════════════════════════
+function rvModal({ titulo, icono, sub = "", cuerpo, pie, ancho = 520, clase = "" }) {
+  const o = document.createElement("div");
+  o.className = "modal-overlay rv-modal-fondo";
+  o.innerHTML = `
+    <div class="rv-modal ${clase}" style="max-width:${ancho}px" role="dialog" aria-modal="true" aria-label="${rvEsc(titulo.replace(/<[^>]+>/g, ""))}" tabindex="-1">
+      <div class="rv-modal-cab">
+        <span class="rv-modal-ic"><i class="ti ti-${icono}"></i></span>
+        <div class="rv-modal-tit"><h2>${titulo}</h2>${sub ? `<p>${sub}</p>` : ""}</div>
+        <button class="rv-modal-x" onclick="this.closest('.modal-overlay').remove()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="rv-modal-cuerpo">${cuerpo}</div>
+      <div class="rv-modal-pie">${pie}</div>
+    </div>`;
+  o.addEventListener("mousedown", e => { if (e.target === o) o.remove(); });
+  o.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); o.remove(); } });
+  document.body.appendChild(o);
+  setTimeout(() => (o.querySelector("[autofocus]") || o.querySelector(".rv-modal")).focus(), 40);
+  return o;
+}
+const rvOpcMonedas = sel => Object.entries(RV_MONEDAS).map(([k, t]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${t}</option>`).join("");
+
+async function rvNueva() {
+  rv.nuevo = { modo: "agenda", sel: null, presuTocado: false };
+  const hoyS = trHoy();
+  rvModal({
+    titulo: "Nueva rendición", icono: "receipt-2", ancho: 780, clase: "rv-m-nueva",
+    sub: "Elegí el viaje y, si ya se le dio, el anticipo al chofer. Los gastos se cargan después.",
+    cuerpo: `
+      <div class="rv-seg" role="tablist">
+        <button class="on" data-modo="agenda" onclick="rvNuevoModo('agenda')"><i class="ti ti-calendar-event"></i> Viaje de la agenda</button>
+        <button data-modo="mano" onclick="rvNuevoModo('mano')"><i class="ti ti-pencil"></i> Cargar a mano</button>
+      </div>
+      <div id="rv-n-agenda">
+        <label class="rv-buscar">
+          <i class="ti ti-search"></i>
+          <input id="rv-n-q" type="search" placeholder="Buscar por OT, cliente, destino, coche o chofer" oninput="rvNuevoListar()" autocomplete="off" autofocus>
+        </label>
+        <div class="rv-viajes" id="rv-n-viajes"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      </div>
+      <div id="rv-n-mano" class="rv-n-grid" hidden>
+        <label class="rv-f g2"><span>Cliente</span><input id="rv-n-cliente" placeholder="Quién contrató el viaje"></label>
+        <label class="rv-f"><span>Sale de</span><input id="rv-n-salida" value="Asunción"></label>
+        <label class="rv-f"><span>Destino</span><input id="rv-n-destino" placeholder="A dónde va"></label>
+        <label class="rv-f"><span>Fecha de salida</span><input type="date" id="rv-n-fs" value="${hoyS}"
+          onchange="const r = $('#rv-n-fr'); if (this.value && (!r.value || r.value < this.value)) r.value = this.value"></label>
+        <label class="rv-f"><span>Fecha de regreso</span><input type="date" id="rv-n-fr" value="${hoyS}"></label>
+        <label class="rv-f"><span>Coche</span><input id="rv-n-coche" placeholder="N° interno" inputmode="numeric"></label>
+        <label class="rv-f"><span>Pasajeros</span><input id="rv-n-pax" inputmode="numeric" placeholder="0"></label>
+      </div>
+      <div class="rv-n-sec">
+        <div class="rv-n-tit"><i class="ti ti-wallet"></i> Anticipo <small>si todavía no se le dio, se agrega después</small></div>
+        <div class="rv-n-fila">
+          <label class="rv-f f-quien"><span>Quién rinde</span><input id="rv-n-chofer" placeholder="El chofer que recibe la plata"></label>
+          <label class="rv-f f-monto"><span>Monto</span>
+            <div class="rv-monto"><input id="rv-n-ant" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvConv('rv-n')" onblur="rvFormatear(this, 'rv-n-mon')">
+            <select id="rv-n-mon" onchange="rvMonedaCambio('rv-n')" aria-label="Moneda">${rvOpcMonedas("GS")}</select></div>
+          </label>
+          <label class="rv-f f-cot" hidden><span>Cotización</span><input id="rv-n-cot" inputmode="decimal" oninput="rvConv('rv-n')" placeholder="Gs. por unidad"></label>
+          <label class="rv-f f-fecha"><span>Se le dio el</span><input type="date" id="rv-n-fecha" value="${hoyS}"></label>
+        </div>
+        <div class="rv-conv" id="rv-n-conv"></div>
+      </div>
+      <div class="rv-n-sec">
+        <div class="rv-n-tit"><i class="ti ti-scale"></i> Presupuesto del viaje <small>para comparar lo presupuestado con lo gastado</small></div>
+        <select id="rv-n-presu" class="rv-sel" onchange="rv.nuevo.presuTocado = true"><option value="">Sin presupuesto</option></select>
+      </div>`,
+    pie: `<span class="rv-pie-info" id="rv-n-info"></span>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="rv-n-ok" onclick="rvCrear(this)"><i class="ti ti-check"></i> Abrir rendición</button>`,
+  });
+  const [viajes, presus, cot] = await Promise.all([
+    api("/api/turismo/rendiciones/viajes"), api("/api/turismo/rendiciones/presupuestos"),
+    api("/api/turismo/rendiciones/cotizaciones")]);
+  rv.viajes = Array.isArray(viajes) ? viajes : [];
+  rv.presus = Array.isArray(presus) ? presus : [];
+  rv.cot = rvCotLimpia(cot);
+  const sp = $("#rv-n-presu");
+  if (sp) sp.innerHTML = `<option value="">Sin presupuesto</option>` + rv.presus.map(p =>
+    `<option value="${p.id}">#${p.id} · ${rvEsc(p.destino || "—")} · ${rvEsc(p.cliente || "sin cliente")} · ${rvF(p.fecha)} · ${gs(p.precio_final)}</option>`).join("");
+  if (!rv.viajes.some(v => !v.rendicion_id)) rvNuevoModo(rv.viajes.length ? "agenda" : "mano");
+  rvNuevoListar();
+}
+
+function rvNuevoModo(m) {
+  rv.nuevo.modo = m;
+  document.querySelectorAll(".rv-seg button").forEach(b => b.classList.toggle("on", b.dataset.modo === m));
+  const ag = $("#rv-n-agenda"), ma = $("#rv-n-mano");
+  if (ag) ag.hidden = m !== "agenda";
+  if (ma) ma.hidden = m !== "mano";
+  if (m === "mano") setTimeout(() => $("#rv-n-cliente")?.focus(), 30);
+  rvNuevoInfo();
+}
+
+function rvNuevoListar() {
+  const cont = $("#rv-n-viajes");
+  if (!cont) return;
+  const Q = ($("#rv-n-q")?.value || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  const hoyS = trHoy();
+  const lista = rv.viajes.map((v, i) => ({ v, i })).filter(({ v }) => {
+    if (!Q) return true;
+    const t = [v.ot_nr, v.cliente, v.salida, v.destino, v.coche, v.tripulacion].join(" ").toUpperCase()
+      .normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return Q.split(/\s+/).every(p => t.includes(p));
+  });
+  if (!rv.viajes.length) {
+    cont.innerHTML = `<div class="rv-vacio chico"><i class="ti ti-calendar-off"></i><b>No hay viajes en la agenda</b><span>De los últimos dos meses y medio y el próximo. Cargalo a mano.</span></div>`;
+    return;
+  }
+  if (!lista.length) {
+    cont.innerHTML = `<div class="rv-vacio chico"><i class="ti ti-search-off"></i><b>Ningún viaje con eso</b><span>Si no está en la agenda, cargalo a mano.</span></div>`;
+    return;
+  }
+  cont.innerHTML = lista.map(({ v, i }) => {
+    const d = rvD(v.fecha_salida);
+    const dias = rvDiasEntre(v.fecha_salida, v.fecha_regreso) + 1;
+    const falta = rvDiasEntre(hoyS, v.fecha_salida);
+    const cuando = falta > 0 ? `<span class="rv-v-tag prox">Sale ${falta === 1 ? "mañana" : `en ${falta} días`}</span>`
+      : (falta <= 0 && rvDiasEntre(hoyS, v.fecha_regreso) >= 0) ? `<span class="rv-v-tag viaje">De viaje</span>` : "";
+    const sel = rv.nuevo.sel === i;
+    const cab = `
+      <span class="rv-v-cal"><b>${d ? String(d.getDate()).padStart(2, "0") : "—"}</b><small>${d ? RV_MESES[d.getMonth()] : ""}</small></span>
+      <span class="rv-v-info">
+        <b>${rvEsc(v.salida || "—")} <i class="ti ti-arrow-narrow-right"></i> ${rvEsc(v.destino || "—")} ${cuando}</b>
+        <small>${rvEsc(v.cliente)}${v.ot_nr ? ` · OT ${rvEsc(v.ot_nr)}` : ""} · ${rvF(v.fecha_salida)}${v.fecha_regreso !== v.fecha_salida ? ` al ${rvF(v.fecha_regreso)}` : ""} · ${rvPl(dias, "día")}</small>
+      </span>
+      <span class="rv-v-der">${v.coche ? `<b>Coche ${rvEsc(v.coche)}</b>` : `<b class="sin">Sin coche</b>`}<small>${rvEsc(rvNombre(v.tripulacion) || "Sin tripulación")}</small></span>`;
+    if (v.rendicion_id) {
+      return `<div class="rv-viaje tiene">${cab}
+        <span class="rv-v-ya">Ya tiene la rendición #${v.rendicion_id}
+          <button class="rv-link" onclick="this.closest('.modal-overlay').remove(); rvAbrir(${v.rendicion_id})">Abrir <i class="ti ti-arrow-right"></i></button></span></div>`;
+    }
+    return `<button type="button" class="rv-viaje ${sel ? "on" : ""}" onclick="rvNuevoElegir(${i})" aria-pressed="${sel}">${cab}
+      <span class="rv-v-check"><i class="ti ti-check"></i></span></button>`;
+  }).join("");
+}
+
+function rvNuevoElegir(i) {
+  rv.nuevo.sel = i;
+  const v = rv.viajes[i];
+  rvNuevoListar();
+  const ch = $("#rv-n-chofer");
+  if (ch) ch.value = rvNombre(v.chofer || "");
+  const f = $("#rv-n-fecha");
+  if (f && v.fecha_salida) f.value = v.fecha_salida < trHoy() ? v.fecha_salida : trHoy();
+  // Si hay un presupuesto del mismo cliente con el mismo destino, se ofrece solo
+  if (!rv.nuevo.presuTocado && rv.presus?.length) {
+    const norm = s => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const palabras = s => norm(s).split(/[^A-Z0-9]+/).filter(p => p.length > 3);
+    const dest = palabras(v.destino);
+    const p = rv.presus.find(p => norm(p.cliente) === norm(v.cliente) && palabras(p.destino).some(x => dest.includes(x)))
+      || rv.presus.find(p => norm(p.cliente) === norm(v.cliente));
+    $("#rv-n-presu").value = p ? p.id : "";
+  }
+  rvNuevoInfo();
+}
+
+function rvNuevoInfo() {
+  const el = $("#rv-n-info");
+  if (!el) return;
+  const v = rv.viajes[rv.nuevo.sel];
+  el.innerHTML = rv.nuevo.modo === "agenda" && v
+    ? `<i class="ti ti-circle-check"></i> ${rvEsc(v.salida)} → ${rvEsc(v.destino)} · ${rvF(v.fecha_salida)}`
+    : "";
+}
+
+// Monto + moneda + cotización: lo comparten la carga rápida, el anticipo y las correcciones
+function rvMonedaCambio(p) {
+  const mon = $(`#${p}-mon`)?.value || "GS";
+  const cot = $(`#${p}-cot`);
+  const caja = cot?.closest(".rv-f");
+  if (caja) caja.hidden = mon === "GS";
+  if (cot && mon !== "GS" && !rvNum(cot.value) && rv.cot[mon]) cot.value = rvCot(rv.cot[mon]);
+  if (p === "rv-c") rv.moneda = mon;
+  rvConv(p);
+}
+function rvConv(p) {
+  const el = $(`#${p}-conv`);
+  if (!el) return;
+  const mon = $(`#${p}-mon`)?.value || "GS";
+  const monto = rvNum($(`#${p}-ant, #${p}-monto`)?.value);
+  const cot = rvNum($(`#${p}-cot`)?.value);
+  let txt = "";
+  if (mon !== "GS" && monto > 0) {
+    txt = cot > 0 ? `<span>${rvMon(monto, mon)} × ${rvCot(cot)} = <b>${gs(monto * cot)}</b></span>`
+                  : `<span class="falta">Poné cuántos guaraníes vale cada ${RV_MONEDAS[mon]}</span>`;
+  }
+  el.innerHTML = txt + (p === "rv-c" ? `<span class="rv-tecla"><kbd>Enter</kbd> agrega el gasto</span>` : "");
+}
+function rvFormatear(inp, idMon) {
+  const mon = $(`#${idMon}`)?.value || "GS";
+  const n = rvNum(inp.value);
+  if (!inp.value.trim() || !n) return;
+  inp.value = mon === "GS" ? rvDec(Math.round(n), 0) : rvDec(n, 2);
+}
+
+async function rvCrear(btn) {
+  let body = {};
+  if (rv.nuevo.modo === "agenda") {
+    const v = rv.viajes[rv.nuevo.sel];
+    if (!v) { toast("Elegí el viaje de la lista (o cargalo a mano)", "error"); return; }
+    body.agenda_ids = v.ids;
+  } else {
+    body = {
+      cliente: $("#rv-n-cliente").value, salida: $("#rv-n-salida").value, destino: $("#rv-n-destino").value,
+      fecha_salida: $("#rv-n-fs").value, fecha_regreso: $("#rv-n-fr").value, coche: $("#rv-n-coche").value,
+      pasajeros: $("#rv-n-pax").value,
+    };
+    if (!body.cliente.trim() && !body.destino.trim()) { toast("Poné al menos el cliente o el destino", "error"); return; }
+    if (body.fecha_regreso && body.fecha_salida && body.fecha_regreso < body.fecha_salida) { toast("El regreso es antes de la salida", "error"); return; }
+  }
+  const chofer = $("#rv-n-chofer").value.trim();
+  if (chofer) body.chofer = chofer;
+  const ant = rvNum($("#rv-n-ant").value);
+  if (ant > 0) {
+    const mon = $("#rv-n-mon").value, cot = rvNum($("#rv-n-cot").value);
+    if (mon !== "GS" && !(cot > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); return; }
+    Object.assign(body, { anticipo: ant, anticipo_moneda: mon, anticipo_cotizacion: cot, anticipo_fecha: $("#rv-n-fecha").value });
+  }
+  const presu = $("#rv-n-presu").value;
+  if (presu) body.presupuesto_id = +presu;
+  btn.disabled = true;
+  const r = await api("/api/turismo/rendiciones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo abrir la rendición", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Rendición abierta: ya se pueden cargar los gastos", "success");
+  rvAbrir(r.id);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  DETALLE DE UNA RENDICIÓN
+// ════════════════════════════════════════════════════════════════════════
+async function rvAbrir(id) {
+  rv.id = id;
+  status("Rendición de viaje");
+  content.scrollTop = 0;
+  content.innerHTML = `<div class="section rv-raiz rv-det" id="rv-det"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`;
+  const [r, cot] = await Promise.all([api(`/api/turismo/rendiciones/${id}`), api("/api/turismo/rendiciones/cotizaciones")]);
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo abrir la rendición", "error"); renderRendicionesTurismo(); return; }
+  if (rv.id !== id) return;
+  rv.cot = rvCotLimpia(cot);
+  rv.esAdmin = !!r.es_admin;
+  rv.puedeCargar = !!r.puede_cargar;
+  const d = r.rendicion;
+  const ult = d.gastos_lista[d.gastos_lista.length - 1];
+  rv.fecha = ult ? ult.fecha : (d.fecha_salida && d.fecha_salida <= trHoy() ? d.fecha_salida : trHoy());
+  rv.moneda = "GS";
+  rv.cat = "combustible";
+  $("#rv-det").innerHTML = `
+    <button class="rv-volver" onclick="rvVolver()"><i class="ti ti-arrow-left"></i> Rendiciones de viaje</button>
+    <section class="rv-ticket" id="rv-d-ticket"></section>
+    <div id="rv-d-aviso"></div>
+    <section class="rv-balance" id="rv-d-balance"></section>
+    <div class="rv-d-grid">
+      <div class="rv-d-izq">
+        <section class="rv-bloque rv-gastos">
+          <div class="rv-bloque-cab" id="rv-d-gcab"></div>
+          <div id="rv-carga-lugar"></div>
+          <div id="rv-d-gastos"></div>
+        </section>
+      </div>
+      <div class="rv-d-der">
+        <section class="rv-bloque" id="rv-d-anticipos"></section>
+        <section class="rv-bloque" id="rv-d-rubros"></section>
+        <section class="rv-bloque" id="rv-d-presu"></section>
+        <section class="rv-bloque" id="rv-d-obs"></section>
+      </div>
+    </div>`;
+  rvPintarDetalle(d);
+}
+
+function rvVolver() {
+  renderRendicionesTurismo();
+}
+
+function rvPintarDetalle(d, nuevoMov) {
+  rv.det = d;
+  const editable = d.editable && rv.puedeCargar;
+  $("#rv-d-ticket").innerHTML = rvTicket(d);
+  $("#rv-d-aviso").innerHTML = d.estado === "abierta" && d.devuelta_motivo ? `
+    <div class="rv-aviso"><i class="ti ti-message-2-exclamation"></i>
+      <div><b>Administración la devolvió para corregir</b><span>${rvEsc(d.devuelta_motivo)}</span></div></div>` : "";
+  $("#rv-d-balance").innerHTML = rvBalance(d);
+  $("#rv-d-gcab").innerHTML = `
+    <h3><i class="ti ti-receipt"></i> Gastos del viaje</h3>
+    <span class="rv-cab-dato">${rvPl(d.gastos_lista.length, "comprobante")} · <b>${gs(d.gastos)}</b></span>`;
+  // La carga rápida se arma una sola vez: así no se pierde lo que se está escribiendo
+  const lugar = $("#rv-carga-lugar");
+  if (editable && !$("#rv-carga")) { lugar.innerHTML = rvCargaHtml(d); rvCargaEventos(); }
+  if (!editable) lugar.innerHTML = "";
+  $("#rv-d-gastos").innerHTML = rvGastos(d, editable);
+  $("#rv-d-anticipos").innerHTML = rvAnticipos(d, editable);
+  const rub = $("#rv-d-rubros");
+  rub.innerHTML = rvRubros(d);
+  rub.hidden = !d.por_categoria.length;
+  const pre = $("#rv-d-presu");
+  const firmaP = JSON.stringify([d.id, d.comparacion, rv.puedeCargar]);
+  if (pre.dataset.firma !== firmaP) {
+    pre.dataset.firma = firmaP;
+    pre.innerHTML = rvPresu(d);
+    pre.hidden = !pre.innerHTML.trim();
+    if (!d.comparacion && rv.puedeCargar) rvPresuOpciones();
+  }
+  const obs = $("#rv-d-obs");
+  const firmaO = JSON.stringify([d.id, d.observaciones, rv.puedeCargar]);
+  if (obs.dataset.firma !== firmaO) {
+    obs.dataset.firma = firmaO;
+    obs.innerHTML = rvObs(d);
+    obs.hidden = !obs.innerHTML.trim();
+  }
+  if (nuevoMov) document.getElementById(`rv-mov-${nuevoMov}`)?.classList.add("nuevo");
+}
+
+function rvTicket(d) {
+  const ida = d.fecha_salida, vuelta = d.fecha_regreso || d.fecha_salida;
+  const fechas = vuelta !== ida ? `${rvDiaSem(ida, true)} ${rvF(ida)} al ${rvDiaSem(vuelta, true)} ${rvF(vuelta)}` : `${rvDiaSem(ida)} ${rvF(ida)}`;
+  const trip = (d.tripulacion || "").trim();
+  return `
+    <div class="rv-t-top">
+      <div class="rv-t-et">
+        <span class="rv-t-ot">${[d.agenda_ot && `OT ${rvEsc(d.agenda_ot)}`, `Rendición #${d.id}`].filter(Boolean).join(" · ")}</span>
+        <span class="rv-t-cli">${rvEsc(d.cliente || "Sin cliente")}</span>
+      </div>
+      <div class="rv-t-acc">
+        ${d.editable && rv.puedeCargar ? `<button class="rv-t-btn" onclick="rvEditarViaje()"><i class="ti ti-pencil"></i><span>Editar viaje</span></button>` : ""}
+        <button class="rv-t-btn" onclick="rvPdf()"><i class="ti ti-file-type-pdf"></i><span>PDF para firmar</span></button>
+        ${rv.esAdmin ? `<button class="rv-t-btn peligro" onclick="rvBorrar()" title="Borrar la rendición" aria-label="Borrar la rendición"><i class="ti ti-trash"></i></button>` : ""}
+      </div>
+    </div>
+    <div class="rv-t-ruta">
+      <b>${rvEsc(d.salida || "—")}</b>
+      <span class="rv-t-linea" aria-hidden="true"><i class="ti ti-bus"></i></span>
+      <b>${rvEsc(d.destino || "—")}</b>
+    </div>
+    <div class="rv-t-datos">
+      <span><i class="ti ti-calendar"></i>${fechas} · ${rvPl(d.dias || 1, "día")}</span>
+      ${d.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(d.coche)}</span>` : ""}
+      ${d.chofer ? `<span><i class="ti ti-steering-wheel"></i>Rinde ${rvEsc(rvNombre(d.chofer))}</span>` : ""}
+      ${trip && rvNombre(trip) !== rvNombre(d.chofer) ? `<span><i class="ti ti-users"></i>${rvEsc(rvNombre(trip))}</span>` : ""}
+      ${d.pasajeros ? `<span><i class="ti ti-armchair"></i>${d.pasajeros} pasajeros</span>` : ""}
+    </div>
+    ${rvPasos(d)}`;
+}
+
+function rvPasos(d) {
+  const orden = ["abierta", "presentada", "aprobada", "saldada"];
+  const i = orden.indexOf(d.estado);
+  const pasos = [
+    ["Cargando", d.creado_por, d.creado_el],
+    ["Presentada", d.presentado_por, d.presentado_el],
+    ["Aprobada", d.aprobado_por, d.aprobado_el],
+    ["Saldada", d.saldado_por, d.saldado_el],
+  ];
+  return `<ol class="rv-pasos" aria-label="Pasos de la rendición">${pasos.map(([t, q, f], k) => {
+    const hecho = k < i || (k === 3 && i === 3);
+    const cls = hecho ? "hecho" : k === i ? "actual" : "";
+    return `<li class="${cls}" ${k === i ? 'aria-current="step"' : ""}>
+      <span class="rv-paso-p">${hecho ? '<i class="ti ti-check"></i>' : k + 1}</span>
+      <span class="rv-paso-t">${t}</span>
+      <span class="rv-paso-s">${k <= i && q ? `${rvEsc(rvCorto(q))} · ${rvF(f)}` : "&nbsp;"}</span>
+    </li>`;
+  }).join("")}</ol>`;
+}
+
+function rvBalance(d) {
+  const s = rvSaldoDe(d);
+  const nA = d.anticipos_lista.length, nG = d.gastos_lista.length;
+  let cls = "justo", que = "cierra justo";
+  if (s > 0) { cls = "dev"; que = d.estado === "saldada" ? "devolvió el chofer" : d.estado === "abierta" ? "devolvería el chofer" : "devuelve el chofer"; }
+  if (s < 0) { cls = "debe"; que = d.estado === "saldada" ? "se le pagó al chofer" : d.estado === "abierta" ? "habría que pagarle" : "hay que pagarle al chofer"; }
+  const pasa = d.anticipos && d.gastos > d.anticipos;
+  const pct = d.anticipos ? Math.round(d.gastos / d.anticipos * 100) : null;
+  const pie = !d.anticipos ? (d.gastos ? "No hubo anticipo: todo lo puso el chofer" : "Sin anticipo ni gastos todavía")
+    : pasa ? `Se pasó ${gs(d.gastos - d.anticipos)} del anticipo (${pct}%)`
+    : `Se gastó el ${pct}% del anticipo`;
+  return `
+    <div class="rv-bal-izq">
+      <div class="rv-bal-cifras">
+        <div class="rv-bal-c">
+          <span class="rv-bal-et"><i class="ti ti-wallet"></i> Anticipos</span>
+          <b>${gs(d.anticipos)}</b>
+          <small>${nA ? rvPl(nA, "entrega") : "ninguno"}</small>
+        </div>
+        <span class="rv-bal-op" aria-hidden="true">−</span>
+        <div class="rv-bal-c">
+          <span class="rv-bal-et"><i class="ti ti-receipt"></i> Gastos</span>
+          <b>${gs(d.gastos)}</b>
+          <small>${rvPl(nG, "comprobante")}${d.litros ? ` · ${rvDec(d.litros, 1)} L` : ""}</small>
+        </div>
+        <span class="rv-bal-op" aria-hidden="true">=</span>
+        <div class="rv-bal-c saldo ${cls}">
+          <span class="rv-bal-et"><i class="ti ti-${s > 0 ? "arrow-back-up" : s < 0 ? "cash" : "equal"}"></i> Saldo</span>
+          <b>${gs(Math.abs(s))}</b>
+          <small>${que}</small>
+        </div>
+      </div>
+      <div class="rv-bal-med">
+        ${rvMedidor(d.anticipos, d.gastos, "grande")}
+        <div class="rv-bal-pie ${pasa ? "pasa" : ""}"><span>${pie}</span>${d.gasto_por_dia ? `<span>${gs(d.gasto_por_dia)} por día</span>` : ""}</div>
+      </div>
+    </div>
+    <div class="rv-bal-der ${RV_ESTADOS[d.estado]?.clase || ""}">${rvSiguiente(d)}</div>`;
+}
+
+// Qué falta para cerrar la rendición, y el botón para hacerlo
+function rvSiguiente(d) {
+  const s = rvSaldoDe(d);
+  const info = (icono, t, sub) => `<div class="rv-sig"><i class="ti ti-${icono} rv-sig-ic"></i><div><b>${t}</b>${sub ? `<span>${sub}</span>` : ""}</div></div>`;
+  const reabrir = rv.esAdmin ? `<button class="rv-link" onclick="rvAccion('reabrir')"><i class="ti ti-arrow-back-up"></i> Reabrir para corregir</button>` : "";
+  if (d.estado === "abierta") {
+    if (!rv.puedeCargar) return info("pencil", "Se están cargando los comprobantes");
+    if (!d.anticipos_lista.length && !d.gastos_lista.length) return info("pencil", "Cargá el anticipo y los gastos", "Cuando estén todos los comprobantes, se presenta para que administración la apruebe.");
+    return `${info("send", "¿Están todos los comprobantes?", "Presentala para que administración la apruebe. Después ya no se puede cambiar, salvo que la devuelvan.")}
+      <button class="btn btn-primary rv-sig-btn" onclick="rvAccion('presentar')"><i class="ti ti-send"></i> Presentar para aprobar</button>`;
+  }
+  if (d.estado === "presentada") {
+    if (!rv.esAdmin) return info("hourglass-high", "Esperando que administración la apruebe", "Si hay que corregir algo, la devuelven con el motivo.");
+    const q = s > 0 ? `Al aprobarla, el chofer tiene que devolver ${gs(s)}.` : s < 0 ? `Al aprobarla, queda para pagarle ${gs(-s)} al chofer.` : "Cierra justo: al aprobarla queda saldada.";
+    return `${info("checklist", "Revisá los gastos y aprobala", q)}
+      <div class="rv-sig-btns">
+        <button class="btn btn-ghost" onclick="rvDevolver()"><i class="ti ti-arrow-back-up"></i> Devolver</button>
+        <button class="btn rv-btn-ok" onclick="rvAccion('aprobar')"><i class="ti ti-check"></i> Aprobar</button>
+      </div>`;
+  }
+  if (d.estado === "aprobada") {
+    const t = s > 0 ? `El chofer tiene que devolver ${gs(s)}` : `Hay que pagarle ${gs(-s)} al chofer`;
+    if (!rv.esAdmin) return info("clock-dollar", `Aprobada. ${t}`, "Administración registra cuando se hace.");
+    return `${info("clock-dollar", t, "Cuando se haga, registralo y la cuenta del viaje queda cerrada.")}
+      <button class="btn btn-primary rv-sig-btn" onclick="rvSaldar()"><i class="ti ti-${s > 0 ? "arrow-back-up" : "cash"}"></i> ${s > 0 ? "Registrar devolución" : "Registrar pago"}</button>
+      ${reabrir}`;
+  }
+  const como = [d.saldo_forma, d.saldo_nota].filter(Boolean).join(" · ");
+  const quien = d.saldado_por ? ` · ${rvCorto(d.saldado_por)}` : "";
+  return `${info("circle-check", "Cuenta cerrada", `${s > 0 ? `Devolvió ${gs(s)}` : s < 0 ? `Se le pagó ${gs(-s)}` : "Cerró justo"}${como ? ` · ${rvEsc(como)}` : ""} · ${rvF(d.saldado_el)}${rvEsc(quien)}`)}
+    ${reabrir}`;
+}
+
+// ─── Carga rápida de gastos ───
+function rvCargaHtml(d) {
+  const c = RV_CAT[rv.cat];
+  return `
+    <div class="rv-carga" id="rv-carga">
+      <div class="rv-cats" role="radiogroup" aria-label="Rubro del gasto">
+        ${RV_CATS.map(x => `<button type="button" role="radio" aria-checked="${x.clave === rv.cat}" class="rv-cat ${x.clave === rv.cat ? "on" : ""}"
+             data-cat="${x.clave}" onclick="rvElegirCat('${x.clave}')"><i class="ti ti-${x.icono}"></i>${x.corto}</button>`).join("")}
+      </div>
+      <div class="rv-campos">
+        <label class="rv-f f-det"><span>Detalle</span><input id="rv-c-det" placeholder="${rvEsc(c.ph)}" maxlength="160" autocomplete="off"></label>
+        <label class="rv-f f-monto"><span>Monto</span>
+          <div class="rv-monto"><input id="rv-c-monto" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvConv('rv-c')" onblur="rvFormatear(this, 'rv-c-mon')">
+          <select id="rv-c-mon" onchange="rvMonedaCambio('rv-c')" aria-label="Moneda">${rvOpcMonedas(rv.moneda)}</select></div>
+        </label>
+        <label class="rv-f f-cot" ${rv.moneda === "GS" ? "hidden" : ""}><span>Cotización</span><input id="rv-c-cot" inputmode="decimal" placeholder="Gs. c/u" oninput="rvConv('rv-c')" value="${rv.moneda !== "GS" && rv.cot[rv.moneda] ? rvCot(rv.cot[rv.moneda]) : ""}"></label>
+      </div>
+      <div class="rv-campos">
+        <label class="rv-f f-fecha"><span>Fecha</span><input type="date" id="rv-c-fecha" value="${rv.fecha}"></label>
+        <label class="rv-f f-lt" ${rv.cat.startsWith("combustible") ? "" : "hidden"}><span>Litros</span><input id="rv-c-lt" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <label class="rv-f f-comp"><span>Comprobante</span><input id="rv-c-comp" placeholder="N° de factura o ticket" maxlength="40" autocomplete="off"></label>
+        <button class="btn btn-primary rv-agregar" id="rv-c-btn" onclick="rvAgregarGasto()"><i class="ti ti-plus"></i> Agregar</button>
+      </div>
+      <div class="rv-conv" id="rv-c-conv"><span class="rv-tecla"><kbd>Enter</kbd> agrega el gasto</span></div>
+    </div>`;
+}
+function rvCargaEventos() {
+  document.querySelectorAll("#rv-carga input, #rv-carga select").forEach(el =>
+    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); rvAgregarGasto(); } }));
+}
+
+function rvElegirCat(k) {
+  rv.cat = k;
+  const c = RV_CAT[k];
+  document.querySelectorAll(".rv-cat").forEach(b => {
+    const on = b.dataset.cat === k;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", on);
+  });
+  const det = $("#rv-c-det");
+  if (det) det.placeholder = c.ph;
+  const lt = $("#rv-c-lt")?.closest(".rv-f");
+  if (lt) lt.hidden = !k.startsWith("combustible");
+  // El combustible de acá se paga en guaraníes; el de afuera, en la plata de allá
+  const mon = $("#rv-c-mon");
+  if (mon) {
+    if (k === "combustible" && mon.value !== "GS") { mon.value = "GS"; rvMonedaCambio("rv-c"); }
+    if (k === "combustible_ext" && mon.value === "GS") {
+      const m = rvMonedaDestino(rv.det?.destino) || Object.keys(rv.cot)[0];
+      if (m) { mon.value = m; rvMonedaCambio("rv-c"); }
+    }
+  }
+  $("#rv-c-det")?.focus();
+}
+
+async function rvAgregarGasto() {
+  const btn = $("#rv-c-btn");
+  if (!btn || btn.disabled) return;
+  const mon = $("#rv-c-mon").value;
+  const body = {
+    tipo: "gasto", categoria: rv.cat, fecha: $("#rv-c-fecha").value, detalle: $("#rv-c-det").value,
+    monto: $("#rv-c-monto").value, moneda: mon, cotizacion: $("#rv-c-cot").value,
+    litros: rv.cat.startsWith("combustible") ? $("#rv-c-lt").value : "", comprobante: $("#rv-c-comp").value,
+  };
+  if (!(rvNum(body.monto) > 0)) { toast("Poné el monto del comprobante", "error"); $("#rv-c-monto").focus(); return; }
+  if (mon !== "GS" && !(rvNum(body.cotizacion) > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); $("#rv-c-cot").focus(); return; }
+  btn.disabled = true;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}/movs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo agregar", "error"); return; }
+  rv.fecha = body.fecha;
+  if (mon !== "GS") rv.cot[mon] = rvNum(body.cotizacion);
+  ["rv-c-det", "rv-c-monto", "rv-c-lt", "rv-c-comp"].forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+  rvPintarDetalle(r.rendicion, r.mov_id);
+  const nuevo = r.rendicion.gastos_lista.find(m => m.id === r.mov_id);
+  const conv = $("#rv-c-conv");
+  if (conv && nuevo) {
+    conv.innerHTML = `<span class="rv-hecho"><i class="ti ti-circle-check"></i> Agregado: ${rvEsc(nuevo.categoria_nombre)} ${gs(nuevo.monto_gs)}</span><span class="rv-tecla"><kbd>Enter</kbd> agrega el gasto</span>`;
+    clearTimeout(rv._hechoT);
+    rv._hechoT = setTimeout(() => { if ($("#rv-c-conv")?.querySelector(".rv-hecho")) rvConv("rv-c"); }, 3200);
+  }
+  $("#rv-c-det")?.focus();
+}
+
+function rvGastos(d, editable) {
+  const g = d.gastos_lista;
+  if (!g.length) {
+    return `<div class="rv-vacio chico"><i class="ti ti-receipt-off"></i><b>Todavía no hay gastos</b>
+      <span>${editable ? "Elegí el rubro, poné el monto y Enter. Se suman solos al saldo." : "No se cargó ningún comprobante."}</span></div>`;
+  }
+  const dias = new Map();
+  g.forEach(m => { if (!dias.has(m.fecha)) dias.set(m.fecha, []); dias.get(m.fecha).push(m); });
+  return [...dias.entries()].map(([f, movs]) => {
+    let et = "";
+    if (d.fecha_salida && f < d.fecha_salida) et = "Antes de salir";
+    else if (d.fecha_salida && f > (d.fecha_regreso || d.fecha_salida)) et = "Después del viaje";
+    else if (d.fecha_salida) et = `Día ${rvDiasEntre(d.fecha_salida, f) + 1}`;
+    const tot = movs.reduce((a, m) => a + (m.monto_gs || 0), 0);
+    return `<div class="rv-dia">
+      <div class="rv-dia-cab"><span>${et ? `<b>${et}</b> · ` : ""}${rvDiaSem(f)} ${rvF(f)}</span><span>${gs(tot)}</span></div>
+      ${movs.map(m => rvFilaMov(m, editable)).join("")}
+    </div>`;
+  }).join("");
+}
+
+function rvFilaMov(m, editable) {
+  const ext = m.moneda && m.moneda !== "GS" ? `${rvMon(m.monto, m.moneda)} × ${rvCot(m.cotizacion)}` : "";
+  const sub = [m.detalle, m.comprobante && `Comp. ${m.comprobante}`].filter(Boolean);
+  return `<div class="rv-mov" id="rv-mov-${m.id}">
+    <span class="rv-mov-ic"><i class="ti ti-${m.tipo === "anticipo" ? "cash" : m.icono}"></i></span>
+    <div class="rv-mov-txt"><b>${rvEsc(m.tipo === "anticipo" ? (m.detalle || "Anticipo") : m.categoria_nombre)}</b>
+      ${m.tipo !== "anticipo" && sub.length ? `<span>${sub.map(rvEsc).join(" · ")}</span>` : ""}
+      ${m.tipo === "anticipo" ? `<span>${rvDiaSem(m.fecha, true)} ${rvF(m.fecha)}${ext ? ` · ${ext}` : ""}</span>` : ""}</div>
+    <div class="rv-mov-ext">${m.litros ? `<span class="rv-lt">${rvDec(m.litros, 1)} L</span>` : ""}${ext ? `<span>${ext}</span>` : ""}</div>
+    <b class="rv-mov-gs">${gs(m.monto_gs)}</b>
+    ${editable ? `<span class="rv-mov-acc">
+      <button onclick="rvEditarMov(${m.id})" title="Corregir" aria-label="Corregir"><i class="ti ti-pencil"></i></button>
+      <button onclick="rvBorrarMov(${m.id})" title="Borrar" aria-label="Borrar"><i class="ti ti-trash"></i></button></span>` : ""}
+  </div>`;
+}
+
+function rvAnticipos(d, editable) {
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-wallet"></i> Anticipos</h3><span class="rv-cab-dato"><b>${gs(d.anticipos)}</b></span></div>
+    ${d.anticipos_lista.length ? `<div class="rv-ants">${d.anticipos_lista.map(m => rvFilaMov(m, editable)).join("")}</div>`
+      : `<p class="rv-nada">No se cargó ningún anticipo${editable ? ". Si se le dio plata al chofer antes de salir, agregala acá." : "."}</p>`}
+    ${editable ? `<button class="rv-mas" onclick="rvMovModal('anticipo')"><i class="ti ti-plus"></i> Agregar anticipo</button>` : ""}`;
+}
+
+function rvRubros(d) {
+  const cats = d.por_categoria;
+  if (!cats.length) return "";
+  const max = cats[0].total || 1;
+  const tot = d.gastos || 1;
+  // El litro promedio: el de acá y el de afuera por separado
+  const precio = clave => {
+    const ms = d.gastos_lista.filter(m => m.categoria === clave && m.litros > 0);
+    const lt = ms.reduce((a, m) => a + m.litros, 0);
+    return lt ? { lt, gsl: ms.reduce((a, m) => a + m.monto_gs, 0) / lt } : null;
+  };
+  const pa = precio("combustible"), pe = precio("combustible_ext");
+  const datos = [];
+  if (pa) datos.push(`<span><i class="ti ti-gas-station"></i>Acá: ${rvDec(pa.lt, 1)} L a <b>${gs(pa.gsl)}</b> el litro</span>`);
+  if (pe) datos.push(`<span><i class="ti ti-world"></i>Afuera: ${rvDec(pe.lt, 1)} L a <b>${gs(pe.gsl)}</b> el litro</span>`);
+  if (d.pasajeros && d.gastos) datos.push(`<span><i class="ti ti-armchair"></i><b>${gs(d.gastos / d.pasajeros)}</b> por pasajero</span>`);
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-chart-bar"></i> En qué se gastó</h3></div>
+    <div class="rv-rubros">
+      ${cats.map((c, i) => `
+        <div class="rv-rub" title="${rvEsc(c.nombre)}: ${rvPl(c.n, "comprobante")}${c.litros ? ` · ${rvDec(c.litros, 1)} L` : ""}">
+          <span class="rv-rub-n"><i class="ti ti-${c.icono}"></i>${rvEsc(c.nombre)}</span>
+          <span class="rv-rub-v">${gs(c.total)}<small>${Math.round(c.total / tot * 100)}%</small></span>
+          <span class="rv-rub-bar"><i style="width:${Math.max(c.total / max * 100, 1.5)}%;animation-delay:${i * 50}ms"></i></span>
+        </div>`).join("")}
+    </div>
+    ${datos.length ? `<div class="rv-rub-datos">${datos.join("")}</div>` : ""}`;
+}
+
+function rvPresu(d) {
+  const c = d.comparacion;
+  if (!c) {
+    if (!rv.puedeCargar) return "";
+    return `
+      <div class="rv-bloque-cab"><h3><i class="ti ti-scale"></i> Contra el presupuesto</h3></div>
+      <p class="rv-nada">Vinculá el presupuesto de este viaje y se ve, rubro por rubro, si se gastó más o menos de lo calculado. Sirve para presupuestar mejor el próximo.</p>
+      <div class="rv-vinc">
+        <select id="rv-presu-sel" class="rv-sel"><option value="">Cargando presupuestos…</option></select>
+        <button class="btn btn-ghost" onclick="rvVincular()"><i class="ti ti-link"></i> Vincular</button>
+      </div>`;
+  }
+  const max = Math.max(...c.filas.map(f => Math.max(f.presupuestado, f.real))) || 1;
+  const dif = c.diferencia;
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-scale"></i> Contra el presupuesto</h3>
+      <span class="rv-dif ${dif > 0 ? "mas" : dif < 0 ? "menos" : ""}"><i class="ti ti-${dif > 0 ? "trending-up" : dif < 0 ? "trending-down" : "equal"}"></i>${dif > 0 ? "+" : dif < 0 ? "−" : ""}${gs(Math.abs(dif))}</span>
+    </div>
+    <div class="rv-pres">
+      ${c.filas.map(f => {
+        const pasa = f.real > f.presupuestado;
+        const wP = f.presupuestado / max * 100, wR = Math.min(f.real, f.presupuestado || f.real) / max * 100;
+        return `<div class="rv-pr" title="Presupuestado ${gs(f.presupuestado)} · gastado ${gs(f.real)}">
+          <span class="rv-pr-n">${rvEsc(f.nombre)}</span>
+          <span class="rv-pr-d ${f.diferencia > 0 ? "mas" : f.diferencia < 0 ? "menos" : ""}">${f.diferencia > 0 ? "+" : f.diferencia < 0 ? "−" : ""}${gs(Math.abs(f.diferencia))}${f.pct != null ? ` <small>${f.pct > 0 ? "+" : ""}${Math.round(f.pct)}%</small>` : ""}</span>
+          <span class="rv-pr-bar">
+            <i class="pres" style="width:${wP}%"></i>
+            <i class="real" style="width:${pasa && f.presupuestado ? wP : wR}%"></i>
+            ${pasa && f.presupuestado ? `<i class="pasa" style="left:calc(${wP}% + 2px);width:calc(${(f.real - f.presupuestado) / max * 100}% - 2px)"></i>` : ""}
+            ${pasa && !f.presupuestado ? `<i class="pasa" style="left:0;width:${f.real / max * 100}%"></i>` : ""}
+          </span>
+          <span class="rv-pr-v">${gs(f.real)} <small>de ${gs(f.presupuestado)}</small></span>
+        </div>`;
+      }).join("")}
+    </div>
+    <div class="rv-pr-ley">
+      <span><i class="sq real"></i>Gastado</span><span><i class="sq pres"></i>Presupuestado</span><span><i class="sq pasa"></i>Lo que se pasó</span>
+    </div>
+    <div class="rv-pr-pie">
+      <span>Presupuesto #${c.presupuesto_id}${c.destino ? ` · ${rvEsc(c.destino)}` : ""} · total ${gs(c.total_presupuestado)} en estos rubros</span>
+      ${rv.puedeCargar ? `<button class="rv-link" onclick="rvDesvincular()">Cambiar</button>` : ""}
+    </div>`;
+}
+
+async function rvPresuOpciones() {
+  const sel = $("#rv-presu-sel");
+  if (!sel) return;
+  if (!rv.presus) rv.presus = await api("/api/turismo/rendiciones/presupuestos");
+  if (!Array.isArray(rv.presus)) rv.presus = [];
+  const s2 = $("#rv-presu-sel");
+  if (!s2) return;
+  if (!rv.presus.length) {
+    s2.innerHTML = `<option value="">No hay presupuestos de turismo guardados</option>`;
+    return;
+  }
+  const norm = s => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const d = rv.det;
+  const conCliente = rv.presus.filter(p => norm(p.cliente) && norm(p.cliente) === norm(d.cliente));
+  const op = p => `<option value="${p.id}">#${p.id} · ${rvEsc(p.destino || "—")} · ${rvEsc(p.cliente || "sin cliente")} · ${rvF(p.fecha)} · ${gs(p.precio_final)}</option>`;
+  s2.innerHTML = `<option value="">Elegí el presupuesto…</option>`
+    + (conCliente.length ? `<optgroup label="Del mismo cliente">${conCliente.map(op).join("")}</optgroup>` : "")
+    + `<optgroup label="Todos">${rv.presus.map(op).join("")}</optgroup>`;
+  if (conCliente.length === 1) s2.value = conCliente[0].id;
+}
+
+async function rvVincular() {
+  const v = $("#rv-presu-sel")?.value;
+  if (!v) { toast("Elegí el presupuesto", "error"); return; }
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ presupuesto_id: +v }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo vincular", "error"); return; }
+  toast("Presupuesto vinculado", "success");
+  rvPintarDetalle(r.rendicion);
+}
+async function rvDesvincular() {
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ presupuesto_id: "" }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo cambiar", "error"); return; }
+  rvPintarDetalle(r.rendicion);
+}
+
+function rvObs(d) {
+  const obs = d.observaciones || "";
+  if (!rv.puedeCargar) {
+    return obs ? `<div class="rv-bloque-cab"><h3><i class="ti ti-notes"></i> Observaciones</h3></div><p class="rv-obs-txt">${rvEsc(obs)}</p>` : "";
+  }
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-notes"></i> Observaciones</h3></div>
+    <textarea id="rv-obs" class="rv-obs" rows="3" maxlength="500" placeholder="Algo que administración tenga que saber del viaje (un gasto sin comprobante, una multa, un arreglo en la ruta…)"
+      oninput="$('#rv-obs-btn').hidden = this.value === (rv.det.observaciones || '')">${rvEsc(obs)}</textarea>
+    <div class="rv-obs-pie"><button class="btn btn-ghost btn-sm" id="rv-obs-btn" hidden onclick="rvGuardarObs(this)"><i class="ti ti-device-floppy"></i> Guardar</button></div>`;
+}
+async function rvGuardarObs(btn) {
+  btn.disabled = true;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ observaciones: $("#rv-obs").value }) });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+  toast("Observaciones guardadas", "success");
+  rvPintarDetalle(r.rendicion);
+}
+
+// ─── Corregir / agregar un movimiento (modal) ───
+function rvMovModal(tipo, m) {
+  const esG = tipo === "gasto";
+  const v = m || { fecha: tipo === "anticipo" ? (rv.det.fecha_salida && rv.det.fecha_salida < trHoy() ? rv.det.fecha_salida : trHoy()) : rv.fecha,
+                   moneda: "GS", monto: "", cotizacion: "", detalle: "", litros: "", comprobante: "", categoria: rv.cat };
+  const mon = v.moneda || "GS";
+  const montoTxt = v.monto ? (mon === "GS" ? rvDec(Math.round(v.monto), 0) : rvDec(v.monto, 2)) : "";
+  rvModal({
+    titulo: m ? (esG ? "Corregir gasto" : "Corregir anticipo") : "Agregar anticipo",
+    icono: esG ? "receipt" : "wallet", ancho: 540,
+    sub: esG ? "Lo que dice el comprobante." : "La plata que se le dio al chofer para el viaje.",
+    cuerpo: `
+      <div class="rv-n-grid">
+        ${esG ? `<label class="rv-f g2"><span>Rubro</span><select id="rv-m-cat" onchange="$('#rv-m-lt').closest('.rv-f').hidden = !this.value.startsWith('combustible')">
+          ${RV_CATS.map(c => `<option value="${c.clave}" ${c.clave === v.categoria ? "selected" : ""}>${c.nombre}</option>`).join("")}</select></label>` : ""}
+        <label class="rv-f"><span>Fecha</span><input type="date" id="rv-m-fecha" value="${rvEsc(v.fecha)}"></label>
+        <label class="rv-f f-monto"><span>Monto</span>
+          <div class="rv-monto"><input id="rv-m-monto" inputmode="decimal" value="${montoTxt}" placeholder="0" oninput="rvConv('rv-m')" onblur="rvFormatear(this, 'rv-m-mon')" autofocus>
+          <select id="rv-m-mon" onchange="rvMonedaCambio('rv-m')" aria-label="Moneda">${rvOpcMonedas(mon)}</select></div>
+        </label>
+        <label class="rv-f" ${mon === "GS" ? "hidden" : ""}><span>Cotización</span><input id="rv-m-cot" inputmode="decimal" oninput="rvConv('rv-m')" value="${mon !== "GS" ? rvCot(v.cotizacion || rv.cot[mon] || 0) : ""}" placeholder="Gs. por unidad"></label>
+        ${esG ? `<label class="rv-f" ${String(v.categoria).startsWith("combustible") ? "" : "hidden"}><span>Litros</span><input id="rv-m-lt" inputmode="decimal" value="${v.litros ? rvDec(v.litros, 2) : ""}" placeholder="0"></label>` : ""}
+        <label class="rv-f g2"><span>Detalle</span><input id="rv-m-det" value="${rvEsc(v.detalle)}" maxlength="160" placeholder="${esG ? "Dónde, qué" : "Ej. Anticipo en dólares"}"></label>
+        ${esG ? `<label class="rv-f g2"><span>Comprobante</span><input id="rv-m-comp" value="${rvEsc(v.comprobante)}" maxlength="40" placeholder="N° de factura o ticket"></label>` : ""}
+      </div>
+      <div class="rv-conv" id="rv-m-conv"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvGuardarMov(this, '${tipo}', ${m ? m.id : "null"})"><i class="ti ti-check"></i> ${m ? "Guardar" : "Agregar"}</button>`,
+  });
+  rvConv("rv-m");
+  document.querySelectorAll(".rv-modal input").forEach(el => el.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); el.closest(".rv-modal").querySelector(".rv-modal-pie .btn-primary").click(); }
+  }));
+}
+function rvEditarMov(mid) {
+  const m = [...rv.det.gastos_lista, ...rv.det.anticipos_lista].find(x => x.id === mid);
+  if (m) rvMovModal(m.tipo, m);
+}
+async function rvGuardarMov(btn, tipo, mid) {
+  const mon = $("#rv-m-mon").value;
+  const body = { tipo, fecha: $("#rv-m-fecha").value, monto: $("#rv-m-monto").value, moneda: mon,
+                 cotizacion: $("#rv-m-cot").value, detalle: $("#rv-m-det").value };
+  if (tipo === "gasto") Object.assign(body, { categoria: $("#rv-m-cat").value, comprobante: $("#rv-m-comp").value,
+                                              litros: $("#rv-m-cat").value.startsWith("combustible") ? $("#rv-m-lt").value : 0 });
+  if (!(rvNum(body.monto) > 0)) { toast("Poné el monto", "error"); return; }
+  if (mon !== "GS" && !(rvNum(body.cotizacion) > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); return; }
+  btn.disabled = true;
+  const r = mid
+    ? await api(`/api/turismo/rendiciones/movs/${mid}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    : await api(`/api/turismo/rendiciones/${rv.id}/movs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo guardar", "error"); return; }
+  if (mon !== "GS") rv.cot[mon] = rvNum(body.cotizacion);
+  btn.closest(".modal-overlay").remove();
+  toast(mid ? "Corregido" : "Anticipo agregado", "success");
+  rvPintarDetalle(r.rendicion, mid || r.mov_id);
+}
+async function rvBorrarMov(mid) {
+  const m = [...rv.det.gastos_lista, ...rv.det.anticipos_lista].find(x => x.id === mid);
+  if (!m) return;
+  const que = m.tipo === "anticipo" ? `el anticipo de ${gs(m.monto_gs)}` : `el gasto de ${m.categoria_nombre.toLowerCase()} de ${gs(m.monto_gs)}`;
+  if (!confirm(`¿Borrar ${que}?`)) return;
+  const fila = document.getElementById(`rv-mov-${mid}`);
+  fila?.classList.add("saliendo");
+  const r = await api(`/api/turismo/rendiciones/movs/${mid}`, { method: "DELETE" });
+  if (!r || !r.ok) { fila?.classList.remove("saliendo"); toast(r?.msg || "No se pudo borrar", "error"); return; }
+  setTimeout(() => rvPintarDetalle(r.rendicion), fila ? 180 : 0);
+}
+
+// ─── Datos del viaje ───
+function rvEditarViaje() {
+  const d = rv.det;
+  rvModal({
+    titulo: "Datos del viaje", icono: "route", ancho: 620,
+    sub: d.agenda_ot ? `Vino de la agenda (OT ${rvEsc(d.agenda_ot)}). Lo que cambies acá no cambia la agenda.` : "",
+    cuerpo: `<div class="rv-n-grid">
+      <label class="rv-f g2"><span>Cliente</span><input id="rv-e-cliente" value="${rvEsc(d.cliente)}" autofocus></label>
+      <label class="rv-f"><span>Sale de</span><input id="rv-e-salida" value="${rvEsc(d.salida)}"></label>
+      <label class="rv-f"><span>Destino</span><input id="rv-e-destino" value="${rvEsc(d.destino)}"></label>
+      <label class="rv-f"><span>Fecha de salida</span><input type="date" id="rv-e-fs" value="${rvEsc(d.fecha_salida)}"></label>
+      <label class="rv-f"><span>Fecha de regreso</span><input type="date" id="rv-e-fr" value="${rvEsc(d.fecha_regreso)}"></label>
+      <label class="rv-f"><span>Coche</span><input id="rv-e-coche" value="${rvEsc(d.coche)}" inputmode="numeric"></label>
+      <label class="rv-f"><span>Pasajeros</span><input id="rv-e-pax" value="${d.pasajeros || ""}" inputmode="numeric"></label>
+      <label class="rv-f"><span>Quién rinde</span><input id="rv-e-chofer" value="${rvEsc(rvNombre(d.chofer))}"></label>
+      <label class="rv-f"><span>Tripulación</span><input id="rv-e-trip" value="${rvEsc(rvNombre(d.tripulacion))}"></label>
+    </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvGuardarViaje(this)"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function rvGuardarViaje(btn) {
+  const body = { cliente: $("#rv-e-cliente").value, salida: $("#rv-e-salida").value, destino: $("#rv-e-destino").value,
+                 fecha_salida: $("#rv-e-fs").value, fecha_regreso: $("#rv-e-fr").value, coche: $("#rv-e-coche").value,
+                 pasajeros: $("#rv-e-pax").value, chofer: $("#rv-e-chofer").value, tripulacion: $("#rv-e-trip").value };
+  if (body.fecha_regreso && body.fecha_salida && body.fecha_regreso < body.fecha_salida) { toast("El regreso es antes de la salida", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo guardar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Viaje actualizado", "success");
+  rvPintarDetalle(r.rendicion);
+}
+
+// ─── Pasos: presentar, aprobar, devolver, saldar, reabrir ───
+async function rvAccion(accion, extra = {}) {
+  const d = rv.det, s = rvSaldoDe(d);
+  const preguntas = {
+    presentar: `¿Presentar la rendición?\n\nQueda para que administración la apruebe. Después ya no se pueden cambiar los gastos, salvo que la devuelvan.`,
+    aprobar: `¿Aprobar la rendición #${d.id}?\n\n${s > 0 ? `El chofer tiene que devolver ${gs(s)}.` : s < 0 ? `Hay que pagarle ${gs(-s)} al chofer.` : "Cierra justo: queda saldada."}`,
+    reabrir: `¿Reabrir la rendición #${d.id}?\n\nVuelve a "Cargando" para corregir los gastos${d.estado !== "abierta" ? " y hay que aprobarla de nuevo" : ""}.`,
+  };
+  if (preguntas[accion] && !confirm(preguntas[accion])) return;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}/estado`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accion, ...extra }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo", "error"); return false; }
+  toast(r.msg || "Listo", "success");
+  // Si se reabre, la carga rápida vuelve a aparecer con lo último
+  rvPintarDetalle(r.rendicion);
+  $("#rv-d-ticket")?.classList.add("cambio");
+  setTimeout(() => $("#rv-d-ticket")?.classList.remove("cambio"), 900);
+  return true;
+}
+
+function rvDevolver() {
+  rvModal({
+    titulo: "Devolver para corregir", icono: "arrow-back-up", ancho: 500,
+    sub: "Vuelve a la oficina con el motivo. Cuando la corrijan, la presentan de nuevo.",
+    cuerpo: `<label class="rv-f"><span>¿Qué hay que corregir?</span>
+      <textarea id="rv-dv-motivo" class="rv-obs" rows="3" maxlength="300" autofocus placeholder="Ej. Falta el comprobante del hotel; el peaje del día 2 está cargado dos veces"></textarea></label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvConfirmarDevolver(this)"><i class="ti ti-arrow-back-up"></i> Devolver</button>`,
+  });
+}
+async function rvConfirmarDevolver(btn) {
+  const motivo = $("#rv-dv-motivo").value.trim();
+  if (motivo.length < 4) { toast("Escribí qué hay que corregir", "error"); return; }
+  btn.disabled = true;
+  const ok = await rvAccion("devolver", { motivo });
+  if (ok) btn.closest(".modal-overlay")?.remove(); else btn.disabled = false;
+}
+
+function rvSaldar() {
+  const s = rvSaldoDe(rv.det);
+  const formas = s > 0 ? ["Efectivo", "Transferencia", "Descuento del próximo anticipo", "Otro"]
+                       : ["Efectivo", "Transferencia", "Con el sueldo", "Otro"];
+  rvModal({
+    titulo: s > 0 ? "Registrar devolución" : "Registrar pago", icono: s > 0 ? "arrow-back-up" : "cash", ancho: 520,
+    sub: s > 0 ? `El chofer devuelve <b>${gs(s)}</b>.` : `Se le paga <b>${gs(-s)}</b> al chofer.`,
+    cuerpo: `
+      <div class="rv-f"><span>¿Cómo?</span>
+        <div class="rv-formas" role="radiogroup">${formas.map((f, i) => `<button type="button" role="radio" aria-checked="${i === 0}" class="rv-forma ${i === 0 ? "on" : ""}"
+          onclick="document.querySelectorAll('.rv-forma').forEach(b => { b.classList.toggle('on', b === this); b.setAttribute('aria-checked', b === this); })">${f}</button>`).join("")}</div>
+      </div>
+      <div class="rv-n-grid" style="margin-top:12px">
+        <label class="rv-f"><span>Fecha</span><input type="date" id="rv-s-fecha" value="${trHoy()}"></label>
+        <label class="rv-f"><span>Nota</span><input id="rv-s-nota" maxlength="200" placeholder="Ej. recibo N° 0012"></label>
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvConfirmarSaldo(this)"><i class="ti ti-check"></i> Registrar</button>`,
+  });
+}
+async function rvConfirmarSaldo(btn) {
+  const forma = document.querySelector(".rv-forma.on")?.textContent || "Efectivo";
+  btn.disabled = true;
+  const ok = await rvAccion("saldar", { forma, fecha: $("#rv-s-fecha").value, nota: $("#rv-s-nota").value });
+  if (ok) btn.closest(".modal-overlay")?.remove(); else btn.disabled = false;
+}
+
+function rvPdf() {
+  window.open(`/api/turismo/rendiciones/${rv.id}/pdf`, "_blank");
+}
+
+async function rvBorrar() {
+  const d = rv.det;
+  if (!confirm(`¿Borrar la rendición #${d.id} (${d.salida || ""} → ${d.destino || ""})?\n\nSe borran ${rvPl(d.anticipos_lista.length, "anticipo")} y ${rvPl(d.gastos_lista.length, "gasto")}. No se puede deshacer.`)) return;
+  const r = await api(`/api/turismo/rendiciones/${d.id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo borrar", "error"); return; }
+  toast(`Rendición #${d.id} borrada`, "success");
+  renderRendicionesTurismo();
+}
