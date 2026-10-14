@@ -13509,7 +13509,7 @@ document.addEventListener("keydown", e => {
 
 const rv = {
   filtro: "activas", q: "", datos: null, id: null, det: null,
-  cat: "combustible", moneda: "GS", fecha: "", cot: {},
+  cat: "combustible", moneda: "GS", fecha: "", cot: {}, pago: "chofer",
   puedeCargar: false, esAdmin: false,
   viajes: [], presus: null, nuevo: { modo: "agenda", sel: null, presuTocado: false },
 };
@@ -13518,12 +13518,22 @@ const RV_CATS = [
   { clave: "combustible", nombre: "Combustible", corto: "Combustible", icono: "gas-station", ph: "Estación y ciudad (ej. Petropar Coronel Oviedo)" },
   { clave: "combustible_ext", nombre: "Combustible en el exterior", corto: "Combustible exterior", icono: "world", ph: "Estación y ciudad (ej. YPF Resistencia)" },
   { clave: "peajes", nombre: "Peajes", corto: "Peajes", icono: "road", ph: "Qué peajes (ej. Ruta 2, ida)" },
+  { clave: "peajes_ext", nombre: "Peajes en el exterior", corto: "Peajes exterior", icono: "road-sign", ph: "Qué peajes (ej. Ruta 14, Telepase)" },
+  { clave: "salario", nombre: "Salario + viático", corto: "Salario + viático", icono: "user-dollar", ph: "De qué chofer" },
   { clave: "comida", nombre: "Comida / viáticos", corto: "Comida / viáticos", icono: "tools-kitchen-2", ph: "Comidas o viático de quién" },
   { clave: "hotel", nombre: "Hotel / estadía", corto: "Hotel / estadía", icono: "bed", ph: "Hotel y noches" },
   { clave: "estacionamiento", nombre: "Estacionamiento", corto: "Estacionamiento", icono: "parking", ph: "Dónde" },
   { clave: "lavado", nombre: "Lavado", corto: "Lavado", icono: "droplets", ph: "Dónde y qué se lavó" },
   { clave: "dinatran", nombre: "DINATRAN", corto: "DINATRAN", icono: "building-bank", ph: "Permiso, habilitación…" },
   { clave: "carta_azul", nombre: "Carta azul", corto: "Carta azul", icono: "file-certificate", ph: "Carta azul" },
+  { clave: "aduana", nombre: "Aduana", corto: "Aduana", icono: "building-arch", ph: "Qué paso de frontera" },
+  { clave: "migraciones", nombre: "Migraciones", corto: "Migraciones", icono: "id-badge-2", ph: "Qué paso de frontera" },
+  { clave: "senasa", nombre: "SENASA / sanidad", corto: "SENASA / sanidad", icono: "shield-check", ph: "SENASA, sanidad…" },
+  { clave: "desinfeccion", nombre: "Desinfección", corto: "Desinfección", icono: "spray", ph: "Dónde" },
+  { clave: "gomeria", nombre: "Gomería", corto: "Gomería", icono: "tire", ph: "Qué se hizo (vulcanización, cambio…)" },
+  { clave: "mantenimiento", nombre: "Mantenimiento en ruta", corto: "Mantenimiento", icono: "tool", ph: "Engrase, aceite, calibración…" },
+  { clave: "limpieza", nombre: "Limpieza / insumos", corto: "Limpieza / insumos", icono: "bucket", ph: "Artículos de limpieza, hielo…" },
+  { clave: "taxi", nombre: "Taxi / traslados", corto: "Taxi / traslados", icono: "car", ph: "De dónde a dónde" },
   { clave: "otros", nombre: "Otros", corto: "Otros", icono: "dots", ph: "Qué fue" },
 ];
 const RV_CAT = Object.fromEntries(RV_CATS.map(c => [c.clave, c]));
@@ -13611,6 +13621,8 @@ function rvMedidor(anticipos, gastos, clase = "") {
   const pasa = gastos > anticipos;
   const wAz = (pasa ? anticipos : gastos) / max * 100;
   const wRo = pasa ? (gastos - anticipos) / max * 100 : 0;
+  // Sin anticipo (servicios cortos: el chofer cobra su salario al rendir) no hay "pasarse"
+  if (!anticipos && gastos) return `<div class="rv-medidor ${clase}" role="img" aria-label="Sin anticipo"><i class="sin" style="width:100%"></i></div>`;
   const ro = wRo <= 0 ? "" : wAz > 0
     ? `<i class="ro" style="left:calc(${wAz}% + 2px);width:calc(${wRo}% - 2px)"></i>`
     : `<i class="ro" style="left:0;width:${wRo}%"></i>`;
@@ -13650,7 +13662,8 @@ async function renderRendicionesTurismo() {
   rv.puedeCargar = !!d.puede_cargar;
   rv.esAdmin = !!d.es_admin;
   const acc = $("#rv-acciones");
-  if (acc && rv.puedeCargar && d.total) acc.innerHTML = `<button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>`;
+  if (acc && rv.puedeCargar && d.total) acc.innerHTML = `<button class="btn btn-ghost" onclick="rvImportar()"><i class="ti ti-file-spreadsheet"></i> Cargar planillas</button>
+    <button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>`;
   rvPintarLista();
 }
 
@@ -13664,7 +13677,8 @@ function rvPintarLista() {
         <span class="rv-vacio-ic"><i class="ti ti-receipt-2"></i></span>
         <b>Todavía no hay rendiciones de viaje</b>
         <span>Se arma a partir del viaje de la agenda: se carga el anticipo que se le dio al chofer y, a la vuelta, sus comprobantes.</span>
-        ${rv.puedeCargar ? `<button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>` : ""}
+        ${rv.puedeCargar ? `<div class="rv-vacio-btns"><button class="btn btn-ghost" onclick="rvImportar()"><i class="ti ti-file-spreadsheet"></i> Cargar las planillas de Excel</button>
+          <button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button></div>` : ""}
       </div>`;
     return;
   }
@@ -13700,10 +13714,11 @@ function rvHero(r) {
   return `
     <section class="rv-hero">
       <div class="rv-hero-num">
-        <span class="rv-hero-et">Gastos de viaje · últimos 90 días</span>
+        <span class="rv-hero-et">Costo de los viajes · últimos 90 días</span>
         <b>${gs(total)}</b>
         <span class="rv-hero-sub">en ${rvPl(r.viajes_90, "viaje")} · promedio <strong>${gs(r.promedio_viaje_90)}</strong> por viaje</span>
         <span class="rv-hero-sub"><strong>${gs(r.por_dia_90)}</strong> por día de viaje</span>
+        ${r.ingreso_90 ? `<span class="rv-hero-rent">Cobrado ${gs(r.ingreso_90)} · los viajes dejaron el <b>${rvDec(r.rentabilidad_90, 1)}%</b></span>` : ""}
       </div>
       <div class="rv-hero-rubros">
         <span class="rv-hero-et">En qué se gasta</span>
@@ -13797,10 +13812,10 @@ function rvPintarFiltrosYLista() {
   });
   lista.innerHTML = grupos.map(g => {
     const [a, m] = g.k.split("-");
-    const gastado = g.items.reduce((s, x) => s + x.gastos, 0);
+    const gastado = g.items.reduce((s, x) => s + (x.costo_total || 0), 0);
     return `<div class="rv-mes">
         <h3>${m ? RV_MESES_L[+m - 1] + " " + a : "Sin fecha"}</h3>
-        <span>${rvPl(g.items.length, "viaje")} · ${gs(gastado)} gastado</span>
+        <span>${rvPl(g.items.length, "viaje")} · costo ${gs(gastado)}</span>
       </div>
       ${g.items.map(rvTarjeta).join("")}`;
   }).join("");
@@ -13813,7 +13828,7 @@ function rvTarjeta(x) {
   const pct = x.anticipos ? Math.round(x.gastos / x.anticipos * 100) : null;
   const pasa = x.anticipos && x.gastos > x.anticipos;
   let pie;
-  if (!x.anticipos) pie = x.gastos ? "Sin anticipo: todo lo puso el chofer" : "Sin anticipo cargado";
+  if (!x.anticipos) pie = x.gastos ? "Sin anticipo" : "Sin anticipo cargado";
   else if (pasa) pie = `Se pasó ${gs(x.gastos - x.anticipos)} (${pct}%)`;
   else if (!x.gastos) pie = "Todavía no se cargó ningún gasto";
   else pie = `Se gastó el ${pct}% del anticipo`;
@@ -13828,11 +13843,13 @@ function rvTarjeta(x) {
         <small>${rvPl(x.dias || 1, "día")}</small>
       </div>
       <div class="rv-info">
-        <div class="rv-ruta"><span>${rvEsc(x.salida || "—")}</span><i class="ti ti-arrow-narrow-right"></i><span>${rvEsc(x.destino || "—")}</span></div>
-        <div class="rv-cli"><span>${rvEsc(x.cliente || "Sin cliente")}</span>${x.agenda_ot ? `<span class="rv-ot">OT ${rvEsc(x.agenda_ot)}</span>` : `<span class="rv-ot">#${x.id}</span>`}</div>
+        ${x.salida && x.destino
+          ? `<div class="rv-ruta"><span>${rvEsc(x.salida)}</span><i class="ti ti-arrow-narrow-right"></i><span>${rvEsc(x.destino)}</span></div>`
+          : `<div class="rv-ruta"><span>${rvEsc(x.destino || x.salida || x.tramo || "Viaje")}</span></div>`}
+        <div class="rv-cli"><span>${rvEsc(x.cliente || x.tramo || "Sin cliente")}</span>${x.agenda_ot ? `<span class="rv-ot">OT ${rvEsc(x.agenda_ot)}</span>` : `<span class="rv-ot">#${x.id}</span>`}</div>
         <div class="rv-datos">
           ${x.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(x.coche)}</span>` : ""}
-          ${x.chofer ? `<span><i class="ti ti-steering-wheel"></i>${rvEsc(rvNombre(x.chofer))}</span>` : ""}
+          ${x.chofer ? `<span><i class="ti ti-steering-wheel"></i>${rvEsc(rvNombre(x.chofer))}${x.chofer2 ? ` y ${rvEsc(rvNombre(x.chofer2).split(" ")[0])}` : ""}</span>` : ""}
           <span><i class="ti ti-receipt"></i>${rvPl(x.n_gastos || 0, "comprobante")}</span>
         </div>
       </div>
@@ -13844,6 +13861,7 @@ function rvTarjeta(x) {
       <div class="rv-lado">
         <span class="rv-estado ${e.clase}"><i class="ti ti-${e.icono}"></i>${e.txt}</span>
         <span class="rv-saldo ${s.clase}">${s.txt}</span>
+        ${x.ingreso ? `<span class="rv-rent ${x.resultado < 0 ? "neg" : ""}" title="Cobrado ${gs(x.ingreso)} · costo ${gs(x.costo_total)}">Dejó ${gs(x.resultado)} · ${rvDec(x.rentabilidad, 0)}%</span>` : ""}
       </div>
     </article>`;
 }
@@ -14098,6 +14116,7 @@ async function rvAbrir(id) {
   rv.fecha = ult ? ult.fecha : (d.fecha_salida && d.fecha_salida <= trHoy() ? d.fecha_salida : trHoy());
   rv.moneda = "GS";
   rv.cat = "combustible";
+  rv.pago = "chofer";
   $("#rv-det").innerHTML = `
     <button class="rv-volver" onclick="rvVolver()"><i class="ti ti-arrow-left"></i> Rendiciones de viaje</button>
     <section class="rv-ticket" id="rv-d-ticket"></section>
@@ -14135,7 +14154,7 @@ function rvPintarDetalle(d, nuevoMov) {
   $("#rv-d-balance").innerHTML = rvBalance(d);
   $("#rv-d-gcab").innerHTML = `
     <h3><i class="ti ti-receipt"></i> Gastos del viaje</h3>
-    <span class="rv-cab-dato">${rvPl(d.gastos_lista.length, "comprobante")} · <b>${gs(d.gastos)}</b></span>`;
+    <span class="rv-cab-dato">${rvPl(d.gastos_lista.length, "comprobante")} · <b>${gs(d.costo_total)}</b>${d.gastos_admin ? `<small>${gs(d.gastos)} el chofer · ${gs(d.gastos_admin)} administración</small>` : ""}</span>`;
   // La carga rápida se arma una sola vez: así no se pierde lo que se está escribiendo
   const lugar = $("#rv-carga-lugar");
   if (editable && !$("#rv-carga")) { lugar.innerHTML = rvCargaHtml(d); rvCargaEventos(); }
@@ -14165,30 +14184,39 @@ function rvPintarDetalle(d, nuevoMov) {
 
 function rvTicket(d) {
   const ida = d.fecha_salida, vuelta = d.fecha_regreso || d.fecha_salida;
-  const fechas = vuelta !== ida ? `${rvDiaSem(ida, true)} ${rvF(ida)} al ${rvDiaSem(vuelta, true)} ${rvF(vuelta)}` : `${rvDiaSem(ida)} ${rvF(ida)}`;
+  const hs = d.hora_salida ? ` ${d.hora_salida}` : "", hl = d.hora_llegada ? ` ${d.hora_llegada}` : "";
+  const fechas = vuelta !== ida ? `${rvDiaSem(ida, true)} ${rvF(ida)}${hs} al ${rvDiaSem(vuelta, true)} ${rvF(vuelta)}${hl}`
+    : `${rvDiaSem(ida)} ${rvF(ida)}${hs}${hl ? ` a${hl}` : ""}`;
+  const choferes = [d.chofer, d.chofer2].filter(Boolean).map(rvNombre);
   const trip = (d.tripulacion || "").trim();
+  const conRuta = d.salida && d.destino;
+  // El tramo completo, si dice más que salida → destino
+  const tramoExtra = d.tramo && conRuta && (d.tramo.split(/\s*[-/]\s*/).filter(Boolean).length > 2) ? d.tramo : "";
   return `
     <div class="rv-t-top">
       <div class="rv-t-et">
         <span class="rv-t-ot">${[d.agenda_ot && `OT ${rvEsc(d.agenda_ot)}`, `Rendición #${d.id}`].filter(Boolean).join(" · ")}</span>
-        <span class="rv-t-cli">${rvEsc(d.cliente || "Sin cliente")}</span>
+        <span class="rv-t-cli">${rvEsc(d.cliente || (d.origen ? "Cargada de la planilla" : "Sin cliente"))}</span>
       </div>
       <div class="rv-t-acc">
-        ${d.editable && rv.puedeCargar ? `<button class="rv-t-btn" onclick="rvEditarViaje()"><i class="ti ti-pencil"></i><span>Editar viaje</span></button>` : ""}
+        ${rv.puedeCargar ? `<button class="rv-t-btn" onclick="rvEditarViaje()"><i class="ti ti-pencil"></i><span>${d.editable ? "Editar viaje" : "Datos del viaje"}</span></button>` : ""}
         <button class="rv-t-btn" onclick="rvPdf()"><i class="ti ti-file-type-pdf"></i><span>PDF para firmar</span></button>
         ${rv.esAdmin ? `<button class="rv-t-btn peligro" onclick="rvBorrar()" title="Borrar la rendición" aria-label="Borrar la rendición"><i class="ti ti-trash"></i></button>` : ""}
       </div>
     </div>
-    <div class="rv-t-ruta">
-      <b>${rvEsc(d.salida || "—")}</b>
+    ${conRuta ? `<div class="rv-t-ruta">
+      <b>${rvEsc(d.salida)}</b>
       <span class="rv-t-linea" aria-hidden="true"><i class="ti ti-bus"></i></span>
-      <b>${rvEsc(d.destino || "—")}</b>
-    </div>
+      <b>${rvEsc(d.destino)}</b>
+    </div>` : `<div class="rv-t-ruta solo"><b>${rvEsc(d.destino || d.salida || d.tramo || "Viaje")}</b></div>`}
+    ${tramoExtra ? `<div class="rv-t-tramo"><i class="ti ti-route"></i>${rvEsc(tramoExtra)}</div>` : ""}
     <div class="rv-t-datos">
       <span><i class="ti ti-calendar"></i>${fechas} · ${rvPl(d.dias || 1, "día")}</span>
-      ${d.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(d.coche)}</span>` : ""}
-      ${d.chofer ? `<span><i class="ti ti-steering-wheel"></i>Rinde ${rvEsc(rvNombre(d.chofer))}</span>` : ""}
-      ${trip && rvNombre(trip) !== rvNombre(d.chofer) ? `<span><i class="ti ti-users"></i>${rvEsc(rvNombre(trip))}</span>` : ""}
+      ${d.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(d.coche)}${d.matricula ? ` · ${rvEsc(d.matricula)}` : ""}</span>` : ""}
+      ${choferes.length ? `<span><i class="ti ti-steering-wheel"></i>${choferes.length > 1 ? `Choferes ${rvEsc(choferes.join(" y "))}` : `Rinde ${rvEsc(choferes[0])}`}</span>`
+        : trip ? `<span><i class="ti ti-users"></i>${rvEsc(rvNombre(trip))}</span>` : ""}
+      ${d.dias_trabajados ? `<span><i class="ti ti-clock-hour-4"></i>${rvDec(d.dias_trabajados, 1)} ${d.dias_trabajados === 1 ? "día trabajado" : "días trabajados"}</span>` : ""}
+      ${d.km_recorridos ? `<span><i class="ti ti-gauge"></i>${rvDec(d.km_recorridos, 0)} km${d.consumo ? ` · ${rvDec(d.consumo, 2)} km/L` : ""}</span>` : ""}
       ${d.pasajeros ? `<span><i class="ti ti-armchair"></i>${d.pasajeros} pasajeros</span>` : ""}
     </div>
     ${rvPasos(d)}`;
@@ -14216,15 +14244,35 @@ function rvPasos(d) {
 
 function rvBalance(d) {
   const s = rvSaldoDe(d);
-  const nA = d.anticipos_lista.length, nG = d.gastos_lista.length;
+  const nA = d.anticipos_lista.length;
+  const nG = d.gastos_lista.filter(m => m.pagado_por !== "administracion").length;
   let cls = "justo", que = "cierra justo";
   if (s > 0) { cls = "dev"; que = d.estado === "saldada" ? "devolvió el chofer" : d.estado === "abierta" ? "devolvería el chofer" : "devuelve el chofer"; }
   if (s < 0) { cls = "debe"; que = d.estado === "saldada" ? "se le pagó al chofer" : d.estado === "abierta" ? "habría que pagarle" : "hay que pagarle al chofer"; }
   const pasa = d.anticipos && d.gastos > d.anticipos;
   const pct = d.anticipos ? Math.round(d.gastos / d.anticipos * 100) : null;
-  const pie = !d.anticipos ? (d.gastos ? "No hubo anticipo: todo lo puso el chofer" : "Sin anticipo ni gastos todavía")
+  const pie = !d.anticipos ? (d.gastos ? "No hubo anticipo" : "Sin anticipo ni gastos todavía")
     : pasa ? `Se pasó ${gs(d.gastos - d.anticipos)} del anticipo (${pct}%)`
     : `Se gastó el ${pct}% del anticipo`;
+  // Lo que se devuelve en cada moneda (los pesos sobrantes se devuelven en pesos)
+  const monedas = (d.saldos_moneda || []);
+  const porMoneda = monedas.some(x => x.moneda !== "GS") ? monedas.map(x => {
+    const v = x.moneda === "GS" ? gs(Math.abs(x.saldo)) : `${x.simbolo} ${rvDec(Math.abs(x.saldo), 2)}`;
+    const t = x.saldo > 0 ? `devuelve <b>${v}</b>` : x.saldo < 0 ? `se le debe <b>${v}</b>` : "justo";
+    return `<span class="${x.saldo > 0 ? "dev" : x.saldo < 0 ? "debe" : ""}"><em>${x.moneda === "GS" ? "Guaraníes" : x.simbolo}</em>${t}</span>`;
+  }).join("") : "";
+  const extra = [];
+  if (porMoneda) extra.push(`<div class="rv-bx monedas"><span class="rv-bx-et"><i class="ti ti-coins"></i> En cada moneda</span><div class="rv-bx-mon">${porMoneda}</div></div>`);
+  if (d.gastos_admin) extra.push(`<div class="rv-bx"><span class="rv-bx-et"><i class="ti ti-building"></i> Pagó administración</span><b>${gs(d.gastos_admin)}</b><small>no entra en la cuenta del chofer</small></div>`);
+  extra.push(`<div class="rv-bx"><span class="rv-bx-et"><i class="ti ti-receipt-2"></i> Costo del viaje</span><b>${gs(d.costo_total)}</b><small>${d.gastos_admin ? "chofer + administración" : "todo lo gastado"}${d.gasto_por_dia ? ` · ${gs(d.gasto_por_dia)} por día` : ""}</small></div>`);
+  if (d.ingreso) {
+    const r = d.resultado;
+    extra.push(`<div class="rv-bx res ${r >= 0 ? "pos" : "neg"}"><span class="rv-bx-et"><i class="ti ti-chart-arrows-vertical"></i> Resultado del servicio</span>
+      <b>${gs(r)}</b><small>cobrado ${gs(d.ingreso)} · rentabilidad ${rvDec(d.rentabilidad, 1)}%</small></div>`);
+  } else if (rv.puedeCargar) {
+    extra.push(`<div class="rv-bx falta"><span class="rv-bx-et"><i class="ti ti-chart-arrows-vertical"></i> Resultado del servicio</span>
+      <button class="rv-link" onclick="rvEditarViaje('ingreso')"><i class="ti ti-plus"></i> Poner lo cobrado</button><small>para ver cuánto dejó el viaje</small></div>`);
+  }
   return `
     <div class="rv-bal-izq">
       <div class="rv-bal-cifras">
@@ -14235,7 +14283,7 @@ function rvBalance(d) {
         </div>
         <span class="rv-bal-op" aria-hidden="true">−</span>
         <div class="rv-bal-c">
-          <span class="rv-bal-et"><i class="ti ti-receipt"></i> Gastos</span>
+          <span class="rv-bal-et"><i class="ti ti-receipt"></i> ${d.gastos_admin ? "Gastos del chofer" : "Gastos"}</span>
           <b>${gs(d.gastos)}</b>
           <small>${rvPl(nG, "comprobante")}${d.litros ? ` · ${rvDec(d.litros, 1)} L` : ""}</small>
         </div>
@@ -14243,13 +14291,15 @@ function rvBalance(d) {
         <div class="rv-bal-c saldo ${cls}">
           <span class="rv-bal-et"><i class="ti ti-${s > 0 ? "arrow-back-up" : s < 0 ? "cash" : "equal"}"></i> Saldo</span>
           <b>${gs(Math.abs(s))}</b>
-          <small>${que}</small>
+          <small>${que}${porMoneda ? " · todo en Gs." : ""}</small>
         </div>
       </div>
       <div class="rv-bal-med">
         ${rvMedidor(d.anticipos, d.gastos, "grande")}
-        <div class="rv-bal-pie ${pasa ? "pasa" : ""}"><span>${pie}</span>${d.gasto_por_dia ? `<span>${gs(d.gasto_por_dia)} por día</span>` : ""}</div>
+        <div class="rv-bal-pie ${pasa ? "pasa" : ""}"><span>${pie}</span>${d.descuentos ? `<span>Descuentos (insumo y cabecera): ${gs(d.descuentos)}</span>` : ""}</div>
       </div>
+      ${d.sin_cotizacion ? `<div class="rv-sincot"><i class="ti ti-alert-triangle"></i> Hay montos en otra moneda sin cotización: no se pasan a guaraníes. ${d.editable && rv.puedeCargar ? "Corregilos con el lápiz y poné la cotización." : ""}</div>` : ""}
+      <div class="rv-bal-extra">${extra.join("")}</div>
     </div>
     <div class="rv-bal-der ${RV_ESTADOS[d.estado]?.clase || ""}">${rvSiguiente(d)}</div>`;
 }
@@ -14282,7 +14332,7 @@ function rvSiguiente(d) {
       ${reabrir}`;
   }
   const como = [d.saldo_forma, d.saldo_nota].filter(Boolean).join(" · ");
-  const quien = d.saldado_por ? ` · ${rvCorto(d.saldado_por)}` : "";
+  const quien = d.saldado_por && d.saldado_por !== "Planilla" ? ` · ${rvCorto(d.saldado_por)}` : "";
   return `${info("circle-check", "Cuenta cerrada", `${s > 0 ? `Devolvió ${gs(s)}` : s < 0 ? `Se le pagó ${gs(-s)}` : "Cerró justo"}${como ? ` · ${rvEsc(como)}` : ""} · ${rvF(d.saldado_el)}${rvEsc(quien)}`)}
     ${reabrir}`;
 }
@@ -14291,7 +14341,15 @@ function rvSiguiente(d) {
 function rvCargaHtml(d) {
   const c = RV_CAT[rv.cat];
   return `
-    <div class="rv-carga" id="rv-carga">
+    <div class="rv-carga ${rv.pago === "administracion" ? "adm" : ""}" id="rv-carga">
+      <div class="rv-pago">
+        <span>Lo pagó</span>
+        <div class="rv-pago-sw" role="radiogroup" aria-label="Quién lo pagó">
+          <button type="button" role="radio" data-pago="chofer" aria-checked="${rv.pago === "chofer"}" class="${rv.pago === "chofer" ? "on" : ""}" onclick="rvElegirPago('chofer')"><i class="ti ti-steering-wheel"></i> El chofer</button>
+          <button type="button" role="radio" data-pago="administracion" aria-checked="${rv.pago === "administracion"}" class="${rv.pago === "administracion" ? "on" : ""}" onclick="rvElegirPago('administracion')"><i class="ti ti-building"></i> Administración</button>
+        </div>
+        <small id="rv-pago-nota">${rv.pago === "administracion" ? "Lo pagó la empresa directo: suma al costo del viaje, no a la cuenta del chofer" : "Sale de lo que se le dio: entra en la cuenta del chofer"}</small>
+      </div>
       <div class="rv-cats" role="radiogroup" aria-label="Rubro del gasto">
         ${RV_CATS.map(x => `<button type="button" role="radio" aria-checked="${x.clave === rv.cat}" class="rv-cat ${x.clave === rv.cat ? "on" : ""}"
              data-cat="${x.clave}" onclick="rvElegirCat('${x.clave}')"><i class="ti ti-${x.icono}"></i>${x.corto}</button>`).join("")}
@@ -14299,14 +14357,15 @@ function rvCargaHtml(d) {
       <div class="rv-campos">
         <label class="rv-f f-det"><span>Detalle</span><input id="rv-c-det" placeholder="${rvEsc(c.ph)}" maxlength="160" autocomplete="off"></label>
         <label class="rv-f f-monto"><span>Monto</span>
-          <div class="rv-monto"><input id="rv-c-monto" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvConv('rv-c')" onblur="rvFormatear(this, 'rv-c-mon')">
+          <div class="rv-monto"><input id="rv-c-monto" inputmode="decimal" placeholder="0" autocomplete="off" oninput="this.dataset.auto = ''; rvConv('rv-c')" onblur="rvFormatear(this, 'rv-c-mon')">
           <select id="rv-c-mon" onchange="rvMonedaCambio('rv-c')" aria-label="Moneda">${rvOpcMonedas(rv.moneda)}</select></div>
         </label>
         <label class="rv-f f-cot" ${rv.moneda === "GS" ? "hidden" : ""}><span>Cotización</span><input id="rv-c-cot" inputmode="decimal" placeholder="Gs. c/u" oninput="rvConv('rv-c')" value="${rv.moneda !== "GS" && rv.cot[rv.moneda] ? rvCot(rv.cot[rv.moneda]) : ""}"></label>
       </div>
       <div class="rv-campos">
         <label class="rv-f f-fecha"><span>Fecha</span><input type="date" id="rv-c-fecha" value="${rv.fecha}"></label>
-        <label class="rv-f f-lt" ${rv.cat.startsWith("combustible") ? "" : "hidden"}><span>Litros</span><input id="rv-c-lt" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <label class="rv-f f-lt" ${rv.cat.startsWith("combustible") ? "" : "hidden"}><span>Litros</span><input id="rv-c-lt" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvLitrosPorPrecio()"></label>
+        <label class="rv-f f-pl" ${rv.cat.startsWith("combustible") ? "" : "hidden"}><span>Precio x litro</span><input id="rv-c-pl" inputmode="decimal" placeholder="Gs." autocomplete="off" oninput="rvLitrosPorPrecio()"></label>
         <label class="rv-f f-comp"><span>Comprobante</span><input id="rv-c-comp" placeholder="N° de factura o ticket" maxlength="40" autocomplete="off"></label>
         <button class="btn btn-primary rv-agregar" id="rv-c-btn" onclick="rvAgregarGasto()"><i class="ti ti-plus"></i> Agregar</button>
       </div>
@@ -14328,8 +14387,7 @@ function rvElegirCat(k) {
   });
   const det = $("#rv-c-det");
   if (det) det.placeholder = c.ph;
-  const lt = $("#rv-c-lt")?.closest(".rv-f");
-  if (lt) lt.hidden = !k.startsWith("combustible");
+  ["#rv-c-lt", "#rv-c-pl"].forEach(id => { const f = $(id)?.closest(".rv-f"); if (f) f.hidden = !k.startsWith("combustible"); });
   // El combustible de acá se paga en guaraníes; el de afuera, en la plata de allá
   const mon = $("#rv-c-mon");
   if (mon) {
@@ -14342,6 +14400,32 @@ function rvElegirCat(k) {
   $("#rv-c-det")?.focus();
 }
 
+function rvElegirPago(p) {
+  rv.pago = p;
+  document.querySelectorAll(".rv-pago-sw button").forEach(b => {
+    const on = b.dataset.pago === p;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", on);
+  });
+  $("#rv-carga")?.classList.toggle("adm", p === "administracion");
+  const n = $("#rv-pago-nota");
+  if (n) n.textContent = p === "administracion"
+    ? "Lo pagó la empresa directo: suma al costo del viaje, no a la cuenta del chofer"
+    : "Sale de lo que se le dio: entra en la cuenta del chofer";
+}
+// Litros × precio del litro = monto (si el monto no se escribió a mano)
+function rvLitrosPorPrecio() {
+  const m = $("#rv-c-monto");
+  const lt = rvNum($("#rv-c-lt")?.value), pl = rvNum($("#rv-c-pl")?.value);
+  if (!m || (m.value && m.dataset.auto !== "1")) return;
+  if (lt > 0 && pl > 0) {
+    const mon = $("#rv-c-mon").value;
+    m.value = mon === "GS" ? rvDec(Math.round(lt * pl), 0) : rvDec(lt * pl, 2);
+    m.dataset.auto = "1";
+  } else if (m.dataset.auto === "1") { m.value = ""; }
+  rvConv("rv-c");
+}
+
 async function rvAgregarGasto() {
   const btn = $("#rv-c-btn");
   if (!btn || btn.disabled) return;
@@ -14350,6 +14434,7 @@ async function rvAgregarGasto() {
     tipo: "gasto", categoria: rv.cat, fecha: $("#rv-c-fecha").value, detalle: $("#rv-c-det").value,
     monto: $("#rv-c-monto").value, moneda: mon, cotizacion: $("#rv-c-cot").value,
     litros: rv.cat.startsWith("combustible") ? $("#rv-c-lt").value : "", comprobante: $("#rv-c-comp").value,
+    precio_litro: rv.cat.startsWith("combustible") ? $("#rv-c-pl").value : "", pagado_por: rv.pago,
   };
   if (!(rvNum(body.monto) > 0)) { toast("Poné el monto del comprobante", "error"); $("#rv-c-monto").focus(); return; }
   if (mon !== "GS" && !(rvNum(body.cotizacion) > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); $("#rv-c-cot").focus(); return; }
@@ -14359,7 +14444,7 @@ async function rvAgregarGasto() {
   if (!r || !r.ok) { toast(r?.msg || "No se pudo agregar", "error"); return; }
   rv.fecha = body.fecha;
   if (mon !== "GS") rv.cot[mon] = rvNum(body.cotizacion);
-  ["rv-c-det", "rv-c-monto", "rv-c-lt", "rv-c-comp"].forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+  ["rv-c-det", "rv-c-monto", "rv-c-lt", "rv-c-comp"].forEach(id => { const el = document.getElementById(id); if (el) { el.value = ""; el.dataset.auto = ""; } });
   rvPintarDetalle(r.rendicion, r.mov_id);
   const nuevo = r.rendicion.gastos_lista.find(m => m.id === r.mov_id);
   const conv = $("#rv-c-conv");
@@ -14393,15 +14478,16 @@ function rvGastos(d, editable) {
 }
 
 function rvFilaMov(m, editable) {
-  const ext = m.moneda && m.moneda !== "GS" ? `${rvMon(m.monto, m.moneda)} × ${rvCot(m.cotizacion)}` : "";
+  const sinCot = m.moneda && m.moneda !== "GS" && !Number(m.cotizacion);
+  const ext = m.moneda && m.moneda !== "GS" ? `${rvMon(m.monto, m.moneda)}${sinCot ? " · sin cotización" : ` × ${rvCot(m.cotizacion)}`}` : "";
   const sub = [m.detalle, m.comprobante && `Comp. ${m.comprobante}`].filter(Boolean);
-  return `<div class="rv-mov" id="rv-mov-${m.id}">
+  return `<div class="rv-mov ${m.pagado_por === "administracion" ? "adm" : ""}" id="rv-mov-${m.id}">
     <span class="rv-mov-ic"><i class="ti ti-${m.tipo === "anticipo" ? "cash" : m.icono}"></i></span>
-    <div class="rv-mov-txt"><b>${rvEsc(m.tipo === "anticipo" ? (m.detalle || "Anticipo") : m.categoria_nombre)}</b>
+    <div class="rv-mov-txt"><b>${rvEsc(m.tipo === "anticipo" ? (m.detalle || "Anticipo") : m.categoria_nombre)}${m.pagado_por === "administracion" ? `<em class="rv-adm" title="Lo pagó la empresa directo: no entra en la cuenta del chofer"><i class="ti ti-building"></i> Administración</em>` : ""}</b>
       ${m.tipo !== "anticipo" && sub.length ? `<span>${sub.map(rvEsc).join(" · ")}</span>` : ""}
       ${m.tipo === "anticipo" ? `<span>${rvDiaSem(m.fecha, true)} ${rvF(m.fecha)}${ext ? ` · ${ext}` : ""}</span>` : ""}</div>
     <div class="rv-mov-ext">${m.litros ? `<span class="rv-lt">${rvDec(m.litros, 1)} L</span>` : ""}${ext ? `<span>${ext}</span>` : ""}</div>
-    <b class="rv-mov-gs">${gs(m.monto_gs)}</b>
+    <b class="rv-mov-gs ${!m.monto_gs ? "vacio" : ""}">${m.monto_gs ? gs(m.monto_gs) : (sinCot ? "—" : "Sin monto")}</b>
     ${editable ? `<span class="rv-mov-acc">
       <button onclick="rvEditarMov(${m.id})" title="Corregir" aria-label="Corregir"><i class="ti ti-pencil"></i></button>
       <button onclick="rvBorrarMov(${m.id})" title="Borrar" aria-label="Borrar"><i class="ti ti-trash"></i></button></span>` : ""}
@@ -14420,10 +14506,10 @@ function rvRubros(d) {
   const cats = d.por_categoria;
   if (!cats.length) return "";
   const max = cats[0].total || 1;
-  const tot = d.gastos || 1;
+  const tot = d.costo_total || 1;
   // El litro promedio: el de acá y el de afuera por separado
   const precio = clave => {
-    const ms = d.gastos_lista.filter(m => m.categoria === clave && m.litros > 0);
+    const ms = d.gastos_lista.filter(m => m.categoria === clave && m.litros > 0 && m.monto_gs > 0);
     const lt = ms.reduce((a, m) => a + m.litros, 0);
     return lt ? { lt, gsl: ms.reduce((a, m) => a + m.monto_gs, 0) / lt } : null;
   };
@@ -14431,7 +14517,8 @@ function rvRubros(d) {
   const datos = [];
   if (pa) datos.push(`<span><i class="ti ti-gas-station"></i>Acá: ${rvDec(pa.lt, 1)} L a <b>${gs(pa.gsl)}</b> el litro</span>`);
   if (pe) datos.push(`<span><i class="ti ti-world"></i>Afuera: ${rvDec(pe.lt, 1)} L a <b>${gs(pe.gsl)}</b> el litro</span>`);
-  if (d.pasajeros && d.gastos) datos.push(`<span><i class="ti ti-armchair"></i><b>${gs(d.gastos / d.pasajeros)}</b> por pasajero</span>`);
+  if (d.pasajeros && d.costo_total) datos.push(`<span><i class="ti ti-armchair"></i><b>${gs(d.costo_total / d.pasajeros)}</b> por pasajero</span>`);
+  if (d.consumo) datos.push(`<span><i class="ti ti-gauge"></i>${rvDec(d.km_recorridos, 0)} km con ${rvDec(d.litros, 1)} L: <b>${rvDec(d.consumo, 2)} km/L</b></span>`);
   return `
     <div class="rv-bloque-cab"><h3><i class="ti ti-chart-bar"></i> En qué se gastó</h3></div>
     <div class="rv-rubros">
@@ -14558,7 +14645,10 @@ function rvMovModal(tipo, m) {
     cuerpo: `
       <div class="rv-n-grid">
         ${esG ? `<label class="rv-f g2"><span>Rubro</span><select id="rv-m-cat" onchange="$('#rv-m-lt').closest('.rv-f').hidden = !this.value.startsWith('combustible')">
-          ${RV_CATS.map(c => `<option value="${c.clave}" ${c.clave === v.categoria ? "selected" : ""}>${c.nombre}</option>`).join("")}</select></label>` : ""}
+          ${RV_CATS.map(c => `<option value="${c.clave}" ${c.clave === v.categoria ? "selected" : ""}>${c.nombre}</option>`).join("")}</select></label>
+        <label class="rv-f g2"><span>Lo pagó</span><select id="rv-m-pago">
+          <option value="chofer" ${(v.pagado_por || rv.pago) !== "administracion" ? "selected" : ""}>El chofer (entra en su cuenta)</option>
+          <option value="administracion" ${(v.pagado_por || rv.pago) === "administracion" ? "selected" : ""}>Administración (la empresa directo)</option></select></label>` : ""}
         <label class="rv-f"><span>Fecha</span><input type="date" id="rv-m-fecha" value="${rvEsc(v.fecha)}"></label>
         <label class="rv-f f-monto"><span>Monto</span>
           <div class="rv-monto"><input id="rv-m-monto" inputmode="decimal" value="${montoTxt}" placeholder="0" oninput="rvConv('rv-m')" onblur="rvFormatear(this, 'rv-m-mon')" autofocus>
@@ -14586,7 +14676,7 @@ async function rvGuardarMov(btn, tipo, mid) {
   const mon = $("#rv-m-mon").value;
   const body = { tipo, fecha: $("#rv-m-fecha").value, monto: $("#rv-m-monto").value, moneda: mon,
                  cotizacion: $("#rv-m-cot").value, detalle: $("#rv-m-det").value };
-  if (tipo === "gasto") Object.assign(body, { categoria: $("#rv-m-cat").value, comprobante: $("#rv-m-comp").value,
+  if (tipo === "gasto") Object.assign(body, { categoria: $("#rv-m-cat").value, comprobante: $("#rv-m-comp").value, pagado_por: $("#rv-m-pago").value,
                                               litros: $("#rv-m-cat").value.startsWith("combustible") ? $("#rv-m-lt").value : 0 });
   if (!(rvNum(body.monto) > 0)) { toast("Poné el monto", "error"); return; }
   if (mon !== "GS" && !(rvNum(body.cotizacion) > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); return; }
@@ -14613,31 +14703,61 @@ async function rvBorrarMov(mid) {
 }
 
 // ─── Datos del viaje ───
-function rvEditarViaje() {
+// Los datos que se pueden corregir aunque ya se haya presentado (no cambian la cuenta con el chofer)
+const RV_SIEMPRE = new Set(["ingreso", "km_inicial", "km_final", "matricula", "hora_salida", "hora_llegada", "fecha_rendicion", "tramo"]);
+function rvEditarViaje(enfocar) {
   const d = rv.det;
+  const ed = d.editable;
+  const campo = (id, et, val, extra = "", clase = "") => {
+    const k = id.replace("rv-e-", "");
+    const bloq = !ed && !RV_SIEMPRE.has(k);
+    return `<label class="rv-f ${clase}"><span>${et}</span><input id="${id}" value="${rvEsc(val ?? "")}" ${extra} ${bloq ? "disabled" : ""}></label>`;
+  };
+  const num0 = v => (v ? rvDec(v, 0) : "");
   rvModal({
-    titulo: "Datos del viaje", icono: "route", ancho: 620,
-    sub: d.agenda_ot ? `Vino de la agenda (OT ${rvEsc(d.agenda_ot)}). Lo que cambies acá no cambia la agenda.` : "",
-    cuerpo: `<div class="rv-n-grid">
-      <label class="rv-f g2"><span>Cliente</span><input id="rv-e-cliente" value="${rvEsc(d.cliente)}" autofocus></label>
-      <label class="rv-f"><span>Sale de</span><input id="rv-e-salida" value="${rvEsc(d.salida)}"></label>
-      <label class="rv-f"><span>Destino</span><input id="rv-e-destino" value="${rvEsc(d.destino)}"></label>
-      <label class="rv-f"><span>Fecha de salida</span><input type="date" id="rv-e-fs" value="${rvEsc(d.fecha_salida)}"></label>
-      <label class="rv-f"><span>Fecha de regreso</span><input type="date" id="rv-e-fr" value="${rvEsc(d.fecha_regreso)}"></label>
-      <label class="rv-f"><span>Coche</span><input id="rv-e-coche" value="${rvEsc(d.coche)}" inputmode="numeric"></label>
-      <label class="rv-f"><span>Pasajeros</span><input id="rv-e-pax" value="${d.pasajeros || ""}" inputmode="numeric"></label>
-      <label class="rv-f"><span>Quién rinde</span><input id="rv-e-chofer" value="${rvEsc(rvNombre(d.chofer))}"></label>
-      <label class="rv-f"><span>Tripulación</span><input id="rv-e-trip" value="${rvEsc(rvNombre(d.tripulacion))}"></label>
+    titulo: ed ? "Datos del viaje" : "Datos del viaje (ya presentada)", icono: "route", ancho: 720,
+    sub: ed ? (d.agenda_ot ? `OT ${rvEsc(d.agenda_ot)}. Lo que cambies acá no cambia la agenda.` : "")
+            : "Lo que cambia la cuenta con el chofer ya no se toca; lo demás (km, horarios, lo cobrado) sí.",
+    cuerpo: `<div class="rv-n-grid tres">
+      ${campo("rv-e-cliente", "Cliente", d.cliente, "", "g2")}
+      ${campo("rv-e-ot", "Orden de servicio", d.agenda_ot)}
+      ${campo("rv-e-tramo", "Tramo", d.tramo, 'placeholder="Ej. ASUNCIÓN - ENCARNACIÓN - ASUNCIÓN"', "g3")}
+      ${campo("rv-e-salida", "Sale de", d.salida)}
+      ${campo("rv-e-destino", "Destino", d.destino)}
+      ${campo("rv-e-pax", "Pasajeros", d.pasajeros || "", 'inputmode="numeric"')}
+      ${campo("rv-e-fs", "Fecha de salida", d.fecha_salida, 'type="date"')}
+      ${campo("rv-e-hora_salida", "Hora de salida", d.hora_salida, 'type="time"')}
+      ${campo("rv-e-dias", "Días trabajados", d.dias_trabajados ? rvDec(d.dias_trabajados, 1) : "", 'inputmode="decimal"')}
+      ${campo("rv-e-fr", "Fecha de llegada", d.fecha_regreso, 'type="date"')}
+      ${campo("rv-e-hora_llegada", "Hora de llegada", d.hora_llegada, 'type="time"')}
+      ${campo("rv-e-fecha_rendicion", "Fecha de rendición", d.fecha_rendicion, 'type="date"')}
+      ${campo("rv-e-coche", "Coche", d.coche, 'inputmode="numeric"')}
+      ${campo("rv-e-matricula", "Matrícula", d.matricula)}
+      ${campo("rv-e-km_inicial", "Km inicial", num0(d.km_inicial), 'inputmode="numeric"')}
+      ${campo("rv-e-chofer", "Chofer 1 (rinde)", rvNombre(d.chofer))}
+      ${campo("rv-e-chofer2", "Chofer 2", rvNombre(d.chofer2))}
+      ${campo("rv-e-km_final", "Km final", num0(d.km_final), 'inputmode="numeric"')}
+      ${campo("rv-e-ingreso", "Lo cobrado por el servicio (Gs.)", num0(d.ingreso), 'inputmode="numeric" onblur="rvFormatear(this, \'x\')"', "g2")}
+      ${campo("rv-e-descuentos", "Descuentos (insumo y cabecera)", num0(d.descuentos), 'inputmode="numeric" onblur="rvFormatear(this, \'x\')"')}
     </div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
           <button class="btn btn-primary" onclick="rvGuardarViaje(this)"><i class="ti ti-check"></i> Guardar</button>`,
   });
+  if (enfocar) setTimeout(() => { const el = document.getElementById("rv-e-" + enfocar); el?.focus(); el?.select?.(); }, 80);
 }
 async function rvGuardarViaje(btn) {
-  const body = { cliente: $("#rv-e-cliente").value, salida: $("#rv-e-salida").value, destino: $("#rv-e-destino").value,
-                 fecha_salida: $("#rv-e-fs").value, fecha_regreso: $("#rv-e-fr").value, coche: $("#rv-e-coche").value,
-                 pasajeros: $("#rv-e-pax").value, chofer: $("#rv-e-chofer").value, tripulacion: $("#rv-e-trip").value };
-  if (body.fecha_regreso && body.fecha_salida && body.fecha_regreso < body.fecha_salida) { toast("El regreso es antes de la salida", "error"); return; }
+  const v = id => $("#rv-e-" + id);
+  const body = {};
+  const mapa = { cliente: "cliente", ot: "agenda_ot", tramo: "tramo", salida: "salida", destino: "destino", pax: "pasajeros",
+                 fs: "fecha_salida", hora_salida: "hora_salida", dias: "dias_trabajados", fr: "fecha_regreso",
+                 hora_llegada: "hora_llegada", fecha_rendicion: "fecha_rendicion", coche: "coche", matricula: "matricula",
+                 km_inicial: "km_inicial", chofer: "chofer", chofer2: "chofer2", km_final: "km_final", ingreso: "ingreso",
+                 descuentos: "descuentos" };
+  Object.entries(mapa).forEach(([id, k]) => { const el = v(id); if (el && !el.disabled) body[k] = el.value; });
+  if (body.chofer !== undefined) body.tripulacion = [body.chofer, body.chofer2].filter(x => (x || "").trim()).join(" / ");
+  if (body.fecha_regreso && body.fecha_salida && body.fecha_regreso < body.fecha_salida) { toast("La llegada es antes de la salida", "error"); return; }
+  const ki = rvNum(body.km_inicial ?? rv.det.km_inicial), kf = rvNum(body.km_final ?? rv.det.km_final);
+  if (ki && kf && kf < ki) { toast("El km final es menor que el inicial", "error"); return; }
   btn.disabled = true;
   const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo guardar", "error"); return; }
@@ -14720,5 +14840,96 @@ async function rvBorrar() {
   const r = await api(`/api/turismo/rendiciones/${d.id}`, { method: "DELETE" });
   if (!r || !r.ok) { toast(r?.msg || "No se pudo borrar", "error"); return; }
   toast(`Rendición #${d.id} borrada`, "success");
+  renderRendicionesTurismo();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  CARGAR LAS PLANILLAS DE EXCEL ("RENDICION TURISMO")
+// ════════════════════════════════════════════════════════════════════════
+// Se eligen los Excel del mes (uno o varios), el sistema muestra qué va a
+// entrar y recién ahí se cargan. Lo que ya estaba cargado no se repite.
+function rvImportar() {
+  rv.imp = { archivos: [] };
+  rvModal({
+    titulo: "Cargar planillas de rendición", icono: "file-spreadsheet", ancho: 720, clase: "rv-m-imp",
+    sub: "Los Excel de “Rendición turismo” (una hoja por día). Se cargan todas las rendiciones con sus gastos, tal cual están; lo que no se completó queda en blanco.",
+    cuerpo: `
+      <label class="rv-drop" id="rv-drop">
+        <input type="file" id="rv-imp-arch" accept=".xlsx,.xlsm" multiple onchange="rvImportarElegir(this.files)">
+        <i class="ti ti-cloud-upload"></i>
+        <b>Elegí los archivos o arrastralos acá</b>
+        <span>Podés elegir varios meses juntos</span>
+      </label>
+      <div id="rv-imp-res"></div>`,
+    pie: `<span class="rv-pie-info" id="rv-imp-info"></span>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="rv-imp-ok" disabled onclick="rvImportarCargar(this)"><i class="ti ti-check"></i> Cargar</button>`,
+  });
+  const z = $("#rv-drop");
+  ["dragenter", "dragover"].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.add("encima"); }));
+  ["dragleave", "drop"].forEach(ev => z.addEventListener(ev, e => { e.preventDefault(); z.classList.remove("encima"); }));
+  z.addEventListener("drop", e => rvImportarElegir(e.dataTransfer.files));
+}
+
+async function rvImportarEnviar(probar) {
+  const fd = new FormData();
+  rv.imp.archivos.forEach(f => fd.append("archivos", f, f.name));
+  _uiCarga(+1);
+  try {
+    const r = await fetch(`/api/turismo/rendiciones/importar${probar ? "?probar=1" : ""}`, { method: "POST", body: fd });
+    return await r.json().catch(() => ({ ok: false, msg: "No se pudo leer la respuesta" }));
+  } catch (e) {
+    return { ok: false, msg: "No se pudo enviar los archivos" };
+  } finally { _uiCarga(-1); }
+}
+
+async function rvImportarElegir(lista) {
+  const archivos = [...(lista || [])].filter(f => /\.xls[xm]$/i.test(f.name));
+  if (!archivos.length) { toast("Elegí archivos de Excel (.xlsx)", "error"); return; }
+  rv.imp.archivos = archivos;
+  const res = $("#rv-imp-res");
+  res.innerHTML = `<div class="rv-imp-leyendo"><div class="dossier-spinner"></div> Leyendo ${rvPl(archivos.length, "planilla")}…</div>`;
+  $("#rv-imp-ok").disabled = true;
+  const r = await rvImportarEnviar(true);
+  if (!$("#rv-imp-res")) return;
+  if (!r || !r.ok) { res.innerHTML = `<div class="rv-imp-error"><i class="ti ti-alert-triangle"></i> ${rvEsc(r?.msg || "No se pudieron leer")}</div>`; return; }
+  rv.imp.prueba = r;
+  const filas = r.archivos.map(a => `
+    <tr>
+      <td><b>${rvEsc(a.periodos.join(", ") || a.nombre)}</b><small>${rvEsc(a.nombre)}</small></td>
+      <td class="n">${a.nuevas}${a.repetidas ? `<small>${a.repetidas} ya estaban</small>` : ""}</td>
+      <td class="n">${a.gastos}</td>
+      <td class="n">${a.ingreso ? gs(a.ingreso) : "—"}</td>
+      <td class="n">${gs(a.costo)}</td>
+    </tr>`).join("");
+  const avisos = [];
+  if (r.repetidas) avisos.push(`<span><i class="ti ti-copy-off"></i> ${rvPl(r.repetidas, "rendición ya estaba cargada", "rendiciones ya estaban cargadas")}: no se repiten.</span>`);
+  if (r.sin_fecha_rendicion) avisos.push(`<span><i class="ti ti-pencil"></i> ${rvPl(r.sin_fecha_rendicion, "no tiene", "no tienen")} fecha de rendición: ${r.sin_fecha_rendicion === 1 ? "queda" : "quedan"} en “Cargando” para completar.</span>`);
+  if (r.sin_cotizacion) avisos.push(`<span><i class="ti ti-coins"></i> ${rvPl(r.sin_cotizacion, "tiene", "tienen")} pesos o reales sin cotización: se cargan en su moneda y no se pasan a guaraníes.</span>`);
+  (r.errores || []).forEach(e => avisos.push(`<span class="mal"><i class="ti ti-alert-triangle"></i> ${rvEsc(e)}</span>`));
+  res.innerHTML = `
+    <div class="rv-imp-tabla">
+      <table class="sv-t">
+        <thead><tr><th>Mes</th><th class="n">Rendiciones</th><th class="n">Gastos</th><th class="n">Cobrado</th><th class="n">Costo</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+    <div class="rv-imp-nota"><i class="ti ti-info-circle"></i><span>Las que tienen fecha de rendición entran como <b>saldadas</b> (ya se rindieron en papel). Administración puede reabrir cualquiera.</span></div>
+    ${avisos.length ? `<div class="rv-imp-avisos">${avisos.join("")}</div>` : ""}`;
+  const ok = $("#rv-imp-ok");
+  ok.disabled = !r.nuevas;
+  ok.innerHTML = `<i class="ti ti-check"></i> ${r.nuevas ? `Cargar ${rvPl(r.nuevas, "rendición", "rendiciones")}` : "Nada nuevo para cargar"}`;
+  $("#rv-imp-info").textContent = r.nuevas ? `${rvPl(r.gastos, "gasto")} en total` : "";
+}
+
+async function rvImportarCargar(btn) {
+  btn.disabled = true;
+  btn.innerHTML = `<div class="dossier-spinner chico"></div> Cargando…`;
+  const r = await rvImportarEnviar(false);
+  if (!r || !r.ok) { btn.disabled = false; btn.innerHTML = `<i class="ti ti-check"></i> Reintentar`; toast(r?.msg || "No se pudo cargar", "error"); return; }
+  btn.closest(".modal-overlay")?.remove();
+  toast(`Listo: ${rvPl(r.importadas, "rendición cargada", "rendiciones cargadas")}`, "success");
+  rv.filtro = "todas";
   renderRendicionesTurismo();
 }
