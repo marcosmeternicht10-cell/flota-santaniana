@@ -6175,6 +6175,7 @@ async function abrirOT(otId) {
         </div>
 
         <div id="ot-km-box">${otKmCaja(ot)}</div>
+        <div id="ot-dep-box" class="ot-dep"></div>
 
         ${ot.fotos && ot.fotos.length ? `
           <div style="margin-bottom:18px">
@@ -6258,6 +6259,7 @@ async function abrirOT(otId) {
   `;
   document.body.appendChild(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOTDetalle(); });
+  otDepCargar(ot);
 }
 
 // Si alguien escribe el técnico y cierra el modal de una, el onblur no llega
@@ -7161,6 +7163,10 @@ async function renderRepuestos() {
 
 // ─── Lista de tarjetas de resultado ───
 function renderListaRepuestos(reps) {
+  const tot = repTotalesContenido(reps);
+  return (tot ? `<div class="rep-totales"><i class="ti ti-droplet"></i> En lo que se ve hay <b>${tot}</b></div>` : "") + _renderListaRepuestos(reps);
+}
+function _renderListaRepuestos(reps) {
   if (!reps.length) {
     if (repBuscar || repFiltroCategoria) {
       return `<div class="empty"><i class="ti ti-search-off"></i>No encontré nada con eso.<br>Probá con otra palabra o el código.</div>`;
@@ -7172,14 +7178,13 @@ function renderListaRepuestos(reps) {
     const est = r.estado_stock;
     const stkClass = est === "ok" ? "ok" : est === "bajo" ? "bajo" : "sin";
     const stkIcon = est === "ok" ? "circle-check" : est === "bajo" ? "alert-triangle" : "circle-x";
-    const stkTxt = est === "sin_stock" ? "sin stock"
-                 : `${fmtNum(r.stock_actual)} ${r.unidad}${est === "bajo" ? " — poco" : ""}`;
+    const stkTxt = est === "sin_stock" ? "sin stock" : `${repStockTxt(r)}${est === "bajo" ? " — poco" : ""}`;
     return `
       <div class="rep-card" style="border-left-color:${col}" onclick="abrirRepuesto(${r.id})">
         <div class="rep-card-main">
           <div class="rep-card-info">
             <div class="rep-card-titulo">${r.descripcion}</div>
-            <div class="rep-card-sub">${[r.aplicacion, r.codigo].filter(Boolean).join(" · ")}${r.n_proveedores > 1 ? ` <span class="rep-card-nprov"><i class="ti ti-building-store"></i> ${r.n_proveedores} proveedores</span>` : ""}</div>
+            <div class="rep-card-sub">${[r.contenido ? repEnvaseTxt(r) : "", r.aplicacion, r.codigo].filter(Boolean).join(" · ")}${r.n_proveedores > 1 ? ` <span class="rep-card-nprov"><i class="ti ti-building-store"></i> ${r.n_proveedores} proveedores</span>` : ""}</div>
           </div>
           <div class="rep-stock-badge ${stkClass}">
             <i class="ti ti-${stkIcon}"></i> ${stkTxt}
@@ -7236,6 +7241,18 @@ function renderPanelCargar() {
           </div>
         </div>
 
+
+        <div class="rep-envase-form">
+          <div class="rep-ubic-form-label"><i class="ti ti-droplet"></i> ¿Viene en envase? <span class="rep-envase-ej">aceite en bidón, tambor, balde de grasa… (si no, dejalo vacío)</span></div>
+          <div class="form-row">
+            <div class="field"><label>Envase</label><input id="r-env" list="rep-envases" value="${hiEsc('' || "")}" placeholder="bidón, tambor…" style="width:140px"></div>
+            <div class="field"><label>Trae cada uno</label><input id="r-cont" inputmode="decimal" value="${0 ? repDec(0) : ""}" placeholder="20" style="width:110px"></div>
+            <div class="field"><label>Medida</label>
+              <select id="r-cuni" style="width:110px">${["litros", "kg", "metros"].map(u => `<option value="${u}" ${('' || "litros") === u ? "selected" : ""}>${u}</option>`).join("")}</select>
+            </div>
+          </div>
+          <datalist id="rep-envases"><option value="bidón"><option value="tambor"><option value="balde"><option value="botella"><option value="lata"><option value="caja"></datalist>
+        </div>
         <div class="form-row" style="margin-top:14px">
           <div class="field"><label>Cantidad inicial</label><input id="r-stk" placeholder="0" style="width:110px"></div>
           <div class="field"><label>Avisar cuando baje de</label><input id="r-min" placeholder="10" style="width:130px"></div>
@@ -7724,6 +7741,7 @@ async function guardarRepuesto() {
       stock_minimo: parseFloat(limpiar($("#r-min").value)) || 0,
       unidad: $("#r-uni").value,
       costo_unitario: parseFloat(limpiar($("#r-cos").value)) || 0,
+      envase: $("#r-env").value, contenido: $("#r-cont").value, contenido_unidad: $("#r-cuni").value,
     })
   });
   if (r.ok) { toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
@@ -7764,10 +7782,11 @@ async function abrirRepuesto(id) {
     fraseUbic = p.join(", ");
   }
 
+  const subCont = r.contenido ? `<div class="rep-d-stockcont">${repDec(r.contenido_total)} ${repUni(r)} en total</div>` : "";
   const estBadge = est === "ok"
-    ? `<div class="rep-d-stockbox ok"><div class="rep-d-stocknum">${fmtNum(r.stock_actual)} ${r.unidad}</div><div class="rep-d-stocklbl">en stock</div></div>`
+    ? `<div class="rep-d-stockbox ok"><div class="rep-d-stocknum">${repCantTxt(r, r.stock_actual)}</div>${subCont}<div class="rep-d-stocklbl">en stock</div></div>`
     : est === "bajo"
-    ? `<div class="rep-d-stockbox bajo"><div class="rep-d-stocknum">${fmtNum(r.stock_actual)} ${r.unidad}</div><div class="rep-d-stocklbl">queda poco — pedir</div></div>`
+    ? `<div class="rep-d-stockbox bajo"><div class="rep-d-stocknum">${repCantTxt(r, r.stock_actual)}</div>${subCont}<div class="rep-d-stocklbl">queda poco — pedir</div></div>`
     : `<div class="rep-d-stockbox sin"><div class="rep-d-stocknum">0</div><div class="rep-d-stocklbl">sin stock</div></div>`;
 
   const o = document.createElement("div");
@@ -7777,7 +7796,7 @@ async function abrirRepuesto(id) {
       <div class="rep-modal-head" style="background:${col}">
         <div>
           <div class="rep-modal-titulo">${r.descripcion}</div>
-          <div class="rep-modal-sub">${[r.aplicacion, r.codigo, r.codigo_alt].filter(Boolean).join(" · ")}</div>
+          <div class="rep-modal-sub">${[r.contenido ? repEnvaseTxt(r) : "", r.aplicacion, r.codigo, r.codigo_alt].filter(Boolean).join(" · ")}</div>
         </div>
         <button class="rep-modal-x" onclick="cerrarRepuesto()"><i class="ti ti-x"></i></button>
       </div>
@@ -7843,8 +7862,8 @@ async function abrirRepuesto(id) {
           : `<div class="rep-d-movs">
               ${r.movimientos.slice(0, 12).map(m => `
                 <div class="rep-d-mov">
-                  <span class="rep-d-mov-tipo ${COLOR_MOV[m.tipo]}">${m.tipo === "salida" ? "−" : m.tipo === "entrada" ? "+" : "="}${fmtNum(m.cantidad)}</span>
-                  <span class="rep-d-mov-mot">${m.motivo || LABEL_MOV[m.tipo]}</span>
+                  <span class="rep-d-mov-tipo ${COLOR_MOV[m.tipo]}">${m.tipo === "salida" ? "−" : m.tipo === "entrada" ? "+" : "="}${repDec(m.cantidad)}${r.contenido ? ` <small>(${repDec(m.cantidad * r.contenido)} ${repUni(r, true)})</small>` : ""}</span>
+                  <span class="rep-d-mov-mot">${m.ot_id ? `<a class="rep-d-mov-ot" onclick="cerrarRepuesto(); abrirOT(${m.ot_id})"><i class="ti ti-clipboard-check"></i> ${hiEsc(m.motivo || "OT #" + m.ot_id)}</a>` : (m.motivo || LABEL_MOV[m.tipo])}</span>
                   <span class="rep-d-mov-meta">${m.fecha}${m.usuario ? " · " + m.usuario : ""}</span>
                   ${puedeEditar ? `<button class="rep-d-mov-del" onclick="borrarMovimiento(${m.id}, ${r.id})"><i class="ti ti-x"></i></button>` : ""}
                 </div>`).join("")}
@@ -7891,8 +7910,18 @@ function movimientoManual(rid, tipo) {
   o.innerHTML = `
     <div class="rep-mini-modal">
       <div class="rep-mini-titulo">${esEntrada ? "Entró stock" : "Saqué del depósito"}</div>
-      <label class="rep-mini-lbl">¿Cuántas unidades?</label>
-      <input id="mm-cant" class="rep-mini-input" type="text" inputmode="decimal" placeholder="1" autofocus>
+      ${repEsEnvase(rid) ? `
+        <label class="rep-mini-lbl">¿Cuánto?</label>
+        <div class="rep-mini-cant">
+          <input id="mm-cant" class="rep-mini-input" type="text" inputmode="decimal" placeholder="1" autofocus>
+          <select id="mm-en" class="rep-mini-input">
+            <option value="envases">${repPlural(window._repActual.envase || "envase", 2)}</option>
+            <option value="contenido">${repUni(window._repActual, true)}</option>
+          </select>
+        </div>
+        <div class="rep-mini-help">Cada ${hiEsc(window._repActual.envase || "envase")} trae ${repDec(window._repActual.contenido)} ${repUni(window._repActual, true)}.</div>`
+      : `<label class="rep-mini-lbl">¿Cuántas unidades?</label>
+      <input id="mm-cant" class="rep-mini-input" type="text" inputmode="decimal" placeholder="1" autofocus>`}
       <label class="rep-mini-lbl">Motivo (opcional)</label>
       <input id="mm-mot" class="rep-mini-input" placeholder="${esEntrada ? "Compra, devolución..." : "Uso en coche 47, rotura..."}">
       ${esEntrada && ((window._repActual || {}).id === rid) && (window._repActual.proveedores || []).length ? `
@@ -7915,7 +7944,8 @@ function movimientoManual(rid, tipo) {
 }
 
 async function confirmarMovManual(rid, tipo, btn) {
-  const cant = parseFloat((document.getElementById("mm-cant").value || "").replace(/\./g, "").replace(/,/g, "."));
+  let cant = rvNum(document.getElementById("mm-cant").value);
+  if (document.getElementById("mm-en")?.value === "contenido" && window._repActual?.contenido) cant = Math.round(cant / window._repActual.contenido * 10000) / 10000;
   if (!cant || cant <= 0) { toast("Poné una cantidad", "error"); return; }
   const mot = document.getElementById("mm-mot").value;
   const cosEl = document.getElementById("mm-cos");
@@ -8030,6 +8060,17 @@ async function editarRepuesto(id) {
         </div>
       </div>
       ${camposProveedor("e", r, "Proveedor principal")}
+        <div class="rep-envase-form">
+          <div class="rep-ubic-form-label"><i class="ti ti-droplet"></i> ¿Viene en envase? <span class="rep-envase-ej">aceite en bidón, tambor, balde de grasa… (si no, dejalo vacío)</span></div>
+          <div class="form-row">
+            <div class="field"><label>Envase</label><input id="e-env" list="rep-envases" value="${hiEsc(r.envase || "")}" placeholder="bidón, tambor…" style="width:140px"></div>
+            <div class="field"><label>Trae cada uno</label><input id="e-cont" inputmode="decimal" value="${r.contenido ? repDec(r.contenido) : ""}" placeholder="20" style="width:110px"></div>
+            <div class="field"><label>Medida</label>
+              <select id="e-cuni" style="width:110px">${["litros", "kg", "metros"].map(u => `<option value="${u}" ${(r.contenido_unidad || "litros") === u ? "selected" : ""}>${u}</option>`).join("")}</select>
+            </div>
+          </div>
+          <datalist id="rep-envases"><option value="bidón"><option value="tambor"><option value="balde"><option value="botella"><option value="lata"><option value="caja"></datalist>
+        </div>
       <div class="form-row" style="margin-top:12px">
         <div class="field"><label>Avisar bajo de</label><input id="e-min" value="${r.stock_minimo||0}" style="width:120px"></div>
         <div class="field"><label>Precio c/u (Gs.)</label><input id="e-cos" value="${r.costo_unitario||0}" style="width:140px"></div>
@@ -8059,6 +8100,7 @@ async function confirmarEditar(id, btn) {
       ubic_nivel: $("#e-un").value, ubic_posicion: $("#e-uo").value,
       stock_minimo: parseFloat(limpiar($("#e-min").value)) || 0,
       costo_unitario: parseFloat(limpiar($("#e-cos").value)) || 0,
+      envase: $("#e-env").value, contenido: $("#e-cont").value, contenido_unidad: $("#e-cuni").value,
     })
   });
   if (r.ok) {
@@ -14932,4 +14974,183 @@ async function rvImportarCargar(btn) {
   toast(`Listo: ${rvPl(r.importadas, "rendición cargada", "rendiciones cargadas")}`, "success");
   rv.filtro = "todas";
   renderRendicionesTurismo();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  PRODUCTOS POR ENVASE (aceite en bidón, tambor…) y LA OT CON EL DEPÓSITO
+// ════════════════════════════════════════════════════════════════════════
+const repDec = (n, d = 2) => rvDec(n, d);
+// "bidón" → "bidones", "tambor" → "tambores", "balde" → "baldes"
+function repPlural(palabra, n) {
+  const p = String(palabra || "").trim();
+  if (!p || Math.abs(n - 1) < 1e-9) return p;
+  const sin = p.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (/[aeiou]$/i.test(p)) return p + "s";
+  if (/ón$/i.test(p)) return sin + "es";
+  return p + "es";
+}
+function repUni(r, corta) {
+  const u = r.contenido_unidad || "litros";
+  return corta ? ({ litros: "L", kg: "kg", metros: "m" }[u] || u) : u;
+}
+const repEnvaseTxt = r => `${r.envase ? r.envase.charAt(0).toUpperCase() + r.envase.slice(1) + " de " : "Envase de "}${repDec(r.contenido)} ${repUni(r, true)}`;
+// Cantidad en envases: "4 bidones" (o "4 u" si no es por envase)
+function repCantTxt(r, n) {
+  if (!r.contenido) return `${repDec(n)} ${r.unidad || "u"}`;
+  return `${repDec(n)} ${repPlural(r.envase || "envase", n)}`;
+}
+function repStockTxt(r) {
+  if (!r.contenido) return `${repDec(r.stock_actual)} ${r.unidad || "u"}`;
+  return `${repCantTxt(r, r.stock_actual)} · ${repDec(r.contenido_total)} ${repUni(r, true)}`;
+}
+// Lo que suman los envases que se ven (ej. buscando "15W40": 1.240 L)
+function repTotalesContenido(reps) {
+  const t = {};
+  (reps || []).forEach(r => { if (r.contenido && r.stock_actual > 0) t[repUni(r, true)] = (t[repUni(r, true)] || 0) + (r.contenido_total || 0); });
+  const partes = Object.entries(t).map(([u, v]) => `${repDec(v, 1)} ${u}`);
+  return partes.length ? partes.join(" · ") : "";
+}
+const repEsEnvase = rid => (window._repActual || {}).id === rid && !!window._repActual.contenido;
+
+// ─── En la OT: lo que se sacó del depósito ───
+const otDep = { ot: null, usados: [], total: 0, puede: false, sel: null, buscarT: null };
+
+async function otDepCargar(ot) {
+  otDep.ot = ot;
+  otDep.sel = null;
+  const r = await api(`/api/ots/${ot.id}/repuestos`);
+  if (!r || !r.ok) { const b = $("#ot-dep-box"); if (b) b.innerHTML = ""; return; }
+  otDep.usados = r.usados; otDep.total = r.total; otDep.puede = !!r.puede_sacar;
+  otDepPintar();
+}
+
+function otDepPintar(nuevo) {
+  const box = $("#ot-dep-box");
+  if (!box) return;
+  const u = otDep.usados;
+  if (!u.length && !otDep.puede) { box.innerHTML = ""; return; }
+  box.innerHTML = `
+    <div class="ot-dep-cab">
+      <div class="ot-dep-tit"><i class="ti ti-package"></i> Del depósito
+        <span>${u.length ? `${u.length} ${u.length === 1 ? "cosa sacada" : "cosas sacadas"} para esta OT` : "lo que se usa sale del inventario"}</span></div>
+      ${u.length ? `<b class="ot-dep-total">${gs(otDep.total)}</b>` : ""}
+    </div>
+    ${u.length ? `<div class="ot-dep-lista">${u.map(m => `
+      <div class="ot-dep-fila ${nuevo === m.id ? "nuevo" : ""}">
+        <span class="ot-dep-ic"><i class="ti ti-${m.contenido ? "droplet" : "box"}"></i></span>
+        <div class="ot-dep-txt">
+          <b>${hiEsc(m.descripcion)}</b>
+          <span>${[m.codigo, m.item_desc && "para: " + m.item_desc, m.usuario, m.fecha && otFechaHora(m.fecha)].filter(Boolean).map(hiEsc).join(" · ")}</span>
+        </div>
+        <span class="ot-dep-cant">${m.contenido ? `${repDec(m.contenido_sacado, 1)} ${repUni(m, true)}<small>${repCantTxt(m, m.cantidad)}</small>` : repCantTxt(m, m.cantidad)}</span>
+        <span class="ot-dep-gs">${m.costo ? gs(m.costo) : "—"}</span>
+        ${otDep.puede ? `<button class="ot-dep-dev" title="Devolver al depósito (vuelve a sumar al stock)" onclick="otDepDevolver(${m.id})"><i class="ti ti-arrow-back-up"></i></button>` : ""}
+      </div>`).join("")}</div>` : ""}
+    ${otDep.puede ? `<div id="ot-dep-sacar">${otDepBotonHtml()}</div>` : ""}`;
+}
+
+const otDepBotonHtml = () => `<button class="ot-dep-mas" onclick="otDepAbrirBuscar()"><i class="ti ti-plus"></i> Sacar del depósito</button>`;
+
+function otDepAbrirBuscar() {
+  const c = $("#ot-dep-sacar");
+  c.innerHTML = `
+    <div class="ot-dep-buscar">
+      <div class="ot-dep-input"><i class="ti ti-search"></i>
+        <input id="ot-dep-q" placeholder="Buscá el repuesto: filtro, 15W40, código…" autocomplete="off"
+               oninput="otDepBuscar(this.value)" onkeydown="if(event.key==='Escape') otDepCerrarBuscar()">
+        <button class="icon-btn" onclick="otDepCerrarBuscar()" title="Cancelar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="ot-dep-res" id="ot-dep-res"></div>
+    </div>`;
+  $("#ot-dep-q").focus();
+  otDepBuscar("");
+}
+function otDepCerrarBuscar() { otDep.sel = null; const c = $("#ot-dep-sacar"); if (c) c.innerHTML = otDepBotonHtml(); }
+
+function otDepBuscar(q) {
+  clearTimeout(otDep.buscarT);
+  otDep.buscarT = setTimeout(async () => {
+    const lista = await api(`/api/ots/repuestos_buscar?q=${encodeURIComponent(q.trim())}`);
+    const res = $("#ot-dep-res");
+    if (!res) return;
+    otDep.lista = Array.isArray(lista) ? lista : [];
+    if (!otDep.lista.length) { res.innerHTML = `<div class="ot-dep-vacio">No hay nada con eso en el inventario.</div>`; return; }
+    res.innerHTML = otDep.lista.map((r, i) => `
+      <button class="ot-dep-op ${r.stock_actual > 0 ? "" : "sin"}" onclick="otDepElegir(${i})" ${r.stock_actual > 0 ? "" : "disabled"}>
+        <span class="ot-dep-op-n"><b>${hiEsc(r.descripcion)}</b><small>${[r.contenido ? repEnvaseTxt(r) : "", r.marca, r.codigo, r.ubicacion && "📍 " + r.ubicacion].filter(Boolean).map(hiEsc).join(" · ")}</small></span>
+        <span class="ot-dep-op-s ${r.estado_stock}">${r.stock_actual > 0 ? repStockTxt(r) : "sin stock"}</span>
+      </button>`).join("");
+  }, q ? 220 : 0);
+}
+
+function otDepElegir(i) {
+  const r = otDep.lista[i];
+  otDep.sel = r;
+  const items = (otDep.ot.items || []);
+  $("#ot-dep-sacar").innerHTML = `
+    <div class="ot-dep-form">
+      <div class="ot-dep-elegido">
+        <span class="ot-dep-ic"><i class="ti ti-${r.contenido ? "droplet" : "box"}"></i></span>
+        <div><b>${hiEsc(r.descripcion)}</b><small>Hay ${repStockTxt(r)}${r.ubicacion ? ` · 📍 ${hiEsc(r.ubicacion)}` : ""}${r.costo_unitario ? ` · ${gs(r.costo_unitario)} c/${hiEsc(r.contenido ? (r.envase || "envase") : "u")}` : ""}</small></div>
+        <button class="icon-btn" onclick="otDepAbrirBuscar()" title="Elegir otro"><i class="ti ti-arrows-exchange"></i></button>
+      </div>
+      <div class="ot-dep-campos">
+        <label class="ot-dep-f"><span>Cuánto</span>
+          <div class="ot-dep-cantbox"><input id="ot-dep-cant" inputmode="decimal" placeholder="${r.contenido ? repDec(Math.min(r.contenido, 30)) : "1"}"
+            oninput="otDepCosto()" onkeydown="if(event.key==='Enter') otDepSacar()">
+          ${r.contenido ? `<select id="ot-dep-en" onchange="otDepCosto()"><option value="contenido">${repUni(r)}</option><option value="envases">${repPlural(r.envase || "envase", 2)}</option></select>`
+                        : `<em>${hiEsc(r.unidad || "u")}</em>`}</div>
+        </label>
+        ${items.length ? `<label class="ot-dep-f grow"><span>Para qué trabajo (opcional)</span>
+          <select id="ot-dep-item"><option value="">—</option>${items.map(it => `<option value="${it.id}">${hiEsc(it.descripcion)}</option>`).join("")}</select></label>` : ""}
+        <button class="btn btn-primary" id="ot-dep-ok" onclick="otDepSacar()"><i class="ti ti-check"></i> Sacar</button>
+        <button class="btn btn-ghost" onclick="otDepCerrarBuscar()">Cancelar</button>
+      </div>
+      <div class="ot-dep-calc" id="ot-dep-calc"></div>
+    </div>`;
+  $("#ot-dep-cant").focus();
+}
+
+function otDepCosto() {
+  const r = otDep.sel, el = $("#ot-dep-calc");
+  if (!r || !el) return;
+  const cant = rvNum($("#ot-dep-cant").value);
+  const en = $("#ot-dep-en")?.value || "envases";
+  const env = en === "contenido" && r.contenido ? cant / r.contenido : cant;
+  if (!cant) { el.innerHTML = ""; return; }
+  const queda = r.stock_actual - env;
+  const partes = [];
+  if (r.contenido) partes.push(en === "contenido" ? `= ${repDec(env, 3)} ${repPlural(r.envase || "envase", env)}` : `= ${repDec(env * r.contenido, 1)} ${repUni(r, true)}`);
+  if (r.costo_unitario) partes.push(`cuesta ${gs(env * r.costo_unitario)}`);
+  partes.push(queda < -1e-9 ? `<b class="mal">no alcanza: hay ${repStockTxt(r)}</b>`
+    : `queda${queda === 1 ? "" : "n"} ${r.contenido ? `${repDec(queda * r.contenido, 1)} ${repUni(r, true)}` : `${repDec(queda)} ${r.unidad || "u"}`}`);
+  el.innerHTML = partes.join(" · ");
+}
+
+async function otDepSacar() {
+  const r = otDep.sel; if (!r) return;
+  const cant = rvNum($("#ot-dep-cant").value);
+  if (!(cant > 0)) { toast("Poné cuánto se sacó", "error"); $("#ot-dep-cant").focus(); return; }
+  const btn = $("#ot-dep-ok"); btn.disabled = true;
+  const res = await api(`/api/ots/${otDep.ot.id}/repuestos`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repuesto_id: r.id, cantidad: cant, en: $("#ot-dep-en")?.value || "envases", item_id: $("#ot-dep-item")?.value || "" })
+  });
+  if (!res || !res.ok) { btn.disabled = false; toast((res && res.msg) || "No se pudo sacar", "error"); return; }
+  otDep.usados = res.usados; otDep.total = res.total; otDep.sel = null;
+  const ult = res.usados[res.usados.length - 1];
+  toast(`Sacado del depósito · queda ${r.contenido ? repDec(res.stock_actual * r.contenido, 1) + " " + repUni(r, true) : repDec(res.stock_actual) + " " + (r.unidad || "u")}`, "success");
+  otDepPintar(ult && ult.id);
+}
+
+async function otDepDevolver(mid) {
+  const m = otDep.usados.find(x => x.id === mid); if (!m) return;
+  const que = m.contenido ? `${repDec(m.contenido_sacado, 1)} ${repUni(m, true)} de ${m.descripcion}` : `${repCantTxt(m, m.cantidad)} de ${m.descripcion}`;
+  if (!confirm(`¿Devolver al depósito ${que}?\n\nVuelve a sumar al stock y sale de esta OT.`)) return;
+  const res = await api(`/api/ots/${otDep.ot.id}/repuestos/${mid}`, { method: "DELETE" });
+  if (!res || !res.ok) { toast((res && res.msg) || "No se pudo devolver", "error"); return; }
+  otDep.usados = res.usados; otDep.total = res.total;
+  toast("Devuelto al depósito", "success");
+  otDepPintar();
 }

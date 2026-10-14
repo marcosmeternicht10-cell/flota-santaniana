@@ -5189,3 +5189,74 @@ button.rv-viaje:hover { border-color: var(--border-strong); background: var(--su
   #rv-acciones { flex-wrap: wrap; }
 }
 .rv-medidor .sin { background: #B9C6D4; }
+
+/* ── La OT con el depósito ── */
+.ot-dep:empty { display: none; }
+.ot-dep { margin-bottom: 16px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface2); }
+.ot-dep-cab { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.ot-dep-tit { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; font-weight: 700; font-size: 13.5px; color: var(--text); }
+.ot-dep-tit > .ti { font-size: 18px; color: var(--brand-blue); }
+.ot-dep-tit span { font-weight: 500; font-size: 12px; color: var(--muted); }
+.ot-dep-total { font: 700 17px var(--display); color: var(--azul-oscuro); white-space: nowrap; }
+.ot-dep-lista { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.ot-dep-fila { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto auto 30px; align-items: center; gap: 10px; padding: 7px 8px; border-radius: 9px; background: var(--surface); border: 1px solid var(--border); }
+.ot-dep-fila.nuevo { animation: rvNuevo 2.2s ease; }
+.ot-dep-ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--info-bg); color: var(--brand-blue); font-size: 16px; flex-shrink: 0; }
+.ot-dep-txt { min-width: 0; }
+.ot-dep-txt b { display: block; font-size: 13px; font-weight: 600; }
+.ot-dep-txt span { display: block; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ot-dep-cant { text-align: right; font-weight: 600; font-size: 13px; white-space: nowrap; }
+.ot-dep-cant small { display: block; font-weight: 500; font-size: 11px; color: var(--muted); }
+.ot-dep-gs { text-align: right; font: 700 14px var(--display); white-space: nowrap; min-width: 90px; }
+.ot-dep-dev { width: 30px; height: 30px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; font-size: 16px; }
+.ot-dep-dev:hover { background: var(--warning-bg); color: #8A5A00; }
+.ot-dep-mas { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; height: 36px; margin-top: 10px; border-radius: 9px; cursor: pointer;
+  border: 1.5px dashed var(--border-strong); background: transparent; font: 600 13px "Inter", sans-serif; color: var(--brand-blue); }
+.ot-dep-mas:hover { background: var(--info-bg); border-color: var(--info-bd); }
+.ot-dep-buscar, .ot-dep-form { margin-top: 10px; }
+.ot-dep-input { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 4px 0 12px; border-radius: 10px; border: 1px solid var(--brand-blue); background: #fff; box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.ot-dep-input input { flex: 1; min-width: 0; border: 0; outline: none; font: 500 14px "Inter", sans-serif; background: transparent; }
+.ot-dep-input input:focus { box-shadow: none; }
+.ot-dep-res { max-height: 260px; overflow-y: auto; margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+.ot-dep-op { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border); background: #fff; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.ot-dep-op:hover:not(:disabled) { border-color: var(--brand-blue); background: var(--info-bg); }
+.ot-dep-op.sin { opacity: .55; cursor: not-allowed; }
+.ot-dep-op-n { min-width: 0; }
+.ot-dep-op-n b { display: block; font-size: 13px; }
+.ot-dep-op-n small { display: block; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ot-dep-op-s { flex-shrink: 0; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--success-bg); color: var(--success); white-space: nowrap; }
+.ot-dep-op-s.bajo { background: var(--warning-bg); color: #8A5A00; }
+.ot-dep-op-s.sin_stock { background: var(--surface3); color: var(--muted); }
+.ot-dep-vacio { padding: 12px; font-size: 12.5px; color: var(--muted); }
+.ot-dep-elegido { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #fff; border: 1px solid var(--border); }
+.ot-dep-elegido > div { flex: 1; min-width: 0; }
+.ot-dep-elegido b { display: block; font-size: 13.5px; }
+.ot-dep-elegido small { font-size: 12px; color: var(--muted); }
+.ot-dep-campos { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 10px; }
+.ot-dep-f { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; font-weight: 600; color: var(--sv-tinta2); }
+.ot-dep-f.grow { flex: 1 1 200px; }
+.ot-dep-f select, .ot-dep-cantbox input, .ot-dep-cantbox select { height: 38px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 9px; background: #fff; font: 500 13.5px "Inter", sans-serif; }
+.ot-dep-cantbox { display: flex; align-items: center; gap: 6px; }
+.ot-dep-cantbox input { width: 100px; text-align: right; font-weight: 600; }
+.ot-dep-cantbox em { font-style: normal; font-size: 13px; color: var(--muted); }
+.ot-dep-campos .btn { height: 38px; }
+.ot-dep-calc { min-height: 16px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.ot-dep-calc .mal { color: var(--brand-red-dark); }
+@media (max-width: 640px) {
+  .ot-dep-fila { grid-template-columns: 30px minmax(0, 1fr) auto; }
+  .ot-dep-gs { grid-column: 2; text-align: left; min-width: 0; font-size: 13px; }
+  .ot-dep-dev { grid-column: 3; grid-row: 2; justify-self: end; }
+}
+/* Inventario: envases */
+.rep-envase-form { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--surface2); border: 1px dashed var(--border-strong); }
+.rep-envase-form .form-row { margin-top: 6px; }
+.rep-envase-ej { font-weight: 400; font-size: 11.5px; color: var(--muted); margin-left: 4px; }
+.rep-totales { display: flex; align-items: center; gap: 7px; margin-bottom: 10px; padding: 9px 12px; border-radius: 10px; background: var(--info-bg); color: var(--brand-blue); font-size: 13px; }
+.rep-totales b { font-weight: 700; }
+.rep-d-stockcont { font-size: 13px; font-weight: 600; opacity: .85; }
+.rep-d-mov-tipo small { font-weight: 500; opacity: .8; }
+.rep-d-mov-ot { display: inline-flex; align-items: center; gap: 4px; color: var(--brand-blue); cursor: pointer; font-weight: 600; }
+.rep-d-mov-ot:hover { text-decoration: underline; }
+.rep-mini-cant { display: flex; gap: 8px; }
+.rep-mini-cant input { flex: 1; }
+.rep-mini-cant select { width: 120px; }
