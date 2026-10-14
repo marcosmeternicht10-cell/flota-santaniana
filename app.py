@@ -93,6 +93,14 @@ from historial_carga import bp_historial, init_historial_module
 init_historial_module(app)
 app.register_blueprint(bp_historial)
 
+# ─── Plan preventivo por km ──────────────────────────────────────────────────
+# Estado de cada coche y de la flota, "cada cuánto" propio por coche, agenda
+# del taller con turnos y cupos, conexión con la OT (un cambio de aceite
+# completado se carga solo en el preventivo) y cumplimiento.
+from plan_preventivo import bp_prev, init_plan_preventivo
+init_plan_preventivo()
+app.register_blueprint(bp_prev)
+
 # ─── Módulo de Servicios Corporativos ────────────────────────────────────────
 # Choferes de corporativos cargan rendiciones desde el celular; admin las
 # resume. init crea la tabla; el seed de choferes se corre desde /api/corp/seed.
@@ -866,6 +874,13 @@ def api_plan_preventivo_pdf(vid):
         return jsonify({"ok": False, "msg": "Vehículo no encontrado"}), 404
     plan = obtener_plan_vehiculo(vid) or {}
     tareas = estado_mantenimiento(vid) or []
+    try:
+        import plan_preventivo
+        ficha = plan_preventivo.ficha_coche(vid) or {}
+        plan["km_dia"] = ficha.get("km_dia")
+        plan["turno"] = ficha.get("turno")
+    except Exception:
+        pass
     os.makedirs("reportes", exist_ok=True)
     patente = vehiculo.get("patente", str(vid))
     ruta = f"reportes/Plan_Preventivo_{patente}.pdf"

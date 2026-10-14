@@ -838,7 +838,7 @@ def desasignar_plan(vehiculo_id):
 
 # ── Kilometraje del vehículo ─────────────────────────────────────────────
 
-def _km_resuelto(km_servicios, km_ots, km_manual, verif_ot, km_ots_despues):
+def _km_resuelto(km_servicios, km_ots, km_manual, verif_ot, km_ots_despues, km_comb=0):
     """La regla del km actual, en un solo lugar (la usan el coche suelto y el
     dashboard de toda la flota).
 
@@ -846,10 +846,200 @@ def _km_resuelto(km_servicios, km_ots, km_manual, verif_ot, km_ots_despues):
     lectura o el de una OT posterior, si es más alto. Así una corrección hacia
     abajo (alguien tipeó 500.000 en vez de 250.000) se respeta, cosa que con
     "el más alto de todos" era imposible.
-    Sin verificación sigue la regla de siempre: el más alto de lo registrado."""
+    Sin verificación sigue la regla de siempre: el más alto de lo registrado.
+
+    km_comb es el odómetro de las cargas de combustible (la lectura más nueva
+    que cierra con las demás; ver lectura_confiable). Si hubo verificación,
+    solo cuentan las cargas desde ese día."""
     if int(verif_ot or 0) > 0:
-        return max(float(km_manual or 0), float(km_ots_despues or 0))
-    return max(float(km_servicios or 0), float(km_ots or 0), float(km_manual or 0))
+        return max(float(km_manual or 0), float(km_ots_despues or 0), float(km_comb or 0))
+    return max(float(km_servicios or 0), float(km_ots or 0), float(km_manual or 0), float(km_comb or 0))
+
+
+# ── Odómetro de las cargas de combustible ────────────────────────────────
+# Cada carga trae lo que marcaba el tablero: es el dato de km más seguido que
+# tiene el sistema. Pero se tipea a mano, así que un cero de más (3.691.180 en
+# vez de 369.118) no puede mover el km del coche. Se toma la lectura más nueva
+# que cierra con la tendencia de las demás.
+
+VENTANA_LECTURAS_DIAS = 180
+KM_DIA_MAXIMO = 2500
+
+
+def _ordinal(fecha):
+    from datetime import date
+    try:
+        return date.fromisoformat(str(fecha)[:10]).toordinal()
+    except Exception:
+        return None
+
+
+def _mediana(valores):
+    v = sorted(valores)
+    n = len(v)
+    if not n:
+        return None
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2.0
+
+
+def _tendencia(puntos):
+    """Recta robusta (Theil-Sen) por puntos (día, km): la pendiente es la
+    mediana de todas las pendientes entre pares, así que una lectura mal
+    tipeada no la mueve. Devuelve (km por día, ordenada) o None."""
+    pts = sorted(puntos)
+    if len(pts) > 60:                       # alcanza con una muestra pareja
+        paso = len(pts) / 60.0
+        pts = [pts[int(i * paso)] for i in range(60)] + [pts[-1]]
+    pend = []
+    for i in range(len(pts)):
+        di, ki = pts[i]
+        for j in range(i + 1, len(pts)):
+            dj, kj = pts[j]
+            if dj != di:
+                pend.append((kj - ki) / float(dj - di))
+    if not pend:
+        return None
+    m = _mediana(pend)
+    b = _mediana([k - m * d for d, k in pts])
+    return m, b
+
+
+def lectura_confiable(lecturas, piso=0):
+    """De [(fecha, km)], la lectura más nueva en la que se puede confiar.
+    Devuelve (km, fecha) o None."""
+    pts = []
+    for f, k in lecturas:
+        d = _ordinal(f)
+        try:
+            k = float(k or 0)
+        except (TypeError, ValueError):
+            continue
+        if d is None or k <= 0 or k > 3000000 or k < float(piso or 0):
+            continue
+        pts.append((d, k, str(f)[:10]))
+    if not pts:
+        return None
+    pts.sort()
+    if len(pts) >= 4:
+        t = _tendencia([(d, k) for d, k, _ in pts])
+        if t:
+            m, b = t
+            tol = max(2500.0, abs(m) * 20)
+            for d, k, f in reversed(pts):
+                if abs(k - (m * d + b)) <= tol:
+                    return k, f
+    # Pocas lecturas: la más nueva que no choca con las anteriores
+    for i in range(len(pts) - 1, -1, -1):
+        d, k, f = pts[i]
+        ok = True
+        for dj, kj, _ in pts[:i]:
+            dias = max(1, d - dj)
+            if k < kj - 500 or k - kj > KM_DIA_MAXIMO * dias:
+                ok = False
+                break
+        if ok:
+            return k, f
+    return None
+
+
+def estimar_km_dia(lecturas, hoy_ord=None, ventana=120):
+    """Cuántos km por día anda el coche, según sus lecturas de odómetro de los
+    últimos meses. Devuelve (km/día, cantidad de lecturas, días que abarcan)
+    o None si no alcanza (hacen falta 3 lecturas en al menos 10 días)."""
+    from datetime import date
+    hoy_ord = hoy_ord or date.today().toordinal()
+    pts = []
+    for f, k in lecturas:
+        d = _ordinal(f)
+        try:
+            k = float(k or 0)
+        except (TypeError, ValueError):
+            continue
+        if d is None or k <= 0 or k > 3000000 or d < hoy_ord - ventana or d > hoy_ord + 1:
+            continue
+        pts.append((d, k))
+    if len(pts) < 3:
+        return None
+    span = max(d for d, _ in pts) - min(d for d, _ in pts)
+    if span < 10:
+        return None
+    t = _tendencia(pts)
+    if not t:
+        return None
+    m = max(0.0, min(float(KM_DIA_MAXIMO), t[0]))
+    return m, len(pts), span
+
+
+def _lecturas_combustible(conn, vids=None, desde=None):
+    """{vehiculo_id: [(fecha, odómetro), ...]} de las cargas de combustible."""
+    from datetime import date, timedelta
+    desde = desde or (date.today() - timedelta(days=VENTANA_LECTURAS_DIAS)).isoformat()
+    q = "SELECT vehiculo_id, fecha, odometro FROM combustible WHERE odometro > 0 AND fecha >= ?"
+    params = [desde]
+    if vids:
+        vids = list(vids)
+        q += f" AND vehiculo_id IN ({','.join('?' * len(vids))})"
+        params += vids
+    salida = {}
+    try:
+        for r in conn.execute(q, params).fetchall():
+            salida.setdefault(r["vehiculo_id"], []).append((r["fecha"], r["odometro"]))
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    return salida
+
+
+def _km_comb_de(lecturas, verif_ot, verif_fecha, km_verificado):
+    """El km que aportan las cargas: si se verificó en una OT, solo las de ese
+    día en adelante y no por debajo de lo verificado."""
+    if int(verif_ot or 0) > 0:
+        desde = str(verif_fecha or "")[:10]
+        lecturas = [(f, k) for f, k in (lecturas or []) if str(f)[:10] >= desde]
+        res = lectura_confiable(lecturas, piso=km_verificado or 0)
+    else:
+        res = lectura_confiable(lecturas or [])
+    return res[0] if res else 0
+
+
+def km_actual_flota(conn=None, vids=None, solo_activos=False):
+    """El km actual de muchos coches de una vez, con la misma regla que
+    km_actual_vehiculo (pocas consultas grandes: en la nube cada consulta
+    cuesta). Devuelve {vehiculo_id: km}."""
+    propia = conn is None
+    if propia:
+        conn = get_connection()
+    filtro, params = [], []
+    if solo_activos:
+        filtro.append("v.activo=1")
+    if vids:
+        vids = list(vids)
+        filtro.append(f"v.id IN ({','.join('?' * len(vids))})")
+        params += vids
+    where = ("WHERE " + " AND ".join(filtro)) if filtro else ""
+    filas = conn.execute(f"""
+        SELECT v.id,
+            COALESCE((SELECT km_inicial FROM vehiculo_plan WHERE vehiculo_id=v.id), 0)
+              + COALESCE((SELECT SUM(km) FROM servicios WHERE vehiculo_id=v.id), 0) AS km_servicios,
+            COALESCE((SELECT MAX(km) FROM ordenes_trabajo WHERE vehiculo_id=v.id), 0) AS km_ots,
+            COALESCE(v.km_manual, 0) AS km_manual,
+            COALESCE(v.km_verif_ot, 0) AS verif_ot,
+            COALESCE(v.km_verif_fecha, '') AS verif_fecha,
+            COALESCE((SELECT MAX(o.km) FROM ordenes_trabajo o WHERE o.vehiculo_id=v.id
+                      AND o.id > COALESCE(v.km_verif_ot, 0)), 0) AS km_ots_despues
+        FROM vehiculos v {where}
+    """, params).fetchall()
+    lect = _lecturas_combustible(conn, vids)
+    salida = {}
+    for r in filas:
+        comb = _km_comb_de(lect.get(r["id"]), r["verif_ot"], r["verif_fecha"], r["km_manual"])
+        salida[r["id"]] = _km_resuelto(r["km_servicios"], r["km_ots"], r["km_manual"],
+                                       r["verif_ot"], r["km_ots_despues"], comb)
+    if propia:
+        conn.close()
+    return salida
 
 
 def km_actual_vehiculo(vehiculo_id):
@@ -860,29 +1050,15 @@ def km_actual_vehiculo(vehiculo_id):
       - km_inicial del plan + suma de servicios (cálculo histórico)
       - el odómetro más alto de las OT (lo que ponen los choferes)
       - la corrección manual (km_manual), si se cargó
+      - el odómetro de las cargas de combustible (la lectura confiable más nueva)
     Esto permite que los km se actualicen solos con los reportes de los choferes,
     y que el taller pueda corregirlos a mano si hace falta.
     """
     conn = get_connection()
-    fila = conn.execute("""
-        SELECT
-            COALESCE((SELECT km_inicial FROM vehiculo_plan WHERE vehiculo_id=?), 0)
-          + COALESCE((SELECT SUM(km) FROM servicios WHERE vehiculo_id=?), 0)
-          AS km_servicios,
-            COALESCE((SELECT MAX(km) FROM ordenes_trabajo WHERE vehiculo_id=?), 0)
-          AS km_ots,
-            COALESCE((SELECT km_manual FROM vehiculos WHERE id=?), 0)
-          AS km_manual,
-            COALESCE((SELECT km_verif_ot FROM vehiculos WHERE id=?), 0)
-          AS verif_ot,
-            COALESCE((SELECT MAX(o.km) FROM ordenes_trabajo o WHERE o.vehiculo_id=?
-                      AND o.id > COALESCE((SELECT km_verif_ot FROM vehiculos WHERE id=?), 0)), 0)
-          AS km_ots_despues
-    """, (vehiculo_id, vehiculo_id, vehiculo_id, vehiculo_id,
-          vehiculo_id, vehiculo_id, vehiculo_id)).fetchone()
-    conn.close()
-    return _km_resuelto(fila["km_servicios"], fila["km_ots"], fila["km_manual"],
-                        fila["verif_ot"], fila["km_ots_despues"])
+    try:
+        return km_actual_flota(conn, [vehiculo_id]).get(vehiculo_id, 0)
+    finally:
+        conn.close()
 
 
 def verificar_km_en_ot(ot_id, km, usuario=""):
@@ -1325,23 +1501,9 @@ def dashboard_resumen():
         "SELECT * FROM vehiculos WHERE activo=1 ORDER BY n_interno, patente"
     ).fetchall()]
 
-    # 2. Km actual de TODOS los vehículos de una vez.
-    #    km = el ODÓMETRO MÁS ALTO entre: servicios, OT (choferes), y corrección manual.
-    #    Se calcula el máximo en Python para que funcione igual en SQLite y PostgreSQL.
-    km_por_veh = {}
-    for r in conn.execute("""
-        SELECT v.id,
-            COALESCE((SELECT km_inicial FROM vehiculo_plan WHERE vehiculo_id=v.id), 0)
-              + COALESCE((SELECT SUM(km) FROM servicios WHERE vehiculo_id=v.id), 0) AS km_servicios,
-            COALESCE((SELECT MAX(km) FROM ordenes_trabajo WHERE vehiculo_id=v.id), 0) AS km_ots,
-            COALESCE(v.km_manual, 0) AS km_manual,
-            COALESCE(v.km_verif_ot, 0) AS verif_ot,
-            COALESCE((SELECT MAX(o.km) FROM ordenes_trabajo o WHERE o.vehiculo_id=v.id
-                      AND o.id > COALESCE(v.km_verif_ot, 0)), 0) AS km_ots_despues
-        FROM vehiculos v WHERE v.activo=1
-    """).fetchall():
-        km_por_veh[r["id"]] = _km_resuelto(r["km_servicios"], r["km_ots"], r["km_manual"],
-                                           r["verif_ot"], r["km_ots_despues"])
+    # 2. Km actual de TODOS los vehículos de una vez (misma regla que el coche
+    #    suelto: OT, servicios, corrección manual y cargas de combustible).
+    km_por_veh = km_actual_flota(conn, solo_activos=True)
 
     # 3. Plan de cada vehículo (1 consulta con JOIN)
     plan_por_veh = {}
@@ -1360,21 +1522,32 @@ def dashboard_resumen():
 
     conn.close()
 
-    # El estado de mantenimiento detallado (vencidos/próximos) es costoso de
-    # calcular por vehículo. Para el dashboard mostramos el resumen básico y
-    # el estado general según si tiene plan. El detalle de vencimientos se ve
-    # al entrar a cada vehículo (módulo Preventivo).
+    # El estado del preventivo de toda la flota sale del plan preventivo, que
+    # lo calcula con pocas consultas grandes (si algo falla, el dashboard
+    # igual se muestra, sin esas alertas).
+    prev = {}
+    try:
+        import plan_preventivo
+        prev = plan_preventivo.resumen_para_dashboard()
+    except Exception:
+        prev = {}
     estado_vehiculos = []
+    coches_vencidos = coches_pronto = 0
     for v in vehiculos:
         plan_nombre = plan_por_veh.get(v["id"])
+        p = prev.get(v["id"]) or {}
+        if p.get("vencidos"):
+            coches_vencidos += 1
+        elif p.get("pronto"):
+            coches_pronto += 1
         estado_vehiculos.append({
             **v,
             "km_actual": km_por_veh.get(v["id"], 0),
             "plan_nombre": plan_nombre,
-            "vencidos": 0,
-            "pronto": 0,
-            "alertas": [],
-            "estado_general": "ok" if plan_nombre else "sin_plan",
+            "vencidos": p.get("vencidos", 0),
+            "pronto": p.get("pronto", 0),
+            "alertas": p.get("alertas", []),
+            "estado_general": p.get("estado") or ("ok" if plan_nombre else "sin_plan"),
         })
 
     # Documentos próximos a vencer (1 consulta)
@@ -1382,8 +1555,8 @@ def dashboard_resumen():
 
     return {
         "vehiculos_activos": len(vehiculos),
-        "mant_vencidos": 0,
-        "mant_proximos": 0,
+        "mant_vencidos": coches_vencidos,
+        "mant_proximos": coches_pronto,
         "docs_proximos": len(docs_proximos),
         "correctivos_pendientes": correctivos_pendientes,
         "vehiculos": estado_vehiculos,
