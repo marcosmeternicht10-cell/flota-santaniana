@@ -1,0 +1,14724 @@
+// ════════════════════════════════════════════════════════════════════════
+//  app.js — Sistema de Gestión de Flota v7.0
+//  La Santaniana - Mantenimiento Preventivo + Correctivo + Documentos
+// ════════════════════════════════════════════════════════════════════════
+
+let cocheActual = null;
+let chartBarras = null, chartTorta = null;
+let kpiModo = "mes", mantTab = "estado", planActual = null;
+
+const $ = sel => document.querySelector(sel);
+const content = $("#content");
+
+// ─── Utilidades ─────────────────────────────────────────────────────────
+function gs(v) {
+  if (v == null) return "Gs. —";
+  const neg = v < 0;
+  const s = "Gs. " + Math.abs(Math.round(v)).toLocaleString("es-PY").replace(/,/g, ".");
+  return neg ? "- " + s : s;
+}
+function gsSmall(v) {
+  if (v == null) return "Gs. —";
+  if (Math.abs(v) >= 1e6) return "Gs. " + (v / 1e6).toFixed(1) + "M";
+  if (Math.abs(v) >= 1e3) return "Gs. " + (v / 1e3).toFixed(0) + "k";
+  return "Gs. " + Math.round(v).toLocaleString("es-PY").replace(/,/g, ".");
+}
+function fmtKm(v) { return (v || 0).toLocaleString("es-PY").replace(/,/g, ".") + " km"; }
+function fmtNum(v) { return (v || 0).toLocaleString("es-PY").replace(/,/g, "."); }
+
+const MESES_ES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+function mesLegible(ym) {
+  if (!ym) return ym;
+  const [a, m] = ym.split("-");
+  return `${MESES_ES[parseInt(m)]} ${a}`;
+}
+function hoy() { return new Date().toISOString().slice(0, 10); }
+function mesActual() { return new Date().toISOString().slice(0, 7); }
+function diasHasta(fecha) {
+  const ms = new Date(fecha) - new Date();
+  return Math.floor(ms / (1000 * 60 * 60 * 24));
+}
+
+// Barra fina arriba mientras el sistema trae datos. Solo aparece si el pedido
+// tarda más de 150 ms, así las respuestas rápidas no parpadean.
+let _uiPendientes = 0, _uiTimer = null;
+function _uiCarga(delta) {
+  _uiPendientes = Math.max(0, _uiPendientes + delta);
+  let b = document.getElementById("ui-carga");
+  if (!b) { b = document.createElement("div"); b.id = "ui-carga"; document.body.appendChild(b); }
+  clearTimeout(_uiTimer);
+  if (_uiPendientes > 0) _uiTimer = setTimeout(() => b.classList.add("activa"), 150);
+  else b.classList.remove("activa");
+}
+
+async function api(url, opts) {
+  _uiCarga(+1);
+  let r;
+  try { r = await fetch(url, opts); }
+  finally { _uiCarga(-1); }
+  // Sesión expirada → redirigir al login
+  if (r.status === 401) {
+    window.location.href = "/login";
+    return {};
+  }
+  // Sin permiso para esta acción (solo admin puede gestionar usuarios)
+  if (r.status === 403) {
+    const data = await r.json().catch(() => ({}));
+    toast(data.error || "No tenés permiso para esta acción", "error");
+    return { ok: false, msg: data.error };
+  }
+  return r.json();
+}
+function status(msg) {
+  $("#statusbar").innerHTML = `<i class="ti ti-info-circle" style="vertical-align:-2px"></i> ${msg}`;
+}
+let _toastTimer = null;
+function toast(msg, tipo = "") {
+  const t = $("#toast");
+  const icono = tipo === "success" ? "check" : tipo === "error" ? "alert-triangle" : "info-circle";
+  t.innerHTML = `<i class="ti ti-${icono}"></i><span>${msg}</span>`;
+  t.className = "toast";
+  void t.offsetWidth;                       // reinicia la animación si ya había uno
+  t.className = "toast show " + tipo;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.className = "toast", 2800);
+}
+
+function setCoche(v) {
+  cocheActual = v;
+  const box = $("#cocheBox");
+  if (v) {
+    $("#cocheName").textContent = v.patente;
+    $("#cocheInfo").textContent = `${v.marca || ""} ${v.modelo || ""}`.trim() || "—";
+    box.classList.add("has-coche");
+  } else {
+    $("#cocheName").textContent = "Ninguno";
+    $("#cocheInfo").textContent = "Hacé clic en un vehículo";
+    box.classList.remove("has-coche");
+  }
+  // Las secciones de un coche no se apagan: si no hay coche elegido, al
+  // tocarlas se pregunta de cuál. Antes quedaban grises y parecían rotas.
+  document.querySelectorAll("[data-needs-coche]").forEach(b => b.classList.toggle("pide-coche", !v));
+}
+
+// ─── Navegación ─────────────────────────────────────────────────────────
+document.querySelectorAll(".nav-item").forEach(btn => {
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    if (btn.hasAttribute("data-needs-coche") && !cocheActual) {
+      elegirCocheYIr(btn.dataset.sec);
+      cerrarSidebar();
+      return;
+    }
+    document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    irA(btn.dataset.sec);
+    cerrarSidebar();  // en el celular, cerrar el menú al elegir una opción
+  });
+});
+
+// ─── Menú lateral en celular (hamburguesa) ───
+function toggleSidebar() {
+  const sb = document.getElementById("sidebar");
+  const ov = document.getElementById("sidebarOverlay");
+  if (sb) sb.classList.toggle("abierto");
+  if (ov) ov.classList.toggle("visible");
+}
+function cerrarSidebar() {
+  const sb = document.getElementById("sidebar");
+  const ov = document.getElementById("sidebarOverlay");
+  if (sb) sb.classList.remove("abierto");
+  if (ov) ov.classList.remove("visible");
+}
+
+// ─── Acceso por secciones ───
+// Un usuario de taller puede tener acceso a todo (lista vacía, como siempre)
+// o solo a las secciones que le habilitó el administrador.
+function tieneSeccionesLimitadas() {
+  return window.USUARIO_ROL === "taller" && (window.USUARIO_SECCIONES || []).length > 0;
+}
+function puedeVerSeccion(sec) {
+  return !tieneSeccionesLimitadas() || window.USUARIO_SECCIONES.includes(sec);
+}
+// Esconde del menú lo que no tiene, y los títulos que quedan vacíos
+function aplicarSecciones() {
+  const secs = window.USUARIO_SECCIONES;
+  document.querySelectorAll(".nav-item[data-sec]").forEach(b => {
+    if (!secs.includes(b.dataset.sec)) b.style.display = "none";
+  });
+  document.querySelectorAll(".nav-section").forEach(t => {
+    let n = t.nextElementSibling, alguno = false;
+    while (n && !n.classList.contains("nav-section")) {
+      if (n.matches?.(".nav-item[data-sec]") && n.style.display !== "none") alguno = true;
+      n.querySelectorAll?.(".nav-item[data-sec]").forEach(x => { if (x.style.display !== "none") alguno = true; });
+      n = n.nextElementSibling;
+    }
+    if (!alguno) t.style.display = "none";
+  });
+  // Arranca en la primera sección que tiene (el dashboard si lo tiene)
+  const primera = secs.includes("dashboard") ? "dashboard"
+    : secs.find(s => !["costos", "kpis", "mantenimiento", "neumaticos"].includes(s)) || secs[0];
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  document.querySelector(`.nav-item[data-sec="${primera}"]`)?.classList.add("active");
+  // Después de que termine de cargar todo el archivo (si no, las secciones
+  // que están más abajo todavía no existen)
+  setTimeout(() => irA(primera), 0);
+}
+
+function irA(sec) {
+  destRecordar(sec);
+  if (!puedeVerSeccion(sec)) {
+    toast("No tenés acceso a esa sección", "error");
+    return;
+  }
+  if (["costos", "kpis", "mantenimiento", "neumaticos"].includes(sec) && !cocheActual) {
+    elegirCocheYIr(sec);
+    return;
+  }
+  // Volver al inicio al cambiar de pantalla
+  content.scrollTop = 0;
+  const map = {
+    dashboard: renderDashboard,
+    vehiculos: renderVehiculos,
+    servicios: renderServicios,
+    costos: renderCostos,
+    kpis: renderKpis,
+    oee: renderOEE,
+    turismo: renderTurismo,
+    turismo_agenda: renderAgendaTurismo,
+    turismo_rendiciones: renderRendicionesTurismo,
+    historial: renderHistorial,
+    combustible: renderCombustible,
+    mantenimiento: renderMantenimiento,
+    planes: renderPlanes,
+    correctivos: renderCorrectivos,
+    documentos: renderDocumentos,
+    neumaticos: renderNeumaticos,
+    inventario_neu: renderInventarioNeu,
+    ots: renderOts,
+    compras: renderCompras,
+    repuestos: renderRepuestos,
+    proveedores: renderProveedores,
+    gerencial: renderGerencial,
+    corp_resumen: renderCorpResumen,
+    corp_historial: renderCorpHistorial,
+    corp_empresas: renderCorpEmpresas,
+    corp_cargas: renderCorpCargas,
+    mantenimientos: renderMantenimientos,
+    corp_combustible: renderCorpCombustible,
+    corp_combustible: renderCorpCombustible,
+    limpieza: renderLimpieza,
+    historial_carga: renderHistorialCarga,
+    trafico: renderTrafico,
+  };
+  map[sec]();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  DASHBOARD GENERAL
+// ════════════════════════════════════════════════════════════════════════
+async function renderDashboard() {
+  status("Resumen general de la flota");
+  const data = await api("/api/dashboard");
+  const docs = await api("/api/documentos");
+
+  // Combinar alertas: mantenimientos vencidos + docs próximos
+  const alertas = [];
+  data.vehiculos.forEach(v => {
+    v.alertas.forEach(a => {
+      alertas.push({
+        tipo: a.estado === "vencido" ? "danger" : "warning",
+        icono: a.estado === "vencido" ? "alert-circle" : "clock-hour-4",
+        titulo: `${v.patente} · ${a.tarea}`,
+        meta: a.estado === "vencido"
+          ? `Vencido hace ${Math.abs(a.km_restantes).toLocaleString("es-PY").replace(/,/g,".")} km · ${v.plan_nombre || "Sin plan"}`
+          : `Faltan ${a.km_restantes.toLocaleString("es-PY").replace(/,/g,".")} km · ${v.plan_nombre || "Sin plan"}`,
+        urgente: a.estado === "vencido"
+      });
+    });
+  });
+  // Agregar alertas de documentos
+  docs.forEach(d => {
+    const dias = diasHasta(d.fecha_vencimiento);
+    if (dias <= 30) {
+      alertas.push({
+        tipo: dias < 0 ? "danger" : "warning",
+        icono: "file-alert",
+        titulo: `${d.patente} · ${d.tipo} ${dias < 0 ? "vencido" : "vence pronto"}`,
+        meta: dias < 0 ? `Hace ${Math.abs(dias)} días (${d.fecha_vencimiento})` : `En ${dias} días (${d.fecha_vencimiento})`,
+        urgente: dias < 0
+      });
+    }
+  });
+  // Ordenar: urgentes primero
+  alertas.sort((a, b) => (b.urgente ? 1 : 0) - (a.urgente ? 1 : 0));
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-layout-dashboard"></i> Dashboard</h1>
+      <p>${saludoDelDia()}</p>
+    </div>
+    <div class="section">
+
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-icon blue"><i class="ti ti-bus"></i></div>
+          <div class="metric-content">
+            <div class="metric-label">Vehículos activos</div>
+            <div class="metric-value">${data.vehiculos_activos}</div>
+          </div>
+        </div>
+        <div class="metric ${data.mant_vencidos > 0 ? 'danger' : ''}">
+          <div class="metric-icon red"><i class="ti ti-alert-circle"></i></div>
+          <div class="metric-content">
+            <div class="metric-label">Mantenimientos vencidos</div>
+            <div class="metric-value">${data.mant_vencidos}</div>
+          </div>
+        </div>
+        <div class="metric ${data.mant_proximos > 0 ? 'warning' : ''}">
+          <div class="metric-icon amber"><i class="ti ti-clock-hour-4"></i></div>
+          <div class="metric-content">
+            <div class="metric-label">Próximos vencimientos</div>
+            <div class="metric-value">${data.mant_proximos}</div>
+          </div>
+        </div>
+        <div class="metric ${data.docs_proximos > 0 ? 'warning' : ''}">
+          <div class="metric-icon amber"><i class="ti ti-file-text"></i></div>
+          <div class="metric-content">
+            <div class="metric-label">Documentos por vencer</div>
+            <div class="metric-value">${data.docs_proximos}</div>
+          </div>
+        </div>
+        <div class="metric ${data.correctivos_pendientes > 0 ? 'warning' : ''}">
+          <div class="metric-icon red"><i class="ti ti-tool"></i></div>
+          <div class="metric-content">
+            <div class="metric-label">Correctivos pendientes</div>
+            <div class="metric-value">${data.correctivos_pendientes}</div>
+          </div>
+        </div>
+      </div>
+
+      ${alertas.length ? `
+        <div class="section-title"><i class="ti ti-bell"></i> Alertas críticas (${alertas.length})</div>
+        ${alertas.slice(0, 8).map(a => `
+          <div class="dash-alert ${a.tipo}">
+            <i class="ti ti-${a.icono}"></i>
+            <div class="dash-alert-text">
+              <div class="dash-alert-title">${a.titulo}</div>
+              <div class="dash-alert-meta">${a.meta}</div>
+            </div>
+            ${a.urgente ? `<span class="badge danger"><span class="dot"></span> Urgente</span>` : ''}
+          </div>
+        `).join("")}
+        ${alertas.length > 8 ? `<p class="hint" style="margin-top:10px"><i class="ti ti-info-circle"></i> Y ${alertas.length - 8} alerta(s) más. Revisá las pantallas de Mantenimiento y Documentos.</p>` : ''}
+      ` : `
+        <div class="card" style="border-color:var(--success-bd);background:linear-gradient(135deg, var(--success-bg) 0%, var(--surface) 100%)">
+          <div class="card-body" style="text-align:center;padding:36px 24px">
+            <div style="display:inline-grid;place-items:center;width:60px;height:60px;border-radius:50%;background:var(--success);box-shadow:0 4px 14px rgba(22,163,74,0.3);margin-bottom:14px">
+              <i class="ti ti-check" style="font-size:32px;color:white"></i>
+            </div>
+            <h3 style="font-size:18px;font-weight:700;margin-bottom:4px">¡Todo en orden!</h3>
+            <p class="hint" style="justify-content:center;color:var(--muted);font-size:13.5px">No hay alertas críticas en la flota</p>
+          </div>
+        </div>
+      `}
+
+      <div class="section-title"><i class="ti ti-list"></i> Estado por vehículo</div>
+      ${window.USUARIO_ROL === 'admin' && data.vehiculos.length > 0 && data.vehiculos.length < 89 ? `
+        <div class="card" style="border-color:var(--warning-bd);background:var(--warning-bg);margin-bottom:14px">
+          <div class="card-body" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <i class="ti ti-alert-triangle" style="font-size:24px;color:var(--warning)"></i>
+            <div style="flex:1;min-width:200px">
+              <div style="font-weight:600;font-size:14px">La carga quedó incompleta (${data.vehiculos.length} de 89 vehículos)</div>
+              <div style="font-size:12.5px;color:var(--muted);margin-top:2px">Tocá el botón para continuar la carga desde donde quedó. No duplica los que ya están.</div>
+            </div>
+            <button class="btn btn-primary" onclick="cargarFlotaInicial()">
+              <i class="ti ti-database-import"></i> Continuar carga
+            </button>
+          </div>
+        </div>
+      ` : ''}
+      ${data.vehiculos.length === 0 ? `
+        <div class="empty">
+          <i class="ti ti-bus"></i>
+          Aún no tenés vehículos cargados.<br>
+          Ir a <b>Vehículos</b> para agregar el primero.
+          ${window.USUARIO_ROL === 'admin' ? `
+            <div style="margin-top:18px">
+              <button class="btn btn-primary" onclick="cargarFlotaInicial()">
+                <i class="ti ti-database-import"></i> Cargar flota completa desde Excel
+              </button>
+              <p style="font-size:11.5px;color:var(--muted);margin-top:8px">
+                Solo si subiste el archivo Excel al servidor. Carga los 89 vehículos + documentos.
+              </p>
+            </div>
+          ` : ''}
+        </div>
+      ` : `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Patente</th><th>N° interno</th><th>Marca / Modelo</th><th>Motor / Plan</th>
+                <th class="num">KM actual</th><th class="center">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.vehiculos.map(v => `
+                <tr class="clickable" onclick="seleccionarYIr(${v.id}, 'mantenimiento')">
+                  <td><b>${v.patente}</b></td>
+                  <td>${v.n_interno ? `<span class="badge cat">${v.n_interno}</span>` : "—"}</td>
+                  <td>${v.marca || "—"} ${v.modelo || ""}</td>
+                  <td>${v.plan_nombre ? `<span class="badge cat">${v.plan_nombre}</span>` : `<span class="badge">Sin plan</span>`}</td>
+                  <td class="num">${fmtNum(v.km_actual)}</td>
+                  <td class="center">
+                    ${v.estado_general === "vencido" ? `<span class="badge danger"><span class="dot"></span> ${v.vencidos} vencidas</span>` : ""}
+                    ${v.estado_general === "pronto" ? `<span class="badge warning"><span class="dot"></span> ${v.pronto} próximas</span>` : ""}
+                    ${v.estado_general === "ok" ? `<span class="badge success"><span class="dot"></span> Al día</span>` : ""}
+                    ${v.estado_general === "sin_plan" ? `<span class="badge">Sin plan</span>` : ""}
+                  </td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `}
+
+    </div>`;
+}
+
+// Ventanita para elegir de qué coche ver una sección (Servicios, Costos, KPIs,
+// Preventivo, Neumáticos), con el mismo buscador que el resto del sistema.
+const NOMBRE_SECCION_COCHE = { costos: "Costos", kpis: "KPIs",
+                               mantenimiento: "Preventivo", neumaticos: "Neumáticos" };
+async function elegirCocheYIr(sec) {
+  const vs = await api("/api/vehiculos");
+  document.getElementById("ec-overlay")?.remove();
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.id = "ec-overlay";
+  o.innerHTML = `
+    <div class="firma-modal ec-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-bus"></i> ${NOMBRE_SECCION_COCHE[sec] || "Elegí el coche"}</h2>
+          <p>¿De qué coche?</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:18px 22px 22px">
+        ${buscadorCoche("ec-coche", vs, { placeholder: "Escribí el N° o la patente" })}
+        <p class="hint" style="margin-top:12px"><i class="ti ti-info-circle"></i>
+          <span>Queda elegido arriba en el menú, así las otras secciones del coche ya se abren directo.</span></p>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  window["_cocheCB_ec-coche"] = vid => { o.remove(); seleccionarYIr(Number(vid), sec); };
+  setTimeout(() => document.getElementById("ec-coche-txt")?.focus(), 80);
+}
+
+async function seleccionarYIr(vid, sec) {
+  const vs = await api("/api/vehiculos");
+  const v = vs.find(x => x.id === vid);
+  if (v) {
+    setCoche(v);
+    document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+    document.querySelector(`.nav-item[data-sec="${sec}"]`)?.classList.add("active");
+    irA(sec);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  VEHÍCULOS
+// ════════════════════════════════════════════════════════════════════════
+async function renderVehiculos() {
+  status("Hacé clic en un coche para seleccionarlo.");
+  const planes = await api("/api/planes");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-bus"></i> Vehículos</h1>
+      <p>Gestión de la flota — datos completos de cada coche</p>
+    </div>
+    <div class="section">
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plus"></i> Nuevo vehículo</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field"><label>Patente *</label><input id="v-pat" placeholder="ABC-123" style="width:120px"></div>
+            <div class="field"><label>N° interno</label><input id="v-int" placeholder="21200" style="width:100px"></div>
+            <div class="field"><label>Tipo</label>
+              <select id="v-tipo" style="width:130px">
+                <option value="">—</option>
+                <option value="Omnibus">Ómnibus</option>
+                <option value="Minibus">Minibús</option>
+                <option value="Camioneta">Camioneta</option>
+              </select>
+            </div>
+            <div class="field"><label>Marca</label><input id="v-mar" placeholder="Scania" style="width:130px"></div>
+            <div class="field"><label>Modelo carrocería</label><input id="v-mod" placeholder="Marcopolo DD" style="width:170px"></div>
+            <div class="field"><label>Año</label><input id="v-año" placeholder="2012" style="width:90px"></div>
+          </div>
+          <div class="form-row" style="margin-top:14px">
+            <div class="field" style="flex:1;min-width:280px"><label>Chasis (VIN)</label><input id="v-cha" placeholder="9BSK6X200C3686985"></div>
+            <div class="field"><label>Asientos</label><input id="v-asi" placeholder="42" style="width:100px"></div>
+            <div class="field"><label>Ejes</label><input id="v-eje" placeholder="3" style="width:80px"></div>
+          </div>
+          <div class="form-row" style="margin-top:14px">
+            <div class="field" style="flex:1;min-width:300px">
+              <label>Motor / chasis (asigna plan automáticamente)</label>
+              <select id="v-plan">
+                <option value="">— Sin plan, asignar después —</option>
+                ${planes.map(p => `<option value="${p.id}">${p.nombre}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>KM actual del odómetro</label><input id="v-km" placeholder="0" style="width:140px"></div>
+            <button class="btn btn-primary" onclick="guardarVehiculo()"><i class="ti ti-plus"></i> Agregar</button>
+          </div>
+          <p class="hint" style="margin-top:14px">
+            <i class="ti ti-bulb"></i>
+            Tip: elegí el motor/chasis y el plan de mantenimiento se asigna solo. Los km del coche van a ir sumándose con cada servicio que cargues.
+          </p>
+        </div>
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> Flota registrada</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Patente</th><th>N° int.</th><th>Tipo</th><th>Marca</th><th>Carrocería</th>
+            <th class="center">Año</th><th class="center">Asientos</th><th class="center">Ejes</th>
+            <th>Plan asignado</th><th class="num">KM actual</th><th class="td-action"></th>
+          </tr></thead>
+          <tbody id="v-body"></tbody>
+        </table>
+      </div>
+    </div>`;
+  cargarVehiculos();
+}
+
+async function cargarVehiculos() {
+  const vs = await api("/api/vehiculos");
+  const body = $("#v-body");
+  if (!vs.length) {
+    body.innerHTML = `<tr><td colspan="11" class="empty"><i class="ti ti-bus"></i>Sin vehículos. Agregá el primero arriba.</td></tr>`;
+    return;
+  }
+  const filas = await Promise.all(vs.map(async v => {
+    const info = await api(`/api/vehiculos/${v.id}/plan`);
+    return { v, plan: info.plan, km: info.km_actual };
+  }));
+  body.innerHTML = filas.map(({v, plan, km}) => `
+    <tr class="clickable ${cocheActual && cocheActual.id === v.id ? 'selected' : ''}" data-id="${v.id}" onclick="seleccionarCoche(${v.id})">
+      <td><b>${v.patente}</b></td>
+      <td>${v.n_interno || "—"}</td>
+      <td>${v.tipo ? `<span class="badge">${v.tipo}</span>` : "—"}</td>
+      <td>${v.marca || "—"}</td>
+      <td title="${v.chasis || ''}">${v.modelo || "—"}</td>
+      <td class="center">${v.año || "—"}</td>
+      <td class="center">${v.asientos || "—"}</td>
+      <td class="center">${v.ejes || "—"}</td>
+      <td>${plan ? `<span class="badge cat">${plan.plan_nombre}</span>` : `<span class="badge">Sin plan</span>`}</td>
+      <td class="num">${fmtNum(km)}</td>
+      <td class="td-action">
+        <button class="icon-btn" onclick="event.stopPropagation();editarVehiculo(${v.id})" title="Editar"><i class="ti ti-edit"></i></button>
+        <button class="icon-btn" onclick="event.stopPropagation();bajaVehiculo(${v.id},'${v.patente}')" title="Dar de baja"><i class="ti ti-trash"></i></button>
+      </td>
+    </tr>`).join("");
+  window._vehiculos = vs;
+}
+
+function seleccionarCoche(id) {
+  const v = window._vehiculos.find(x => x.id === id);
+  setCoche(v);
+  document.querySelectorAll("#v-body tr").forEach(tr => tr.classList.remove("selected"));
+  $(`#v-body tr[data-id="${id}"]`)?.classList.add("selected");
+  status(`✓ Coche ${v.patente} seleccionado.`);
+  toast(`Seleccionado: ${v.patente}`, "success");
+}
+
+async function guardarVehiculo() {
+  const pat = $("#v-pat").value.trim();
+  if (!pat) { toast("La patente es obligatoria", "error"); return; }
+  const r = await api("/api/vehiculos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      patente: pat,
+      marca: $("#v-mar").value.trim(),
+      modelo: $("#v-mod").value.trim(),
+      año: $("#v-año").value.trim(),
+      chasis: $("#v-cha").value.trim(),
+      n_interno: $("#v-int").value.trim(),
+      asientos: $("#v-asi").value.trim() || 0,
+      ejes: $("#v-eje").value.trim() || 0,
+      tipo: $("#v-tipo").value,
+      plan_id: $("#v-plan").value || null,
+      km_inicial: parseFloat($("#v-km").value || 0)
+    })
+  });
+  if (r.ok) {
+    toast("Vehículo agregado", "success");
+    ["v-pat", "v-int", "v-mar", "v-mod", "v-año", "v-cha", "v-asi", "v-eje", "v-km"].forEach(id => $("#" + id).value = "");
+    $("#v-plan").value = ""; $("#v-tipo").value = "";
+    cargarVehiculos();
+  } else toast(r.msg, "error");
+}
+
+async function editarVehiculo(vid) {
+  const v = window._vehiculos.find(x => x.id === vid);
+  if (!v) return;
+  abrirModalEditarVehiculo(v);
+}
+
+function abrirModalEditarVehiculo(v) {
+  // Modal flotante con todos los campos editables
+  const overlay = document.createElement("div");
+  overlay.id = "modal-edit-veh";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:999;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:640px;width:100%;max-height:90vh;overflow:auto">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <h3 style="font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px"><i class="ti ti-edit" style="color:var(--brand-blue)"></i> Editar vehículo · ${v.patente}</h3>
+        <button class="icon-btn" onclick="cerrarModalEditarVehiculo()"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:22px">
+        <div class="form-row">
+          <div class="field"><label>Patente</label><input id="ev-pat" value="${v.patente || ''}" style="width:140px"></div>
+          <div class="field"><label>N° interno</label><input id="ev-int" value="${v.n_interno || ''}" style="width:120px"></div>
+          <div class="field"><label>Tipo</label>
+            <select id="ev-tipo" style="width:140px">
+              <option value="">—</option>
+              <option value="Omnibus" ${v.tipo==='Omnibus'?'selected':''}>Ómnibus</option>
+              <option value="Minibus" ${v.tipo==='Minibus'?'selected':''}>Minibús</option>
+              <option value="Camioneta" ${v.tipo==='Camioneta'?'selected':''}>Camioneta</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Marca</label><input id="ev-mar" value="${v.marca || ''}" style="width:160px"></div>
+          <div class="field" style="flex:1;min-width:240px"><label>Modelo carrocería</label><input id="ev-mod" value="${v.modelo || ''}"></div>
+          <div class="field"><label>Año</label><input id="ev-año" value="${v.año || ''}" style="width:90px"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field" style="flex:1"><label>Chasis (VIN)</label><input id="ev-cha" value="${v.chasis || ''}"></div>
+          <div class="field"><label>Asientos</label><input id="ev-asi" value="${v.asientos || ''}" style="width:100px"></div>
+          <div class="field"><label>Ejes</label><input id="ev-eje" value="${v.ejes || ''}" style="width:80px"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label><i class="ti ti-clock"></i> Horario de salida</label>
+            <input id="ev-horario" type="time" value="${v.horario_salida || ''}" style="width:140px">
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Hora fija de salida del coche. Sirve para priorizar las OTs.</div>
+          </div>
+          <div class="field"><label><i class="ti ti-gas-station"></i> Consumo (km/litro)</label>
+            <input id="ev-consumo" type="number" step="0.1" value="${v.consumo_km_litro || ''}" placeholder="2.5" style="width:140px">
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">Rendimiento de combustible. Sirve para presupuestos de turismo.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+          <button class="btn btn-ghost" onclick="cerrarModalEditarVehiculo()">Cancelar</button>
+          <button class="btn btn-primary" onclick="guardarEdicionVehiculo(${v.id})"><i class="ti ti-device-floppy"></i> Guardar cambios</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) cerrarModalEditarVehiculo(); });
+}
+
+function cerrarModalEditarVehiculo() {
+  const m = document.getElementById("modal-edit-veh");
+  if (m) m.remove();
+}
+
+async function guardarEdicionVehiculo(vid) {
+  const r = await api(`/api/vehiculos/${vid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      patente: $("#ev-pat").value.trim(),
+      n_interno: $("#ev-int").value.trim(),
+      tipo: $("#ev-tipo").value,
+      marca: $("#ev-mar").value.trim(),
+      modelo: $("#ev-mod").value.trim(),
+      año: $("#ev-año").value.trim() || null,
+      chasis: $("#ev-cha").value.trim(),
+      asientos: $("#ev-asi").value.trim() || 0,
+      ejes: $("#ev-eje").value.trim() || 0,
+    })
+  });
+  if (r.ok) {
+    // Guardar también el horario de salida (campo aparte)
+    const horario = $("#ev-horario").value;
+    await api(`/api/vehiculos/${vid}/horario_salida`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ horario })
+    });
+    // Guardar el consumo (km/litro)
+    const consumo = $("#ev-consumo").value;
+    await api(`/api/vehiculos/${vid}/consumo`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ consumo_km_litro: consumo })
+    });
+    toast("Vehículo actualizado", "success");
+    cerrarModalEditarVehiculo();
+    cargarVehiculos();
+  } else toast(r.msg || "Error", "error");
+}
+
+async function bajaVehiculo(id, pat) {
+  if (!confirm(`¿Dar de baja el coche ${pat}?`)) return;
+  await api(`/api/vehiculos/${id}`, { method: "DELETE" });
+  if (cocheActual && cocheActual.id === id) setCoche(null);
+  toast("Vehículo dado de baja");
+  cargarVehiculos();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  SERVICIOS
+// ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
+//  COSTOS
+// ════════════════════════════════════════════════════════════════════════
+async function renderCostos() {
+  const v = cocheActual;
+  status(`Costos del coche ${v.patente}`);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-coin"></i> Costos · ${v.patente}</h1>
+      <p>Registro de costos variables, fijos directos e indirectos</p>
+    </div>
+    <div class="section">
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plus"></i> Cargar costo</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field"><label>Mes</label><input id="c-mes" type="month" value="${mesActual()}"></div>
+            <div class="field"><label>Tipo</label>
+              <select id="c-tipo">
+                <option value="variable">Variable</option>
+                <option value="fijo_directo">Fijo Directo</option>
+                <option value="fijo_indirecto">Fijo Indirecto</option>
+              </select>
+            </div>
+            <div class="field" style="flex:1;min-width:200px"><label>Concepto</label><input id="c-con" placeholder="Combustible"></div>
+            <div class="field"><label>Monto (Gs.)</label><input id="c-mon" placeholder="22000000" style="width:160px"></div>
+            <button class="btn btn-primary" onclick="guardarCosto()"><i class="ti ti-plus"></i> Agregar</button>
+          </div>
+        </div>
+      </div>
+      <div class="section-title"><i class="ti ti-list"></i> Costos cargados</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mes</th><th>Tipo</th><th>Concepto</th><th class="num">Monto</th><th class="td-action"></th></tr></thead>
+          <tbody id="c-body"></tbody>
+        </table>
+      </div>
+    </div>`;
+  cargarCostos();
+}
+const NOMBRE_TIPO = { variable: "Variable", fijo_directo: "Fijo Directo", fijo_indirecto: "Fijo Indirecto" };
+async function cargarCostos() {
+  const costos = await api(`/api/costos/${cocheActual.id}`);
+  const body = $("#c-body");
+  if (!costos.length) {
+    body.innerHTML = `<tr><td colspan="5" class="empty"><i class="ti ti-coin-off"></i>Sin costos cargados</td></tr>`;
+    return;
+  }
+  body.innerHTML = costos.map(c => `
+    <tr><td>${c.mes}</td><td><span class="badge">${NOMBRE_TIPO[c.tipo] || c.tipo}</span></td>
+    <td>${c.concepto}</td><td class="num">${gs(c.monto)}</td>
+    <td class="td-action"><button class="icon-btn" onclick="borrarCosto(${c.id})"><i class="ti ti-trash"></i></button></td></tr>`).join("");
+}
+async function guardarCosto() {
+  const con = $("#c-con").value.trim();
+  if (!con) { toast("Ingresá un concepto", "error"); return; }
+  const mon = $("#c-mon").value.replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/costos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: cocheActual.id, mes: $("#c-mes").value,
+      tipo: $("#c-tipo").value, concepto: con, monto: mon || 0
+    })
+  });
+  if (r.ok) { toast("Costo agregado", "success"); $("#c-con").value = ""; $("#c-mon").value = ""; cargarCostos(); }
+  else toast("Error al guardar", "error");
+}
+async function borrarCosto(id) {
+  if (!confirm("¿Eliminar este costo?")) return;
+  await api(`/api/costos/${id}`, { method: "DELETE" });
+  toast("Costo eliminado");
+  cargarCostos();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  KPIs
+// ════════════════════════════════════════════════════════════════════════
+// ─── OEE de Flota ───
+function _colorOEE(pct) {
+  if (pct >= 70) return "var(--success)";
+  if (pct >= 50) return "var(--warning)";
+  return "var(--danger)";
+}
+
+// ═══════════════ PRESUPUESTOS DE TURISMO ═══════════════
+let turismoTab = "nuevo";
+
+// ═══════════════ HISTORIAL DE AUDITORÍA (solo admin) ═══════════════
+let histFiltros = { desde: "", hasta: "", categoria: "", usuario: "" };
+
+const ICONO_CAT = {
+  "Acceso": "ti-login", "Órdenes de Trabajo": "ti-clipboard-check", "Compras": "ti-shopping-cart",
+  "Turismo": "ti-bus-stop", "Usuarios": "ti-users", "Vehículos": "ti-car",
+  "Reportes de chofer": "ti-message-report",
+};
+const COLOR_CAT = {
+  "Acceso": "#6366f1", "Órdenes de Trabajo": "#2563eb", "Compras": "#d97706",
+  "Turismo": "#0891b2", "Usuarios": "#dc2626", "Vehículos": "#059669",
+  "Reportes de chofer": "#7c3aed",
+};
+
+// ═══════════════ COMBUSTIBLE (cargas + rendimiento) ═══════════════
+let combTab = "cargar";
+
+async function renderCombustible() {
+  status("Control de combustible");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-gas-station"></i> Combustible</h1>
+      <p>Registro de cargas y rendimiento real de la flota</p>
+    </div>
+    <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${combTab==='cargar'?'active':''}" onclick="setCombTab('cargar')"><i class="ti ti-plus"></i> Cargar / Historial</button>
+          <button class="tab-btn ${combTab==='rendimiento'?'active':''}" onclick="setCombTab('rendimiento')"><i class="ti ti-gauge"></i> Rendimiento por bus</button>
+          <button class="tab-btn" onclick="abrirReferencias()"><i class="ti ti-adjustments"></i> Consumos de referencia</button>
+        </div>
+      </div>
+      <div id="comb-contenido"></div>
+    </div>`;
+  if (combTab === "cargar") await renderCombCargar();
+  else await renderCombRendimiento();
+}
+
+function setCombTab(t) { combTab = t; renderCombustible(); }
+
+async function renderCombCargar() {
+  const cont = document.getElementById("comb-contenido");
+  const vehiculos = await api("/api/vehiculos");
+  const data = await api("/api/combustible");
+  const cargas = data.cargas || [];
+  const stats = data.stats || {};
+
+  cont.innerHTML = `
+    <!-- Resumen -->
+    <div class="metrics" style="margin-bottom:18px">
+      <div class="metric"><div class="metric-content"><div class="metric-label">Total de cargas</div>
+        <div class="metric-value">${stats.total_cargas || 0}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Litros cargados</div>
+        <div class="metric-value" style="color:var(--brand-blue)">${fmtNum(stats.total_litros || 0)}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Gasto total</div>
+        <div class="metric-value" style="color:#d97706">${gs(stats.total_gasto || 0)}</div></div></div>
+    </div>
+
+    <!-- Formulario de carga -->
+    <div class="card">
+      <div class="card-head"><i class="ti ti-plus"></i> Registrar carga de combustible</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="field" style="min-width:220px"><label>Vehículo *</label>
+            ${buscadorCoche("cm-veh", vehiculos, { placeholder: "Escribí el N° de coche o la patente" })}
+          </div>
+          <div class="field"><label>Fecha *</label><input id="cm-fecha" type="date" value="${hoy()}"></div>
+          <div class="field"><label>Odómetro (km) *</label><input id="cm-odo" type="number" placeholder="458200"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Litros *</label><input id="cm-litros" type="number" step="0.1" placeholder="400" oninput="calcCostoComb()"></div>
+          <div class="field"><label>Precio por litro</label><input id="cm-precio" type="number" placeholder="7500" oninput="calcCostoComb()"></div>
+          <div class="field"><label>Costo total</label><input id="cm-costo" type="number" placeholder="(se calcula solo)"></div>
+          <div class="field"><label>Surtidor / Estación</label><input id="cm-estacion" placeholder="Petropar Ruta 2"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Chofer</label><input id="cm-chofer" placeholder="Nombre del chofer"></div>
+          <div class="field" style="flex:1"><label>Observaciones</label><input id="cm-obs" placeholder="Opcional"></div>
+          <button class="btn btn-primary" style="align-self:flex-end" onclick="guardarCargaComb()"><i class="ti ti-device-floppy"></i> Registrar carga</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Lista de cargas -->
+    <div class="section-title"><i class="ti ti-list"></i> Cargas registradas (${cargas.length})</div>
+    ${cargas.length === 0 ? `
+      <div class="empty"><i class="ti ti-gas-station-off"></i>No hay cargas registradas todavía.</div>
+    ` : `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Fecha</th><th>Vehículo</th><th class="num">Odómetro</th><th class="num">Litros</th>
+          <th class="num">Precio/L</th><th class="num">Costo</th>
+          <th class="center">Consumo<br><span style="font-weight:400;text-transform:none">L cada 100 km</span></th><th class="td-action"></th>
+        </tr></thead>
+        <tbody>
+          ${cargas.map(c => {
+            const coche = c.n_interno ? `${c.patente} (${c.n_interno})` : c.patente;
+            // Se muestra el consumo en litros cada 100 km: se lee directo
+            // ("gastó 24 litros para hacer 100 km") y no hace falta invertir
+            // el número mentalmente como con los km por litro.
+            const rend = c.litros_100km != null
+              ? `<span style="font-weight:700">${c.litros_100km.toLocaleString("es-PY",{minimumFractionDigits:2})}</span>`
+              : (c.rendimiento_dudoso
+                  ? `<span style="color:var(--danger)" title="Revisá el kilometraje: el número no da">revisar ⚠</span>`
+                  : `<span style="color:var(--lighter);font-size:12px">primera carga</span>`);
+            return `<tr>
+              <td>${c.fecha}</td>
+              <td><b>${coche}</b></td>
+              <td class="num">${fmtNum(c.odometro)}</td>
+              <td class="num">${(c.litros || 0).toLocaleString("es-PY", { maximumFractionDigits: 2 })} L</td>
+              <td class="num">${gs(c.precio_litro)}</td>
+              <td class="num">${gs(c.costo_total)}</td>
+              <td class="center">${rend}</td>
+              <td class="td-action" style="white-space:nowrap">
+                <button class="icon-btn" title="Corregir esta carga" onclick="editarCargaComb(${c.id})"><i class="ti ti-pencil"></i></button>
+                <button class="icon-btn" title="Eliminar" onclick="borrarCargaComb(${c.id})"><i class="ti ti-trash"></i></button>
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>
+    `}`;
+}
+
+// Calcula el costo total en vivo (litros x precio)
+function calcCostoComb() {
+  const litros = parseFloat($("#cm-litros").value) || 0;
+  const precio = parseFloat($("#cm-precio").value) || 0;
+  if (litros > 0 && precio > 0) {
+    $("#cm-costo").value = Math.round(litros * precio);
+  }
+}
+
+async function guardarCargaComb() {
+  const datos = {
+    vehiculo_id: $("#cm-veh").value,
+    fecha: $("#cm-fecha").value,
+    odometro: $("#cm-odo").value,
+    litros: $("#cm-litros").value,
+    precio_litro: $("#cm-precio").value,
+    costo_total: $("#cm-costo").value,
+    estacion: $("#cm-estacion").value,
+    chofer: $("#cm-chofer").value,
+    observaciones: $("#cm-obs").value,
+  };
+  if (!datos.vehiculo_id) { toast("Elegí el vehículo", "error"); return; }
+  if (!datos.litros || parseFloat(datos.litros) <= 0) { toast("Cargá los litros", "error"); return; }
+  if (!datos.odometro || parseFloat(datos.odometro) <= 0) { toast("Cargá el odómetro", "error"); return; }
+  const r = await api("/api/combustible", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos)
+  });
+  if (r.ok) { toast("Carga registrada", "success"); renderCombustible(); }
+  else toast(r.msg || "Error", "error");
+}
+
+async function borrarCargaComb(id) {
+  if (!confirm("¿Eliminar esta carga de combustible?\n\nEl rendimiento del coche se vuelve a calcular sin ella.")) return;
+  const r = await api(`/api/combustible/${id}`, { method: "DELETE" });
+  if (r && r.ok) {
+    toast(r.msg || "Carga eliminada", "success");
+    if (typeof cargarCombCorp === "function" && document.getElementById("cbc-resultado")) cargarCombCorp();
+    else renderCombustible();
+  } else {
+    toast((r && (r.msg || r.error)) || "No se pudo eliminar", "error");
+  }
+}
+
+// ─── Corregir una carga mal cargada ───
+// Tocar el kilometraje o los litros cambia el rendimiento calculado del coche,
+// así que al guardar se recalcula solo.
+
+async function editarCargaComb(id) {
+  const c = await api(`/api/combustible/${id}`);
+  if (!c || c.error) { toast("No se pudo abrir la carga", "error"); return; }
+  const vehiculos = await api("/api/vehiculos");
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:520px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-pencil"></i> Corregir carga de combustible</h2>
+          <p>Cargada el ${c.fecha}${c.chofer ? " por " + c.chofer : ""}</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div style="padding:16px 24px 4px">
+        <div class="field" style="margin-bottom:12px">
+          <label>Vehículo</label>
+          ${buscadorCoche("ec-veh", vehiculos, { seleccionado: c.vehiculo_id })}
+        </div>
+        <div class="form-row" style="margin-bottom:12px">
+          <div class="field"><label>Fecha</label><input id="ec-fecha" type="date" value="${c.fecha || ""}"></div>
+          <div class="field" style="flex:1"><label>Kilometraje</label><input id="ec-odo" value="${Math.round(c.odometro || 0)}" inputmode="numeric"></div>
+        </div>
+        <div class="form-row" style="margin-bottom:12px">
+          <div class="field"><label>Litros</label><input id="ec-litros" value="${c.litros || ""}" inputmode="decimal" style="width:110px"></div>
+          <div class="field"><label>Precio por litro</label><input id="ec-precio" value="${Math.round(c.precio_litro || 0)}" inputmode="numeric" style="width:130px" oninput="ecTotal()"></div>
+          <div class="field" style="flex:1"><label>Total Gs.</label><input id="ec-total" readonly style="background:var(--surface2);font-weight:600"></div>
+        </div>
+        <div class="field" style="margin-bottom:6px">
+          <label>Estación (opcional)</label>
+          <input id="ec-estacion" value="${(c.estacion || "").replace(/"/g, "&quot;")}" placeholder="ej: Petrobras Acceso Sur">
+        </div>
+        <p class="hint" style="margin:10px 0 4px"><i class="ti ti-info-circle"></i> Al guardar se recalcula el rendimiento del coche, que depende de la secuencia de kilometrajes.</p>
+      </div>
+
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarCargaEditada(${id}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  ecTotal();
+  document.getElementById("ec-litros").addEventListener("input", ecTotal);
+}
+
+function ecTotal() {
+  const l = parseFloat((document.getElementById("ec-litros") || {}).value || "0".replace(",", ".")) || 0;
+  const p = parseFloat(String((document.getElementById("ec-precio") || {}).value || "0").replace(/\./g, "")) || 0;
+  const t = document.getElementById("ec-total");
+  if (t) t.value = (l > 0 && p > 0) ? fmtNum(Math.round(l * p)) : "";
+}
+
+async function guardarCargaEditada(id, btn) {
+  const litros = $("#ec-litros").value, odo = $("#ec-odo").value;
+  if (!parseFloat(String(litros).replace(",", "."))) { toast("Poné los litros", "error"); return; }
+  if (!parseFloat(String(odo).replace(/\./g, ""))) { toast("Poné el kilometraje", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/combustible/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: $("#ec-veh").value, fecha: $("#ec-fecha").value,
+      odometro: odo, litros: litros, precio_litro: $("#ec-precio").value,
+      estacion: $("#ec-estacion").value
+    })
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Carga actualizada", "success");
+    btn.closest(".modal-overlay").remove();
+    if (typeof cargarCombCorp === "function" && document.getElementById("cbc-resultado")) cargarCombCorp();
+    else renderCombustible();
+  } else {
+    toast((r && r.msg) || "No se pudo guardar", "error");
+    btn.disabled = false;
+  }
+}
+
+// Ranking de rendimiento por bus
+async function renderCombRendimiento() {
+  const cont = document.getElementById("comb-contenido");
+  const data = await api("/api/combustible");
+  const ranking = (data.stats && data.stats.ranking) || [];
+  const conRend = ranking.filter(v => v.rendimiento_prom != null);
+
+  cont.innerHTML = `
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px">
+      Rendimiento promedio de cada bus (km por litro), ordenado del que <b>más gasta</b> (⚠️ arriba) al <b>más eficiente</b> (🥇 abajo). Revisá los que tienen rendimiento bajo.
+    </p>
+    ${conRend.length === 0 ? `
+      <div class="empty"><i class="ti ti-gauge"></i>Todavía no hay suficientes cargas para calcular el rendimiento.<br>
+      Hacen falta al menos 2 cargas por vehículo.</div>
+    ` : `
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>#</th><th>Vehículo</th>
+          <th class="center">Consumo<br><span style="font-weight:400;text-transform:none">L cada 100 km</span></th>
+          <th class="num">Litros totales</th><th class="num">Gasto total</th><th class="center">Cargas</th>
+        </tr></thead>
+        <tbody>
+          ${conRend.map((v, i) => {
+            const coche = v.n_interno ? `${v.patente} (Coche ${v.n_interno})` : v.patente;
+            // Se muestra en litros cada 100 km, que se lee directo. Menos
+            // litros es mejor, así que el color va al revés que con km/L.
+            const l100 = v.rendimiento_prom ? Math.round(100 / v.rendimiento_prom * 100) / 100 : 0;
+            const color = l100 && l100 <= 40 ? '#059669' : l100 <= 50 ? '#d97706' : '#dc2626';
+            // La lista viene de menor a mayor rendimiento, o sea del que más
+            // gasta al que menos: el PRIMERO es el que hay que revisar y el
+            // ÚLTIMO el más eficiente.
+            const medalla = i === conRend.length - 1 ? '🥇' : i === 0 ? '⚠️' : `${i + 1}`;
+            return `<tr>
+              <td><b>${medalla}</b></td>
+              <td><b>${coche}</b></td>
+              <td class="center"><span style="font-weight:700;color:${color};font-size:15px">${l100 ? l100.toLocaleString("es-PY",{minimumFractionDigits:2}) : "—"}</span></td>
+              <td class="num">${fmtNum(v.litros)} L</td>
+              <td class="num">${gs(v.gasto)}</td>
+              <td class="center">${v.cargas}</td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>
+      <div style="margin-top:14px;padding:12px;background:#f0fdf4;border-radius:9px;font-size:13px;color:#166534">
+        <i class="ti ti-bulb"></i> El rendimiento de cada bus se usa automáticamente en los presupuestos de Turismo.
+      </div>
+    `}`;
+}
+
+async function renderHistorial() {
+  status("Historial de actividad");
+  const params = new URLSearchParams();
+  if (histFiltros.desde) params.set("desde", histFiltros.desde);
+  if (histFiltros.hasta) params.set("hasta", histFiltros.hasta);
+  if (histFiltros.categoria) params.set("categoria", histFiltros.categoria);
+  if (histFiltros.usuario) params.set("usuario", histFiltros.usuario);
+  const data = await api("/api/auditoria?" + params.toString());
+  const registros = data.registros || [];
+  const stats = data.stats || {};
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-history"></i> Historial de actividad</h1>
+      <p>Todo lo que pasa en el sistema — solo visible para administración</p>
+    </div>
+    <div class="section">
+      <!-- Resumen -->
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric"><div class="metric-content"><div class="metric-label">Total de acciones</div>
+          <div class="metric-value">${stats.total || 0}</div></div></div>
+        ${(stats.por_categoria || []).slice(0, 3).map(c => `
+          <div class="metric"><div class="metric-content"><div class="metric-label">${c.categoria || "Sin categoría"}</div>
+          <div class="metric-value" style="color:${COLOR_CAT[c.categoria]||'#64748b'}">${c.n}</div></div></div>
+        `).join("")}
+      </div>
+
+      <!-- Filtros -->
+      <div class="toolbar" style="gap:10px;flex-wrap:wrap;margin-bottom:16px">
+        <div class="field" style="margin:0"><label style="font-size:11px">Desde</label>
+          <input type="date" id="hist-desde" value="${histFiltros.desde}" onchange="aplicarFiltrosHist()" style="width:150px"></div>
+        <div class="field" style="margin:0"><label style="font-size:11px">Hasta</label>
+          <input type="date" id="hist-hasta" value="${histFiltros.hasta}" onchange="aplicarFiltrosHist()" style="width:150px"></div>
+        <div class="field" style="margin:0"><label style="font-size:11px">Categoría</label>
+          <select id="hist-cat" onchange="aplicarFiltrosHist()" style="width:180px">
+            <option value="">Todas</option>
+            ${Object.keys(ICONO_CAT).map(c => `<option value="${c}" ${histFiltros.categoria===c?'selected':''}>${c}</option>`).join("")}
+          </select></div>
+        ${histFiltros.desde || histFiltros.hasta || histFiltros.categoria || histFiltros.usuario ?
+          `<button class="btn btn-ghost" style="align-self:flex-end" onclick="limpiarFiltrosHist()"><i class="ti ti-x"></i> Limpiar</button>` : ""}
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> Actividad (${registros.length})</div>
+      ${registros.length === 0 ? `
+        <div class="empty"><i class="ti ti-history-off"></i>No hay actividad registrada en este período.</div>
+      ` : `
+        <div class="timeline-hist">
+          ${registros.map(r => {
+            const fecha = (r.fecha_hora || "").slice(0, 10);
+            const hora = (r.fecha_hora || "").slice(11, 19);
+            const color = COLOR_CAT[r.categoria] || "#64748b";
+            const icono = ICONO_CAT[r.categoria] || "ti-point";
+            return `
+              <div class="hist-row">
+                <div class="hist-icon" style="background:${color}1a;color:${color}"><i class="ti ${icono}"></i></div>
+                <div class="hist-body">
+                  <div class="hist-top">
+                    <span class="hist-accion">${r.accion}</span>
+                    <span class="hist-fecha">${fecha} · ${hora}</span>
+                  </div>
+                  <div class="hist-meta">
+                    <span class="hist-user"><i class="ti ti-user"></i> ${r.usuario || "?"}${r.rol ? ` (${LABEL_ROL[r.rol] || r.rol})` : ""}</span>
+                    ${r.categoria ? `<span class="hist-cat" style="color:${color}">${r.categoria}</span>` : ""}
+                    ${r.detalle ? `<span class="hist-detalle">${r.detalle}</span>` : ""}
+                    ${r.referencia ? `<button class="hist-evidencia" onclick="verEvidenciaHist('${r.referencia}')"><i class="ti ti-photo"></i> Ver evidencia</button>` : ""}
+                  </div>
+                </div>
+              </div>`;
+          }).join("")}
+        </div>
+        ${registros.length >= 500 ? `<div style="text-align:center;color:var(--muted);font-size:13px;margin-top:14px">Mostrando las 500 acciones más recientes. Usá los filtros para ver más.</div>` : ""}
+      `}
+    </div>`;
+}
+
+function aplicarFiltrosHist() {
+  histFiltros.desde = $("#hist-desde").value;
+  histFiltros.hasta = $("#hist-hasta").value;
+  histFiltros.categoria = $("#hist-cat").value;
+  renderHistorial();
+}
+
+function limpiarFiltrosHist() {
+  histFiltros = { desde: "", hasta: "", categoria: "", usuario: "" };
+  renderHistorial();
+}
+
+// Trae y muestra la(s) foto(s) de evidencia de un registro del historial
+async function verEvidenciaHist(referencia) {
+  const data = await api("/api/auditoria/evidencia?ref=" + encodeURIComponent(referencia));
+  const fotos = data.fotos || [];
+  if (!fotos.length) { toast("No se encontró la evidencia", "error"); return; }
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.8);z-index:2000;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="max-width:90vw;max-height:90vh;text-align:center">
+      <div style="color:#fff;font-size:15px;margin-bottom:12px;font-weight:600">
+        <i class="ti ti-photo"></i> ${fotos[0].tipo || "Evidencia"} ${fotos.length > 1 ? `(${fotos.length} fotos)` : ""}
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;max-height:75vh;overflow:auto">
+        ${fotos.map(f => `<img src="${f.datos}" style="max-width:${fotos.length>1?'42vw':'85vw'};max-height:70vh;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.5)">`).join("")}
+      </div>
+      <button class="btn btn-ghost" style="margin-top:14px;background:rgba(255,255,255,0.15);color:#fff;border:none" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i> Cerrar</button>
+    </div>`;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function renderTurismo() {
+  status("Presupuestos de Turismo");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-bus-stop"></i> Presupuestos de Turismo</h1>
+      <p>Calculá el costo y precio de un servicio de turismo o charter</p>
+    </div>
+    <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${turismoTab==='nuevo'?'active':''}" onclick="setTurismoTab('nuevo')"><i class="ti ti-calculator"></i> Nuevo presupuesto</button>
+          <button class="tab-btn ${turismoTab==='guardados'?'active':''}" onclick="setTurismoTab('guardados')"><i class="ti ti-folder"></i> Guardados</button>
+          <button class="tab-btn ${turismoTab==='config'?'active':''}" onclick="setTurismoTab('config')"><i class="ti ti-settings"></i> Configuración</button>
+        </div>
+      </div>
+      <div id="turismo-contenido"></div>
+    </div>`;
+  if (turismoTab === "nuevo") await renderTurismoNuevo();
+  else if (turismoTab === "guardados") await renderTurismoGuardados();
+  else await renderTurismoConfig();
+}
+
+function setTurismoTab(t) { turismoTab = t; renderTurismo(); }
+
+// ─── Nuevo presupuesto con cálculo en vivo ───
+async function renderTurismoNuevo() {
+  const cont = document.getElementById("turismo-contenido");
+  const vehiculos = await api("/api/vehiculos");
+  const cfg = await api("/api/turismo/config");
+  cont.innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <!-- Columna de datos -->
+      <div>
+        <div class="card">
+          <div class="card-head"><i class="ti ti-map-pin"></i> Datos del viaje</div>
+          <div class="card-body">
+            <div class="field" style="margin-bottom:12px"><label>Destino *</label><input id="tu-destino" placeholder="Buenos Aires" oninput="calcularTurismoVivo()"></div>
+            <div class="field" style="margin-bottom:12px"><label>Descripción</label><input id="tu-desc" placeholder="Charter 3 días" oninput="calcularTurismoVivo()"></div>
+            <div class="field" style="margin-bottom:12px"><label>Cliente</label><input id="tu-cliente" placeholder="Nombre del cliente"></div>
+            <div class="field" style="margin-bottom:12px"><label>Vehículo</label>
+              ${buscadorCoche("tu-vehiculo", vehiculos)}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+              <div class="field"><label>Km totales *</label><input id="tu-km" type="number" placeholder="2400" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Días</label><input id="tu-dias" type="number" value="1" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Noches</label><input id="tu-noches" type="number" value="0" oninput="calcularTurismoVivo()"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px">
+              <div class="field"><label>Pasajeros</label><input id="tu-pax" type="number" placeholder="45" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Consumo (km/l)</label><input id="tu-consumo" type="number" step="0.1" placeholder="2.5" oninput="calcularTurismoVivo()"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px">
+          <div class="card-head"><i class="ti ti-cash"></i> Valores (editables por viaje)</div>
+          <div class="card-body">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field"><label>Precio gasoil (Gs/l)</label><input id="tu-gasoil" type="number" value="${cfg.precio_gasoil||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Jornal chofer/día</label><input id="tu-jornal" type="number" value="${cfg.jornal_chofer||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Viático/día</label><input id="tu-viatico" type="number" value="${cfg.viatico_dia||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Comida/día</label><input id="tu-comida" type="number" value="${cfg.comida_dia||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Hospedaje/noche</label><input id="tu-hospedaje" type="number" value="${cfg.hospedaje_noche||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>CPK cubiertas</label><input id="tu-cpk" type="number" value="${cfg.cpk_cubiertas||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Mant./km</label><input id="tu-mant" type="number" value="${cfg.costo_mant_km||''}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Peajes (local)</label><input id="tu-peajes" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Margen (%)</label><input id="tu-margen" type="number" value="${cfg.margen_sugerido||30}" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>IVA (%)</label><input id="tu-iva" type="number" value="${cfg.iva_porcentaje||10}" oninput="calcularTurismoVivo()"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:16px;border:2px solid #fef0e6">
+          <div class="card-head" style="background:#fff8f3"><i class="ti ti-world"></i> Viajes largos / internacionales (opcional)</div>
+          <div class="card-body">
+            <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border-radius:9px;cursor:pointer;margin-bottom:14px">
+              <input type="checkbox" id="tu-2chofer" onchange="calcularTurismoVivo()" style="width:18px;height:18px">
+              <div>
+                <b style="font-size:14px">Segundo chofer</b>
+                <div style="font-size:12px;color:var(--muted)">Obligatorio en viajes largos. Duplica chofer, viáticos y comidas.</div>
+              </div>
+            </label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="field"><label>Peajes en el exterior</label><input id="tu-peajes-ext" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Seguro del viaje</label><input id="tu-seguro" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Trámites / habilitaciones</label><input id="tu-tramites" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>Otros gastos</label><input id="tu-otros" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+              <div class="field"><label>% Imprevistos (colchón)</label><input id="tu-imprevistos" type="number" placeholder="0" oninput="calcularTurismoVivo()"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Columna de resultado en vivo -->
+      <div>
+        <div class="card" style="position:sticky;top:20px">
+          <div class="card-head"><i class="ti ti-receipt"></i> Presupuesto</div>
+          <div class="card-body" id="tu-resultado">
+            <div class="empty" style="padding:40px"><i class="ti ti-calculator"></i>Cargá los datos del viaje para ver el cálculo.</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+  calcularTurismoVivo();
+}
+
+// Auto-completar el consumo cuando se elige un vehículo
+window["_cocheCB_tu-vehiculo"] = () => autoConsumo();
+
+function autoConsumo() {
+  const id = (document.getElementById("tu-vehiculo") || {}).value;
+  const v = (window["_coches_tu-vehiculo"] || []).find(x => String(x.id) === String(id));
+  const consumo = v ? v.consumo_km_litro : 0;
+  if (consumo && parseFloat(consumo) > 0) {
+    document.getElementById("tu-consumo").value = consumo;
+  }
+  calcularTurismoVivo();
+}
+
+// Junta los datos del formulario
+function datosTurismo() {
+  // El coche ahora se elige con el buscador (un campo oculto con el id), no
+  // con una lista desplegable: la patente se saca de los coches que cargó
+  const sel = document.getElementById("tu-vehiculo") || {};
+  const coche = (window["_coches_tu-vehiculo"] || []).find(x => String(x.id) === String(sel.value));
+  return {
+    destino: $("#tu-destino").value, descripcion: $("#tu-desc").value, cliente: $("#tu-cliente").value,
+    vehiculo_id: sel.value || null, patente: coche ? (coche.patente || "") : "",
+    km_total: $("#tu-km").value, dias: $("#tu-dias").value, noches: $("#tu-noches").value,
+    pasajeros: $("#tu-pax").value, consumo_km_litro: $("#tu-consumo").value,
+    precio_gasoil: $("#tu-gasoil").value, jornal_chofer: $("#tu-jornal").value,
+    viatico_dia: $("#tu-viatico").value, comida_dia: $("#tu-comida").value,
+    hospedaje_noche: $("#tu-hospedaje").value, cpk_cubiertas: $("#tu-cpk").value,
+    costo_mant_km: $("#tu-mant").value, peajes: $("#tu-peajes").value, otros: $("#tu-otros").value,
+    margen: $("#tu-margen").value, iva: $("#tu-iva").value,
+    // Viajes largos / internacionales
+    segundo_chofer: $("#tu-2chofer").checked,
+    peajes_exterior: $("#tu-peajes-ext").value, seguro_viaje: $("#tu-seguro").value,
+    tramites: $("#tu-tramites").value, imprevistos_pct: $("#tu-imprevistos").value,
+  };
+}
+
+let turismoTimer = null;
+function calcularTurismoVivo() {
+  clearTimeout(turismoTimer);
+  turismoTimer = setTimeout(async () => {
+    const datos = datosTurismo();
+    if (!datos.km_total || parseFloat(datos.km_total) <= 0) {
+      document.getElementById("tu-resultado").innerHTML = `<div class="empty" style="padding:40px"><i class="ti ti-calculator"></i>Ingresá los km del viaje para ver el cálculo.</div>`;
+      return;
+    }
+    const r = await api("/api/turismo/calcular", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(datos)
+    });
+    mostrarResultadoTurismo(r, datos);
+  }, 300);
+}
+
+function mostrarResultadoTurismo(r, datos) {
+  const cont = document.getElementById("tu-resultado");
+  const linea = (concepto, monto, sub) => monto > 0 ?
+    `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)${sub?';color:var(--muted);font-size:13px':''}">
+      <span>${concepto}</span><span style="font-weight:600">${gs(monto)}</span></div>` : "";
+  cont.innerHTML = `
+    <div style="font-size:13px;color:var(--muted);margin-bottom:10px">
+      ${r.litros_estimados} litros · ${r.consumo_km_litro} km/l · ${datos.km_total} km${r.segundo_chofer ? ' · 2 choferes' : ''}
+    </div>
+    ${linea("Combustible", r.costo_combustible)}
+    ${linea("Cubiertas", r.costo_cubiertas)}
+    ${linea("Mantenimiento", r.costo_mantenimiento)}
+    ${linea(r.segundo_chofer ? "Chofer (×2)" : "Chofer", r.costo_chofer)}
+    ${linea(r.segundo_chofer ? "Viáticos (×2)" : "Viáticos", r.costo_viaticos)}
+    ${linea(r.segundo_chofer ? "Comidas (×2)" : "Comidas", r.costo_comidas)}
+    ${linea("Hospedaje", r.costo_hospedaje)}
+    ${linea("Peajes (local)", r.peajes)}
+    ${linea("Peajes exterior", r.peajes_exterior)}
+    ${linea("Seguro del viaje", r.seguro_viaje)}
+    ${linea("Trámites", r.tramites)}
+    ${linea("Otros", r.otros)}
+    <div style="display:flex;justify-content:space-between;padding:10px 0;margin-top:6px;border-top:2px solid var(--border);font-weight:700">
+      <span>Subtotal</span><span>${gs(r.subtotal)}</span></div>
+    ${r.monto_imprevistos > 0 ? `<div style="display:flex;justify-content:space-between;padding:5px 0;color:var(--muted)">
+      <span>Imprevistos (${r.imprevistos_pct}%)</span><span>${gs(r.monto_imprevistos)}</span></div>` : ""}
+    <div style="display:flex;justify-content:space-between;padding:5px 0;color:var(--muted)">
+      <span>Margen (${r.margen_pct}%)</span><span>${gs(r.monto_margen)}</span></div>
+    <div style="display:flex;justify-content:space-between;padding:5px 0;color:var(--muted)">
+      <span>IVA (${r.iva_pct}%)</span><span>${gs(r.monto_iva)}</span></div>
+    <div style="background:var(--brand-red);color:#fff;padding:14px;border-radius:10px;margin-top:12px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:15px;font-weight:700">PRECIO TOTAL</span>
+      <span style="font-size:22px;font-weight:800">${gs(r.precio_final)}</span>
+    </div>
+    ${r.precio_por_pasajero > 0 ? `
+      <div style="text-align:center;margin-top:10px;color:var(--brand-blue);font-weight:700;font-size:15px">
+        ${gs(r.precio_por_pasajero)} por pasajero (${r.pasajeros})
+      </div>` : ""}
+    <button class="btn btn-primary" style="width:100%;margin-top:16px" onclick="guardarPresupuestoTurismo()"><i class="ti ti-device-floppy"></i> Guardar presupuesto</button>`;
+}
+
+async function guardarPresupuestoTurismo() {
+  const datos = datosTurismo();
+  if (!datos.destino) { toast("Poné un destino", "error"); return; }
+  if (!datos.km_total) { toast("Poné los km", "error"); return; }
+  const r = await api("/api/turismo/presupuestos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ datos })
+  });
+  if (r.ok) {
+    toast("Presupuesto guardado", "success");
+    turismoTab = "guardados";
+    renderTurismo();
+  } else toast("Error al guardar", "error");
+}
+
+// ─── Presupuestos guardados ───
+async function renderTurismoGuardados() {
+  const cont = document.getElementById("turismo-contenido");
+  const lista = await api("/api/turismo/presupuestos");
+  if (!lista.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-folder-open"></i>No hay presupuestos guardados todavía.</div>`;
+    return;
+  }
+  cont.innerHTML = `
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Fecha</th><th>Destino</th><th>Cliente</th><th>Vehículo</th>
+        <th class="center">Días</th><th class="center">Pax</th><th class="num">Precio</th><th class="td-action"></th>
+      </tr></thead>
+      <tbody>
+        ${lista.map(p => `<tr>
+          <td>${(p.fecha_creacion||"").slice(0,10)}</td>
+          <td><b>${p.destino}</b>${p.descripcion ? `<br><span style="font-size:12px;color:var(--muted)">${p.descripcion}</span>` : ""}</td>
+          <td>${p.cliente || "—"}</td>
+          <td>${p.patente || "—"}</td>
+          <td class="center">${p.dias}</td>
+          <td class="center">${p.pasajeros || "—"}</td>
+          <td class="num"><b>${gs(p.precio_final)}</b></td>
+          <td class="td-action" style="white-space:nowrap">
+            <button class="icon-btn" title="Imprimir PDF" onclick="window.open('/api/turismo/presupuestos/${p.id}/pdf','_blank')"><i class="ti ti-printer"></i></button>
+            <button class="icon-btn" title="Eliminar" onclick="borrarPresupuestoTurismo(${p.id})"><i class="ti ti-trash"></i></button>
+          </td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>`;
+}
+
+async function borrarPresupuestoTurismo(pid) {
+  if (!confirm("¿Eliminar este presupuesto?")) return;
+  await api(`/api/turismo/presupuestos/${pid}`, { method: "DELETE" });
+  toast("Eliminado");
+  renderTurismo();
+}
+
+// ─── Configuración de valores por defecto ───
+async function renderTurismoConfig() {
+  const cont = document.getElementById("turismo-contenido");
+  const cfg = await api("/api/turismo/config");
+  cont.innerHTML = `
+    <div class="card" style="max-width:640px">
+      <div class="card-head"><i class="ti ti-settings"></i> Valores por defecto para presupuestos</div>
+      <div class="card-body">
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">Estos valores se usan como punto de partida en cada presupuesto. Podés ajustarlos por viaje.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="field"><label>Precio gasoil (Gs/litro)</label><input id="cfg-gasoil" type="number" value="${cfg.precio_gasoil||''}"></div>
+          <div class="field"><label>Jornal chofer por día</label><input id="cfg-jornal" type="number" value="${cfg.jornal_chofer||''}"></div>
+          <div class="field"><label>Viático por día</label><input id="cfg-viatico" type="number" value="${cfg.viatico_dia||''}"></div>
+          <div class="field"><label>Comida por día</label><input id="cfg-comida" type="number" value="${cfg.comida_dia||''}"></div>
+          <div class="field"><label>Hospedaje por noche</label><input id="cfg-hospedaje" type="number" value="${cfg.hospedaje_noche||''}"></div>
+          <div class="field"><label>CPK cubiertas (Gs/km)</label><input id="cfg-cpk" type="number" value="${cfg.cpk_cubiertas||''}"></div>
+          <div class="field"><label>Mantenimiento (Gs/km)</label><input id="cfg-mant" type="number" value="${cfg.costo_mant_km||''}"></div>
+          <div class="field"><label>Consumo por defecto (km/l)</label><input id="cfg-consumo" type="number" step="0.1" value="${cfg.consumo_defecto||2.5}"></div>
+          <div class="field"><label>Margen sugerido (%)</label><input id="cfg-margen" type="number" value="${cfg.margen_sugerido||30}"></div>
+          <div class="field"><label>IVA (%)</label><input id="cfg-iva" type="number" value="${cfg.iva_porcentaje||10}"></div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:18px" onclick="guardarConfigTurismo()"><i class="ti ti-device-floppy"></i> Guardar configuración</button>
+      </div>
+    </div>`;
+}
+
+async function guardarConfigTurismo() {
+  const datos = {
+    precio_gasoil: $("#cfg-gasoil").value, jornal_chofer: $("#cfg-jornal").value,
+    viatico_dia: $("#cfg-viatico").value, comida_dia: $("#cfg-comida").value,
+    hospedaje_noche: $("#cfg-hospedaje").value, cpk_cubiertas: $("#cfg-cpk").value,
+    costo_mant_km: $("#cfg-mant").value, consumo_defecto: $("#cfg-consumo").value,
+    margen_sugerido: $("#cfg-margen").value, iva_porcentaje: $("#cfg-iva").value,
+  };
+  const r = await api("/api/turismo/config", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos)
+  });
+  if (r.ok) toast("Configuración guardada", "success");
+  else toast("Error", "error");
+}
+
+async function renderOEE() {
+  status("OEE — Eficiencia General de la Flota");
+  const hoy = new Date().toISOString().slice(0, 10);
+  const ini = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-gauge"></i> OEE — Eficiencia de Flota</h1>
+      <p>Disponibilidad × Rendimiento × Calidad — qué tan bien se aprovecha cada bus</p>
+    </div>
+    <div class="section">
+      <div style="background:#eaf2fb;border-radius:11px;padding:13px 16px;margin-bottom:18px;font-size:13px;color:var(--text)">
+        <b><i class="ti ti-info-circle"></i> Cómo se calcula:</b>
+        <b>Disponibilidad</b> = días operativo ÷ días del período ·
+        <b>Rendimiento</b> = km recorridos ÷ meta de km ·
+        <b>Calidad</b> = días sin fallas ÷ días operativo.
+        El OEE es el producto de los tres.
+      </div>
+      <div class="toolbar">
+        <div class="field"><label style="font-size:12px">Desde</label>
+          <input type="date" id="oee-desde" value="${ini}" style="padding:9px;border-radius:9px;border:1.5px solid var(--border)"></div>
+        <div class="field"><label style="font-size:12px">Hasta</label>
+          <input type="date" id="oee-hasta" value="${hoy}" style="padding:9px;border-radius:9px;border:1.5px solid var(--border)"></div>
+        <button class="btn btn-primary" style="align-self:flex-end" onclick="calcularOEEFlota()"><i class="ti ti-calculator"></i> Calcular</button>
+      </div>
+      <div id="oee-result"><div class="empty"><i class="ti ti-gauge"></i>Elegí un período y tocá Calcular.</div></div>
+    </div>`;
+}
+
+async function calcularOEEFlota() {
+  const desde = document.getElementById("oee-desde").value;
+  const hasta = document.getElementById("oee-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  const cont = document.getElementById("oee-result");
+  cont.innerHTML = `<div class="empty"><i class="ti ti-loader"></i> Calculando...</div>`;
+  const data = await api(`/api/oee_flota?desde=${desde}&hasta=${hasta}`);
+  if (!data.ok || !data.vehiculos.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-gauge-off"></i>No hay datos para calcular en ese período.</div>`;
+    return;
+  }
+  const p = data.promedio;
+  cont.innerHTML = `
+    <div class="metrics" style="margin-bottom:20px">
+      <div class="metric"><div class="metric-content">
+        <div class="metric-label">Disponibilidad</div>
+        <div class="metric-value" style="color:${_colorOEE(p.disponibilidad)}">${p.disponibilidad}%</div></div></div>
+      <div class="metric"><div class="metric-content">
+        <div class="metric-label">Rendimiento</div>
+        <div class="metric-value" style="color:${_colorOEE(p.rendimiento)}">${p.rendimiento}%</div></div></div>
+      <div class="metric"><div class="metric-content">
+        <div class="metric-label">Calidad</div>
+        <div class="metric-value" style="color:${_colorOEE(p.calidad)}">${p.calidad}%</div></div></div>
+      <div class="metric" style="border:2px solid ${_colorOEE(p.oee)}"><div class="metric-content">
+        <div class="metric-label">OEE de Flota</div>
+        <div class="metric-value" style="color:${_colorOEE(p.oee)}">${p.oee}%</div></div></div>
+    </div>
+    <div class="section-title"><i class="ti ti-list"></i> Detalle por vehículo (peores primero)</div>
+    <div class="table-wrap"><table>
+      <thead><tr>
+        <th>Vehículo</th><th class="center">Disponib.</th><th class="center">Rendim.</th>
+        <th class="center">Calidad</th><th class="center">OEE</th><th>Observación</th>
+      </tr></thead>
+      <tbody>
+        ${data.vehiculos.map(v => `<tr>
+          <td><b>${v.patente}</b>${v.n_interno ? ` <span class="badge cat">${v.n_interno}</span>` : ""}</td>
+          <td class="center" style="color:${_colorOEE(v.disponibilidad)}">${v.disponibilidad}%</td>
+          <td class="center" style="color:${_colorOEE(v.rendimiento)}">${v.rendimiento}%</td>
+          <td class="center" style="color:${_colorOEE(v.calidad)}">${v.calidad}%</td>
+          <td class="center"><b style="color:${_colorOEE(v.oee)}">${v.oee}%</b></td>
+          <td style="font-size:12px;color:var(--muted)">${v.faltantes && v.faltantes.length ? "⚠ Falta: " + v.faltantes.join(", ") : "—"}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table></div>`;
+}
+
+async function renderKpis() {
+  const v = cocheActual;
+  status(`KPIs del coche ${v.patente}`);
+  const meses = await api(`/api/meses/${v.id}`);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-chart-bar"></i> KPIs · ${v.patente}</h1>
+      <p>${v.marca} ${v.modelo} — indicadores económicos</p>
+    </div>
+    <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${kpiModo==='mes'?'active':''}" onclick="setKpiModo('mes')"><i class="ti ti-calendar"></i> Por mes</button>
+          <button class="tab-btn ${kpiModo==='produccion'?'active':''}" onclick="setKpiModo('produccion')"><i class="ti ti-chart-area"></i> Producción</button>
+        </div>
+        <select id="k-mes" onchange="cargarKpis()" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;${kpiModo==='produccion'?'display:none':''}">
+          ${meses.map(m => `<option value="${m}">${mesLegible(m)}</option>`).join("")}
+        </select>
+        <button class="btn btn-pdf" style="margin-left:auto" onclick="exportarPdf()"><i class="ti ti-file-type-pdf"></i> Exportar PDF</button>
+      </div>
+      <div id="k-result"></div>
+    </div>`;
+  window._meses = meses;
+  cargarKpis();
+}
+function setKpiModo(m) {
+  kpiModo = m;
+  document.querySelectorAll(".tab-btn").forEach(t => t.classList.remove("active"));
+  event.target.closest(".tab-btn").classList.add("active");
+  $("#k-mes").style.display = m === "produccion" ? "none" : "";
+  cargarKpis();
+}
+async function cargarKpis() {
+  const v = cocheActual;
+  let url = `/api/kpis/${v.id}?modo=${kpiModo}`;
+  if (kpiModo === "mes") url += `&mes=${$("#k-mes")?.value || ""}`;
+  const k = await api(url);
+  const res = $("#k-result");
+  if (!k || !k.cantidad_servicios) {
+    res.innerHTML = `<div class="empty"><i class="ti ti-chart-area-line"></i>Sin datos para mostrar en este período.</div>`;
+    if (chartBarras) { chartBarras.destroy(); chartBarras = null; }
+    if (chartTorta) { chartTorta.destroy(); chartTorta = null; }
+    return;
+  }
+  const subtitulo = kpiModo === "produccion"
+    ? `Producción total${k.fecha_inicio ? ` · ${k.fecha_inicio} → ${k.fecha_fin}` : ""}`
+    : mesLegible($("#k-mes").value);
+  const ing = k.ingreso || 1;
+  const filas = [
+    ["INGRESO", k.ingreso, "var(--brand)", true, 100, "ti-arrow-up-right"],
+    ["− Costos Variables", k.costos_variables, "var(--danger)", false, k.costos_variables/ing*100, "ti-minus"],
+    ["= MARGEN DE CONTRIBUCIÓN", k.margen_contribucion, "var(--success)", true, k.margen_contribucion/ing*100, "ti-equal"],
+    ["− Costos Fijos Directos", k.costos_fijos_directos, "var(--warning)", false, k.costos_fijos_directos/ing*100, "ti-minus"],
+    ["− Costos Fijos Indirectos", k.costos_fijos_indirectos, "var(--warning)", false, k.costos_fijos_indirectos/ing*100, "ti-minus"],
+    ["= UTILIDAD OPERATIVA", k.utilidad_operativa, "var(--brand-dark)", true, k.utilidad_operativa/ing*100, "ti-equal"],
+  ];
+  res.innerHTML = `
+    <h2 style="color:var(--brand);font-size:17px;margin-bottom:14px;font-weight:600">${subtitulo}</h2>
+    <div class="metrics">
+      <div class="metric"><div class="metric-icon blue"><i class="ti ti-clipboard-check"></i></div><div class="metric-content"><div class="metric-label">Servicios</div><div class="metric-value">${k.cantidad_servicios}</div></div></div>
+      <div class="metric"><div class="metric-icon green"><i class="ti ti-road"></i></div><div class="metric-content"><div class="metric-label">KM totales</div><div class="metric-value">${fmtNum(k.total_km)}</div></div></div>
+      <div class="metric"><div class="metric-icon blue"><i class="ti ti-cash"></i></div><div class="metric-content"><div class="metric-label">Ingreso</div><div class="metric-value">${gsSmall(k.ingreso)}</div></div></div>
+      <div class="metric ${k.rentabilidad_pct < 15 ? 'warning' : 'success'}"><div class="metric-icon green"><i class="ti ti-trending-up"></i></div><div class="metric-content"><div class="metric-label">Rentabilidad</div><div class="metric-value">${k.rentabilidad_pct.toFixed(1)}%</div></div></div>
+    </div>
+    <div class="charts-row">
+      <div class="chart-card"><h3>Estructura de costos</h3><div class="chart-container"><canvas id="chartBarras"></canvas></div></div>
+      <div class="chart-card"><h3>Distribución del ingreso</h3><div class="chart-container"><canvas id="chartTorta"></canvas></div></div>
+    </div>
+    <div class="card">
+      <div class="card-head"><i class="ti ti-calculator"></i> Detalle de la estructura de costos</div>
+      <div class="card-body">
+        ${filas.map(([lbl, val, col, bold, pct, ic]) => `
+          <div class="cost-row">
+            <div class="cost-label ${bold?'bold':''}" style="color:${col}">${lbl}</div>
+            <div class="cost-bar-track"><div class="cost-bar" style="width:${Math.min(100,Math.abs(pct))}%;background:${col}"></div></div>
+            <div class="cost-pct">${Math.round(pct)}%</div>
+            <div class="cost-val" style="color:${col}">${gs(val)}</div>
+          </div>`).join("")}
+      </div>
+    </div>
+    <div class="section-title"><i class="ti ti-target"></i> Indicadores operativos</div>
+    <div class="kpi-grid">
+      ${kpiCard("KM prom./servicio", fmtNum(k.km_promedio))}
+      ${kpiCard("Horas prom./servicio", k.horas_promedio)}
+      ${kpiCard("Ingreso prom./servicio", gsSmall(k.ingreso_promedio_servicio))}
+      ${kpiCard("Ingreso por KM", gsSmall(k.ingreso_por_km))}
+      ${kpiCard("Ingreso por hora", gsSmall(k.ingreso_por_hora))}
+      ${kpiCard("Costo variable por KM", gsSmall(k.costo_variable_por_km))}
+      ${kpiCard("Margen contribución", k.margen_pct.toFixed(1)+"%")}
+      ${kpiCard("Rentabilidad operativa", k.rentabilidad_pct.toFixed(1)+"%")}
+    </div>`;
+  dibujarGraficos(k);
+}
+function kpiCard(label, value) {
+  return `<div class="kpi-card"><div class="kpi-card-label">${label}</div><div class="kpi-card-value">${value}</div></div>`;
+}
+function dibujarGraficos(k) {
+  if (chartBarras) chartBarras.destroy();
+  if (chartTorta) chartTorta.destroy();
+  chartBarras = new Chart($("#chartBarras"), {
+    type: "bar",
+    data: {
+      labels: ["Ingreso", "C. Variables", "Margen", "C.F. Directos", "C.F. Indirectos", "Utilidad"],
+      datasets: [{
+        data: [k.ingreso, k.costos_variables, k.margen_contribucion, k.costos_fijos_directos, k.costos_fijos_indirectos, k.utilidad_operativa],
+        backgroundColor: ["#2D8EF5", "#DC2626", "#16A34A", "#D97706", "#D97706", "#1A6FDB"],
+        borderRadius: 6, borderSkipped: false
+      }]
+    },
+    options: {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => gs(c.raw) } } },
+      scales: {
+        x: { ticks: { callback: v => v >= 1e6 ? (v/1e6)+"M" : v, font:{size:10} }, grid: { color: "#F1F5F9" } },
+        y: { ticks: { font: { size: 11 } }, grid: { display: false } }
+      }
+    }
+  });
+  const fijos = k.costos_fijos_directos + k.costos_fijos_indirectos;
+  const util = Math.max(0, k.utilidad_operativa);
+  chartTorta = new Chart($("#chartTorta"), {
+    type: "doughnut",
+    data: {
+      labels: ["Costos variables", "Costos fijos", "Utilidad operativa"],
+      datasets: [{ data: [k.costos_variables, fijos, util], backgroundColor: ["#DC2626", "#D97706", "#1A6FDB"], borderColor: "#fff", borderWidth: 3 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
+      plugins: {
+        legend: { position: "bottom", labels: { font: { size: 11 }, padding: 14, boxWidth: 10, usePointStyle: true } },
+        tooltip: { callbacks: { label: c => `${c.label}: ${gs(c.raw)}` } }
+      }
+    }
+  });
+}
+function exportarPdf() {
+  const v = cocheActual;
+  let url = `/api/exportar_pdf/${v.id}?modo=${kpiModo}`;
+  if (kpiModo === "mes") url += `&mes=${$("#k-mes")?.value || ""}`;
+  toast("Generando PDF...", "success");
+  window.open(url, "_blank");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  MANTENIMIENTO (preventivo, por vehículo)
+// ════════════════════════════════════════════════════════════════════════
+async function renderMantenimiento() {
+  const v = cocheActual;
+  status(`Mantenimiento preventivo del coche ${v.patente}`);
+  const planVeh = await api(`/api/vehiculos/${v.id}/plan`);
+  const planes = await api("/api/planes");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-tool"></i> Mantenimiento · ${v.patente}</h1>
+      <p>${v.marca} ${v.modelo} — control preventivo por kilometraje</p>
+    </div>
+    <div class="section">
+      ${planVeh.plan ? `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+        <button class="btn btn-ghost" onclick="window.open('/api/vehiculos/${v.id}/plan_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir plan</button>
+      </div>` : ""}
+      ${planVeh.plan ? renderOdometro(planVeh) : renderSinPlan(planes, v)}
+      ${planVeh.plan ? `
+        <div class="tabs">
+          <button class="tab-btn ${mantTab==='estado'?'active':''}" onclick="setMantTab('estado')"><i class="ti ti-gauge"></i> Estado actual</button>
+          <button class="tab-btn ${mantTab==='realizar'?'active':''}" onclick="setMantTab('realizar')"><i class="ti ti-plus"></i> Registrar</button>
+          <button class="tab-btn ${mantTab==='historial'?'active':''}" onclick="setMantTab('historial')"><i class="ti ti-history"></i> Historial</button>
+        </div>
+        <div id="mant-body"></div>
+      ` : ""}
+    </div>`;
+  if (planVeh.plan) cargarMantTab(planVeh);
+}
+function renderOdometro(p) {
+  const v = cocheActual;
+  const coche = v && v.n_interno ? v.n_interno : "—";
+  return `<div class="odometer-card">
+    <div>
+      <div class="odo-label">Odómetro estimado</div>
+      <div class="odo-value">${fmtNum(p.km_actual)} km</div>
+      <div class="odo-verif">${p.km_verif
+        ? `<i class="ti ti-circle-check"></i> Verificado en la OT #${p.km_verif.ot} · ${otFechaHora(p.km_verif.fecha)}${p.km_verif.por ? " · " + hiEsc(p.km_verif.por) : ""}`
+        : `<i class="ti ti-info-circle"></i> El km se verifica al abrir una OT del coche`}</div>
+      <div class="odo-plan"><i class="ti ti-bus"></i> Coche: <b>${coche}</b></div>
+    </div>
+    <div id="odo-resumen" class="odo-resumen"></div>
+  </div>`;
+}
+
+function renderSinPlan(planes, v) {
+  return `<div class="card">
+    <div class="card-head"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Sin plan asignado</div>
+    <div class="card-body">
+      <p style="margin-bottom:14px;color:var(--muted);font-size:13.5px">Asignale un plan para empezar a controlar los vencimientos.</p>
+      <div class="form-row">
+        <div class="field" style="flex:1;min-width:280px"><label>Plan de mantenimiento</label>
+          <select id="m-plan">
+            <option value="">-- Elegí un plan --</option>
+            ${planes.map(p => `<option value="${p.id}">${p.nombre} (${p.cant_tareas} tareas)</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>KM actual del odómetro</label><input id="m-km" placeholder="250000" style="width:140px"></div>
+        <button class="btn btn-primary" onclick="asignarPlanCoche(${v.id})"><i class="ti ti-link"></i> Asignar plan</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function asignarPlanCoche(vid) {
+  const pid = $("#m-plan").value;
+  if (!pid) { toast("Elegí un plan", "error"); return; }
+  await api(`/api/vehiculos/${vid}/plan`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ plan_id: pid, km_inicial: parseFloat($("#m-km").value || 0) })
+  });
+  toast("Plan asignado", "success");
+  renderMantenimiento();
+}
+function setMantTab(t) {
+  mantTab = t;
+  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+  event.target.closest(".tab-btn").classList.add("active");
+  api(`/api/vehiculos/${cocheActual.id}/plan`).then(p => cargarMantTab(p));
+}
+async function cargarMantTab(planVeh) {
+  if (mantTab === "estado") await tabEstado();
+  else if (mantTab === "realizar") await tabRealizar(planVeh);
+  else if (mantTab === "historial") await tabHistorial();
+}
+async function tabEstado() {
+  const v = cocheActual;
+  const data = await api(`/api/vehiculos/${v.id}/estado_mantenimiento`);
+  const estado = data.estado || [];
+  const counts = { vencido: 0, pronto: 0, ok: 0 };
+  estado.forEach(e => counts[e.estado] = (counts[e.estado] || 0) + 1);
+  if ($("#odo-resumen")) $("#odo-resumen").innerHTML = `
+    ${counts.vencido > 0 ? `<span class="odo-tag vencido"><i class="ti ti-alert-circle"></i> ${counts.vencido} vencidas</span>` : ""}
+    ${counts.pronto > 0 ? `<span class="odo-tag pronto"><i class="ti ti-clock-hour-4"></i> ${counts.pronto} próximas</span>` : ""}
+    ${counts.ok > 0 ? `<span class="odo-tag ok"><i class="ti ti-circle-check"></i> ${counts.ok} al día</span>` : ""}`;
+
+  const iconoEstado = { optimo: "circle-check", bueno: "circle-check", regular: "clock-hour-4", atencion: "alert-triangle", vencido: "alert-circle" };
+  const labelEstado = { optimo: "Óptimo", bueno: "Bueno", regular: "Regular", atencion: "Atención", vencido: "Vencido" };
+
+  $("#mant-body").innerHTML = !estado.length ? `<div class="empty">El plan no tiene tareas cargadas.</div>` : `
+    <div class="alert-list">
+      ${estado.map(e => `
+        <div class="alert-row ${e.estado}">
+          <i class="ti ti-${iconoEstado[e.estado_grad] || 'circle'}"></i>
+          <div style="min-width:0">
+            <div class="alert-task">${e.tarea}
+              ${e.categoria ? `<span class="badge cat">${e.categoria}</span>` : ""}
+              <span class="grad-badge grad-${e.estado_grad}"><span class="dot"></span> ${labelEstado[e.estado_grad]} · ${e.porcentaje.toFixed(0)}%</span>
+            </div>
+            <div class="alert-meta" style="margin:6px 0 6px">
+              ${e.ultimo_km !== null
+                ? `Último: ${fmtNum(e.ultimo_km)} km${e.ultima_fecha ? ` · ${e.ultima_fecha}` : ""}`
+                : "Sin registro previo"}
+              · Cada ${fmtNum(e.intervalo_km)} km · Próximo: ${fmtNum(e.proximo_km)} km
+            </div>
+            <div class="grad-bar-wrap" style="max-width:520px">
+              <div class="grad-bar estado-${e.estado_grad}" style="width:${e.porcentaje_visual}%"></div>
+            </div>
+          </div>
+          <div class="alert-km">
+            <div class="alert-km-restante">
+              ${e.estado === "vencido" ? `▲ ${fmtNum(Math.abs(e.km_restantes))}` : fmtNum(e.km_restantes)}
+            </div>
+            <div class="alert-meta">${e.estado === 'vencido' ? 'km pasados' : 'km restantes'}</div>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="abrirRegistrar(${e.tarea_id})"><i class="ti ti-check"></i> Registrar</button>
+        </div>
+      `).join("")}
+    </div>`;
+}
+function abrirRegistrar(tareaId) {
+  mantTab = "realizar";
+  document.querySelectorAll(".tab-btn").forEach((b, i) => b.classList.toggle("active", i === 1));
+  api(`/api/vehiculos/${cocheActual.id}/plan`).then(p => tabRealizar(p, tareaId));
+}
+async function tabRealizar(planVeh, preseleccion = null) {
+  const tareas = await api(`/api/planes/${planVeh.plan.plan_id}/tareas`);
+  $("#mant-body").innerHTML = `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-circle-plus"></i> Registrar mantenimiento realizado</div>
+      <div class="card-body">
+        <p class="hint"><i class="ti ti-bulb"></i> Cuando el taller termina una tarea del plan, registrala acá. El sistema actualiza el próximo vencimiento solo.</p>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field" style="flex:1;min-width:280px"><label>Tarea realizada</label>
+            <select id="mr-tarea">
+              ${tareas.map(t => `<option value="${t.id}" ${t.id==preseleccion?'selected':''}>${t.tarea} (cada ${fmtNum(t.intervalo_km)} km)</option>`).join("")}
+            </select>
+          </div>
+          <div class="field"><label>Fecha</label><input id="mr-fecha" type="date" value="${hoy()}"></div>
+          <div class="field"><label>KM del coche</label><input id="mr-km" placeholder="${planVeh.km_actual.toFixed(0)}" style="width:130px"></div>
+          <div class="field"><label>Costo (Gs.)</label><input id="mr-costo" placeholder="0" style="width:150px"></div>
+          <div class="field" style="flex:1;min-width:250px"><label>Observaciones</label><input id="mr-obs" placeholder="Marca de aceite, taller, etc"></div>
+          <button class="btn btn-primary" onclick="guardarMantenimiento()"><i class="ti ti-device-floppy"></i> Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+async function guardarMantenimiento() {
+  const km = parseFloat($("#mr-km").value);
+  if (!km) { toast("Ingresá el km del coche", "error"); return; }
+  const costo = ($("#mr-costo").value || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/mantenimientos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: cocheActual.id, tarea_plan_id: parseInt($("#mr-tarea").value),
+      fecha: $("#mr-fecha").value, km, costo: costo || 0, observaciones: $("#mr-obs").value
+    })
+  });
+  if (r.ok) {
+    toast("Mantenimiento registrado", "success");
+    mantTab = "estado";
+    renderMantenimiento();
+  } else toast("Error al guardar", "error");
+}
+async function tabHistorial() {
+  const hist = await api(`/api/vehiculos/${cocheActual.id}/mantenimientos`);
+  $("#mant-body").innerHTML = !hist.length ? `<div class="empty"><i class="ti ti-history"></i>Sin mantenimientos registrados</div>` : `
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Fecha</th><th>Tarea</th><th>Categoría</th><th class="num">KM</th><th class="num">Costo</th><th>Observaciones</th><th class="td-action"></th></tr></thead>
+        <tbody>${hist.map(h => `
+          <tr><td>${h.fecha}</td><td>${h.tarea}</td>
+            <td>${h.categoria ? `<span class="badge cat">${h.categoria}</span>` : "—"}</td>
+            <td class="num">${fmtNum(h.km)}</td><td class="num">${gs(h.costo)}</td>
+            <td>${h.observaciones || "—"}</td>
+            <td class="td-action"><button class="icon-btn" onclick="borrarMantenimiento(${h.id})"><i class="ti ti-trash"></i></button></td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+async function borrarMantenimiento(id) {
+  if (!confirm("¿Eliminar este registro?")) return;
+  await api(`/api/mantenimientos/${id}`, { method: "DELETE" });
+  toast("Eliminado"); renderMantenimiento();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  PLANES (biblioteca global)
+// ════════════════════════════════════════════════════════════════════════
+async function renderPlanes() {
+  status("Catálogo de planes de mantenimiento");
+  const planes = await api("/api/planes");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-clipboard-text"></i> Planes de Mantenimiento</h1>
+      <p>Catálogo reutilizable de planes por modelo de motor/coche</p>
+    </div>
+    <div class="section">
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plus"></i> Crear plan nuevo</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field" style="flex:1;min-width:240px"><label>Nombre del plan</label><input id="p-nom" placeholder="ej: Mercedes O-500 RSD"></div>
+            <div class="field" style="flex:2;min-width:280px"><label>Descripción (opcional)</label><input id="p-desc" placeholder="Notas, marca de motor, etc"></div>
+            <button class="btn btn-primary" onclick="crearPlanWeb()"><i class="ti ti-plus"></i> Crear plan</button>
+          </div>
+        </div>
+      </div>
+      <div class="section-title"><i class="ti ti-list"></i> Planes existentes</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Plan</th><th>Descripción</th><th class="center">Tareas</th><th class="center">Vehículos</th><th class="td-action"></th></tr></thead>
+          <tbody>
+            ${planes.map(p => `<tr class="clickable" onclick="abrirPlan(${p.id})">
+              <td><b>${p.nombre}</b></td>
+              <td style="color:var(--muted);font-size:12.5px">${p.descripcion || "—"}</td>
+              <td class="center"><span class="badge">${p.cant_tareas}</span></td>
+              <td class="center"><span class="badge cat">${p.cant_vehiculos}</span></td>
+              <td class="td-action"><button class="icon-btn" onclick="event.stopPropagation();borrarPlan(${p.id},'${p.nombre.replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button></td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      <p class="hint" style="margin-top:8px"><i class="ti ti-bulb"></i> Hacé clic en un plan para ver y editar sus tareas.</p>
+      <div id="plan-detalle"></div>
+    </div>`;
+}
+async function crearPlanWeb() {
+  const nom = $("#p-nom").value.trim();
+  if (!nom) { toast("Ingresá un nombre", "error"); return; }
+  const r = await api("/api/planes", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nombre: nom, descripcion: $("#p-desc").value.trim() })
+  });
+  if (r.ok) { toast("Plan creado", "success"); renderPlanes(); } else toast(r.msg, "error");
+}
+async function borrarPlan(id, nom) {
+  if (!confirm(`¿Eliminar el plan "${nom}"?`)) return;
+  const r = await api(`/api/planes/${id}`, { method: "DELETE" });
+  if (r.ok) { toast("Plan eliminado"); renderPlanes(); } else toast(r.msg, "error");
+}
+async function abrirPlan(pid) {
+  planActual = pid;
+  const tareas = await api(`/api/planes/${pid}/tareas`);
+  const planes = await api("/api/planes");
+  const plan = planes.find(p => p.id === pid);
+
+  // Si hay coche seleccionado y tiene ESTE plan, traer su estado real
+  let estadoTareas = {};
+  let cocheInfo = null;
+  if (cocheActual) {
+    const planVeh = await api(`/api/vehiculos/${cocheActual.id}/plan`);
+    if (planVeh.plan && planVeh.plan.plan_id === pid) {
+      const ed = await api(`/api/vehiculos/${cocheActual.id}/estado_mantenimiento`);
+      cocheInfo = { patente: cocheActual.patente, km_actual: planVeh.km_actual };
+      (ed.estado || []).forEach(e => { estadoTareas[e.tarea_id] = e; });
+    }
+  }
+
+  $("#plan-detalle").innerHTML = `
+    <div class="section-title"><i class="ti ti-tool"></i> Tareas del plan: ${plan.nombre}</div>
+    ${cocheInfo ? `
+      <div style="background:linear-gradient(135deg, var(--info-bg) 0%, var(--surface) 100%);border:1px solid var(--info-bd);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px">
+        <i class="ti ti-info-circle" style="font-size:20px;color:var(--info)"></i>
+        <div style="font-size:13px">
+          Mostrando el estado real de <b>${cocheInfo.patente}</b>
+          (odómetro: <b>${fmtNum(cocheInfo.km_actual)} km</b>)
+        </div>
+      </div>
+    ` : `
+      <p class="hint" style="margin-bottom:10px">
+        <i class="ti ti-bulb"></i>
+        Seleccioná un coche que tenga este plan para ver el porcentaje de uso real en cada tarea.
+      </p>
+    `}
+    <div class="card">
+      <div class="card-head"><i class="ti ti-plus"></i> Agregar tarea</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="field" style="flex:1;min-width:200px"><label>Tarea</label><input id="t-nom" placeholder="ej: Cambio de aceite de motor"></div>
+          <div class="field"><label>Intervalo (km)</label><input id="t-km" placeholder="15000" style="width:140px"></div>
+          <div class="field"><label>Categoría</label><input id="t-cat" placeholder="ej: Lubricación" style="width:180px"></div>
+          <button class="btn btn-primary" onclick="agregarTareaWeb()"><i class="ti ti-plus"></i> Agregar</button>
+        </div>
+      </div>
+    </div>
+    <div class="table-wrap" style="margin-top:14px">
+      <table>
+        <thead><tr>
+          <th>Tarea</th><th>Categoría</th><th class="num">Intervalo (km)</th>
+          <th style="min-width:220px">Estado de uso</th>
+          <th class="td-action"></th>
+        </tr></thead>
+        <tbody>${tareas.map(t => {
+          const e = estadoTareas[t.id];
+          let celdaEstado;
+          if (e) {
+            const labelEst = { optimo:'Óptimo', bueno:'Bueno', regular:'Regular', atencion:'Atención', vencido:'Vencido' };
+            celdaEstado = `
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="grad-bar-wrap" style="flex:1;max-width:140px">
+                  <div class="grad-bar estado-${e.estado_grad}" style="width:${e.porcentaje_visual}%"></div>
+                </div>
+                <span class="grad-badge grad-${e.estado_grad}" style="white-space:nowrap">
+                  <span class="dot"></span> ${e.porcentaje.toFixed(0)}%
+                </span>
+              </div>`;
+          } else {
+            celdaEstado = `<span style="color:var(--lighter);font-size:12px">—</span>`;
+          }
+          return `<tr>
+            <td>${t.tarea}</td>
+            <td>${t.categoria ? `<span class="badge cat">${t.categoria}</span>` : "—"}</td>
+            <td class="num">${fmtNum(t.intervalo_km)}</td>
+            <td>${celdaEstado}</td>
+            <td class="td-action"><button class="icon-btn" onclick="borrarTarea(${t.id})"><i class="ti ti-trash"></i></button></td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </div>`;
+  $("#plan-detalle").scrollIntoView({ behavior: "smooth" });
+}
+async function agregarTareaWeb() {
+  const nom = $("#t-nom").value.trim();
+  const km = parseInt($("#t-km").value);
+  if (!nom || !km) { toast("Tarea e intervalo son obligatorios", "error"); return; }
+  await api(`/api/planes/${planActual}/tareas`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tarea: nom, intervalo_km: km, categoria: $("#t-cat").value.trim() })
+  });
+  toast("Tarea agregada", "success"); abrirPlan(planActual);
+}
+async function borrarTarea(id) {
+  if (!confirm("¿Eliminar esta tarea?")) return;
+  await api(`/api/tareas/${id}`, { method: "DELETE" });
+  toast("Tarea eliminada"); abrirPlan(planActual);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  CORRECTIVOS (averías)
+// ════════════════════════════════════════════════════════════════════════
+const TIPOS_FALLA = ["Motor", "Frenos", "Eléctrico", "Transmisión", "Suspensión", "Carrocería", "Neumáticos", "Aire acondicionado", "Otro"];
+const ESTADOS_CORR = { pendiente: "Pendiente", en_reparacion: "En reparación", completado: "Completado" };
+
+let correctivosTab = "por_ot";  // 'por_ot' o 'manual'
+
+async function renderCorrectivos() {
+  status("Mantenimientos correctivos / averías");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-alert-triangle"></i> Correctivos</h1>
+      <p>Averías y reparaciones — agrupadas por orden de trabajo</p>
+    </div>
+    <div class="section">
+      <div class="toolbar">
+        <div class="tabs">
+          <button class="tab-btn ${correctivosTab==='por_ot'?'active':''}" onclick="setCorrectivosTab('por_ot')"><i class="ti ti-clipboard-list"></i> Por orden de trabajo</button>
+          <button class="tab-btn ${correctivosTab==='manual'?'active':''}" onclick="setCorrectivosTab('manual')"><i class="ti ti-plus"></i> Registro manual</button>
+        </div>
+        <button class="btn btn-ghost" style="margin-left:auto" onclick="abrirReporteCorrectivos()"><i class="ti ti-printer"></i> Imprimir por fechas</button>
+      </div>
+      <div id="correctivos-contenido"></div>
+    </div>`;
+  if (correctivosTab === "por_ot") {
+    await renderCorrectivosPorOT();
+  } else {
+    await renderCorrectivosManual();
+  }
+}
+
+function setCorrectivosTab(t) { correctivosTab = t; renderCorrectivos(); }
+
+// Vista NUEVA: correctivos agrupados por su orden de trabajo
+async function renderCorrectivosPorOT() {
+  const cont = document.getElementById("correctivos-contenido");
+  const grupos = await api("/api/correctivos_por_ot");
+  if (!grupos.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-mood-smile"></i>No hay correctivos en ninguna orden de trabajo.<br>¡Buena señal!</div>`;
+    return;
+  }
+  // Total de items correctivos
+  const totalItems = grupos.reduce((s, g) => s + g.items.length, 0);
+  cont.innerHTML = `
+    <div style="margin-bottom:16px;color:var(--muted);font-size:14px">
+      <b>${totalItems}</b> trabajos correctivos en <b>${grupos.length}</b> órdenes de trabajo
+    </div>
+    ${grupos.map(g => {
+      const coche = g.n_interno ? `Coche ${g.n_interno}` : g.patente;
+      const completados = g.items.filter(i => i.estado === "completado").length;
+      const colorEstado = g.estado === "cerrada" ? "success" : g.estado === "en_proceso" ? "warning" : "danger";
+      return `
+        <div class="card" style="margin-bottom:14px">
+          <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="abrirOT(${g.ot_id})">
+            <span><i class="ti ti-clipboard-check"></i> OT #${g.ot_id} · ${coche} · ${g.patente}</span>
+            <span style="display:flex;gap:8px;align-items:center">
+              <span class="badge ${colorEstado}"><span class="dot"></span> ${LABEL_ESTADO_OT[g.estado]}</span>
+              <span style="font-size:12px;color:var(--muted)">${g.fecha_apertura}</span>
+            </span>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div class="table-wrap"><table>
+              <thead><tr>
+                <th>Falla / Trabajo</th><th>Técnico</th><th>Material necesario</th><th class="center">Estado</th>
+              </tr></thead>
+              <tbody>
+                ${g.items.map(it => `<tr>
+                  <td><b>${it.descripcion}</b></td>
+                  <td style="color:var(--muted)">${it.tecnico || "—"}</td>
+                  <td>${it.material_pedido || "—"}</td>
+                  <td class="center">
+                    <span class="badge ${it.estado === 'completado' ? 'success' : 'warning'}">
+                      <span class="dot"></span> ${it.estado === 'completado' ? 'Completado' : 'Pendiente'}
+                    </span>
+                  </td>
+                </tr>`).join("")}
+              </tbody>
+            </table></div>
+            <div style="padding:10px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)">
+              ${completados}/${g.items.length} completados · ${g.km ? fmtNum(g.km) + ' km' : 'sin km'} · Tocá el encabezado para abrir la OT
+            </div>
+          </div>
+        </div>`;
+    }).join("")}`;
+}
+
+// Vista vieja: registro manual de correctivos (se mantiene por si se necesita)
+async function renderCorrectivosManual() {
+  const cont = document.getElementById("correctivos-contenido");
+  const correctivos = await api("/api/correctivos");
+  const vehiculos = await api("/api/vehiculos");
+  cont.innerHTML = `
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plus"></i> Registrar avería / reparación</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field" style="min-width:200px"><label>Vehículo *</label>
+              ${buscadorCoche("co-veh", vehiculos)}
+            </div>
+            <div class="field"><label>Fecha</label><input id="co-fecha" type="date" value="${hoy()}"></div>
+            <div class="field"><label>KM del coche</label><input id="co-km" placeholder="260000" style="width:130px"></div>
+            <div class="field"><label>Tipo de falla *</label>
+              <select id="co-tipo">${TIPOS_FALLA.map(t => `<option value="${t}">${t}</option>`).join("")}</select>
+            </div>
+          </div>
+          <div class="form-row" style="margin-top:14px">
+            <div class="field" style="flex:1;min-width:300px"><label>Descripción de la falla *</label>
+              <input id="co-desc" placeholder="ej: Pastillas de freno gastadas, ruido al frenar">
+            </div>
+            <div class="field" style="flex:1;min-width:250px"><label>Reparación realizada</label>
+              <input id="co-rep" placeholder="ej: Cambio de pastillas delanteras">
+            </div>
+          </div>
+          <div class="form-row" style="margin-top:14px">
+            <div class="field"><label>Taller</label><input id="co-taller" placeholder="Taller Asunción" style="width:200px"></div>
+            <div class="field"><label>Costo (Gs.)</label><input id="co-costo" placeholder="0" style="width:150px"></div>
+            <div class="field"><label>Estado</label>
+              <select id="co-estado">
+                <option value="pendiente">Pendiente</option>
+                <option value="en_reparacion">En reparación</option>
+                <option value="completado" selected>Completado</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="guardarCorrectivo()"><i class="ti ti-device-floppy"></i> Guardar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> Historial manual (${correctivos.length})</div>
+      ${correctivos.length === 0 ? `
+        <div class="empty"><i class="ti ti-mood-smile"></i>Sin correctivos manuales registrados.</div>
+      ` : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Fecha</th><th>Vehículo</th><th>Tipo</th><th>Descripción</th>
+              <th class="num">KM</th><th class="num">Costo</th><th class="center">Estado</th><th class="td-action"></th>
+            </tr></thead>
+            <tbody>
+              ${correctivos.map(c => `
+                <tr>
+                  <td>${c.fecha}</td>
+                  <td><b>${c.patente}</b></td>
+                  <td><span class="badge">${c.tipo_falla}</span></td>
+                  <td title="${c.reparacion || ''}">${c.descripcion}</td>
+                  <td class="num">${fmtNum(c.km)}</td>
+                  <td class="num">${gs(c.costo)}</td>
+                  <td class="center">
+                    <span class="badge ${c.estado === 'completado' ? 'success' : c.estado === 'en_reparacion' ? 'warning' : 'danger'}">
+                      <span class="dot"></span> ${ESTADOS_CORR[c.estado]}
+                    </span>
+                  </td>
+                  <td class="td-action"><button class="icon-btn" onclick="borrarCorrectivo(${c.id})"><i class="ti ti-trash"></i></button></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `}`;
+}
+async function guardarCorrectivo() {
+  const desc = $("#co-desc").value.trim();
+  if (!desc) { toast("Ingresá una descripción de la falla", "error"); return; }
+  const costo = ($("#co-costo").value || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/correctivos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: parseInt($("#co-veh").value), fecha: $("#co-fecha").value,
+      km: parseFloat($("#co-km").value || 0), tipo_falla: $("#co-tipo").value,
+      descripcion: desc, reparacion: $("#co-rep").value,
+      taller: $("#co-taller").value, costo: costo || 0, estado: $("#co-estado").value
+    })
+  });
+  if (r.ok) {
+    toast("Correctivo registrado", "success");
+    ["co-km", "co-desc", "co-rep", "co-taller", "co-costo"].forEach(id => $("#" + id).value = "");
+    renderCorrectivos();
+  } else toast("Error al guardar", "error");
+}
+async function borrarCorrectivo(id) {
+  if (!confirm("¿Eliminar este registro?")) return;
+  await api(`/api/correctivos/${id}`, { method: "DELETE" });
+  toast("Eliminado"); renderCorrectivos();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  DOCUMENTOS (VTV, seguro, habilitación, etc.)
+// ════════════════════════════════════════════════════════════════════════
+const TIPOS_DOC = ["VTV", "Seguro", "Habilitación Municipal", "Habilitación DINATRAN", "Cédula Verde", "Cédula Azul", "Tacógrafo", "Otro"];
+
+async function renderDocumentos() {
+  status("Documentos y vencimientos de la flota");
+  const docs = await api("/api/documentos");
+  const vehiculos = await api("/api/vehiculos");
+  // Calcular días hasta vencimiento y ordenar por urgencia (lo más urgente arriba)
+  docs.forEach(d => d._dias = diasHasta(d.fecha_vencimiento));
+  docs.sort((a, b) => a._dias - b._dias);
+  // Contadores para el resumen
+  const nVencidos = docs.filter(d => d._dias < 0).length;
+  const nPorVencer = docs.filter(d => d._dias >= 0 && d._dias <= 30).length;
+  const nAlDia = docs.filter(d => d._dias > 30).length;
+  // Guardar para los filtros
+  window._todosDocs = docs;
+  window._vehiculosDocs = vehiculos;
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-file-text"></i> Documentos</h1>
+      <p>Control de habilitaciones, seguros y otros vencimientos</p>
+    </div>
+    <div class="section">
+      <!-- Resumen de un vistazo -->
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('vencidos')">
+          <div class="metric-content"><div class="metric-label">Vencidos</div>
+          <div class="metric-value" style="color:var(--danger)">${nVencidos}</div></div>
+        </div>
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('porvencer')">
+          <div class="metric-content"><div class="metric-label">Por vencer (30 días)</div>
+          <div class="metric-value" style="color:var(--warning)">${nPorVencer}</div></div>
+        </div>
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('aldia')">
+          <div class="metric-content"><div class="metric-label">Al día</div>
+          <div class="metric-value" style="color:var(--success)">${nAlDia}</div></div>
+        </div>
+        <div class="metric" style="cursor:pointer" onclick="filtrarDocs('')">
+          <div class="metric-content"><div class="metric-label">Total</div>
+          <div class="metric-value">${docs.length}</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plus"></i> Registrar documento</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field" style="min-width:200px"><label>Vehículo *</label>
+              ${buscadorCoche("d-veh", vehiculos)}
+            </div>
+            <div class="field"><label>Tipo *</label>
+              <select id="d-tipo">${TIPOS_DOC.map(t => `<option value="${t}">${t}</option>`).join("")}</select>
+            </div>
+            <div class="field"><label>Nombre / descripción</label><input id="d-nom" placeholder="VTV 2026" style="width:180px"></div>
+            <div class="field"><label>Emisión</label><input id="d-emi" type="date"></div>
+            <div class="field"><label>Vencimiento *</label><input id="d-venc" type="date"></div>
+          </div>
+          <div class="form-row" style="margin-top:14px">
+            <div class="field" style="flex:1;min-width:200px"><label>Proveedor / aseguradora</label><input id="d-prov" placeholder="ej: Senatran, La Consolidada"></div>
+            <div class="field"><label>Costo (Gs.)</label><input id="d-costo" placeholder="0" style="width:150px"></div>
+            <div class="field" style="flex:1;min-width:200px"><label>Observaciones</label><input id="d-obs" placeholder="Notas internas"></div>
+            <button class="btn btn-primary" onclick="guardarDocumento()"><i class="ti ti-device-floppy"></i> Guardar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Barra de filtros y búsqueda -->
+      <div class="toolbar" style="margin-top:6px">
+        <button class="btn btn-ghost" onclick="abrirReporteDocumentos()"><i class="ti ti-printer"></i> Imprimir por vencer</button>
+        <button class="btn ${docVista==='lista'?'btn-primary':'btn-ghost'}" onclick="setDocVista('lista')"><i class="ti ti-list"></i> Lista</button>
+        <button class="btn ${docVista==='vehiculo'?'btn-primary':'btn-ghost'}" onclick="setDocVista('vehiculo')"><i class="ti ti-bus"></i> Por vehículo</button>
+        <select id="doc-filtro-tipo" onchange="renderDocsTabla()" style="padding:9px;border-radius:9px;border:1.5px solid var(--border)">
+          <option value="">Todos los tipos</option>
+          ${TIPOS_DOC.map(t => `<option value="${t}">${t}</option>`).join("")}
+        </select>
+        <input id="doc-buscar" oninput="renderDocsTabla()" placeholder="Buscar por patente..." style="padding:9px;border-radius:9px;border:1.5px solid var(--border);flex:1;min-width:160px">
+      </div>
+
+      <div id="docs-contenido"></div>
+    </div>`;
+  renderDocsTabla();
+}
+
+// Estado de la vista de documentos
+let docVista = "lista";
+let docFiltroEstado = "";
+function setDocVista(v) { docVista = v; renderDocumentos(); }
+function filtrarDocs(estado) { docFiltroEstado = estado; renderDocsTabla(); }
+
+// Renderiza la tabla/agrupación según filtros activos
+function renderDocsTabla() {
+  const cont = document.getElementById("docs-contenido");
+  if (!cont) return;
+  let docs = (window._todosDocs || []).slice();
+  const filtroTipo = (document.getElementById("doc-filtro-tipo") || {}).value || "";
+  const buscar = ((document.getElementById("doc-buscar") || {}).value || "").toLowerCase().trim();
+
+  // Aplicar filtros
+  if (docFiltroEstado === "vencidos") docs = docs.filter(d => d._dias < 0);
+  else if (docFiltroEstado === "porvencer") docs = docs.filter(d => d._dias >= 0 && d._dias <= 30);
+  else if (docFiltroEstado === "aldia") docs = docs.filter(d => d._dias > 30);
+  if (filtroTipo) docs = docs.filter(d => d.tipo === filtroTipo);
+  if (buscar) docs = docs.filter(d => (d.patente || "").toLowerCase().includes(buscar));
+
+  const filtroLabel = { vencidos: "Vencidos", porvencer: "Por vencer", aldia: "Al día" }[docFiltroEstado] || "Todos";
+
+  if (docs.length === 0) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-file-off"></i>No hay documentos ${docFiltroEstado || filtroTipo || buscar ? "con ese filtro" : "registrados"}.</div>`;
+    return;
+  }
+
+  if (docVista === "vehiculo") {
+    cont.innerHTML = renderDocsPorVehiculo(docs, filtroLabel);
+  } else {
+    cont.innerHTML = renderDocsLista(docs, filtroLabel);
+  }
+}
+
+function _badgeDoc(dias) {
+  if (dias < 0) return `<span class="badge danger"><span class="dot"></span> Vencido hace ${Math.abs(dias)} días</span>`;
+  if (dias <= 30) return `<span class="badge warning"><span class="dot"></span> En ${dias} días</span>`;
+  return `<span class="badge success"><span class="dot"></span> ${dias} días</span>`;
+}
+
+function _filaDoc(d) {
+  return `<tr>
+    <td><b>${d.patente}</b></td>
+    <td><span class="badge cat">${d.tipo}</span></td>
+    <td>${d.nombre || "—"}</td>
+    <td>${d.fecha_vencimiento}</td>
+    <td class="center">${_badgeDoc(d._dias)}</td>
+    <td style="color:var(--muted)">${d.proveedor || "—"}</td>
+    <td class="num">${gs(d.costo)}</td>
+    <td class="td-action" style="white-space:nowrap">
+      <button class="icon-btn" title="Renovar" onclick="renovarDocumento(${d.id})"><i class="ti ti-refresh"></i></button>
+      <button class="icon-btn" title="Ver renovaciones anteriores" onclick="verHistorialDoc(${d.id})"><i class="ti ti-history"></i></button>
+      <button class="icon-btn" title="Eliminar" onclick="borrarDocumento(${d.id})"><i class="ti ti-trash"></i></button>
+    </td>
+  </tr>`;
+}
+
+function renderDocsLista(docs, filtroLabel) {
+  return `
+    <div class="section-title"><i class="ti ti-calendar"></i> Documentos — ${filtroLabel} (${docs.length})</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Vehículo</th><th>Tipo</th><th>Nombre</th>
+          <th>Vencimiento</th><th class="center">Estado</th>
+          <th>Proveedor</th><th class="num">Costo</th><th class="td-action"></th>
+        </tr></thead>
+        <tbody>${docs.map(_filaDoc).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderDocsPorVehiculo(docs, filtroLabel) {
+  // Agrupar por patente
+  const grupos = {};
+  docs.forEach(d => {
+    const key = d.patente || "Sin patente";
+    (grupos[key] = grupos[key] || []).push(d);
+  });
+  // Ordenar vehículos: los que tienen algo más urgente primero
+  const patentes = Object.keys(grupos).sort((a, b) => {
+    const minA = Math.min(...grupos[a].map(d => d._dias));
+    const minB = Math.min(...grupos[b].map(d => d._dias));
+    return minA - minB;
+  });
+  let html = `<div class="section-title"><i class="ti ti-bus"></i> Por vehículo — ${filtroLabel} (${docs.length})</div>`;
+  patentes.forEach(pat => {
+    const lista = grupos[pat];
+    const masUrgente = Math.min(...lista.map(d => d._dias));
+    const colorBorde = masUrgente < 0 ? "var(--danger)" : masUrgente <= 30 ? "var(--warning)" : "var(--success)";
+    html += `
+      <div class="card" style="margin-bottom:12px;border-left:4px solid ${colorBorde}">
+        <div class="card-head"><i class="ti ti-bus"></i> ${pat} <span style="color:var(--muted);font-weight:400;font-size:13px">(${lista.length} documento${lista.length>1?"s":""})</span></div>
+        <div class="card-body" style="padding:0">
+          <div class="table-wrap"><table>
+            <tbody>
+              ${lista.map(d => `<tr>
+                <td><span class="badge cat">${d.tipo}</span></td>
+                <td>${d.nombre || "—"}</td>
+                <td>${d.fecha_vencimiento}</td>
+                <td class="center">${_badgeDoc(d._dias)}</td>
+                <td style="color:var(--muted)">${d.proveedor || "—"}</td>
+                <td class="td-action" style="white-space:nowrap">
+                  <button class="icon-btn" title="Renovar" onclick="renovarDocumento(${d.id})"><i class="ti ti-refresh"></i></button>
+                  <button class="icon-btn" title="Ver renovaciones anteriores" onclick="verHistorialDoc(${d.id})"><i class="ti ti-history"></i></button>
+                  <button class="icon-btn" title="Eliminar" onclick="borrarDocumento(${d.id})"><i class="ti ti-trash"></i></button>
+                </td>
+              </tr>`).join("")}
+            </tbody>
+          </table></div>
+        </div>
+      </div>`;
+  });
+  return html;
+}
+async function guardarDocumento() {
+  const venc = $("#d-venc").value;
+  if (!venc) { toast("La fecha de vencimiento es obligatoria", "error"); return; }
+  const costo = ($("#d-costo").value || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/documentos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: parseInt($("#d-veh").value), tipo: $("#d-tipo").value,
+      nombre: $("#d-nom").value, fecha_emision: $("#d-emi").value || null,
+      fecha_vencimiento: venc, proveedor: $("#d-prov").value,
+      costo: costo || 0, observaciones: $("#d-obs").value
+    })
+  });
+  if (r.ok) {
+    toast("Documento agregado", "success");
+    ["d-nom", "d-emi", "d-venc", "d-prov", "d-costo", "d-obs"].forEach(id => $("#" + id).value = "");
+    renderDocumentos();
+  } else toast("Error al guardar", "error");
+}
+async function borrarDocumento(id) {
+  if (!confirm("¿Eliminar este documento?")) return;
+  await api(`/api/documentos/${id}`, { method: "DELETE" });
+  toast("Eliminado"); renderDocumentos();
+}
+
+// Renovar un documento: copia los datos y solo pide la nueva fecha de vencimiento
+function renovarDocumento(id) {
+  const doc = (window._todosDocs || []).find(d => d.id === id);
+  if (!doc) return;
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  const hoy = new Date().toISOString().slice(0, 10);
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-refresh"></i> Renovar documento</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 4px">${doc.patente} · ${doc.tipo}${doc.nombre ? " · " + doc.nombre : ""}</p>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 18px">Vence el ${doc.fecha_vencimiento}. Al renovar, el anterior pasa al historial y deja de figurar como vencido.</p>
+      <div style="display:flex;gap:12px;margin-bottom:14px">
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Nueva emisión</label>
+          <input type="date" id="ren-emi" value="${hoy}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Nuevo vencimiento *</label>
+          <input type="date" id="ren-venc" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+      </div>
+      <div style="margin-bottom:18px">
+        <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Costo de la renovación (Gs.)</label>
+        <input id="ren-costo" placeholder="0" value="${doc.costo || ''}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarRenovar(${id}, this)"><i class="ti ti-check"></i> Renovar</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+async function confirmarRenovar(id, btn) {
+  const doc = (window._todosDocs || []).find(d => d.id === id);
+  if (!doc) return;
+  const venc = document.getElementById("ren-venc").value;
+  const emi = document.getElementById("ren-emi").value;
+  if (!venc) { toast("Poné la nueva fecha de vencimiento", "error"); return; }
+  const costo = (document.getElementById("ren-costo").value || "0").replace(/\./g, "").replace(/,/g, ".");
+  btn.disabled = true;
+  // El endpoint de renovación archiva el documento anterior: así el vencido
+  // deja de aparecer en las alertas, pero queda guardado en el historial.
+  const r = await api(`/api/documentos/${id}/renovar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fecha_emision: emi || null, fecha_vencimiento: venc, costo: costo || 0
+    })
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Documento renovado", "success");
+    btn.closest(".modal-overlay").remove();
+    renderDocumentos();
+  } else {
+    toast((r && r.msg) || "Error al renovar", "error");
+    btn.disabled = false;
+  }
+}
+
+// Modal de fechas para el PDF de documentos por vencer
+function abrirReporteDocumentos() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const en60 = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-printer"></i> Documentos por vencer</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Genera un PDF con los documentos que vencen hasta la fecha que elijas (incluye los ya vencidos).</p>
+      <div style="margin-bottom:18px">
+        <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Mostrar vencimientos hasta:</label>
+        <input type="date" id="doc-hasta" value="${en60}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="generarReporteDocumentos(this)"><i class="ti ti-download"></i> Generar PDF</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function generarReporteDocumentos(btn) {
+  const hasta = document.getElementById("doc-hasta").value;
+  if (!hasta) { toast("Elegí una fecha", "error"); return; }
+  window.open(`/api/documentos_pdf?hasta=${hasta}`, "_blank");
+  btn.closest(".modal-overlay").remove();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  TRÁFICO — las salidas del día
+// ════════════════════════════════════════════════════════════════════════
+// Lo que antes era el Excel del grupo de WhatsApp. Se arma acá, casilla por
+// casilla, y todo se guarda solo al salir de cada una. El sistema sabe dónde
+// quedó cada coche (el que ayer fue a COP hoy amanece en COP): con eso
+// sugiere quién hace cada regreso y avisa si algo no cierra. Publicar guarda
+// una versión y arma el PDF único para mandar al grupo.
+
+const tr = { fecha: null, d: null, listas: null, dias: [], asignar: null, sug: null, deshacer: null, reordenar: new Set(),
+             tipo: (() => { try { return localStorage.getItem("tr-tipo") === "internacional" ? "internacional" : "nacional"; } catch (e) { return "nacional"; } })() };
+// Nacional o internacional (Buenos Aires): la misma fórmula, cada uno con sus
+// días, sus versiones y su PDF. El tipo viaja en cada pedido.
+const trT = () => `tipo=${tr.tipo}`;
+const trInt = () => tr.tipo === "internacional";
+const TR_DIAS = ["DOMINGO", "LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO"];
+const TR_MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+
+const trQuieto = () => !!(window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+const trEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const trIso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const trHoy = () => trIso(new Date());                       // la fecha de acá, no la de Londres
+const trFecha = f => { const [a, m, d] = f.split("-").map(Number); return new Date(a, m - 1, d); };
+const trSumar = (f, n) => { const d = trFecha(f); d.setDate(d.getDate() + n); return trIso(d); };
+const trCorto = f => { const d = trFecha(f); return `${TR_DIAS[d.getDay()].slice(0, 3)} ${d.getDate()}`; };
+const trLargo = f => { const d = trFecha(f); return `${TR_DIAS[d.getDay()]} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`; };
+const trPuede = () => !!tr.d?.puede_editar;
+const trEsCoche = c => /^\d+$/.test(String(c || "").trim());
+const trSinTildes = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// 930 → 09:30, 9.30 → 09:30, 0630 → 06:30. Si no se entiende queda como está.
+function trHora(v) {
+  const s = String(v || "").trim().replace(/[.,h ]/gi, ":").replace(/:+/g, ":");
+  if (!s) return "";
+  let m = s.match(/^(\d{1,2}):(\d{1,2})$/) || s.match(/^(\d{1,2})(\d{2})$/);
+  if (!m && /^\d{1,2}$/.test(s)) m = [s, s, "0"];
+  if (!m) return s;
+  const h = +m[1], mi = +m[2];
+  if (h > 23 || mi > 59) return s;
+  return `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}`;
+}
+
+// Que un doble clic no haga dos veces lo mismo (importar tarda y uno vuelve
+// a tocar): mientras una acción está en marcha, la misma no arranca otra vez.
+tr.ocupado = new Set();
+async function trUnaVez(clave, fn, aviso) {
+  if (tr.ocupado.has(clave)) { if (aviso) toast(aviso); return; }
+  tr.ocupado.add(clave);
+  try { return await fn(); } finally { tr.ocupado.delete(clave); }
+}
+
+// Cartel que tapa la pantalla mientras trabaja: no se puede tocar nada más
+function trEspera(texto) {
+  const el = document.createElement("div");
+  el.className = "tr-espera";
+  el.innerHTML = `<div class="tr-espera-caja"><i class="ti ti-loader-2 gira"></i><b>${trEsc(texto)}</b><span>Un momento, no hace falta tocar de nuevo</span></div>`;
+  document.body.appendChild(el);
+  return () => { el.classList.add("sale"); setTimeout(() => el.remove(), 340); };
+}
+
+async function trPedir(url, method = "GET", body) {
+  const opts = { method };
+  if (body !== undefined) { opts.headers = { "Content-Type": "application/json" }; opts.body = JSON.stringify(body); }
+  return api(url, opts);
+}
+
+// ─── Entrada ─────────────────────────────────────────────────────────────
+
+function trTipoSwitch() {
+  const b = (t, ico, txt) => `<button role="tab" class="${tr.tipo === t ? "on" : ""}" aria-selected="${tr.tipo === t}" onclick="trCambiarTipo('${t}')"><i class="ti ti-${ico}"></i>${txt}</button>`;
+  return `<div class="tr-tipo-sw ${trInt() ? "int" : ""}" role="tablist" aria-label="Tráfico">
+    <span class="tr-tipo-fondo"></span>${b("nacional", "map-2", "Nacional")}${b("internacional", "world", "Internacional")}</div>`;
+}
+
+function trSubtitulo() {
+  return trInt()
+    ? "Los viajes a Buenos Aires: se arma igual que el nacional, cada día con su versión y su PDF"
+    : "Las salidas del día: se arma acá, el sistema sabe dónde quedó cada coche y sale el PDF para el grupo";
+}
+
+async function trCambiarTipo(t) {
+  if (t === tr.tipo) return;
+  tr.tipo = t;
+  try { localStorage.setItem("tr-tipo", t); } catch (e) { /* sin almacenamiento: queda en memoria */ }
+  const sw = $("#tr-tipo-sw");
+  if (sw) sw.innerHTML = trTipoSwitch();
+  const sub = $("#tr-sub");
+  if (sub) sub.textContent = trSubtitulo();
+  status(trInt() ? "Tráfico internacional" : "Tráfico: las salidas del día");
+  tr.archivos = {};
+  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha, 0, true)]);
+  tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
+  trDatalists();
+}
+
+async function renderTrafico() {
+  status(trInt() ? "Tráfico internacional" : "Tráfico: las salidas del día");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-route"></i> Tráfico</h1>
+      <p id="tr-sub">${trSubtitulo()}</p>
+      <div class="page-actions" id="tr-tipo-sw">${trTipoSwitch()}</div>
+    </div>
+    <div class="section tr-raiz" id="tr-raiz"><div class="dossier-loading"></div></div>
+    <div id="tr-listas" hidden></div>`;
+  tr.asignar = null;
+  trCerrarSug();
+  const primera = !tr.fecha;
+  if (primera) tr.fecha = trHoy();
+  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha)]);
+  tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
+  trDatalists();
+}
+
+function trDatalists() {
+  const el = $("#tr-listas");
+  if (!el || !tr.listas) return;
+  el.innerHTML = `
+    <datalist id="tr-l-trip">${tr.listas.tripulantes.map(n => `<option value="${trEsc(n)}">`).join("")}</datalist>
+    <datalist id="tr-l-dest">${tr.listas.destinos.map(n => `<option value="${trEsc(n)}">`).join("")}</datalist>`;
+}
+
+// Suma a las listas lo que se acaba de escribir, para que aparezca la próxima vez
+function trAprender(campo, v) {
+  if (!tr.listas || !v) return;
+  const lista = campo === "destino" ? tr.listas.destinos : /^trip|reserva_.*_trip/.test(campo) ? tr.listas.tripulantes : null;
+  if (lista && !lista.includes(v) && v.length > 2) { lista.push(v); lista.sort(); trDatalists(); }
+}
+
+async function trCargar(fecha, dir = 0, cambioTipo = false) {
+  const tipo = tr.tipo;
+  const [d, dias] = await Promise.all([
+    api(`/api/trafico/dia/${fecha}?${trT()}`),
+    api(`/api/trafico/dias?hasta=${trSumar(fecha, 4)}&${trT()}`),
+  ]);
+  if (tipo !== tr.tipo) return;            // se cambió de tráfico mientras llegaba
+  const raiz = $("#tr-raiz");
+  if (!raiz) return;
+  if (!d || d.error) { raiz.innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>No se pudo traer el tráfico. Probá de nuevo.</div>`; return; }
+  tr.fecha = fecha;
+  tr.d = d;
+  tr.dias = Array.isArray(dias) ? dias : [];
+  tr.asignar = null;
+  tr.reordenar.clear();
+  trCerrarSug();
+  if ((dir || cambioTipo) && document.startViewTransition && !trQuieto()) {
+    document.documentElement.dataset.trDir = cambioTipo ? (trInt() ? "sig" : "ant") : dir > 0 ? "sig" : "ant";
+    const t = document.startViewTransition(() => trPintar(true));
+    t.finished.finally(() => delete document.documentElement.dataset.trDir);
+  } else {
+    trPintar(true);
+  }
+}
+
+function trIr(paso) { trCargar(trSumar(tr.fecha, paso), paso); }
+function trIrA(fecha) {
+  if (!fecha || fecha === tr.fecha) return;
+  trCargar(fecha, fecha > tr.fecha ? 1 : -1);
+}
+
+// ─── Dibujo general ──────────────────────────────────────────────────────
+
+function trVacio() {
+  const d = tr.d;
+  return !d.existe || !(d.bloques || []).length;
+}
+
+function trPintar(entrada = false) {
+  const raiz = $("#tr-raiz");
+  if (!raiz) return;
+  const d = tr.d;
+  raiz.classList.toggle("solo-ver", !trPuede());
+  raiz.classList.toggle("int", trInt());
+  raiz.innerHTML = `
+    <div id="tr-tablero">${trTablero()}</div>
+    <div class="tr-cuerpo">
+    ${trVacio() ? trInicioVacio() : `
+      <div id="tr-resumen">${trResumen()}</div>
+      <div id="tr-donde">${trDonde()}</div>
+      <div class="tr-corredores ${entrada ? "entra" : ""}" id="tr-corredores">
+        ${d.bloques.map((b, i) => trBloque(b, i)).join("")}
+      </div>
+      ${trPuede() ? `
+        <form class="tr-nuevo-corr" onsubmit="event.preventDefault(); trAgregarBloque(this)">
+          <i class="ti ti-plus"></i>
+          <input name="nombre" placeholder="Agregar corredor (ej: ${trInt() ? "LA PLATA" : "CONCEPCION"})" autocomplete="off" maxlength="60">
+          <button class="btn btn-ghost" type="submit">Agregar</button>
+        </form>` : ""}`}
+    </div>
+    <div class="tr-deshacer" id="tr-deshacer"></div>
+    <div class="tr-asignando" id="tr-asignando"></div>`;
+  if (entrada) trAnimarFecha();
+}
+
+// El tablero: la fecha en fichas, el estado y lo que se puede hacer
+function trTablero() {
+  const d = tr.d, f = tr.fecha, dia = d.dia || {};
+  const fe = trFecha(f);
+  const fichas = s => [...s].map((ch, i) => `<span class="tr-ficha" style="--k:${i}"><b>${ch}</b></span>`).join("");
+  const hayAlgo = !trVacio();
+  let chip, sub = "";
+  if (!hayAlgo) {
+    chip = `<span class="tr-estado-chip vacio"><i class="ti ti-circle-dashed"></i> Sin armar</span>`;
+  } else if (!dia.version) {
+    chip = `<span class="tr-estado-chip borrador"><i class="ti ti-pencil"></i> Borrador</span>`;
+    sub = "Todavía no se publicó";
+  } else if (dia.modificado) {
+    const n = (d.cambios_pendientes || []).length;
+    chip = `<span class="tr-estado-chip cambios"><i class="ti ti-pencil"></i> Versión ${dia.version} · ${n ? `${n} cambio${n === 1 ? "" : "s"} sin publicar` : "cambios sin publicar"}</span>`;
+    sub = trPublicada(dia);
+  } else {
+    chip = `<span class="tr-estado-chip publicado"><i class="ti ti-circle-check"></i> Versión ${dia.version} publicada</span>`;
+    sub = trPublicada(dia);
+  }
+  const pendiente = hayAlgo && (!dia.version || dia.modificado);
+  const dias = [];
+  for (let i = -3; i <= 3; i++) {
+    const g = trSumar(f, i);
+    const x = tr.dias.find(z => z.fecha === g);
+    let estado = "vacio", txt = "";
+    if (x && x.salidas) {
+      if (!x.version) { estado = "borrador"; txt = "borrador"; }
+      else { estado = x.modificado ? "cambios" : "publicado"; txt = `v${x.version}${x.modificado ? "*" : ""}`; }
+    }
+    dias.push(`<button class="tr-dia ${estado} ${g === f ? "on" : ""}" onclick="trIrA('${g}')" title="${trLargo(g)}">
+      <span>${g === trHoy() ? "HOY" : g === trSumar(trHoy(), 1) ? "MAÑANA" : trCorto(g).split(" ")[0]}</span>
+      <b>${trFecha(g).getDate()}</b><i>${txt}</i></button>`);
+  }
+  return `
+    <div class="tr-tablero">
+      <div class="tr-tab-fecha">
+        <button class="tr-flecha" onclick="trIr(-1)" aria-label="Día anterior"><i class="ti ti-chevron-left"></i></button>
+        <button class="tr-fecha-centro" onclick="trElegirFecha()" title="Elegir otra fecha">
+          <span class="tr-dia-nombre">${TR_DIAS[fe.getDay()]}</span>
+          <span class="tr-fichas">${fichas(String(fe.getDate()).padStart(2, "0"))}<i></i>${fichas(TR_MESES[fe.getMonth()])}</span>
+        </button>
+        <input type="date" id="tr-fecha-in" value="${f}" onchange="trIrA(this.value)" tabindex="-1" aria-hidden="true">
+        <button class="tr-flecha" onclick="trIr(1)" aria-label="Día siguiente"><i class="ti ti-chevron-right"></i></button>
+      </div>
+      <div class="tr-tab-estado">
+        ${chip}
+        ${sub ? `<small>${sub}</small>` : ""}
+      </div>
+      <div class="tr-tab-acciones">
+        ${puedeVerSeccion("servicios") ? `<button class="tr-tab-btn" onclick="destNavegar('servicios')" title="Indicadores de los servicios, sacados del tráfico"><i class="ti ti-chart-histogram"></i><span>Servicios</span></button>` : ""}
+        ${dia.version ? `<button class="tr-tab-btn" onclick="trVersiones(this)" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
+        ${hayAlgo ? `<button class="tr-tab-btn" onclick="trVerPdf()" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
+          <button class="tr-tab-btn" onclick="trDescargar(${pendiente ? "null" : dia.version}, 'imagen', this)" title="Descargar la hoja como imagen${pendiente ? " (borrador)" : ""}"><i class="ti ti-photo-down"></i><span>Imagen</span></button>` : ""}
+        ${trPuede() ? `<button class="tr-tab-btn" onclick="trMas(this)" title="Importar, copiar, vaciar"><i class="ti ti-dots"></i></button>` : ""}
+        ${trPuede() && pendiente ? `<button class="tr-publicar" onclick="trPublicar()"><i class="ti ti-send"></i> Publicar versión ${(dia.version || 0) + 1}</button>`
+          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onpointerenter="trPrecargar(${dia.version})" onpointerdown="trPrecargar(${dia.version})" onclick="trCompartir(${dia.version}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
+      </div>
+      <div class="tr-tab-dias">${dias.join("")}</div>
+    </div>`;
+}
+
+function trPublicada(dia) {
+  const p = String(dia.publicado_el || "");
+  if (p.length < 16) return "";
+  const quien = (dia.publicado_por || "").trim().split(" ")[0];
+  return `Publicada el ${p.slice(8, 10)}/${p.slice(5, 7)} a las ${p.slice(11, 16)}${quien ? ` por ${trEsc(quien)}` : ""}`;
+}
+
+function trElegirFecha() {
+  const i = $("#tr-fecha-in");
+  if (!i) return;
+  try { i.showPicker(); } catch (e) { i.focus(); i.click(); }
+}
+
+// Las fichas de la fecha giran cuando cambia el día, como los carteles
+function trAnimarFecha() {
+  if (trQuieto()) return;
+  document.querySelectorAll(".tr-ficha").forEach(f => {
+    f.classList.remove("gira");
+    void f.offsetWidth;
+    f.classList.add("gira");
+  });
+}
+
+// ─── Día vacío: de dónde arrancar ────────────────────────────────────────
+
+function trInicioVacio() {
+  const ant = tr.d.dia_anterior;
+  if (!trPuede()) return `<div class="tr-vacio-solo"><i class="ti ti-calendar-off"></i>Todavía no se armó el tráfico de este día.</div>`;
+  const opciones = [];
+  if (ant) {
+    opciones.push(`
+      <button class="tr-op principal" onclick="trCopiar('${ant}', false, true)">
+        <i class="ti ti-wand"></i>
+        <b>Armar desde el ${trLargo(ant)}</b>
+        <span>Copia los horarios y en cada regreso pone el coche que quedó allá, con su tripulación. Las idas quedan para completar.</span>
+        <em>Recomendado</em>
+      </button>
+      <button class="tr-op" onclick="trCopiar('${ant}', true, false)">
+        <i class="ti ti-copy"></i>
+        <b>Copiar el ${trLargo(ant)} tal cual</b>
+        <span>Los mismos horarios, coches y tripulantes. Después se cambia lo que haga falta.</span>
+      </button>`);
+  }
+  if (trInt()) {
+    opciones.push(`
+      <button class="tr-op ${ant ? "" : "principal"}" onclick="trAgregarBloque('BUENOS AIRES')">
+        <i class="ti ti-world"></i>
+        <b>Empezar con BUENOS AIRES</b>
+        <span>Las idas (de acá a Retiro, Liniers, San Justo, La Plata) a la izquierda y los regresos a la derecha.</span>
+        ${ant ? "" : "<em>Para empezar</em>"}
+      </button>`);
+  } else {
+    opciones.push(`
+      <button class="tr-op" onclick="trImportar()">
+        <i class="ti ti-file-spreadsheet"></i>
+        <b>Importar el Excel</b>
+        <span>La planilla de siempre (HORARIOS NACIONALES): se lee tal cual, con las siglas como están.</span>
+      </button>`);
+  }
+  opciones.push(`
+    <button class="tr-op" onclick="document.querySelector('.tr-vacio-nuevo input')?.focus()">
+      <i class="ti ti-pencil-plus"></i>
+      <b>Empezar en blanco</b>
+      <span>Agregar los corredores y las salidas a mano.</span>
+    </button>`);
+  return `
+    <div class="tr-vacio">
+      <div class="tr-vacio-cab">
+        <h2>¿Cómo armamos el ${trInt() ? "internacional del " : ""}${trLargo(tr.fecha)}?</h2>
+        <p>${ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: se arma a mano, una vez, y después se parte del anterior." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+      </div>
+      <div class="tr-ops">${opciones.join("")}</div>
+      <form class="tr-nuevo-corr tr-vacio-nuevo" onsubmit="event.preventDefault(); trAgregarBloque(this)">
+        <i class="ti ti-plus"></i>
+        <input name="nombre" placeholder="Primer corredor (ej: ${trInt() ? "BUENOS AIRES" : "CONCEPCION"})" autocomplete="off" maxlength="60">
+        <button class="btn btn-ghost" type="submit">Agregar</button>
+      </form>
+    </div>`;
+}
+
+function trCopiar(desde, conAsignaciones, completar) {
+  return trUnaVez("copiar", () => _trCopiar(desde, conAsignaciones, completar), "Ya se está armando el día");
+}
+async function _trCopiar(desde, conAsignaciones, completar) {
+  if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)}. ¿Seguimos?`)) return;
+  const listo = trEspera(completar ? "Armando el día con los coches que están allá…" : "Copiando el día…");
+  let r;
+  try {
+    r = await trPedir(`/api/trafico/dia/${tr.fecha}/copiar?${trT()}`, "POST",
+      { desde, con_asignaciones: conAsignaciones, completar });
+  } finally { listo(); }
+  if (!r.ok) { toast(r.msg || "No se pudo copiar", "error"); return; }
+  tr.d = r;
+  trPintar(true);
+  trRefrescarDias();
+  if (completar) {
+    toast(r.completadas ? `Listo: ${r.completadas} regreso${r.completadas === 1 ? "" : "s"} con el coche que está allá` : "Horarios copiados. No había coches allá para los regresos.", "success");
+    trVoltearLlenas();
+  } else toast("Día copiado", "success");
+}
+
+// ─── Resumen y dónde están los coches ────────────────────────────────────
+
+function trResumen() {
+  const r = tr.d.resumen || {};
+  const n = (v, txt, cls = "", accion = "") => `
+    <${accion ? "button" : "div"} class="tr-num ${cls}" ${accion ? `onclick="${accion}"` : ""}>
+      <b>${v}</b><span>${txt}</span>
+    </${accion ? "button" : "div"}>`;
+  return `
+    <div class="tr-resumen">
+      ${n(r.salidas || 0, r.salidas === 1 ? "salida" : "salidas")}
+      ${n(r.coches || 0, r.coches === 1 ? "coche" : "coches")}
+      ${n(r.tripulantes || 0, "tripulantes")}
+      ${r.a_confirmar ? n(r.a_confirmar, "a confirmar", "falta", "trIrAProblema('falta')") : n("✓", "todo asignado", "bien")}
+      ${r.con_aviso ? n(r.con_aviso, r.con_aviso === 1 ? "con aviso" : "con avisos", "aviso", "trIrAProblema('aviso')") : ""}
+      ${r.refuerzos ? n(r.refuerzos, r.refuerzos === 1 ? "refuerzo" : "refuerzos", "ref") : ""}
+      ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con papeles vencidos" : "coches con papeles vencidos", "doc", "trIrAProblema('doc')") : ""}
+    </div>`;
+}
+
+function trIrAProblema(tipo) {
+  const filas = [...document.querySelectorAll(`.tr-fila.${tipo === "falta" ? "falta" : tipo === "doc" ? "papeles" : "con-aviso"}`)];
+  if (!filas.length) return;
+  tr._prob = ((tr._prob ?? -1) + 1) % filas.length;
+  const f = filas[tr._prob];
+  f.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "center" });
+  f.classList.remove("ilumina"); void f.offsetWidth; f.classList.add("ilumina");
+}
+
+// Cuántas salidas del interior sin coche tienen un coche esperando allá
+function trVaciasInterior() {
+  return tr.d.completables || 0;
+}
+
+function trDonde() {
+  const grupos = tr.d.ubicaciones || [];
+  const vacias = trVaciasInterior();
+  const cabeza = `
+    <div class="tr-donde-cab">
+      <div>
+        <b><i class="ti ti-map-pin"></i> Dónde amanecen los coches</b>
+        <span>Donde terminó su último viaje. ${trPuede() ? "Tocá un coche y después la salida (o arrastralo)." : ""}</span>
+      </div>
+      ${trPuede() ? `<button class="tr-completar" onclick="trCompletar()" ${vacias ? "" : "disabled"}
+          title="Pone en cada salida del interior sin coche el que está en ese lugar, con su tripulación">
+          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} ${trInt() ? `regreso${vacias === 1 ? "" : "s"} con el coche que está en Buenos Aires` : `salida${vacias === 1 ? "" : "s"} con el coche que está allá`}` : "Nada para completar con lo que está allá"}
+        </button>` : ""}
+    </div>`;
+  if (!grupos.length) {
+    return `<div class="tr-donde">${cabeza}<div class="tr-donde-nada">Cuando haya días anteriores cargados, acá aparece dónde quedó cada coche.</div></div>`;
+  }
+  const chip = (c, lugar) => {
+    const usado = (c.hoy || []).filter(Boolean);
+    const llego = c.desde_fecha === trSumar(tr.fecha, -1) ? "ayer" : `el ${c.desde_fecha.slice(8, 10)}/${c.desde_fecha.slice(5, 7)}`;
+    const titulo = `Llegó ${llego} (salió ${c.desde_hora} ${c.destino})${c.trip1 ? ` · ${c.trip1}${c.trip2 ? " y " + c.trip2 : ""}` : ""}${usado.length ? ` · hoy sale ${usado.join(", ")}` : ""}`;
+    return `<button class="tr-cc ${usado.length ? "usado" : ""} ${tr.asignar === c.coche ? "sel" : ""}" data-coche="${trEsc(c.coche)}" data-lugar="${trEsc(lugar)}"
+              ${trPuede() ? `draggable="true" onclick="trTomarCoche('${trEsc(c.coche)}', '${trEsc(lugar)}')"` : ""} title="${trEsc(titulo)}">
+              <b>${trEsc(c.coche)}</b>${usado.length ? `<small>${usado[0]}</small>` : ""}</button>`;
+  };
+  return `
+    <div class="tr-donde">
+      ${cabeza}
+      <div class="tr-lugares">
+        ${grupos.map(g => `
+          <div class="tr-lugar ${g.lugar === "ASU" ? "asu" : ""}">
+            <span class="tr-lugar-nom">${trEsc(g.lugar)}<i>${g.coches.length}</i></span>
+            <div class="tr-lugar-coches">${g.coches.map(c => chip(c, g.lugar)).join("")}</div>
+          </div>`).join("")}
+      </div>
+    </div>`;
+}
+
+function trCompletar() { return trUnaVez("completar", () => _trCompletar()); }
+async function _trCompletar() {
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/completar?${trT()}`, "POST", {});
+  if (!r.ok) { toast(r.msg || "No se pudo completar", "error"); return; }
+  const antes = trCochesPorFila();
+  trAplicar(r, { repintar: true });
+  if (r.completadas) {
+    toast(`${r.completadas} salida${r.completadas === 1 ? "" : "s"} completada${r.completadas === 1 ? "" : "s"} con el coche que está allá`, "success");
+    trVoltearLlenas(antes);
+  } else toast("No hay coches en esos lugares para completar", "");
+}
+
+function trCochesPorFila() {
+  const m = {};
+  document.querySelectorAll(".tr-fila").forEach(f => { m[f.dataset.id] = f.querySelector(".tr-chapa")?.value || ""; });
+  return m;
+}
+
+// Las chapas que recién se llenaron giran una atrás de otra
+function trVoltearLlenas(antes = {}) {
+  const filas = [...document.querySelectorAll(".tr-fila")].filter(f => {
+    const v = f.querySelector(".tr-chapa")?.value || "";
+    return v && trEsCoche(v) && !antes[f.dataset.id];
+  });
+  filas.forEach((f, i) => setTimeout(() => trVoltear(f.querySelector(".tr-chapa")), i * 120));
+}
+
+function trVoltear(input) {
+  if (!input) return;
+  const fin = input.value;
+  const caja = input.closest(".tr-chapa-c");
+  caja?.classList.remove("voltea"); void caja?.offsetWidth; caja?.classList.add("voltea");
+  if (trQuieto() || !trEsCoche(fin)) return;
+  let k = 0;
+  const t = setInterval(() => {
+    if (++k > 6 || document.activeElement === input) { clearInterval(t); input.value = fin; return; }
+    input.value = [...fin].map((ch, i) => i < k - 1 ? ch : Math.floor(Math.random() * 10)).join("");
+  }, 60);
+}
+
+// ─── Corredores y salidas ────────────────────────────────────────────────
+
+function trBloque(b, i) {
+  const pend = new Set((tr.d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
+  const ni = (b.ida || []).length, nr = (b.regreso || []).length;
+  const ro = trPuede() ? "" : "readonly";
+  const col = lado => {
+    const lista = b[lado] || [];
+    const nota = b[`nota_${lado}`] || "";
+    return `
+      <div class="tr-col ${lado}" data-bid="${b.id}" data-lado="${lado}">
+        <div class="tr-col-cab">
+          <b>${lado === "ida" ? "IDA" : "REGRESO"}</b>
+          <i class="ti ti-arrow-narrow-${lado === "ida" ? "right" : "left"}"></i>
+          ${trPuede() || nota ? `<input class="tr-nota ${nota ? "con" : ""}" data-bcampo="nota_${lado}" value="${trEsc(nota)}"
+                  placeholder="+ nota (ej: ${trInt() ? (lado === "ida" ? "26300 LASTRE A ASU" : "SIN RESERVA") : "TRASBORDO BSAS"})" ${ro} maxlength="40" data-v="${trEsc(nota)}">` : ""}
+        </div>
+        <div class="tr-etiquetas"><span></span><span>Hora</span><span>Tramo</span><span>Coche</span><span>Tripulantes</span><span></span></div>
+        <div class="tr-filas">
+          ${lista.map((s, k) => trFila(s, lado, pend.has(s.id), k)).join("") || `<div class="tr-sin">Sin salidas de ${lado === "ida" ? "ida" : "regreso"}</div>`}
+        </div>
+        ${trPuede() ? `<div class="tr-mas-fila">
+          <button class="tr-mas" onclick="trAgregarSalida(${b.id}, '${lado}')"><i class="ti ti-plus"></i> Salida</button>
+          ${lista.length ? `<button class="tr-mas ref" onclick="trElegirRefuerzo(${b.id}, '${lado}', this)"><i class="ti ti-copy-plus"></i> Refuerzo</button>` : ""}
+        </div>` : ""}
+        ${trPuede() || b[`reserva_${lado}_coche`] || b[`reserva_${lado}_trip`] ? `
+          <div class="tr-reserva">
+            <span>Reserva</span>
+            <input class="tr-res-coche" data-bcampo="reserva_${lado}_coche" value="${trEsc(b[`reserva_${lado}_coche`])}" data-v="${trEsc(b[`reserva_${lado}_coche`])}"
+                   placeholder="Coche" ${ro} maxlength="15" ${trInt() ? "" : 'inputmode="numeric"'}>
+            <input class="tr-res-trip" data-bcampo="reserva_${lado}_trip" value="${trEsc(b[`reserva_${lado}_trip`])}" data-v="${trEsc(b[`reserva_${lado}_trip`])}"
+                   placeholder="Tripulante" ${ro} list="tr-l-trip" maxlength="80">
+          </div>` : ""}
+      </div>`;
+  };
+  return `
+    <section class="tr-corr" data-bid="${b.id}" style="--i:${Math.min(i, 10)}">
+      <header class="tr-corr-cab">
+        <span class="tr-corr-marca"></span>
+        <input class="tr-corr-nombre" data-bcampo="nombre" value="${trEsc(b.nombre)}" data-v="${trEsc(b.nombre)}" ${ro} maxlength="60"
+               aria-label="Nombre del corredor" style="--n:${Math.max(6, b.nombre.length)}">
+        <span class="tr-corr-cuenta" id="tr-cuenta-${b.id}">${ni} ida${ni === 1 ? "" : "s"} · ${nr} regreso${nr === 1 ? "" : "s"}</span>
+        ${trPuede() ? `
+          <span class="tr-corr-acc">
+            <button onclick="trMoverBloque(${b.id}, -1)" title="Subir"><i class="ti ti-arrow-up"></i></button>
+            <button onclick="trMoverBloque(${b.id}, 1)" title="Bajar"><i class="ti ti-arrow-down"></i></button>
+            <button class="peligro" onclick="trBorrarBloque(${b.id})" title="Quitar el corredor"><i class="ti ti-trash"></i></button>
+          </span>` : ""}
+      </header>
+      <div class="tr-cols">${col("ida")}${col("regreso")}</div>
+    </section>`;
+}
+
+function trClasesFila(s, cambiada) {
+  const av = s.avisos || [];
+  const c = [];
+  if (av.some(a => a.nivel === "falta")) c.push("falta");
+  if (av.some(a => a.nivel === "error")) c.push("con-aviso", "error");
+  else if (av.some(a => a.nivel === "aviso")) c.push("con-aviso");
+  if (av.some(a => a.nivel === "doc")) c.push("papeles");
+  if ((s.destino_extras || []).includes("REFUERZO")) c.push("refuerzo");
+  if (cambiada) c.push("cambiada");
+  return c.join(" ");
+}
+
+function trAvisos(s) {
+  return (s.avisos || []).filter(a => a.nivel === "error" || a.nivel === "aviso")
+    .map(a => `<span class="tr-av ${a.nivel}"><i class="ti ti-${a.nivel === "error" ? "alert-octagon" : "alert-triangle"}"></i>${trEsc(a.txt)}</span>`).join("");
+}
+
+function trDoc(s) {
+  const d = (s.avisos || []).find(a => a.nivel === "doc");
+  return d ? trEsc(d.txt) : "";
+}
+
+function trFila(s, lado, cambiada, k = 0) {
+  const ro = trPuede() ? "" : "readonly";
+  const v = (campo, extra = "") => `data-campo="${campo}" value="${trEsc(s[campo])}" data-v="${trEsc(s[campo])}" ${ro} ${extra}`;
+  const doc = trDoc(s);
+  return `
+    <div class="tr-fila ${trClasesFila(s, cambiada)}" data-id="${s.id}" data-lado="${lado}" data-origen="${trEsc(s.origen || "")}" style="--k:${Math.min(k, 8)}">
+      <span class="tr-parada"></span>
+      ${trInt() ? `<span class="tr-hora-c">
+          <input class="tr-in tr-hora" ${v("hora", 'placeholder="--:--" inputmode="numeric" maxlength="5" aria-label="Hora"')}>
+          <input class="tr-in tr-escala" ${v("nota", 'placeholder="+ antes" maxlength="24" aria-label="Sale antes de otro lado (ej: 00:20 CDE)" title="Si antes sale de otro lado, ej: 00:20 CDE"')}>
+        </span>` : `<input class="tr-in tr-hora" ${v("hora", 'placeholder="--:--" inputmode="numeric" maxlength="5" aria-label="Hora"')}>`}
+      <input class="tr-in tr-tramo" ${v("destino", `list="tr-l-dest" placeholder="Tramo" maxlength="60" aria-label="Tramo" title="${trEsc(s.destino)}"`)}>
+      <span class="tr-chapa-c ${doc ? "doc" : ""}" ${doc ? `title="${doc}"` : ""}>
+        <input class="tr-in tr-chapa" ${v("coche", 'placeholder="COCHE" autocomplete="off" maxlength="10" aria-label="Coche"')}>
+      </span>
+      <span class="tr-trips">
+        <input class="tr-in tr-trip" ${v("trip1", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Primer tripulante"')}>
+        <input class="tr-in tr-trip" ${v("trip2", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Segundo tripulante"')}>
+      </span>
+      ${trPuede() ? `<span class="tr-acc-fila">
+          <button class="tr-ref" onclick="trRefuerzo(${s.id})" title="Agregar un refuerzo: otro coche a la misma hora y el mismo tramo" tabindex="-1"><i class="ti ti-copy-plus"></i></button>
+          <button class="tr-quitar" onclick="trBorrarSalida(${s.id})" title="Quitar esta salida" tabindex="-1"><i class="ti ti-x"></i></button>
+        </span>` : "<span></span>"}
+      <div class="tr-avisos">${trAvisos(s)}</div>
+    </div>`;
+}
+
+// Después de guardar: se actualiza lo que depende (avisos, resumen, tablero,
+// dónde están los coches) sin tocar las casillas, así no se pierde el lugar.
+function trAplicar(d, { repintar = false } = {}) {
+  if (!d || d.ok === false) return;
+  tr.d = d;
+  if (repintar || trVacio() || !$("#tr-corredores")) { trPintar(); return; }
+  $("#tr-tablero").innerHTML = trTablero();
+  $("#tr-resumen").innerHTML = trResumen();
+  $("#tr-donde").innerHTML = trDonde();
+  const pend = new Set((d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
+  d.bloques.forEach(b => {
+    const cuenta = $(`#tr-cuenta-${b.id}`);
+    const ni = (b.ida || []).length, nr = (b.regreso || []).length;
+    if (cuenta) cuenta.textContent = `${ni} ida${ni === 1 ? "" : "s"} · ${nr} regreso${nr === 1 ? "" : "s"}`;
+    ["ida", "regreso"].forEach(lado => {
+      (b[lado] || []).forEach(s => {
+        const f = document.querySelector(`.tr-fila[data-id="${s.id}"]`);
+        if (!f) return;
+        f.className = `tr-fila ${trClasesFila(s, pend.has(s.id))}`;
+        f.dataset.origen = s.origen || "";
+        f.querySelector(".tr-avisos").innerHTML = trAvisos(s);
+        const caja = f.querySelector(".tr-chapa-c");
+        const doc = trDoc(s);
+        caja.classList.toggle("doc", !!doc);
+        if (doc) caja.title = doc; else caja.removeAttribute("title");
+      });
+      // ¿Cambió el orden por la hora? Se acomoda cuando no se está escribiendo ahí
+      const col = document.querySelector(`.tr-col[data-bid="${b.id}"][data-lado="${lado}"]`);
+      if (!col) return;
+      const enPantalla = [...col.querySelectorAll(".tr-fila")].map(f => +f.dataset.id);
+      const enOrden = (b[lado] || []).map(s => s.id);
+      if (enPantalla.join() !== enOrden.join()) {
+        if (col.contains(document.activeElement)) tr.reordenar.add(`${b.id}-${lado}`);
+        else trRepintarColumna(b, lado);
+      }
+    });
+  });
+  if (tr.asignar) trMarcarAsignar();
+}
+
+function trRepintarColumna(b, lado) {
+  const col = document.querySelector(`.tr-col[data-bid="${b.id}"][data-lado="${lado}"] .tr-filas`);
+  if (!col) return;
+  const pend = new Set((tr.d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
+  // FLIP: cada fila se desliza de donde estaba a donde va
+  const antes = {};
+  col.querySelectorAll(".tr-fila").forEach(f => { antes[f.dataset.id] = f.getBoundingClientRect().top; });
+  col.innerHTML = (b[lado] || []).map((s, k) => trFila(s, lado, pend.has(s.id), k)).join("")
+    || `<div class="tr-sin">Sin salidas de ${lado}</div>`;
+  if (trQuieto()) return;
+  col.querySelectorAll(".tr-fila").forEach(f => {
+    f.style.animation = "none";
+    const a = antes[f.dataset.id];
+    if (a == null) return;
+    const dy = a - f.getBoundingClientRect().top;
+    if (!dy) return;
+    f.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 420, easing: "cubic-bezier(.22,.61,.36,1)" });
+  });
+}
+
+// ─── Guardar casilla por casilla ─────────────────────────────────────────
+
+async function trGuardarCampo(el) {
+  const campo = el.dataset.campo || el.dataset.bcampo;
+  if (!campo || !trPuede()) return;
+  let v = el.value.replace(/\s+/g, " ").trim().toUpperCase();
+  if (campo === "hora") {
+    v = trHora(v);
+    if (v && !/^\d{2}:\d{2}$/.test(v)) { toast("Escribí la hora así: 09:30 (o 930)", "error"); el.value = el.dataset.v || ""; return; }
+  }
+  el.value = v;
+  if (v === (el.dataset.v || "")) return;
+  if (campo === "nombre" && !v) { el.value = el.dataset.v; return; }
+  el.dataset.v = v;
+  el.classList.add("guardando");
+  let r;
+  if (el.dataset.campo) {
+    const id = el.closest(".tr-fila").dataset.id;
+    r = await trPedir(`/api/trafico/salida/${id}`, "PATCH", { [campo]: v });
+  } else {
+    const bid = el.closest("[data-bid]").dataset.bid;
+    r = await trPedir(`/api/trafico/bloque/${bid}`, "PATCH", { [campo]: v });
+  }
+  el.classList.remove("guardando");
+  if (!r || r.ok === false) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+  el.classList.remove("guardado"); void el.offsetWidth; el.classList.add("guardado");
+  if (campo === "nota_ida" || campo === "nota_regreso") el.classList.toggle("con", !!v);
+  if (campo === "nombre") el.style.setProperty("--n", Math.max(6, v.length));
+  trAprender(campo, v);
+  trAplicar(r);
+  trRefrescarDias();
+}
+
+// Teclado: Enter pasa a la casilla siguiente, como en la planilla
+function trTecla(e) {
+  const el = e.target;
+  if (!el.classList?.contains("tr-in")) return;
+  if (tr.sug && el.classList.contains("tr-chapa") && trTeclaSug(e)) return;
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const todos = [...document.querySelectorAll("#tr-corredores .tr-in:not([readonly])")];
+    const sig = todos[todos.indexOf(el) + 1];
+    el.blur();
+    if (sig) sig.focus();
+  } else if (e.key === "Escape") {
+    el.value = el.dataset.v || "";
+    el.blur();
+  }
+}
+
+function trAgregarSalida(bid, lado) { return trUnaVez(`salida-${bid}-${lado}`, () => _trAgregarSalida(bid, lado)); }
+async function _trAgregarSalida(bid, lado) {
+  const b = tr.d.bloques.find(x => x.id === bid);
+  const lista = b?.[lado] || [];
+  // El tramo que más se repite en esa columna, para no escribirlo de nuevo
+  const cuenta = {};
+  lista.forEach(s => { if (s.destino) cuenta[s.destino] = (cuenta[s.destino] || 0) + 1; });
+  const destino = Object.entries(cuenta).sort((a, b2) => b2[1] - a[1])[0]?.[0] || "";
+  const r = await trPedir(`/api/trafico/bloque/${bid}/salida`, "POST", { lado, destino });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  const f = document.querySelector(`.tr-fila[data-id="${r.salida_id}"]`);
+  if (f) { f.classList.add("nueva"); f.querySelector(".tr-hora")?.focus(); }
+  trRefrescarDias();
+}
+
+// Refuerzo: otro coche a la misma hora y el mismo tramo (de noche es lo común).
+// Queda marcado REFUERZO en el tramo, y el coche que lo hace queda allá para
+// el día siguiente, como cualquier otro.
+function trRefuerzo(sid) { return trUnaVez(`refuerzo-${sid}`, () => _trRefuerzo(sid)); }
+async function _trRefuerzo(sid) {
+  let s = null, lado = null, bid = null;
+  tr.d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(x => { if (x.id === sid) { s = x; lado = l; bid = b.id; } })));
+  if (!s) return;
+  const destino = (s.destino_extras || []).includes("REFUERZO") ? s.destino : `${s.destino || ""} REFUERZO`.trim();
+  const r = await trPedir(`/api/trafico/bloque/${bid}/salida`, "POST", { lado, hora: s.hora, destino });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar el refuerzo", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  const f = document.querySelector(`.tr-fila[data-id="${r.salida_id}"]`);
+  if (f) { f.classList.add("nueva"); f.querySelector(".tr-chapa")?.focus(); }
+}
+
+// "+ Refuerzo" abajo de cada columna: se elige a qué salida (las de la noche primero)
+function trElegirRefuerzo(bid, lado, btn) {
+  const b = tr.d.bloques.find(x => x.id === bid);
+  const lista = [...(b?.[lado] || [])].filter(s => !(s.destino_extras || []).includes("REFUERZO"))
+    .sort((a, c) => ((c.hora || "") >= "18:00") - ((a.hora || "") >= "18:00") || (c.hora || "").localeCompare(a.hora || ""));
+  if (!lista.length) { toast("Primero cargá la salida que lleva refuerzo", ""); return; }
+  trMenu(btn, lista.map(s => ({
+    icono: "copy-plus",
+    html: `<b>${trEsc(s.hora || "--:--")} ${trEsc(s.destino || "")}</b><span>${s.coche ? `Va el ${trEsc(s.coche)} · ` : ""}agregar otro coche a esta hora</span>`,
+    fn: () => trRefuerzo(s.id),
+  })));
+}
+
+async function trBorrarSalida(sid) {
+  let s = null, lado = null, bid = null;
+  tr.d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(x => { if (x.id === sid) { s = x; lado = l; bid = b.id; } })));
+  const fila = document.querySelector(`.tr-fila[data-id="${sid}"]`);
+  if (fila && !trQuieto()) {
+    fila.classList.add("sale");
+    await new Promise(res => setTimeout(res, 235));
+  }
+  const r = await trPedir(`/api/trafico/salida/${sid}`, "DELETE");
+  if (!r.ok) { fila?.classList.remove("sale"); toast(r.msg || "No se pudo quitar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  if (s) trOfrecerDeshacer(`Se quitó la salida ${s.hora || ""} ${s.destino || ""}`.trim(), async () => {
+    const r2 = await trPedir(`/api/trafico/bloque/${bid}/salida`, "POST",
+      { lado, hora: s.hora, destino: s.destino, coche: s.coche, trip1: s.trip1, trip2: s.trip2 });
+    if (r2.ok) { trAplicar(r2, { repintar: true }); trRefrescarDias(); }
+  });
+}
+
+function trOfrecerDeshacer(txt, fn) {
+  const el = $("#tr-deshacer");
+  if (!el) return;
+  clearTimeout(tr.deshacer);
+  el.innerHTML = `<span>${trEsc(txt)}</span><button>Deshacer</button>`;
+  el.classList.add("visible");
+  el.querySelector("button").onclick = () => { el.classList.remove("visible"); clearTimeout(tr.deshacer); fn(); };
+  tr.deshacer = setTimeout(() => el.classList.remove("visible"), 7000);
+}
+
+function trAgregarBloque(form) { return trUnaVez("bloque", () => _trAgregarBloque(form)); }
+async function _trAgregarBloque(form) {
+  // Viene el formulario, o directo el nombre (botón "Empezar con BUENOS AIRES")
+  const input = typeof form === "string" ? null : form.querySelector("input");
+  const nombre = (input ? input.value : form).trim().toUpperCase();
+  if (!nombre) { input?.focus(); return; }
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/bloque?${trT()}`, "POST", { nombre });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  const sec = document.querySelector(`.tr-corr[data-bid="${r.bloque_id}"]`);
+  sec?.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "center" });
+  sec?.classList.add("nuevo");
+}
+
+function trMoverBloque(bid, paso) { return trUnaVez("mover", () => _trMoverBloque(bid, paso)); }
+async function _trMoverBloque(bid, paso) {
+  const r = await trPedir(`/api/trafico/bloque/${bid}/mover`, "POST", { paso });
+  if (!r.ok) return;
+  const cards = [...document.querySelectorAll(".tr-corr")];
+  const antes = Object.fromEntries(cards.map(c => [c.dataset.bid, c.getBoundingClientRect().top]));
+  trAplicar(r, { repintar: true });
+  if (trQuieto()) return;
+  document.querySelectorAll(".tr-corr").forEach(c => {
+    c.style.animation = "none";
+    const dy = (antes[c.dataset.bid] ?? 0) - c.getBoundingClientRect().top;
+    if (dy) c.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 500, easing: "cubic-bezier(.22,.61,.36,1)" });
+  });
+}
+
+async function trBorrarBloque(bid) {
+  const b = tr.d.bloques.find(x => x.id === bid);
+  const n = (b?.ida?.length || 0) + (b?.regreso?.length || 0);
+  if (!confirm(`¿Quitar el corredor ${b?.nombre || ""}${n ? ` con sus ${n} salidas` : ""}?`)) return;
+  const r = await trPedir(`/api/trafico/bloque/${bid}`, "DELETE");
+  if (!r.ok) { toast(r.msg || "No se pudo quitar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+  toast("Corredor quitado", "success");
+}
+
+async function trRefrescarDias() {
+  const dias = await api(`/api/trafico/dias?hasta=${trSumar(tr.fecha, 4)}&${trT()}`);
+  if (Array.isArray(dias)) { tr.dias = dias; const t = $("#tr-tablero"); if (t) t.innerHTML = trTablero(); }
+}
+
+// ─── Sugerencias de coche ────────────────────────────────────────────────
+// Al entrar en la casilla del coche aparecen los que pueden hacer esa salida:
+// primero los que están en el lugar, del que llegó antes al último.
+
+async function trAbrirSug(input) {
+  if (!trPuede()) return;
+  const fila = input.closest(".tr-fila");
+  const sid = +fila.dataset.id;
+  if (tr.sug?.sid === sid) return;
+  trCerrarSug();
+  const caja = document.createElement("div");
+  caja.className = "tr-sug";
+  caja.innerHTML = `<div class="tr-sug-cargando"><i class="ti ti-loader-2"></i> Buscando dónde están los coches…</div>`;
+  caja.addEventListener("mousedown", e => e.preventDefault());   // que no se vaya el foco de la casilla
+  document.body.appendChild(caja);
+  tr.sug = { sid, input, caja, datos: null, items: [], sel: -1 };
+  trUbicarSug();
+  const r = await api(`/api/trafico/salida/${sid}/sugerencias`);
+  if (tr.sug?.sid !== sid) return;
+  tr.sug.datos = r && !r.error ? r : { candidatos: [], salida: {} };
+  trPintarSug();
+}
+
+function trUbicarSug() {
+  const s = tr.sug;
+  if (!s) return;
+  const r = s.input.getBoundingClientRect();
+  const w = Math.min(360, window.innerWidth - 16);
+  const left = Math.max(8, Math.min(r.left - 8, window.innerWidth - w - 8));
+  s.caja.style.width = w + "px";
+  s.caja.style.left = left + "px";
+  const alto = s.caja.offsetHeight || 260;
+  const abajo = window.innerHeight - r.bottom;
+  if (abajo < alto + 16 && r.top > abajo) { s.caja.style.top = ""; s.caja.style.bottom = (window.innerHeight - r.top + 6) + "px"; s.caja.classList.add("arriba"); }
+  else { s.caja.style.bottom = ""; s.caja.style.top = (r.bottom + 6) + "px"; s.caja.classList.remove("arriba"); }
+}
+
+function trPintarSug() {
+  const s = tr.sug;
+  if (!s || !s.datos) return;
+  const q = s.input.value.trim().toUpperCase();
+  const sal = s.datos.salida || {};
+  let cands = (s.datos.candidatos || []).filter(c => !q || c.coche.startsWith(q) || !trEsCoche(q));
+  if (q && trEsCoche(q) && q === s.input.dataset.v) cands = s.datos.candidatos || [];   // ya tiene uno: mostrar todos
+  const ya = new Set(cands.map(c => c.coche));
+  const otros = q && trEsCoche(q) && q !== s.input.dataset.v
+    ? (tr.listas?.coches || []).filter(c => c.coche.startsWith(q) && !ya.has(c.coche)).slice(0, 5) : [];
+  s.items = [...cands.map(c => ({ ...c, tipo: "cand" })), ...otros.map(c => ({ ...c, tipo: "flota" }))];
+  if (s.sel >= s.items.length) s.sel = s.items.length - 1;
+  const etiqueta = c => c.rango === 0 ? `<em class="alla">Está en ${trEsc(c.lugar)}</em>`
+    : c.rango === 1 ? `<em class="cerca">En ${trEsc(c.lugar)}, mismo corredor</em>`
+    : `<em class="tarde">En ${trEsc(c.lugar)} · sale más tarde (${trEsc((c.ya_hoy || []).join(", "))})</em>`;
+  const filas = s.items.map((c, k) => c.tipo === "cand" ? `
+      <button class="tr-sug-it ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-sug-chapa">${trEsc(c.coche)}</span>
+        <span class="tr-sug-txt">
+          ${etiqueta(c)}
+          <span>Llegó ${trEsc(c.cuando)} · salió ${trEsc(c.desde_hora)} ${trEsc(c.destino)}</span>
+          ${c.trip1 ? `<small><i class="ti ti-users"></i> ${trEsc(c.trip1)}${c.trip2 ? " · " + trEsc(c.trip2) : ""}</small>` : ""}
+        </span>
+      </button>` : `
+      <button class="tr-sug-it flota ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-sug-chapa borde">${trEsc(c.coche)}</span>
+        <span class="tr-sug-txt"><span>${trEsc(c.modelo || "De la flota")}</span><small>No sabemos dónde está</small></span>
+      </button>`).join("");
+  const total = s.datos.total || 0;
+  s.caja.innerHTML = `
+    <div class="tr-sug-cab">
+      <b>${trEsc(sal.hora || "")} ${trEsc(sal.destino || "")}</b>
+      <span>${sal.origen ? `Sale de ${trEsc(sal.origen)}` : "No se sabe de dónde sale"}${total > 12 ? ` · ${total} coches posibles, los que llegaron antes primero` : ""}</span>
+    </div>
+    ${filas || `<div class="tr-sug-nada">${sal.origen && sal.origen !== "ASU"
+      ? `Ningún coche quedó en ${trEsc(sal.origen)}. Escribí el número igual.` : "Escribí el número del coche."}</div>`}
+    <div class="tr-sug-pie"><kbd>↑</kbd><kbd>↓</kbd> elegir · <kbd>Enter</kbd> poner · <kbd>Esc</kbd> cerrar</div>`;
+  s.caja.querySelectorAll(".tr-sug-it").forEach(b => b.onclick = () => trElegirSug(+b.dataset.k));
+  trUbicarSug();
+}
+
+function trTeclaSug(e) {
+  const s = tr.sug;
+  if (!s || !s.items) return false;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = s.items.length;
+    if (!n) return true;
+    s.sel = e.key === "ArrowDown" ? (s.sel + 1) % n : (s.sel - 1 + n) % n;
+    trPintarSug();
+    s.caja.querySelector(".tr-sug-it.on")?.scrollIntoView({ block: "nearest" });
+    return true;
+  }
+  if (e.key === "Enter" && s.sel >= 0) { e.preventDefault(); trElegirSug(s.sel); return true; }
+  if (e.key === "Escape") { trCerrarSug(); return false; }
+  return false;
+}
+
+async function trElegirSug(k) {
+  const s = tr.sug;
+  const c = s?.items[k];
+  if (!c) return;
+  const input = s.input;
+  trCerrarSug();
+  await trPonerCoche(input.closest(".tr-fila"), c.coche, c.tipo === "cand" ? c : null);
+  // y sigue con la casilla de al lado
+  const fila = document.querySelector(`.tr-fila[data-id="${input.closest(".tr-fila")?.dataset.id}"]`);
+  fila?.querySelector(".tr-trip")?.focus();
+}
+
+// Pone el coche en la salida y, si no tenía tripulantes, los que vinieron con él
+async function trPonerCoche(fila, coche, cand) {
+  if (!fila) return;
+  const id = fila.dataset.id;
+  const ins = fila.querySelectorAll(".tr-trip");
+  const datos = { coche };
+  if (cand && cand.trip1 && !ins[0].value.trim() && !ins[1].value.trim()) {
+    datos.trip1 = cand.trip1;
+    datos.trip2 = cand.trip2 || "";
+  }
+  const chapa = fila.querySelector(".tr-chapa");
+  chapa.value = coche; chapa.dataset.v = coche;
+  if (datos.trip1 !== undefined) {
+    ins[0].value = datos.trip1; ins[0].dataset.v = datos.trip1;
+    ins[1].value = datos.trip2; ins[1].dataset.v = datos.trip2;
+  }
+  trVoltear(chapa);
+  const r = await trPedir(`/api/trafico/salida/${id}`, "PATCH", datos);
+  if (!r || r.ok === false) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+  trAplicar(r);
+  trRefrescarDias();
+}
+
+function trCerrarSug() {
+  if (tr.sug?.caja) tr.sug.caja.remove();
+  tr.sug = null;
+}
+
+// ─── Tocar un coche de "dónde amanecen" y después la salida ──────────────
+
+function trTomarCoche(coche, lugar) {
+  tr.asignar = tr.asignar === coche ? null : coche;
+  tr.asignarLugar = lugar;
+  trMarcarAsignar();
+}
+
+function trMarcarAsignar() {
+  const raiz = $("#tr-raiz");
+  if (!raiz) return;
+  const c = tr.asignar;
+  raiz.classList.toggle("asignando", !!c);
+  document.querySelectorAll(".tr-cc").forEach(b => b.classList.toggle("sel", b.dataset.coche === c));
+  document.querySelectorAll(".tr-fila").forEach(f => f.classList.toggle("apta", !!c && f.dataset.origen === tr.asignarLugar));
+  const banda = $("#tr-asignando");
+  if (banda) {
+    banda.innerHTML = c ? `<i class="ti ti-hand-finger"></i> Tocá la salida que hace el <b>${trEsc(c)}</b> (está en ${trEsc(tr.asignarLugar)})
+      <button onclick="trTomarCoche(null)">Cancelar</button>` : "";
+    banda.classList.toggle("visible", !!c);
+  }
+}
+
+function trClickFila(e) {
+  if (!tr.asignar) return;
+  const fila = e.target.closest(".tr-fila");
+  if (!fila || e.target.closest(".tr-acc-fila")) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const coche = tr.asignar;
+  const cand = trCandDesdePanel(coche);
+  tr.asignar = null;
+  trMarcarAsignar();
+  document.activeElement?.blur?.();
+  trPonerCoche(fila, coche, cand);
+}
+
+function trCandDesdePanel(coche) {
+  for (const g of tr.d.ubicaciones || []) for (const c of g.coches) if (c.coche === coche) return c;
+  return null;
+}
+
+// ─── Ver, publicar y compartir ───────────────────────────────────────────
+
+function trNombreArchivo(version, ext = "pdf") {
+  const d = trFecha(tr.fecha);
+  const dia = TR_DIAS[d.getDay()].charAt(0) + TR_DIAS[d.getDay()].slice(1).toLowerCase();
+  return trSinTildes(`Trafico-${trInt() ? "Internacional-" : ""}${dia}-${trLargo(tr.fecha).split(" ")[1].replace(/\//g, "-")}-${version ? "v" + version : "borrador"}.${ext}`);
+}
+
+function trVerPdf(version) {
+  window.open(`/api/trafico/dia/${tr.fecha}/pdf?${trT()}${version ? `&v=${version}` : ""}`, "_blank");
+}
+
+async function trPublicar() {
+  const d = tr.d, dia = d.dia || {}, r = d.resumen || {};
+  const nueva = (dia.version || 0) + 1;
+  const cambios = d.cambios_pendientes || [];
+  const conAviso = [];
+  d.bloques.forEach(b => ["ida", "regreso"].forEach(l => (b[l] || []).forEach(s =>
+    (s.avisos || []).filter(a => a.nivel === "error" || a.nivel === "aviso").forEach(a => conAviso.push(`${s.hora || "--:--"} ${s.destino}: ${a.txt}`)))));
+  const fondo = document.createElement("div");
+  fondo.className = "tr-modal-fondo";
+  fondo.innerHTML = `
+    <div class="tr-modal" role="dialog" aria-modal="true">
+      <div class="tr-modal-cab">
+        <span>Publicar el tráfico${trInt() ? " internacional" : ""}</span>
+        <b>${trLargo(tr.fecha)}</b>
+        <em>Versión ${nueva}</em>
+        <button class="tr-modal-x" onclick="this.closest('.tr-modal-fondo').remove()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="tr-modal-cuerpo" id="tr-pub-cuerpo">
+        <ul class="tr-checks">
+          <li class="ok"><i class="ti ti-circle-check"></i><span><b>${r.salidas} salidas</b> en ${d.bloques.length} corredor${d.bloques.length === 1 ? "" : "es"}, con ${r.coches} coches y ${r.tripulantes} tripulantes</span></li>
+          ${r.a_confirmar ? `<li class="falta"><i class="ti ti-alert-circle"></i><span><b>${r.a_confirmar} salida${r.a_confirmar === 1 ? "" : "s"} a confirmar.</b> Salen en el PDF como A CONFIRMAR.</span></li>` : ""}
+          ${conAviso.length ? `<li class="aviso"><i class="ti ti-alert-triangle"></i><span><b>${conAviso.length} aviso${conAviso.length === 1 ? "" : "s"}:</b>
+              <small>${conAviso.slice(0, 4).map(trEsc).join("<br>")}${conAviso.length > 4 ? `<br>y ${conAviso.length - 4} más` : ""}</small></span></li>` : ""}
+        </ul>
+        ${dia.version ? `
+          <div class="tr-pub-cambios">
+            <b>Qué cambió desde la versión ${dia.version}</b>
+            ${cambios.length ? `<ul>${cambios.map(c => `<li class="${c.tipo}">${trEsc(c.txt)}</li>`).join("")}</ul>`
+              : `<p>No hay diferencias en las salidas.</p>`}
+            <small>En el PDF esas filas salen marcadas en rojo, para que nadie se quede con la vieja.</small>
+          </div>` : ""}
+      </div>
+      <div class="tr-modal-pie" id="tr-pub-pie">
+        <button class="btn btn-ghost" onclick="this.closest('.tr-modal-fondo').remove()">Seguir editando</button>
+        <button class="btn btn-ghost" onclick="trVerPdf()"><i class="ti ti-eye"></i> Ver cómo sale</button>
+        <button class="tr-publicar" onclick="trConfirmarPublicar(this)"><i class="ti ti-send"></i> Publicar versión ${nueva}</button>
+      </div>
+    </div>`;
+  fondo.addEventListener("click", e => { if (e.target === fondo) fondo.remove(); });
+  document.body.appendChild(fondo);
+}
+
+async function trConfirmarPublicar(btn) {
+  btn.disabled = true;
+  btn.innerHTML = `<i class="ti ti-loader-2 gira"></i> Publicando…`;
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}/publicar?${trT()}`, "POST", {});
+  if (!r.ok) { btn.disabled = false; btn.innerHTML = `<i class="ti ti-send"></i> Publicar`; toast(r.msg || "No se pudo publicar", "error"); return; }
+  tr.d = r.estado;
+  trPintar();
+  trRefrescarDias();
+  const v = r.version;
+  // Se arma la imagen ya, así al tocar Compartir sale al instante (el celular lo pide)
+  trPrecargar(v);
+  const cuerpo = $("#tr-pub-cuerpo"), pie = $("#tr-pub-pie");
+  if (cuerpo) cuerpo.innerHTML = `
+    <div class="tr-listo">
+      <svg viewBox="0 0 52 52" class="tr-listo-check"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
+      <b>${r.sin_cambios ? `La versión ${v} ya estaba publicada` : `Versión ${v} publicada`}</b>
+      <span>Ahora mandalo al grupo de WhatsApp de los choferes.</span>
+    </div>`;
+  if (pie) pie.innerHTML = `
+    <button class="btn btn-ghost" onclick="trDescargar(${v}, 'pdf', this)"><i class="ti ti-file-type-pdf"></i> PDF</button>
+    <button class="btn btn-ghost" onclick="trDescargar(${v}, 'imagen', this)"><i class="ti ti-photo-down"></i> Imagen</button>
+    <button class="tr-publicar compartir" onclick="trCompartir(${v}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir por WhatsApp</button>`;
+}
+
+// La hoja del día como PDF o como imagen (PNG). Lo publicado se guarda en
+// memoria: al tocar Compartir sale al instante, que el celular lo exige.
+tr.archivos = {};
+async function trTraer(tipo, v) {
+  const clave = `${tr.tipo}|${tr.fecha}|${tipo}|${v || "borrador"}`;
+  if (v && tr.archivos[clave]) return tr.archivos[clave];
+  const x = await fetch(`/api/trafico/dia/${tr.fecha}/${tipo}?${trT()}${v ? `&v=${v}` : ""}`).catch(() => null);
+  if (!x || !x.ok) {
+    if (x && x.status === 501) toast("Para la imagen falta instalar pypdfium2 en el servidor", "error");
+    return null;
+  }
+  const b = await x.blob();
+  if (v) tr.archivos[clave] = b;
+  return b;
+}
+function trPrecargar(v) { if (v) trTraer("imagen", v); }
+
+async function trConEspera(btn, fn) {
+  if (!btn) return fn();
+  const antes = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<i class="ti ti-loader-2 gira"></i>${btn.classList.contains("tr-tab-btn") ? "" : " Armando…"}`;
+  try { return await fn(); } finally { btn.disabled = false; btn.innerHTML = antes; }
+}
+
+// tipo: "pdf" o "imagen". Sin versión: como está ahora (borrador si hay cambios)
+async function trDescargar(v, tipo = "pdf", btn = null) {
+  const blob = await trConEspera(btn, () => trTraer(tipo, v));
+  if (!blob) { toast(tipo === "imagen" ? "No se pudo armar la imagen" : "No se pudo armar el PDF", "error"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = trNombreArchivo(v, tipo === "imagen" ? "png" : "pdf");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+// En el celular abre el menú de compartir con la imagen (WhatsApp la muestra
+// directo en el chat, sin abrir nada). En la computadora la descarga.
+async function trCompartir(v, btn, tipo = "imagen") {
+  const blob = await trConEspera(btn, () => trTraer(tipo, v));
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const ext = tipo === "imagen" ? "png" : "pdf";
+  const archivo = new File([blob], trNombreArchivo(v, ext), { type: tipo === "imagen" ? "image/png" : "application/pdf" });
+  const nombre = `Tráfico${trInt() ? " internacional" : ""} ${trLargo(tr.fecha)}`;
+  const texto = `${nombre} · versión ${v}`;
+  if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    try { await navigator.share({ files: [archivo], title: nombre, text: texto }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  trDescargar(v, tipo);
+  toast(`Se descargó ${tipo === "imagen" ? "la imagen" : "el PDF"}: adjuntala en el grupo de WhatsApp`, "success");
+}
+
+// Las versiones publicadas: cada una se puede ver en PDF o bajar como imagen
+async function trVersiones(btn) {
+  const vs = await api(`/api/trafico/dia/${tr.fecha}/versiones?${trT()}`);
+  if (!Array.isArray(vs)) return;
+  const items = [];
+  vs.forEach(v => {
+    let n = 0;
+    try { n = JSON.parse(v.cambios || "[]").length; } catch (e) { /* nada */ }
+    const p = String(v.publicado_el || "");
+    const cuando = `${p.slice(8, 10)}/${p.slice(5, 7)} ${p.slice(11, 16)}${v.publicado_por ? " · " + trEsc(v.publicado_por.split(" ")[0]) : ""}`;
+    items.push({
+      html: `<b>Versión ${v.version} · ver PDF</b><span>${cuando}${v.version > 1 ? ` · ${n} cambio${n === 1 ? "" : "s"}` : ""}</span>`,
+      icono: "file-type-pdf", fn: () => trVerPdf(v.version),
+    });
+    items.push({
+      html: `<b>Versión ${v.version} · bajar imagen</b><span>Para mandar al grupo</span>`,
+      icono: "photo-down", fn: () => trDescargar(v.version, "imagen"),
+    });
+  });
+  trMenu(btn, items);
+}
+
+function trMas(btn) {
+  const ant = tr.d.dia_anterior;
+  trMenu(btn, [
+    ...(trInt() ? [] : [{ icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar }]),
+    ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
+               { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
+    { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
+  ]);
+}
+
+function trMenu(btn, items) {
+  document.querySelectorAll(".tr-menu").forEach(m => m.remove());
+  const m = document.createElement("div");
+  m.className = "tr-menu";
+  m.innerHTML = items.map((it, k) => `<button data-k="${k}" class="${it.peligro ? "peligro" : ""}"><i class="ti ti-${it.icono}"></i><span>${it.html}</span></button>`).join("")
+    || `<div class="tr-menu-nada">Nada para mostrar</div>`;
+  document.body.appendChild(m);
+  const r = btn.getBoundingClientRect();
+  m.style.top = (r.bottom + 6) + "px";
+  m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, window.innerWidth - m.offsetWidth - 8)) + "px";
+  m.querySelectorAll("button").forEach(b => b.onclick = () => { m.remove(); items[+b.dataset.k].fn(); });
+  setTimeout(() => document.addEventListener("click", function fuera(e) {
+    if (!m.contains(e.target)) { m.remove(); document.removeEventListener("click", fuera); }
+  }), 0);
+}
+
+function trImportar() {
+  if (tr.ocupado.has("importar")) { toast("Ya se está importando la planilla"); return; }
+  const i = document.createElement("input");
+  i.type = "file";
+  i.accept = ".xlsx,.xlsm";
+  i.onchange = () => trUnaVez("importar", async () => {
+    const f = i.files[0];
+    if (!f) return;
+    if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)}. ¿Seguimos?`)) return;
+    const fd = new FormData();
+    fd.append("archivo", f);
+    fd.append("fecha", tr.fecha);
+    const listo = trEspera("Importando la planilla…");
+    let r;
+    try { r = await api("/api/trafico/importar", { method: "POST", body: fd }); }
+    finally { listo(); }
+    if (!r || !r.ok) { toast(r?.msg || "No se pudo leer la planilla", "error"); return; }
+    tr.d = r;
+    trPintar(true);
+    trRefrescarDias();
+    let msg = `Planilla importada: ${r.importadas} salidas`;
+    if (r.fecha_excel && r.fecha_excel !== tr.fecha) msg += ` (la planilla decía ${trLargo(r.fecha_excel)})`;
+    toast(msg, "success");
+    const listas = await api(`/api/trafico/listas?${trT()}`);
+    if (listas && !listas.error) { tr.listas = listas; trDatalists(); }
+  }, "Ya se está importando la planilla");
+  i.click();
+}
+
+function trVaciar() { return trUnaVez("vaciar", () => _trVaciar()); }
+async function _trVaciar() {
+  if (!confirm(`¿Vaciar el tráfico del ${trLargo(tr.fecha)}? Se quitan todos los corredores y salidas.`)) return;
+  const r = await trPedir(`/api/trafico/dia/${tr.fecha}?${trT()}`, "DELETE");
+  if (!r.ok) { toast(r.msg || "No se pudo vaciar", "error"); return; }
+  trAplicar(r, { repintar: true });
+  trRefrescarDias();
+}
+
+// ─── Eventos (uno solo para toda la pantalla) ────────────────────────────
+(function () {
+  const dentro = e => e.target.closest?.("#tr-raiz");
+  document.addEventListener("change", e => {
+    if (!dentro(e)) return;
+    if (e.target.matches(".tr-in, .tr-nota, .tr-corr-nombre, .tr-res-coche, .tr-res-trip")) trGuardarCampo(e.target);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && tr.asignar) { trTomarCoche(null); return; }
+    if (!dentro(e)) return;
+    if (e.target.matches(".tr-nota, .tr-corr-nombre, .tr-res-coche, .tr-res-trip") && e.key === "Enter") { e.preventDefault(); e.target.blur(); return; }
+    trTecla(e);
+  });
+  document.addEventListener("focusin", e => {
+    if (!dentro(e)) { if (tr.sug && !e.target.closest?.(".tr-sug")) trCerrarSug(); return; }
+    if (e.target.classList.contains("tr-chapa")) trAbrirSug(e.target);
+    else if (tr.sug && e.target !== tr.sug.input) trCerrarSug();
+  });
+  document.addEventListener("focusout", e => {
+    if (!dentro(e)) return;
+    if (tr.sug && e.target === tr.sug.input) setTimeout(() => { if (tr.sug && document.activeElement !== tr.sug.input) trCerrarSug(); }, 120);
+    // Si la columna quedó desordenada por una hora nueva, se acomoda al salir de ella
+    const col = e.target.closest(".tr-col");
+    if (col && tr.reordenar.size) setTimeout(() => {
+      if (col.contains(document.activeElement)) return;
+      const clave = `${col.dataset.bid}-${col.dataset.lado}`;
+      if (!tr.reordenar.has(clave)) return;
+      tr.reordenar.delete(clave);
+      const b = tr.d.bloques.find(x => x.id === +col.dataset.bid);
+      if (b) trRepintarColumna(b, col.dataset.lado);
+    }, 0);
+  });
+  document.addEventListener("input", e => {
+    if (tr.sug && e.target === tr.sug.input) { tr.sug.sel = -1; trPintarSug(); }
+  });
+  document.addEventListener("click", e => { if (dentro(e) && tr.asignar) trClickFila(e); }, true);
+  // Arrastrar un coche de "dónde amanecen" a una salida
+  document.addEventListener("dragstart", e => {
+    const cc = e.target.closest?.(".tr-cc");
+    if (!cc) return;
+    e.dataTransfer.setData("text/plain", cc.dataset.coche);
+    e.dataTransfer.effectAllowed = "copy";
+    tr.asignarLugar = cc.dataset.lugar;
+    document.querySelectorAll(".tr-fila").forEach(f => f.classList.toggle("apta", f.dataset.origen === cc.dataset.lugar));
+    $("#tr-raiz")?.classList.add("arrastrando");
+  });
+  document.addEventListener("dragend", () => {
+    $("#tr-raiz")?.classList.remove("arrastrando");
+    document.querySelectorAll(".tr-fila.apta, .tr-fila.encima").forEach(f => f.classList.remove("apta", "encima"));
+  });
+  document.addEventListener("dragover", e => {
+    const f = e.target.closest?.("#tr-raiz .tr-fila");
+    if (!f || !$("#tr-raiz")?.classList.contains("arrastrando")) return;
+    e.preventDefault();
+    document.querySelectorAll(".tr-fila.encima").forEach(x => x !== f && x.classList.remove("encima"));
+    f.classList.add("encima");
+  });
+  document.addEventListener("drop", e => {
+    const f = e.target.closest?.("#tr-raiz .tr-fila");
+    if (!f) return;
+    e.preventDefault();
+    const coche = e.dataTransfer.getData("text/plain");
+    if (coche) trPonerCoche(f, coche, trCandDesdePanel(coche));
+  });
+  // La ventanita de sugerencias acompaña a la casilla si se mueve la pantalla
+  window.addEventListener("resize", () => trUbicarSug());
+  document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); }, true);
+})();
+
+// ════════════════════════════════════════════════════════════════════════
+//  SERVICIOS — lo que salió de verdad, sacado del tráfico
+// ════════════════════════════════════════════════════════════════════════
+// Cada salida del tráfico de un día que ya llegó es un servicio: no se carga
+// nada aparte. Arriba el período (una sola fila de filtros que manda sobre
+// todo lo de abajo), después el número del período, los indicadores, lo que
+// dicen los números y cada gráfico con su tabla al lado (tocá "Tabla").
+
+const sv = { preset: "30", desde: null, hasta: null, corredor: "", trafico: "", d: null, pedido: 0, redibujar: null };
+const SV_PRESETS = [["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"], ["mesant", "Mes pasado"], ["90", "90 días"]];
+const SV_DIAS = ["LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB", "DOM"];
+const SV_DIAS_LARGOS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+// Escala de un solo azul para magnitudes (mapa de horarios); de claro a oscuro
+const SV_RAMPA = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+// Escala ordinal (versiones por día): el escalón más claro igual se ve sobre blanco
+const SV_ORDINAL = ["#86b6ef", "#2a78d6", "#184f95"];
+
+const svEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// 12.345 y 3,5: punto para los miles y coma para los decimales, siempre
+function svNum(v, dec = 0) {
+  const n = Number(v);
+  if (v == null || !isFinite(n)) return "—";
+  let [ent, frac] = Math.abs(n).toFixed(dec).split(".");
+  ent = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return (n < 0 && +Math.abs(n).toFixed(dec) ? "-" : "") + ent + (frac ? "," + frac : "");
+}
+const svFechaCorta = f => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+const svDiaSemana = f => { const d = trFecha(f).getDay(); return (d + 6) % 7; };       // 0 = lunes
+const svTip = obj => svEsc(JSON.stringify(obj));
+
+function svPeriodo(preset) {
+  const hoy = trHoy();
+  const d = trFecha(hoy);
+  if (preset === "7") return [trSumar(hoy, -6), hoy];
+  if (preset === "30") return [trSumar(hoy, -29), hoy];
+  if (preset === "90") return [trSumar(hoy, -89), hoy];
+  if (preset === "mes") return [`${hoy.slice(0, 8)}01`, hoy];
+  if (preset === "mesant") {
+    const ini = new Date(d.getFullYear(), d.getMonth() - 1, 1), fin = new Date(d.getFullYear(), d.getMonth(), 0);
+    return [trIso(ini), trIso(fin)];
+  }
+  return [sv.desde, sv.hasta];
+}
+
+// ─── Entrada ─────────────────────────────────────────────────────────────
+
+async function renderServicios() {
+  status("Servicios: lo que salió de verdad, sacado del tráfico");
+  if (!sv.desde) [sv.desde, sv.hasta] = svPeriodo(sv.preset);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-chart-histogram"></i> Servicios</h1>
+      <p>Lo que salió de verdad, sacado del tráfico de cada día: para ver dónde estamos parados y qué mejorar</p>
+    </div>
+    <div class="section sv-raiz" id="sv-raiz">
+      <div class="sv-filtros" id="sv-filtros"></div>
+      <div id="sv-cuerpo"><div class="dossier-loading"></div></div>
+    </div>`;
+  svPintarFiltros();
+  await svCargar(true);
+}
+
+function svPintarFiltros() {
+  const f = $("#sv-filtros");
+  if (!f) return;
+  const corredores = sv.d?.corredores_disponibles || [];
+  f.innerHTML = `
+    <div class="sv-periodos" role="group" aria-label="Período">
+      ${SV_PRESETS.map(([k, t]) => `<button class="sv-chip ${sv.preset === k ? "on" : ""}" onclick="svElegirPreset('${k}')">${t}</button>`).join("")}
+    </div>
+    <label class="sv-fechas ${sv.preset === "custom" ? "on" : ""}" title="Elegir las fechas">
+      <i class="ti ti-calendar"></i>
+      <input type="date" id="sv-desde" value="${sv.desde}" max="${trHoy()}" onchange="svFechasPropias()">
+      <span>al</span>
+      <input type="date" id="sv-hasta" value="${sv.hasta}" max="${trHoy()}" onchange="svFechasPropias()">
+    </label>
+    ${sv.d?.hay_internacional || sv.trafico ? `
+    <div class="sv-periodos sv-trafico" role="group" aria-label="Tráfico">
+      ${[["", "Todo"], ["nacional", "Nacional"], ["internacional", "Internacional"]].map(([k, t]) =>
+        `<button class="sv-chip ${sv.trafico === k ? "on" : ""}" onclick="svElegirTrafico('${k}')">${t}</button>`).join("")}
+    </div>` : ""}
+    <div class="sv-corr-sel ${sv.corredor ? "on" : ""}">
+      <i class="ti ti-route"></i>
+      <select id="sv-corredor" onchange="svElegirCorredor(this.value)" aria-label="Corredor">
+        <option value="">Todos los corredores</option>
+        ${corredores.map(c => `<option value="${svEsc(c)}" ${c === sv.corredor ? "selected" : ""}>${svEsc(c)}</option>`).join("")}
+        ${sv.corredor && !corredores.includes(sv.corredor) ? `<option value="${svEsc(sv.corredor)}" selected>${svEsc(sv.corredor)}</option>` : ""}
+      </select>
+      ${sv.corredor ? `<button class="sv-quitar" onclick="svElegirCorredor('')" title="Ver todos los corredores"><i class="ti ti-x"></i></button>` : ""}
+    </div>
+    <span class="sv-esp"></span>
+    <button class="sv-btn" onclick="svExcel()" title="El detalle de cada servicio, por tripulante, por coche y por corredor">
+      <i class="ti ti-file-spreadsheet"></i><span>Excel</span>
+    </button>`;
+}
+
+function svElegirPreset(k) {
+  sv.preset = k;
+  [sv.desde, sv.hasta] = svPeriodo(k);
+  svPintarFiltros();
+  svCargar();
+}
+function svFechasPropias() {
+  let a = $("#sv-desde").value, b = $("#sv-hasta").value;
+  if (!a || !b) return;
+  if (a > b) [a, b] = [b, a];
+  sv.preset = "custom";
+  sv.desde = a; sv.hasta = b;
+  svPintarFiltros();
+  svCargar();
+}
+function svElegirCorredor(c) {
+  sv.corredor = c || "";
+  svPintarFiltros();
+  svCargar();
+  $("#sv-raiz")?.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "start" });
+}
+// "hacen nacionales", "hacen internacionales" o "hacen línea" (los dos juntos)
+function svHacen() {
+  return sv.trafico === "internacional" ? "hacen internacionales" : sv.trafico === "nacional" ? "hacen nacionales" : "hacen línea";
+}
+function svQuery() {
+  return `desde=${sv.desde}&hasta=${sv.hasta}${sv.corredor ? `&corredor=${encodeURIComponent(sv.corredor)}` : ""}${sv.trafico ? `&trafico=${sv.trafico}` : ""}`;
+}
+// Nacional, internacional o los dos juntos. Al cambiar, el corredor elegido
+// puede no existir en el otro: se vuelve a "todos".
+function svElegirTrafico(t) {
+  if (t === sv.trafico) return;
+  sv.trafico = t;
+  sv.corredor = "";
+  svPintarFiltros();
+  svCargar();
+}
+function svExcel() { window.location = `/api/servicios/excel?${svQuery()}`; }
+
+// Al cambiar el filtro, lo de antes queda a media luz hasta que llega lo nuevo
+async function svCargar(primera = false) {
+  const cuerpo = $("#sv-cuerpo");
+  if (!cuerpo) return;
+  const yo = ++sv.pedido;
+  if (!primera) cuerpo.classList.add("recargando");
+  const d = await api(`/api/servicios/panel?${svQuery()}`);
+  if (yo !== sv.pedido || !$("#sv-cuerpo")) return;
+  cuerpo.classList.remove("recargando");
+  if (!d || d.error) { cuerpo.innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>No se pudieron traer los servicios. Probá de nuevo.</div>`; return; }
+  sv.d = d;
+  sv.desde = d.desde; sv.hasta = d.hasta;
+  svPintarFiltros();
+  svPintar(primera);
+}
+
+// ─── Dibujo ──────────────────────────────────────────────────────────────
+
+function svPintar(entrada) {
+  const d = sv.d, c = $("#sv-cuerpo");
+  if (!d.hay_datos && d.corredor) {
+    c.innerHTML = `
+      <div class="sv-vacio">
+        <i class="ti ti-route"></i>
+        <b>No hay servicios de ${svEsc(d.corredor)} en estas fechas</b>
+        <span>Puede que el corredor tenga otro nombre en esos días. Probá con todos los corredores.</span>
+        <button class="btn btn-primary" onclick="svElegirCorredor('')">Ver todos los corredores</button>
+      </div>`;
+    return;
+  }
+  if (!d.hay_datos) {
+    const primero = d.primer_dia;
+    c.innerHTML = `
+      <div class="sv-vacio">
+        <i class="ti ti-chart-histogram"></i>
+        <b>${primero ? "No hay servicios en estas fechas" : "Todavía no hay tráfico cargado"}</b>
+        <span>${primero ? `El tráfico empieza el ${svFechaCorta(primero)}/${primero.slice(2, 4)}. Elegí otro período.`
+          : "Cada salida del tráfico de un día es un servicio: cuando se arme el tráfico, acá aparecen solos."}</span>
+        ${primero ? `<button class="btn btn-primary" onclick="sv.preset='custom'; sv.desde='${primero}'; sv.hasta=trHoy(); svPintarFiltros(); svCargar()">Ver desde el ${svFechaCorta(primero)}</button>`
+          : `<button class="btn btn-primary" onclick="destNavegar('trafico')"><i class="ti ti-route"></i> Ir a Tráfico</button>`}
+      </div>`;
+    return;
+  }
+  c.innerHTML = `
+    ${svHero()}
+    <div class="sv-kpis">${svKpis()}</div>
+    <section class="sv-card ancho" id="sv-dias">
+      ${svCabeza("Servicios por día", "Cada columna es un día. Tocá una para ver sus servicios y abrirla en Tráfico.", "dias",
+        `<span class="sv-ley"><i class="sq" style="background:var(--sv-s1)"></i>Regulares</span><span class="sv-ley"><i class="sq" style="background:var(--sv-s2)"></i>Refuerzos</span>`)}
+      <div class="sv-graf" id="sv-g-dias"></div>
+      <div class="sv-tabla">${svTablaDias()}</div>
+    </section>
+    <div class="sv-dos">
+      <section class="sv-card" id="sv-corr">
+        ${svCabeza("Corredores", d.corredor ? `Solo ${svEsc(d.corredor)}. Tocá de nuevo para ver todos.` : "Cuántos servicios tiene cada corredor. Tocá uno para ver solo ese.", "corr",
+          `<span class="sv-ley"><i class="sq" style="background:var(--sv-s1)"></i>Regulares</span><span class="sv-ley"><i class="sq" style="background:var(--sv-s2)"></i>Refuerzos</span>`)}
+        <div class="sv-graf">${svCorredores()}</div>
+        <div class="sv-tabla">${svTablaCorredores()}</div>
+      </section>
+      <section class="sv-card" id="sv-horas">
+        ${svCabeza("Cuándo salen", "Servicios por día de la semana y hora, en promedio. Más oscuro, más salidas.", "horas")}
+        <div class="sv-graf">${svMapa()}</div>
+        <div class="sv-tabla">${svTablaMapa()}</div>
+      </section>
+    </div>
+    <div class="sv-dos">
+      <section class="sv-card" id="sv-flota">
+        ${svCabeza("La flota", "Cuántos coches trabajan, cuáles cargan más y cuáles no salieron.", "flota")}
+        <div class="sv-graf">${svFlota()}</div>
+        <div class="sv-tabla">${svTablaCoches()}</div>
+      </section>
+      <section class="sv-card" id="sv-trip">
+        ${svCabeza("La tripulación", "Cuántos servicios hizo cada uno. Tocá un nombre para ver sus viajes.", "trip")}
+        <div class="sv-graf">${svTripulacion()}</div>
+        <div class="sv-tabla">${svTablaTrip()}</div>
+      </section>
+    </div>
+    <section class="sv-card ancho" id="sv-plan">
+      ${svCabeza("Cómo se arma el tráfico", "Con cuánto tiempo se publica la grilla, cuántas veces se cambia y cuánto sale A CONFIRMAR.", "plan")}
+      <div class="sv-graf">${svPlan()}</div>
+      <div class="sv-tabla">${svTablaPlan()}</div>
+    </section>
+    ${svDistancias()}`;
+  svDibujarDias();
+  if (entrada) svAnimarEntrada();
+  svContar();
+}
+
+function svCabeza(titulo, bajada, clave, leyenda = "") {
+  return `
+    <header class="sv-card-cab">
+      <div>
+        <h3>${titulo}</h3>
+        <p>${bajada}</p>
+      </div>
+      <div class="sv-card-acc">
+        ${leyenda ? `<div class="sv-leyenda">${leyenda}</div>` : ""}
+        <button class="sv-vista" onclick="svVerTabla(this)" aria-pressed="false" title="Ver los mismos datos en una tabla">
+          <i class="ti ti-table"></i><span>Tabla</span>
+        </button>
+      </div>
+    </header>`;
+}
+
+function svVerTabla(btn) {
+  const card = btn.closest(".sv-card");
+  const on = card.classList.toggle("ver-tabla");
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  btn.querySelector("span").textContent = on ? "Gráfico" : "Tabla";
+  btn.querySelector("i").className = `ti ti-${on ? "chart-bar" : "table"}`;
+}
+
+// ─── El número del período ───────────────────────────────────────────────
+
+function svDeltaHtml(v, sentido = "neutro", sufijo = "") {
+  if (v == null) return "";
+  const sube = v > 0, cero = Math.abs(v) < 0.05;
+  const clase = cero ? "igual" : sentido === "neutro" ? "neutro" : (sube === (sentido === "arriba")) ? "bien" : "mal";
+  const flecha = cero ? "ti-equal" : sube ? "ti-arrow-up-right" : "ti-arrow-down-right";
+  return `<span class="sv-delta ${clase}"><i class="ti ${flecha}"></i>${svNum(Math.abs(v), 1)}%${sufijo}</span>`;
+}
+
+function svHero() {
+  const d = sv.d, t = d.totales, del = d.deltas;
+  const max = Math.max(1, ...d.serie.map(x => x.servicios));
+  const barras = d.serie.map((x, i) => `<i style="--h:${x.con_trafico ? Math.max(4, x.servicios / max * 100) : 0}%;--i:${i}" class="${x.con_trafico ? "" : "sin"}"></i>`).join("");
+  const rango = `del ${svFechaCorta(d.desde)} al ${svFechaCorta(d.hasta)}`;
+  return `
+    <section class="sv-hero">
+      <div class="sv-hero-num">
+        <span class="sv-hero-et">${d.corredor ? `Servicios · ${svEsc(d.corredor)}` : "Servicios del período"}</span>
+        <b data-contar="${t.servicios}">${svNum(t.servicios)}</b>
+        <span class="sv-hero-sub">${svNum(t.por_dia, 1)} por día · ${t.dias} ${t.dias === 1 ? "día" : "días"} con tráfico · ${rango}</span>
+        ${del.servicios != null ? `<span class="sv-hero-delta">${svDeltaHtml(del.servicios, "arriba")} <em>por día, contra los ${d.dias_periodo} días anteriores</em></span>` : ""}
+      </div>
+      <div class="sv-hero-barras" aria-hidden="true">${barras}</div>
+    </section>`;
+}
+
+function svSpark(valores, color = "var(--sv-de)") {
+  const v = valores.map(x => x == null ? null : +x);
+  const nums = v.filter(x => x != null);
+  if (nums.length < 2) return "";
+  const W = 150, H = 26, max = Math.max(...nums), min = Math.min(...nums, 0), rango = (max - min) || 1;
+  let pts = [], ultimo = null;
+  v.forEach((x, i) => {
+    if (x == null) return;
+    const px = i / (v.length - 1) * (W - 6) + 3, py = H - 3 - (x - min) / rango * (H - 6);
+    pts.push(`${px.toFixed(1)},${py.toFixed(1)}`);
+    ultimo = [px, py];
+  });
+  return `<svg class="sv-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <polyline points="${pts.join(" ")}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+    ${ultimo ? `<circle cx="${ultimo[0]}" cy="${ultimo[1]}" r="3.2" fill="var(--sv-s1)" stroke="#fff" stroke-width="2" vector-effect="non-scaling-stroke"/>` : ""}
+  </svg>`;
+}
+
+function svKpis() {
+  const d = sv.d, t = d.totales, del = d.deltas, s = d.serie.filter(x => x.con_trafico);
+  const sinComp = del.comparable === false;
+  const tile = (et, valor, sub, delta, spark, extra = "") => `
+    <div class="sv-kpi ${extra}">
+      <span class="sv-kpi-et">${et}</span>
+      <b>${valor}</b>
+      <span class="sv-kpi-sub">${sub}</span>
+      <div class="sv-kpi-pie">${delta || `<span class="sv-delta vacio">${sinComp ? "sin período anterior completo" : ""}</span>`}${spark}</div>
+    </div>`;
+  const kmFaltan = (d.tramos || []).filter(x => x.km == null).length;
+  return [
+    tile("Refuerzos", `<span data-contar="${t.refuerzos}">${svNum(t.refuerzos)}</span>`,
+      `${svNum(t.servicios ? t.refuerzos / t.servicios * 100 : 0, 1)}% de los servicios`,
+      svDeltaHtml(del.refuerzos, "neutro", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.refuerzos : null))),
+    tile("Coches por día", `<span data-contar="${t.coches_por_dia}" data-dec="1">${svNum(t.coches_por_dia, 1)}</span>`,
+      `${t.uso_flota != null ? `${svNum(t.uso_flota, 0)}% de los ${t.flota_base} que ${svHacen()}` : "—"}`,
+      svDeltaHtml(del.coches_por_dia, "neutro"), svSpark(d.serie.map(x => x.con_trafico ? x.coches : null))),
+    tile("Coches distintos", `<span data-contar="${t.coches}">${svNum(t.coches)}</span>`,
+      "salieron al menos una vez", svDeltaHtml(del.coches, "neutro"), ""),
+    tile("Tripulantes", `<span data-contar="${t.tripulantes}">${svNum(t.tripulantes)}</span>`,
+      "hicieron al menos un servicio", svDeltaHtml(del.tripulantes, "neutro"), ""),
+    tile("Asientos ofrecidos", `<span data-contar="${t.asientos}">${svNum(t.asientos)}</span>`,
+      `${svNum(t.dias ? t.asientos / t.dias : 0)} por día${t.sin_coche ? " (sin contar los servicios sin coche)" : ""}`,
+      svDeltaHtml(del.asientos, "arriba", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.asientos : null))),
+    t.km ? tile("Km recorridos", `<span data-contar="${t.km}">${svNum(t.km)}</span>`,
+      `${svNum(t.dias ? t.km / t.dias : 0)} por día${t.km_cubiertos < t.servicios ? ` · faltan distancias de ${svNum(t.servicios - t.km_cubiertos)} servicios` : ""}`,
+      svDeltaHtml(del.km, "neutro", " por día"), svSpark(d.serie.map(x => x.con_trafico ? x.km : null)))
+      : tile("Km recorridos", "—", kmFaltan ? `Cargá la distancia de ${kmFaltan} ${kmFaltan === 1 ? "tramo" : "tramos"} y aparecen solos` : "Sin distancias",
+        `<button class="sv-link" onclick="svIrA('sv-dist')">Cargar distancias <i class="ti ti-arrow-right"></i></button>`, "", "falta"),
+  ].join("");
+}
+
+// Lleva a una sección del panel y la ilumina un momento.
+function svIrA(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: trQuieto() ? "auto" : "smooth", block: "start" });
+  el.classList.remove("ilumina"); void el.offsetWidth; el.classList.add("ilumina");
+}
+
+// ─── Servicios por día (columnas) ────────────────────────────────────────
+
+function svEscala(max, n = 4) {
+  if (max <= 0) return { tope: 1, paso: 1, marcas: [0, 1] };
+  const crudo = max / n, mag = Math.pow(10, Math.floor(Math.log10(crudo)));
+  const paso = [1, 2, 2.5, 5, 10].map(m => m * mag).find(p => p >= crudo) || 10 * mag;
+  const tope = Math.ceil(max / paso) * paso;
+  const marcas = [];
+  for (let v = 0; v <= tope + 1e-9; v += paso) marcas.push(+v.toFixed(6));
+  return { tope, paso, marcas };
+}
+
+// Columna con la punta redondeada (4px) y la base recta
+function svPathCol(x, y, w, h, r = 4) {
+  if (h <= 0) return "";
+  r = Math.min(r, h, w / 2);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+function svDibujarDias() {
+  const caja = $("#sv-g-dias");
+  if (!caja || !sv.d) return;
+  const serie = sv.d.serie;
+  const W = Math.max(300, caja.clientWidth), H = 250;
+  const pad = { l: 38, r: 64, t: 16, b: 34 };
+  const pw = W - pad.l - pad.r, ph = H - pad.t - pad.b;
+  const max = Math.max(1, ...serie.map(x => x.servicios));
+  const esc = svEscala(max);
+  const banda = pw / serie.length;
+  const bw = Math.max(2, Math.min(24, banda * 0.64));
+  const y = v => pad.t + ph - v / esc.tope * ph;
+  const prom = sv.d.totales.por_dia;
+  let g = "";
+  // grilla y marcas del eje
+  esc.marcas.forEach(m => {
+    g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(m)}" y2="${y(m)}" class="${m === 0 ? "sv-base" : "sv-grid"}"/>`;
+    g += `<text x="${pad.l - 8}" y="${y(m) + 4}" class="sv-eje" text-anchor="end">${svNum(m)}</text>`;
+  });
+  // fines de semana, apenas marcados para leer la semana
+  serie.forEach((x, i) => {
+    if (x.dia_semana >= 5) g += `<rect x="${pad.l + i * banda}" y="${pad.t}" width="${banda}" height="${ph}" class="sv-finde"/>`;
+  });
+  // las columnas
+  const cada = Math.max(1, Math.ceil(26 / banda));
+  serie.forEach((x, i) => {
+    const cx = pad.l + i * banda + (banda - bw) / 2;
+    const reg = x.servicios - x.refuerzos;
+    let marcas = "";
+    if (!x.con_trafico) {
+      marcas = `<circle cx="${cx + bw / 2}" cy="${y(0) - 4}" r="2.5" class="sv-sindato"/>`;
+    } else {
+      const hReg = reg / esc.tope * ph, hRef = x.refuerzos / esc.tope * ph;
+      const gap = x.refuerzos && reg ? 2 : 0;
+      marcas += `<path d="${svPathCol(cx, y(reg), bw, hReg, x.refuerzos ? 0 : 4)}" class="sv-m1"/>`;
+      if (x.refuerzos) marcas += `<path d="${svPathCol(cx, y(x.servicios), bw, Math.max(1, hRef - gap), 4)}" class="sv-m2"/>`;
+    }
+    const nombre = `${SV_DIAS_LARGOS[x.dia_semana]} ${svFechaCorta(x.fecha)}`;
+    const tip = x.con_trafico
+      ? { t: nombre, f: [[svNum(x.servicios), "servicios"], [svNum(reg), "regulares"], [svNum(x.refuerzos), "refuerzos"], [svNum(x.coches), "coches"]], p: "Tocá para ver el día" }
+      : { t: nombre, f: [["—", "sin tráfico cargado"]] };
+    g += `<g class="sv-col ${x.con_trafico ? "" : "vacia"}" style="--i:${i}" data-tip="${svTip(tip)}" tabindex="0" role="button"
+             aria-label="${svEsc(nombre)}: ${x.con_trafico ? `${x.servicios} servicios` : "sin tráfico"}" ${x.con_trafico ? `onclick="svAbrir('dia','${x.fecha}')" onkeydown="if(event.key==='Enter')svAbrir('dia','${x.fecha}')"` : ""}>
+            <rect x="${pad.l + i * banda}" y="${pad.t}" width="${banda}" height="${ph + 6}" class="sv-hit"/>${marcas}</g>`;
+    if (i % cada === 0 || i === serie.length - 1) {
+      const lab = x.fecha.slice(8, 10) === "01" || i === 0 ? svFechaCorta(x.fecha) : x.fecha.slice(8, 10).replace(/^0/, "");
+      g += `<text x="${pad.l + i * banda + banda / 2}" y="${H - pad.b + 16}" class="sv-eje ${x.dia_semana >= 5 ? "finde" : ""}" text-anchor="middle">${lab}</text>`;
+      if (banda >= 16) g += `<text x="${pad.l + i * banda + banda / 2}" y="${H - pad.b + 28}" class="sv-eje sv-eje-dia" text-anchor="middle">${SV_DIAS[x.dia_semana][0]}</text>`;
+    }
+  });
+  // promedio
+  if (prom) g += `<line x1="${pad.l}" x2="${W - pad.r + 4}" y1="${y(prom)}" y2="${y(prom)}" class="sv-prom"/>
+                  <text x="${W - pad.r + 8}" y="${y(prom) - 3}" class="sv-prom-t">Promedio</text>
+                  <text x="${W - pad.r + 8}" y="${y(prom) + 11}" class="sv-prom-v">${svNum(prom, 1)}</text>`;
+  caja.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="sv-svg" role="img" aria-label="Servicios por día">${g}</svg>`;
+}
+
+function svTablaDias() {
+  return `<table class="sv-t"><thead><tr><th>Día</th><th class="n">Servicios</th><th class="n">Regulares</th><th class="n">Refuerzos</th><th class="n">Coches</th></tr></thead><tbody>
+    ${sv.d.serie.filter(x => x.con_trafico).map(x => `<tr><td>${SV_DIAS_LARGOS[x.dia_semana]} ${svFechaCorta(x.fecha)}</td><td class="n">${x.servicios}</td><td class="n">${x.servicios - x.refuerzos}</td><td class="n">${x.refuerzos}</td><td class="n">${x.coches}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Corredores (barras horizontales) ────────────────────────────────────
+
+function svCorredores() {
+  const cs = sv.d.corredores;
+  const max = Math.max(1, ...cs.map(c => c.servicios));
+  return `<div class="sv-barras">${cs.map((c, i) => {
+    const reg = c.servicios - c.refuerzos;
+    const tip = { t: c.corredor, f: [[svNum(c.servicios), "servicios"], [`${svNum(c.parte, 1)}%`, "del total"], [svNum(c.refuerzos), "refuerzos"],
+      [svNum(c.ida), "idas"], [svNum(c.regreso), "regresos"], [svNum(c.coches), "coches distintos"], [svNum(c.asientos), "asientos ofrecidos"]]
+      .concat(c.km ? [[svNum(c.km), "km"]] : []), p: sv.corredor ? "Tocá para ver todos" : "Tocá para ver solo este corredor" };
+    return `
+      <button class="sv-fila-barra ${sv.corredor === c.corredor ? "on" : ""}" style="--i:${i}" data-tip="${svTip(tip)}"
+              onclick="svElegirCorredor(sv.corredor === this.dataset.c ? '' : this.dataset.c)" data-c="${svEsc(c.corredor)}">
+        <span class="sv-fb-nom">${svEsc(c.corredor)}</span>
+        <span class="sv-fb-pista">
+          <i class="sv-fb-a" style="--w:${reg / max * 100}%"></i>${c.refuerzos ? `<i class="sv-fb-b" style="--w:${c.refuerzos / max * 100}%"></i>` : ""}
+        </span>
+        <span class="sv-fb-val"><b>${svNum(c.servicios)}</b> ${svNum(c.parte, 0)}%</span>
+      </button>`;
+  }).join("")}</div>`;
+}
+
+function svTablaCorredores() {
+  return `<table class="sv-t"><thead><tr><th>Corredor</th><th class="n">Servicios</th><th class="n">%</th><th class="n">Idas</th><th class="n">Regresos</th><th class="n">Refuerzos</th><th class="n">Coches</th><th class="n">Asientos</th><th class="n">Km</th></tr></thead><tbody>
+    ${sv.d.corredores.map(c => `<tr><td>${svEsc(c.corredor)}</td><td class="n">${c.servicios}</td><td class="n">${svNum(c.parte, 1)}</td><td class="n">${c.ida}</td><td class="n">${c.regreso}</td><td class="n">${c.refuerzos}</td><td class="n">${c.coches}</td><td class="n">${svNum(c.asientos)}</td><td class="n">${c.km ? svNum(c.km) : "—"}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Mapa de horarios ────────────────────────────────────────────────────
+
+function svMapa() {
+  const { celdas, dias } = sv.d.horario;
+  const prom = celdas.map((fila, i) => fila.map(v => dias[i] ? v / dias[i] : 0));
+  const max = Math.max(0.0001, ...prom.flat());
+  let pico = [0, 0];
+  prom.forEach((f, i) => f.forEach((v, h) => { if (v > prom[pico[0]][pico[1]]) pico = [i, h]; }));
+  const color = v => v <= 0 ? "" : SV_RAMPA[Math.min(SV_RAMPA.length - 1, Math.floor(v / max * SV_RAMPA.length - 1e-9))];
+  const filas = prom.map((f, i) => `
+    <span class="sv-mapa-dia">${SV_DIAS[i]}</span>
+    ${f.map((v, h) => {
+      const tip = { t: `${SV_DIAS_LARGOS[i]} ${String(h).padStart(2, "0")}:00 a ${String(h).padStart(2, "0")}:59`,
+        f: [[svNum(v, 1), "servicios en promedio"], [svNum(celdas[i][h]), "en total"]], p: dias[i] ? `${dias[i]} ${SV_DIAS_LARGOS[i]}${dias[i] === 1 ? "" : (SV_DIAS_LARGOS[i].endsWith("s") ? "" : "s")} en el período` : "" };
+      return `<i class="sv-celda ${v ? "" : "cero"}" style="${v ? `background:${color(v)};` : ""}--i:${h}" data-tip="${svTip(tip)}"></i>`;
+    }).join("")}`).join("");
+  const horas = Array.from({ length: 24 }, (_, h) => `<span>${h % 3 === 0 ? String(h).padStart(2, "0") : ""}</span>`).join("");
+  const hp = String(pico[1]).padStart(2, "0");
+  return `
+    <div class="sv-mapa">
+      ${filas}
+      <span></span>${horas}
+    </div>
+    <div class="sv-mapa-pie">
+      <span class="sv-escala"><em>0</em><i style="background:linear-gradient(90deg, ${SV_RAMPA.join(",")})"></i><em>${svNum(max, 1)} por hora</em></span>
+      ${prom[pico[0]][pico[1]] ? `<span class="sv-pico"><i class="ti ti-flame"></i>El momento más cargado: <b>${SV_DIAS_LARGOS[pico[0]]} de ${hp}:00 a ${hp}:59</b></span>` : ""}
+    </div>`;
+}
+
+function svTablaMapa() {
+  const { celdas, dias } = sv.d.horario;
+  return `<table class="sv-t sv-t-mapa"><thead><tr><th>Hora</th>${SV_DIAS.map(d => `<th class="n">${d}</th>`).join("")}</tr></thead><tbody>
+    ${Array.from({ length: 24 }, (_, h) => `<tr><td>${String(h).padStart(2, "0")}:00</td>${celdas.map((f, i) => `<td class="n">${dias[i] && f[h] ? svNum(f[h] / dias[i], 1) : ""}</td>`).join("")}</tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── La flota ────────────────────────────────────────────────────────────
+
+function svFlota() {
+  const d = sv.d, t = d.totales, cs = d.coches;
+  const max = Math.max(1, ...cs.map(c => c.servicios));
+  const mediana = cs.length ? cs.map(c => c.servicios).sort((a, b) => a - b)[Math.floor(cs.length / 2)] : 0;
+  const top = cs.slice(0, 10);
+  const uso = t.uso_flota ?? 0;
+  return `
+    <div class="sv-medidor" data-tip="${svTip({ t: "Coches en uso por día", f: [[svNum(t.coches_por_dia, 1), "en promedio"], [svNum(t.flota_base), svHacen()], [`${svNum(uso, 1)}%`, "en uso"]] })}">
+      <div class="sv-med-txt"><b>${svNum(t.coches_por_dia, 1)}</b> de <b>${t.flota_base}</b> coches en uso por día <em>${svNum(uso, 0)}%</em></div>
+      <div class="sv-med-pista"><i style="--w:${Math.min(100, uso)}%"></i></div>
+      <small>Los que ${svHacen()} son los que salieron alguna vez en ese tráfico (turismo y corporativos no cuentan).</small>
+    </div>
+    <h4 class="sv-sub">Los que más salieron <span>mediana: ${mediana} servicios</span></h4>
+    <div class="sv-barras chico">${top.map((c, i) => {
+      const tip = { t: `Coche ${c.coche}${c.modelo ? ` · ${c.modelo}` : ""}`, f: [[svNum(c.servicios), "servicios"], [svNum(c.dias), "días con salida"], [svNum(c.refuerzos), "refuerzos"]].concat(c.km ? [[svNum(c.km), "km"]] : []).concat([[c.corredor, "corredor principal"]]), p: "Tocá para ver sus servicios" };
+      return `
+        <button class="sv-fila-barra" style="--i:${i}" data-tip="${svTip(tip)}" onclick="svAbrir('coche','${svEsc(c.coche)}')">
+          <span class="sv-fb-nom"><span class="sv-chapa">${svEsc(c.coche)}</span></span>
+          <span class="sv-fb-pista"><i class="sv-fb-a" style="--w:${c.servicios / max * 100}%"></i>
+            ${mediana ? `<i class="sv-mediana" style="--x:${mediana / max * 100}%" title="Mediana"></i>` : ""}</span>
+          <span class="sv-fb-val"><b>${c.servicios}</b></span>
+        </button>`;
+    }).join("")}</div>
+    ${cs.length > 10 ? `<button class="sv-link" onclick="svVerTabla(this.closest('.sv-card').querySelector('.sv-vista'))">Ver los ${cs.length} coches <i class="ti ti-arrow-right"></i></button>` : ""}
+    <h4 class="sv-sub">No salieron en el período <span>${d.parados.length || "ninguno"}</span></h4>
+    ${d.parados.length ? `<div class="sv-parados">${d.parados.map(p => {
+      const est = p.estado || [];
+      return `<div class="sv-parado ${est.length ? "con-estado" : ""}">
+          <span class="sv-chapa ${est.length ? "gris" : ""}">${svEsc(p.coche)}</span>
+          <span class="sv-parado-txt">
+            <b>${est.length ? est.map(e => `<i class="ti ti-${e.tipo === "taller" ? "tool" : "ban"}"></i> ${svEsc(e.txt)}`).join(" · ") : "Sin motivo cargado"}</b>
+            <em>${p.ultimo ? `Último servicio: ${svFechaCorta(p.ultimo.slice(0, 10))}` : "Nunca salió"}${p.modelo ? ` · ${svEsc(p.modelo)}` : ""}</em>
+          </span>
+        </div>`;
+    }).join("")}</div>` : `<p class="sv-nada"><i class="ti ti-circle-check"></i> Todos los coches que ${svHacen()} salieron al menos una vez.</p>`}`;
+}
+
+function svTablaCoches() {
+  return `<table class="sv-t"><thead><tr><th>Coche</th><th>Modelo</th><th class="n">Servicios</th><th class="n">Días</th><th class="n">Refuerzos</th><th>Corredor principal</th><th class="n">Km</th></tr></thead><tbody>
+    ${sv.d.coches.map(c => `<tr class="clic" onclick="svAbrir('coche','${svEsc(c.coche)}')"><td><b>${svEsc(c.coche)}</b></td><td>${svEsc(c.modelo)}</td><td class="n">${c.servicios}</td><td class="n">${c.dias}</td><td class="n">${c.refuerzos}</td><td>${svEsc(c.corredor)}</td><td class="n">${c.km ? svNum(c.km) : "—"}</td></tr>`).join("")}
+    ${sv.d.parados.map(p => `<tr><td><b>${svEsc(p.coche)}</b></td><td>${svEsc(p.modelo)}</td><td class="n">0</td><td class="n">0</td><td class="n">0</td><td>${(p.estado || []).map(e => svEsc(e.txt)).join(", ") || "—"}</td><td class="n">—</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── La tripulación ──────────────────────────────────────────────────────
+
+function svTripulacion() {
+  const ps = sv.d.tripulantes;
+  if (!ps.length) return `<p class="sv-nada">No hay tripulantes cargados en este período.</p>`;
+  const max = Math.max(1, ...ps.map(p => p.servicios));
+  const ord = ps.map(p => p.servicios).sort((a, b) => a - b);
+  const mediana = ord[Math.floor(ord.length / 2)];
+  const top = ps.slice(0, 14);
+  const prom = ord.reduce((a, b) => a + b, 0) / ord.length;
+  return `
+    <div class="sv-trip-res">
+      <div><b>${ps.length}</b><span>tripulantes</span></div>
+      <div><b>${svNum(prom, 1)}</b><span>servicios en promedio</span></div>
+      <div><b>${mediana}</b><span>la mitad hizo esto o menos</span></div>
+    </div>
+    <h4 class="sv-sub">Los que más servicios hicieron <span>la rayita es la mediana</span></h4>
+    <div class="sv-barras chico">${top.map((p, i) => {
+      const tip = { t: p.nombre, f: [[svNum(p.servicios), "servicios"], [svNum(p.dias), "días con salida"], [svNum(p.coches), "coches distintos"], [svNum(p.refuerzos), "refuerzos"]].concat(p.km ? [[svNum(p.km), "km"]] : []), p: "Tocá para ver sus viajes" };
+      return `
+        <button class="sv-fila-barra" style="--i:${i}" data-tip="${svTip(tip)}" data-n="${svEsc(p.nombre)}" onclick="svAbrir('tripulante', this.dataset.n)">
+          <span class="sv-fb-nom">${svEsc(p.nombre)}</span>
+          <span class="sv-fb-pista"><i class="sv-fb-a" style="--w:${p.servicios / max * 100}%"></i>
+            <i class="sv-mediana" style="--x:${mediana / max * 100}%"></i></span>
+          <span class="sv-fb-val"><b>${p.servicios}</b></span>
+        </button>`;
+    }).join("")}</div>
+    ${ps.length > 14 ? `<button class="sv-link" onclick="svVerTabla(this.closest('.sv-card').querySelector('.sv-vista'))">Ver los ${ps.length} tripulantes <i class="ti ti-arrow-right"></i></button>` : ""}`;
+}
+
+function svTablaTrip() {
+  return `<table class="sv-t"><thead><tr><th>Tripulante</th><th class="n">Servicios</th><th class="n">Días</th><th class="n">Refuerzos</th><th class="n">Coches</th><th class="n">Km</th><th>Último</th></tr></thead><tbody>
+    ${sv.d.tripulantes.map(p => `<tr class="clic" data-n="${svEsc(p.nombre)}" onclick="svAbrir('tripulante', this.dataset.n)"><td>${svEsc(p.nombre)}</td><td class="n">${p.servicios}</td><td class="n">${p.dias}</td><td class="n">${p.refuerzos}</td><td class="n">${p.coches}</td><td class="n">${p.km ? svNum(p.km) : "—"}</td><td>${p.ultimo ? svFechaCorta(p.ultimo.slice(0, 10)) + " " + p.ultimo.slice(11) : ""}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Cómo se arma el tráfico ─────────────────────────────────────────────
+
+function svPlan() {
+  const p = sv.d.planificacion;
+  const ant = p.anticipacion_mediana;
+  const tile = (et, valor, sub, nivel = "") => `
+    <div class="sv-ptile ${nivel}">
+      <span class="sv-pet">${et}</span><b>${valor}</b><em>${sub}</em>
+      ${nivel ? `<span class="sv-ptag ${nivel}"><i class="ti ti-${nivel === "bien" ? "circle-check" : "alert-triangle"}"></i>${nivel === "bien" ? "Bien" : "A mejorar"}</span>` : ""}
+    </div>`;
+  const nivelAnt = ant == null ? "" : ant < 3 ? "mal" : ant >= 10 ? "bien" : "";
+  const nivelConf = p.a_confirmar_pct == null ? "" : p.a_confirmar_pct >= 10 ? "mal" : p.a_confirmar_pct <= 2 ? "bien" : "";
+  const nivelVer = p.versiones_promedio == null ? "" : p.versiones_promedio >= 2 ? "mal" : p.versiones_promedio <= 1.2 ? "bien" : "";
+  const dias = p.dias.map((x, i) => {
+    const v = x.versiones;
+    const fondo = !x.publicado ? "" : SV_ORDINAL[Math.min(v, 3) - 1];
+    const tip = { t: `${SV_DIAS_LARGOS[svDiaSemana(x.fecha)]} ${svFechaCorta(x.fecha)}`,
+      f: x.publicado ? [[String(v), v === 1 ? "versión" : "versiones"], [x.anticipacion != null ? `${svNum(x.anticipacion, 1)} h` : "—", "antes de la primera salida"],
+        [String(x.cambios), "cambios después de publicar"], [String(x.a_confirmar), "salidas publicadas A CONFIRMAR"]] : [["—", "nunca se publicó"]] };
+    return `<i class="sv-pdia ${x.publicado ? "" : "sin"}" style="${fondo ? `background:${fondo};` : ""}--i:${i}" data-tip="${svTip(tip)}">${x.publicado ? (v > 1 ? v : "") : "–"}</i>`;
+  }).join("");
+  return `
+    <div class="sv-ptiles">
+      ${tile("Se publica", ant == null ? "—" : ant < 0 ? "Después" : `${svNum(ant, 1)} h`, ant == null ? "sin publicaciones" : "antes de la primera salida (mediana)", nivelAnt)}
+      ${tile("Versiones por día", p.versiones_promedio == null ? "—" : svNum(p.versiones_promedio, 1), `${svNum(p.cambios)} cambios después de publicar`, nivelVer)}
+      ${tile("Salen A CONFIRMAR", p.a_confirmar_pct == null ? "—" : `${svNum(p.a_confirmar_pct, 1)}%`, "de las salidas, al publicar", nivelConf)}
+      ${tile("Días sin publicar", svNum(p.dias_sin_publicar), `de ${p.dias.length} días con tráfico`, p.dias_sin_publicar ? "mal" : "bien")}
+    </div>
+    <h4 class="sv-sub">Día por día <span class="sv-pley"><i style="background:${SV_ORDINAL[0]}"></i>1 versión <i style="background:${SV_ORDINAL[1]}"></i>2 <i style="background:${SV_ORDINAL[2]}"></i>3 o más <i class="sin"></i>sin publicar</span></h4>
+    <div class="sv-pdias">${dias}</div>`;
+}
+
+function svTablaPlan() {
+  return `<table class="sv-t"><thead><tr><th>Día</th><th class="n">Versiones</th><th class="n">Horas antes</th><th class="n">Cambios</th><th class="n">A confirmar</th></tr></thead><tbody>
+    ${sv.d.planificacion.dias.map(x => `<tr><td>${SV_DIAS_LARGOS[svDiaSemana(x.fecha)]} ${svFechaCorta(x.fecha)}</td><td class="n">${x.publicado ? x.versiones : "sin publicar"}</td><td class="n">${x.anticipacion != null ? svNum(x.anticipacion, 1) : "—"}</td><td class="n">${x.cambios}</td><td class="n">${x.a_confirmar}</td></tr>`).join("")}
+  </tbody></table>`;
+}
+
+// ─── Distancias por tramo ────────────────────────────────────────────────
+
+function svDistancias() {
+  const ts = sv.d.tramos || [];
+  if (!ts.length) return "";
+  const faltan = ts.filter(t => t.km == null).length;
+  const ed = sv.d.puede_editar;
+  return `
+    <section class="sv-card ancho sv-dist ${faltan ? "" : "completo"}" id="sv-dist">
+      <header class="sv-card-cab">
+        <div>
+          <h3>Distancias por tramo</h3>
+          <p>${faltan ? `Se cargan una sola vez: con ${faltan === 1 ? "la que falta" : `las ${faltan} que faltan`} el sistema calcula solo los km de cada coche, corredor y día.`
+            : "Con estas distancias se calculan los km. Los dos sentidos de un tramo usan la misma."}</p>
+        </div>
+        ${faltan ? `<span class="sv-falta"><i class="ti ti-ruler-measure"></i> Faltan ${faltan}</span>` : `<span class="sv-ok"><i class="ti ti-circle-check"></i> Completas</span>`}
+      </header>
+      <div class="sv-tramos">
+        ${ts.map(t => `
+          <label class="sv-tramo ${t.km == null ? "falta" : ""}">
+            <span class="sv-tramo-nom">${svEsc(t.nombre)}</span>
+            <span class="sv-tramo-n">${svNum(t.servicios)} servicios</span>
+            <span class="sv-tramo-km">
+              <input type="text" inputmode="numeric" value="${t.km != null ? svNum(t.km) : ""}" placeholder="—" ${ed ? "" : "readonly"}
+                     data-clave="${svEsc(t.clave)}" data-v="${t.km != null ? svNum(t.km) : ""}" onchange="svGuardarDistancia(this)"
+                     onkeydown="if(event.key==='Enter')this.blur()" aria-label="Kilómetros de ${svEsc(t.nombre)}">
+              <em>km</em>
+            </span>
+          </label>`).join("")}
+      </div>
+    </section>`;
+}
+
+async function svGuardarDistancia(inp) {
+  const v = inp.value.trim();
+  if (v === (inp.dataset.v || "")) return;
+  inp.classList.add("guardando");
+  const r = await api("/api/servicios/distancia", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clave: inp.dataset.clave, km: v }) });
+  inp.classList.remove("guardando");
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo guardar", "error"); inp.value = inp.dataset.v || ""; return; }
+  inp.dataset.v = v;
+  inp.closest(".sv-tramo")?.classList.toggle("falta", !v);
+  inp.classList.remove("guardado"); void inp.offsetWidth; inp.classList.add("guardado");
+  clearTimeout(sv._distT);
+  sv._distT = setTimeout(() => svCargar(), 900);          // los km se recalculan solos
+}
+
+// ─── El cajón con el detalle ─────────────────────────────────────────────
+
+async function svAbrir(tipo, clave) {
+  svCerrarCajon(true);
+  const fondo = document.createElement("div");
+  fondo.className = "sv-cajon-fondo";
+  fondo.innerHTML = `<aside class="sv-cajon" role="dialog" aria-modal="true"><div class="sv-cajon-cab"><div class="dossier-loading"></div></div></aside>`;
+  fondo.addEventListener("click", e => { if (e.target === fondo) svCerrarCajon(); });
+  document.body.appendChild(fondo);
+  const d = await api(`/api/servicios/detalle?tipo=${tipo}&clave=${encodeURIComponent(clave)}&desde=${sv.desde}&hasta=${sv.hasta}${sv.trafico ? `&trafico=${sv.trafico}` : ""}`);
+  const caja = fondo.querySelector(".sv-cajon");
+  if (!caja || !fondo.isConnected) return;
+  if (!d || d.error) { caja.innerHTML = `<div class="empty">No se pudo traer el detalle.</div>`; return; }
+  const r = d.resumen;
+  const titulo = tipo === "coche" ? `<span class="sv-chapa grande">${svEsc(clave)}</span>`
+    : tipo === "dia" ? `${SV_DIAS_LARGOS[svDiaSemana(clave)]} ${svFechaCorta(clave)}`
+    : svEsc(clave);
+  const etiqueta = { coche: "Coche", tripulante: "Tripulante", corredor: "Corredor", dia: "Día" }[tipo];
+  const porFecha = {};
+  d.servicios.forEach(s => (porFecha[s.fecha] = porFecha[s.fecha] || []).push(s));
+  const coche = (sv.d?.coches || []).find(c => c.coche === clave);
+  caja.innerHTML = `
+    <div class="sv-cajon-cab">
+      <span>${tipo === "dia" ? "Servicios del día" : `${etiqueta} · del ${svFechaCorta(d.desde)} al ${svFechaCorta(d.hasta)}`}</span>
+      <h3>${titulo}</h3>
+      <div class="sv-cajon-num">
+        <div><b>${svNum(r.servicios)}</b><em>servicios</em></div>
+        ${tipo !== "dia" ? `<div><b>${svNum(r.dias)}</b><em>días</em></div>` : `<div><b>${svNum(r.coches)}</b><em>coches</em></div>`}
+        <div><b>${svNum(r.refuerzos)}</b><em>refuerzos</em></div>
+        ${r.km ? `<div><b>${svNum(r.km)}</b><em>km</em></div>` : ""}
+      </div>
+      <button class="sv-cajon-x" onclick="svCerrarCajon()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="sv-cajon-cuerpo">
+      ${Object.entries(porFecha).map(([f, lista]) => `
+        <div class="sv-cj-dia">
+          ${tipo !== "dia" ? `<h5>${SV_DIAS_LARGOS[svDiaSemana(f)]} ${svFechaCorta(f)}</h5>` : ""}
+          ${lista.map(s => `
+            <div class="sv-cj-serv">
+              <span class="sv-cj-hora">${svEsc(s.hora || "--:--")}</span>
+              <span class="sv-cj-tramo"><b>${svEsc(s.destino || s.corredor)}</b>${s.refuerzo ? `<em class="ref">REFUERZO</em>` : ""}<small>${s.lado === "regreso" ? "Regreso" : "Ida"} · ${svEsc(s.corredor)}</small></span>
+              ${tipo !== "coche" ? `<span class="sv-chapa ${s.coche ? "" : "falta"}">${s.coche ? svEsc(s.coche) : "A CONF."}</span>` : ""}
+              <span class="sv-cj-trip">${s.trips.length ? s.trips.map(t => svEsc(t)).join("<br>") : `<em>sin tripulantes</em>`}</span>
+            </div>`).join("")}
+        </div>`).join("") || `<div class="empty">Sin servicios en el período.</div>`}
+    </div>
+    <div class="sv-cajon-pie">
+      ${tipo === "dia" ? `<button class="btn btn-primary" onclick="svIrTrafico('${clave}')"><i class="ti ti-route"></i> Abrir en Tráfico</button>` : ""}
+      ${tipo === "coche" && coche?.vid && puedeVerSeccion("historial_carga") ? `<button class="btn btn-ghost" onclick="svIrHistorial(${coche.vid})"><i class="ti ti-timeline-event"></i> Historial del coche</button>` : ""}
+      ${tipo === "corredor" ? `<button class="btn btn-ghost" onclick="svCerrarCajon(); svElegirCorredor(${svEsc(JSON.stringify(clave))})"><i class="ti ti-filter"></i> Ver solo este corredor</button>` : ""}
+      <button class="btn btn-ghost" onclick="svCerrarCajon()">Cerrar</button>
+    </div>`;
+  caja.querySelector(".sv-cajon-x")?.focus();
+}
+
+function svCerrarCajon(ya = false) {
+  document.querySelectorAll(".sv-cajon-fondo").forEach(f => {
+    if (ya || trQuieto()) { f.remove(); return; }
+    f.classList.add("sale");
+    setTimeout(() => f.remove(), 420);
+  });
+}
+function svIrTrafico(fecha, trafico) {
+  svCerrarCajon(true);
+  tr.fecha = fecha;
+  const t = trafico || sv.trafico;
+  if (t === "nacional" || t === "internacional") {
+    tr.tipo = t;
+    try { localStorage.setItem("tr-tipo", t); } catch (e) { /* queda en memoria */ }
+  }
+  destNavegar("trafico");
+}
+function svIrHistorial(vid) { svCerrarCajon(true); window._hiAbrirCoche = vid; destNavegar("historial_carga"); }
+
+// ─── Movimiento: columnas que crecen y números que cuentan ───────────────
+
+function svAnimarEntrada() {
+  if (trQuieto()) return;
+  $("#sv-cuerpo")?.classList.add("entra");
+  setTimeout(() => $("#sv-cuerpo")?.classList.remove("entra"), 2600);
+}
+
+function svContar() {
+  const els = document.querySelectorAll("#sv-cuerpo [data-contar]");
+  if (trQuieto()) return;
+  const dur = 1100;
+  els.forEach(el => {
+    const fin = +el.dataset.contar, dec = +(el.dataset.dec || 0);
+    if (!isFinite(fin) || fin === 0) return;
+    const t0 = performance.now();
+    const paso = t => {
+      if (!el.isConnected) return;
+      const k = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+      el.textContent = svNum(fin * e, dec);
+      if (k < 1) requestAnimationFrame(paso);
+    };
+    requestAnimationFrame(paso);
+  });
+}
+
+// ─── Globito con los datos al pasar o enfocar ────────────────────────────
+(function () {
+  let caja = null;
+  const crear = () => {
+    caja = document.createElement("div");
+    caja.id = "sv-tip";
+    caja.setAttribute("role", "tooltip");
+    document.body.appendChild(caja);
+  };
+  const mostrar = (el, x, y) => {
+    let info;
+    try { info = JSON.parse(el.dataset.tip); } catch (e) { return; }
+    if (!caja) crear();
+    caja.replaceChildren();
+    const t = document.createElement("div"); t.className = "sv-tip-t"; t.textContent = info.t || ""; caja.appendChild(t);
+    (info.f || []).forEach(([v, et]) => {
+      const fila = document.createElement("div"); fila.className = "sv-tip-f";
+      const b = document.createElement("b"); b.textContent = v;
+      const s = document.createElement("span"); s.textContent = et;
+      fila.append(b, s); caja.appendChild(fila);
+    });
+    if (info.p) { const p = document.createElement("div"); p.className = "sv-tip-p"; p.textContent = info.p; caja.appendChild(p); }
+    caja.classList.add("visible");
+    const w = caja.offsetWidth, h = caja.offsetHeight;
+    let left = x + 14, top = y - h - 12;
+    if (left + w > window.innerWidth - 8) left = x - w - 14;
+    if (top < 8) top = y + 18;
+    caja.style.left = Math.max(8, left) + "px";
+    caja.style.top = top + "px";
+  };
+  const ocultar = () => caja?.classList.remove("visible");
+  document.addEventListener("pointermove", e => {
+    const el = e.target.closest?.("#sv-raiz [data-tip], .sv-medidor[data-tip]");
+    if (el) mostrar(el, e.clientX, e.clientY); else ocultar();
+  }, { passive: true });
+  document.addEventListener("focusin", e => {
+    const el = e.target.closest?.("#sv-raiz [data-tip]");
+    if (!el) { ocultar(); return; }
+    const r = el.getBoundingClientRect();
+    mostrar(el, r.left + r.width / 2, r.top);
+  });
+  document.addEventListener("scroll", ocultar, true);
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { ocultar(); svCerrarCajon(); } });
+  // El gráfico de columnas se rehace al cambiar el ancho
+  let t = null;
+  window.addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => { if ($("#sv-g-dias")) svDibujarDias(); }, 180); });
+})();
+
+// ─── Arranque ───────────────────────────────────────────────────────────
+setCoche(null);
+if (window.USUARIO_ROL === "compras") {
+  // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
+  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga"];
+  document.querySelectorAll(".nav-item").forEach(b => {
+    if (!seccionesCompras.includes(b.dataset.sec)) b.style.display = "none";
+  });
+  document.querySelectorAll(".nav-section").forEach(s => {
+    const t = s.textContent.trim();
+    if (t !== "Compras" && t !== "Taller") s.style.display = "none";
+  });
+  document.querySelector('.nav-item[data-sec="compras"]')?.classList.add("active");
+  renderCompras();
+} else if (window.USUARIO_ROL === "auditor") {
+  // El auditor controla: todo lo de rendiciones corporativas más lo suyo de
+  // siempre (combustible e historial). Solo consulta, no modifica nada.
+  const seccionesAuditor = ["combustible",
+                            "corp_resumen", "corp_historial", "corp_empresas",
+                            "corp_combustible", "corp_cargas", "turismo_rendiciones"];
+  document.querySelectorAll(".nav-item").forEach(b => {
+    if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
+  });
+  document.querySelectorAll(".nav-section").forEach(s => {
+    const t = s.textContent.trim();
+    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo") s.style.display = "none";
+  });
+  document.querySelector('.nav-item[data-sec="corp_resumen"]')?.classList.add("active");
+  renderCorpResumen();
+} else if (tieneSeccionesLimitadas()) {
+  aplicarSecciones();
+} else {
+  renderDashboard();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  NEUMÁTICOS (por vehículo - vista con esquema visual)
+// ════════════════════════════════════════════════════════════════════════
+
+const ESTADO_GRAD_LABEL = {
+  optimo: "Óptimo", bueno: "Bueno", regular: "Regular",
+  atencion: "Atención", vencido: "Vencido"
+};
+
+// Confirmar que la config automática es correcta (saca el aviso)
+async function confirmarConfig(vid) {
+  const data = await api(`/api/vehiculos/${vid}/neumaticos`);
+  const r = await api(`/api/vehiculos/${vid}/config_neumaticos`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ configuracion: data.configuracion })
+  });
+  if (r.ok) { toast("Configuración confirmada", "success"); renderNeumaticos(); }
+}
+
+// Abrir selector para cambiar la configuración de ruedas del vehículo
+async function cambiarConfigNeumaticos(vid, actual) {
+  const configs = await api("/api/configs_neumaticos");
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:480px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-settings"></i> Configuración de ruedas</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Elegí cómo es este vehículo. El cambio afecta solo a esta unidad. Recordá: adelante 1 rueda por lado, atrás gemelas.</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:18px">
+        ${configs.map(c => `
+          <label style="display:flex;align-items:center;gap:12px;padding:13px 14px;border:1.5px solid ${c.valor===actual?'var(--brand-blue)':'var(--border)'};border-radius:11px;cursor:pointer;background:${c.valor===actual?'#eaf2fb':'#fff'}">
+            <input type="radio" name="cfg-neu" value="${c.valor}" ${c.valor===actual?'checked':''} style="width:18px;height:18px">
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:14px">${c.label.split('—')[0].trim()}</div>
+              <div style="font-size:12px;color:var(--muted)">${c.ruedas} ruedas en total</div>
+            </div>
+            <span class="badge cat">${c.ruedas}</span>
+          </label>
+        `).join("")}
+      </div>
+      <p style="font-size:11.5px;color:var(--muted);margin:0 0 16px"><i class="ti ti-info-circle"></i> Si cambiás la cantidad de ruedas, las posiciones se rearman. Las cubiertas instaladas en posiciones que ya no existan quedarán libres.</p>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarCambioConfig(${vid}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+async function guardarCambioConfig(vid, btn) {
+  const sel = document.querySelector('input[name="cfg-neu"]:checked');
+  if (!sel) { toast("Elegí una configuración", "error"); return; }
+  const r = await api(`/api/vehiculos/${vid}/config_neumaticos`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ configuracion: sel.value })
+  });
+  if (r.ok) {
+    toast("Configuración actualizada", "success");
+    btn.closest(".modal-overlay").remove();
+    renderNeumaticos();
+  } else toast("Error al guardar", "error");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  NEUMÁTICOS — plano interactivo con drag & drop
+// ════════════════════════════════════════════════════════════════════════
+
+// Coordenadas de cada posición según configuración (bus visto desde arriba).
+// Reusa el mismo mapa de layouts que ya existía, centralizado acá.
+// ─── Layouts del bus (vista superior, versión robusta) ───
+// Cada layout: tamaño del lienzo, caja de la carrocería, líneas de eje, y
+// las posiciones con su coordenada central (cx,cy) y etiqueta legible.
+// 'lado' indica si la etiqueta va arriba ('top') o abajo ('bot') de la rueda.
+const BUS_LAYOUTS = {
+  "4x2": { w: 480, h: 300, bus:{x:48,y:70,w:384,h:160}, ejes:[150,360], pos:{
+    "DI":{x:108,y:55,lado:"top",l:"Dir. izq"},"DD":{x:108,y:245,lado:"bot",l:"Dir. der"},
+    "TI-Ext":{x:392,y:55,lado:"top",l:"Tra. izq"},"TD-Ext":{x:392,y:245,lado:"bot",l:"Tra. der"} } },
+
+  "6x2": { w: 620, h: 320, bus:{x:52,y:72,w:516,h:176}, ejes:[170,430,510], pos:{
+    "DI":{x:120,y:54,lado:"top",l:"Dir. izq"},"DD":{x:120,y:266,lado:"bot",l:"Dir. der"},
+    "TI-Ext":{x:404,y:48,lado:"top",l:"Tra. izq E"},"TI-Int":{x:404,y:96,lado:"mid",l:""},
+    "TD-Ext":{x:404,y:272,lado:"bot",l:"Tra. der E"},"TD-Int":{x:404,y:224,lado:"mid",l:""} } },
+
+  "6x2/3": { w: 700, h: 320, bus:{x:52,y:72,w:596,h:176}, ejes:[170,400,560], pos:{
+    "DI":{x:120,y:54,lado:"top",l:"Dir. izq"},"DD":{x:120,y:266,lado:"bot",l:"Dir. der"},
+    "TI-Ext":{x:360,y:48,lado:"top",l:"Tra. izq E"},"TI-Int":{x:360,y:96,lado:"mid",l:""},
+    "TD-Ext":{x:360,y:272,lado:"bot",l:"Tra. der E"},"TD-Int":{x:360,y:224,lado:"mid",l:""},
+    "AI":{x:600,y:54,lado:"top",l:"Aux. izq"},"AD":{x:600,y:266,lado:"bot",l:"Aux. der"} } },
+
+  "8x2": { w: 760, h: 320, bus:{x:52,y:72,w:656,h:176}, ejes:[170,420,580], pos:{
+    "DI":{x:120,y:54,lado:"top",l:"Dir. izq"},"DD":{x:120,y:266,lado:"bot",l:"Dir. der"},
+    "TI-Ext":{x:400,y:48,lado:"top",l:"Tra. izq E"},"TI-Int":{x:400,y:96,lado:"mid",l:""},
+    "TD-Ext":{x:400,y:272,lado:"bot",l:"Tra. der E"},"TD-Int":{x:400,y:224,lado:"mid",l:""},
+    "AI-Ext":{x:620,y:48,lado:"top",l:"Aux. izq E"},"AI-Int":{x:620,y:96,lado:"mid",l:""},
+    "AD-Ext":{x:620,y:272,lado:"bot",l:"Aux. der E"},"AD-Int":{x:620,y:224,lado:"mid",l:""} } },
+
+  "4patas": { w: 780, h: 330, bus:{x:52,y:76,w:676,h:180}, ejes:[180,420,580], pos:{
+    "DI":{x:124,y:56,lado:"top",l:"Dir. izq"},"DD":{x:124,y:276,lado:"bot",l:"Dir. der"},
+    "TI-Ext":{x:400,y:50,lado:"top",l:"Tra. izq E"},"TI-Int":{x:400,y:100,lado:"mid",l:""},
+    "TD-Ext":{x:400,y:282,lado:"bot",l:"Tra. der E"},"TD-Int":{x:400,y:232,lado:"mid",l:""},
+    "AI":{x:540,y:56,lado:"top",l:"Aux. izq"},"AD":{x:540,y:276,lado:"bot",l:"Aux. der"},
+    "RI":{x:660,y:56,lado:"top",l:"Ref. izq"},"RD":{x:660,y:276,lado:"bot",l:"Ref. der"} } },
+
+  "camioneta": { w: 460, h: 290, bus:{x:48,y:74,w:364,h:150}, ejes:[150,350], pos:{
+    "DI":{x:108,y:56,lado:"top",l:"Del. izq"},"DD":{x:108,y:240,lado:"bot",l:"Del. der"},
+    "TI-Ext":{x:392,y:56,lado:"top",l:"Tra. izq"},"TD-Ext":{x:392,y:240,lado:"bot",l:"Tra. der"} } },
+
+  "2ejes": { w: 520, h: 320, bus:{x:52,y:72,w:416,h:176}, ejes:[170,400], pos:{
+    "DI":{x:120,y:54,lado:"top",l:"Dir. izq"},"DD":{x:120,y:266,lado:"bot",l:"Dir. der"},
+    "TI-Ext":{x:404,y:48,lado:"top",l:"Tra. izq E"},"TI-Int":{x:404,y:96,lado:"mid",l:""},
+    "TD-Ext":{x:404,y:272,lado:"bot",l:"Tra. der E"},"TD-Int":{x:404,y:224,lado:"mid",l:""} } },
+
+  "3ejes": { w: 680, h: 340, bus:{x:52,y:84,w:576,h:172}, ejes:[170,420,560], pos:{
+    "DI":{x:120,y:62,lado:"top",l:"Dir. izq"},"DD":{x:120,y:278,lado:"bot",l:"Dir. der"},
+    "MI-Ext":{x:400,y:56,lado:"top",l:"Med. izq E"},"MI-Int":{x:400,y:106,lado:"mid",l:""},
+    "MD-Ext":{x:400,y:284,lado:"bot",l:"Med. der E"},"MD-Int":{x:400,y:234,lado:"mid",l:""},
+    "TI-Ext":{x:600,y:62,lado:"top",l:"Tra. izq"},"TD-Ext":{x:600,y:278,lado:"bot",l:"Tra. der"} } },
+
+  "4ejes": { w: 760, h: 320, bus:{x:52,y:72,w:656,h:176}, ejes:[150,250,470,610], pos:{
+    "D1I":{x:110,y:54,lado:"top",l:"Dir1 izq"},"D1D":{x:110,y:266,lado:"bot",l:"Dir1 der"},
+    "D2I":{x:200,y:54,lado:"top",l:"Dir2 izq"},"D2D":{x:200,y:266,lado:"bot",l:"Dir2 der"},
+    "MI-Ext":{x:450,y:48,lado:"top",l:"Pen. izq E"},"MI-Int":{x:450,y:96,lado:"mid",l:""},
+    "MD-Ext":{x:450,y:272,lado:"bot",l:"Pen. der E"},"MD-Int":{x:450,y:224,lado:"mid",l:""},
+    "TI-Ext":{x:620,y:54,lado:"top",l:"Tra. izq"},"TD-Ext":{x:620,y:266,lado:"bot",l:"Tra. der"} } },
+};
+
+const COLOR_DESGASTE = {
+  optimo:   { fill:"#C0DD97", stroke:"#3B6D11", text:"#27500A" },
+  bueno:    { fill:"#D9ECA8", stroke:"#65A30D", text:"#3B6D11" },
+  regular:  { fill:"#FEF08A", stroke:"#CA8A04", text:"#854D0E" },
+  atencion: { fill:"#FDBA74", stroke:"#EA580C", text:"#9A3412" },
+  vencido:  { fill:"#FCA5A5", stroke:"#DC2641", text:"#991B1B" },
+};
+
+// Estado del drag en curso
+let neuDrag = null;  // { tipo:'stock'|'rueda', neumaticoId, posicionOrigen, codigo, kmActualBus }
+
+async function renderNeumaticos() {
+  const v = cocheActual;
+  status(`Neumáticos del coche ${v.patente}`);
+  const data = await api(`/api/vehiculos/${v.id}/neumaticos`);
+
+  if (!data.configuracion) {
+    content.innerHTML = `
+      <div class="page-header">
+        <h1><i class="ti ti-disc"></i> Neumáticos · ${v.patente}</h1>
+        <p>${v.marca} ${v.modelo}</p>
+      </div>
+      <div class="section">
+        <div class="card">
+          <div class="card-head"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Sin configuración</div>
+          <div class="card-body">
+            <p>Este vehículo no tiene un plan de mantenimiento asignado, o el plan no tiene configuración de neumáticos.</p>
+            <p style="margin-top:8px;font-size:13px;color:var(--muted)">Andá a <b>Preventivo</b> y asignale un plan al coche. La configuración de neumáticos se asocia automáticamente al modelo del chasis.</p>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  // Disponibles para el panel lateral
+  const disponibles = await api("/api/neumaticos?estado=disponible");
+
+  const avisoVerificar = (data.verificado === 0) ? `
+    <div class="neu-aviso-verif">
+      <i class="ti ti-alert-triangle"></i>
+      <div style="flex:1">
+        <b>Verificá esta configuración</b>
+        <p>El sistema asignó <b>${data.configuracion}</b> según los ejes. Confirmá o cambiala.</p>
+      </div>
+      <button class="btn btn-primary" onclick="confirmarConfig(${v.id})"><i class="ti ti-check"></i> Es correcta</button>
+    </div>` : "";
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-disc"></i> Neumáticos · ${v.patente}</h1>
+      <p>${v.marca} ${v.modelo} — arrastrá las cubiertas al bus</p>
+    </div>
+    <div class="section">
+      ${avisoVerificar}
+
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px">
+        <button class="btn btn-ghost btn-sm" onclick="cambiarConfigNeumaticos(${v.id}, '${data.configuracion}')"><i class="ti ti-settings"></i> Cambiar configuración</button>
+      </div>
+
+      <!-- PLANO INTERACTIVO -->
+      <div class="neu-board">
+        <div class="neu-bus-zone">
+          <div class="neu-bus-meta">
+            <span><i class="ti ti-settings-2"></i> ${data.configuracion} · ${data.neumaticos.filter(n=>!n.vacia).length}/${data.neumaticos.length} ruedas</span>
+            <span><i class="ti ti-ruler-2"></i> ${data.medida || "—"}</span>
+            <span><i class="ti ti-gauge"></i> ${fmtNum(data.km_actual_vehiculo)} km</span>
+          </div>
+          <div id="neu-svg-wrap" class="neu-svg-wrap">${generarSvgBusDrag(data)}</div>
+          <div class="neu-leyenda">
+            <span><i class="ti ti-circle-filled" style="color:#3B6D11"></i> nueva</span>
+            <span><i class="ti ti-circle-filled" style="color:#CA8A04"></i> media</span>
+            <span><i class="ti ti-circle-filled" style="color:#DC2641"></i> cambiar</span>
+            <span class="neu-leyenda-tip"><i class="ti ti-hand-finger"></i> arrastrá entre ruedas para rotar</span>
+          </div>
+        </div>
+
+        <div class="neu-stock-zone" id="neu-stock-zone">
+          <div class="neu-stock-head">
+            <i class="ti ti-stack-2"></i> En stock
+            <span class="neu-stock-count">${disponibles.length}</span>
+          </div>
+          <div id="neu-stock-list" class="neu-stock-list">
+            ${disponibles.length === 0
+              ? `<div class="neu-stock-empty"><i class="ti ti-package-off"></i>No hay cubiertas disponibles.<br><button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="irAInventarioNeu()">Ir al inventario</button></div>`
+              : disponibles.map(n => tarjetaStock(n)).join("")}
+          </div>
+          <div class="neu-retirar-zone" id="neu-retirar-zone">
+            <i class="ti ti-arrow-down"></i> Soltá acá para retirar del bus
+          </div>
+        </div>
+      </div>
+
+      <!-- DETALLE POR POSICIÓN (respaldo) -->
+      <div class="section-title"><i class="ti ti-list"></i> Detalle por posición</div>
+      <div class="tire-list">
+        ${data.neumaticos.map(n => renderTireCard(n, v.id)).join("")}
+      </div>
+
+      <div class="section-title"><i class="ti ti-spare-tire"></i> Cubiertas auxiliares a bordo (Trucky)</div>
+      <div id="trucky-section"></div>
+    </div>`;
+
+  activarDragNeumaticos(v.id, data.km_actual_vehiculo);
+  cargarTruckies(v.id);
+}
+
+// Tarjeta de cubierta en el panel de stock (arrastrable)
+function tarjetaStock(n) {
+  const mm = n.profundidad_mm ? `${n.profundidad_mm}mm` : "—";
+  return `
+    <div class="neu-stock-card" draggable="true" data-nid="${n.id}" data-cod="${n.codigo}">
+      <div class="neu-stock-disc">${mm}</div>
+      <div class="neu-stock-info">
+        <div class="neu-stock-cod">${n.codigo}</div>
+        <div class="neu-stock-med">${n.marca || ""} ${n.medida ? "· " + n.medida : ""}</div>
+        ${n.reencauches > 0 ? `<div class="neu-stock-re"><i class="ti ti-refresh"></i> ${n.reencauches}x reenc.</div>` : ""}
+      </div>
+    </div>`;
+}
+
+// SVG del bus con ruedas arrastrables (versión robusta y animada)
+function generarSvgBusDrag(data) {
+  const layout = BUS_LAYOUTS[data.configuracion] || BUS_LAYOUTS["6x2"];
+  const map = {};
+  data.neumaticos.forEach(n => { map[n.posicion] = n; });
+  const b = layout.bus;
+  const cx_frente = b.x + 46;
+  const cy_centro = b.y + b.h / 2;
+
+  // Dimensiones de las ruedas (rectángulos redondeados grandes)
+  const RW = 48, RH_dir = 30, RH_gem = 28;
+
+  let svg = `<svg class="neu-svg" viewBox="0 0 ${layout.w} ${layout.h}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">`;
+
+  // Carrocería (animación de fade)
+  svg += `<g class="neu-body">`;
+  svg += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="42" fill="#F8FAFC" stroke="#1E5A96" stroke-width="3"/>`;
+  // Frente sombreado
+  svg += `<path d="M${b.x} ${b.y+34} Q${b.x+2} ${b.y} ${b.x+42} ${b.y} L${b.x+42} ${b.y+b.h} Q${b.x+2} ${b.y+b.h} ${b.x} ${b.y+b.h-34}" fill="#1E5A96" opacity="0.10"/>`;
+  // Líneas de eje
+  (layout.ejes || []).forEach(ex => {
+    svg += `<line x1="${ex}" y1="${b.y}" x2="${ex}" y2="${b.y+b.h}" stroke="#CBD5E1" stroke-width="1.5"/>`;
+  });
+  svg += `</g>`;
+  svg += `<text class="neu-frente" x="${cx_frente}" y="${cy_centro + 4}" text-anchor="middle">FRENTE</text>`;
+
+  // Ruedas
+  let i = 0;
+  for (const [pos, c] of Object.entries(layout.pos)) {
+    const n = map[pos];
+    const vacia = !n || n.vacia;
+    const delay = (0.08 + i * 0.04).toFixed(2);
+    const esGemela = pos.includes("-Int") || pos.includes("-Ext");
+    const rh = esGemela ? RH_gem : RH_dir;
+    const x = c.x - RW/2;
+    const y = c.y - rh/2;
+
+    // Etiqueta de posición (según lado)
+    let lblTxt = "";
+    if (c.l) {
+      const lblY = c.lado === "top" ? (y - 12) : (y + rh + 18);
+      lblTxt = `<text class="neu-wheel-lbl" x="${c.x}" y="${lblY}">${c.l}</text>`;
+    }
+
+    if (vacia) {
+      svg += `<g class="neu-wheel neu-wheel-empty" data-pos="${pos}" style="animation-delay:${delay}s">
+        <title>${pos} — vacía, soltá una cubierta acá</title>
+        ${lblTxt}
+        <rect class="neu-slot" x="${x}" y="${y}" width="${RW}" height="${rh}" rx="9"/>
+        <text class="neu-slot-plus" x="${c.x}" y="${c.y + 6}">+</text>
+      </g>`;
+    } else {
+      const col = COLOR_DESGASTE[n.estado_grad] || COLOR_DESGASTE.optimo;
+      const pct = Math.round(n.porcentaje_uso);
+      svg += `<g class="neu-wheel neu-wheel-full" data-pos="${pos}" data-nid="${n.neumatico_id}" draggable="true" style="animation-delay:${delay}s">
+        <title>${n.codigo} — ${pct}% usado (${fmtNum(n.km_totales)} km)</title>
+        ${lblTxt}
+        <rect class="neu-tire" x="${x}" y="${y}" width="${RW}" height="${rh}" rx="9" fill="${col.fill}" stroke="${col.stroke}" stroke-width="2"/>
+        <text class="neu-tire-pct" x="${c.x}" y="${c.y + 5}" fill="${col.text}">${pct}%</text>
+      </g>`;
+    }
+    i++;
+  }
+  svg += `</svg>`;
+  return svg;
+}
+
+// ─── Activar el drag & drop sobre el plano ───
+function activarDragNeumaticos(vid, kmBus) {
+  const wrap = $("#neu-svg-wrap");
+  const stockList = $("#neu-stock-list");
+  const retirarZone = $("#neu-retirar-zone");
+  if (!wrap) return;
+
+  // Helper: limpiar resaltados
+  const limpiar = () => {
+    wrap.querySelectorAll(".neu-slot.over, .neu-tire.over").forEach(e => e.classList.remove("over"));
+    retirarZone?.classList.remove("over");
+  };
+
+  // 1. DRAG desde el STOCK (instalar)
+  stockList?.querySelectorAll(".neu-stock-card").forEach(card => {
+    card.addEventListener("dragstart", e => {
+      neuDrag = { tipo: "stock", neumaticoId: +card.dataset.nid, codigo: card.dataset.cod, kmActualBus: kmBus };
+      card.classList.add("dragging");
+      if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text", card.dataset.cod); }
+    });
+    card.addEventListener("dragend", () => { card.classList.remove("dragging"); limpiar(); neuDrag = null; });
+  });
+
+  // 2. DRAG desde una RUEDA instalada (rotar o retirar)
+  wrap.querySelectorAll(".neu-wheel-full").forEach(w => {
+    w.addEventListener("dragstart", e => {
+      neuDrag = { tipo: "rueda", neumaticoId: +w.dataset.nid, posicionOrigen: w.dataset.pos, kmActualBus: kmBus };
+      w.classList.add("dragging");
+      if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text", w.dataset.nid); }
+    });
+    w.addEventListener("dragend", () => { w.classList.remove("dragging"); limpiar(); neuDrag = null; });
+  });
+
+  // 3. DROP en ruedas (vacías = instalar/rotar)
+  wrap.querySelectorAll(".neu-wheel").forEach(w => {
+    const slot = w.querySelector(".neu-slot, .neu-tire");
+    w.addEventListener("dragover", e => {
+      e.preventDefault();
+      if (!neuDrag) return;
+      const pos = w.dataset.pos;
+      const ocupada = w.classList.contains("neu-wheel-full");
+      // No resaltar la misma rueda de origen
+      if (neuDrag.tipo === "rueda" && neuDrag.posicionOrigen === pos) return;
+      // Solo permitir soltar en ruedas vacías (las ocupadas hay que liberarlas antes)
+      if (!ocupada) slot?.classList.add("over");
+    });
+    w.addEventListener("dragleave", () => slot?.classList.remove("over"));
+    w.addEventListener("drop", e => {
+      e.preventDefault();
+      slot?.classList.remove("over");
+      if (!neuDrag) return;
+      const pos = w.dataset.pos;
+      const ocupada = w.classList.contains("neu-wheel-full");
+      if (ocupada) { toast("Esa rueda está ocupada. Movela o sacala primero.", "error"); return; }
+      if (neuDrag.tipo === "stock") {
+        instalarPorDrag(neuDrag.neumaticoId, neuDrag.codigo, pos, vid, kmBus);
+      } else if (neuDrag.tipo === "rueda") {
+        if (neuDrag.posicionOrigen === pos) return;
+        rotarPorDrag(neuDrag.neumaticoId, neuDrag.posicionOrigen, pos, vid, kmBus);
+      }
+    });
+  });
+
+  // 4. DROP en zona de retiro (solo para ruedas)
+  retirarZone?.addEventListener("dragover", e => {
+    e.preventDefault();
+    if (neuDrag && neuDrag.tipo === "rueda") retirarZone.classList.add("over");
+  });
+  retirarZone?.addEventListener("dragleave", () => retirarZone.classList.remove("over"));
+  retirarZone?.addEventListener("drop", e => {
+    e.preventDefault();
+    retirarZone.classList.remove("over");
+    if (neuDrag && neuDrag.tipo === "rueda") {
+      retirarPorDrag(neuDrag.neumaticoId, neuDrag.posicionOrigen, vid, kmBus);
+    }
+  });
+}
+
+// ─── Acción: INSTALAR (con mini-cuadro de km) ───
+function instalarPorDrag(nid, codigo, posicion, vid, kmBus) {
+  const o = document.createElement("div");
+  o.className = "neu-mini-overlay visible";
+  o.innerHTML = `
+    <div class="neu-mini">
+      <div class="neu-mini-titulo"><i class="ti ti-arrow-down-circle"></i> Instalar ${codigo}</div>
+      <p class="neu-mini-sub">en la posición <b>${posicion}</b></p>
+      <label class="neu-mini-lbl">Si la cubierta es nueva, dejá 0. Si ya tiene uso, poné los km que traía:</label>
+      <input id="ni-km" class="neu-mini-input" type="text" inputmode="decimal" value="0" autofocus>
+      <p class="neu-mini-help"><i class="ti ti-info-circle"></i> El bus está en ${fmtNum(kmBus)} km. La cubierta empezará a contar desde acá.</p>
+      <div class="neu-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.neu-mini-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarInstalarDrag(${nid}, '${posicion}', ${vid}, ${kmBus}, this)"><i class="ti ti-check"></i> Instalar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => { const i = document.getElementById("ni-km"); i?.focus(); i?.select(); }, 50);
+}
+
+async function confirmarInstalarDrag(nid, posicion, vid, kmBus, btn) {
+  const kmTraia = parseFloat((document.getElementById("ni-km").value || "0").replace(/\./g, "").replace(/,/g, ".")) || 0;
+  // Si la cubierta traía km, los seteamos antes de instalar (ajuste de km acumulados)
+  if (kmTraia > 0) {
+    await api(`/api/neumaticos/${nid}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ km_acumulados: kmTraia })
+    });
+  }
+  const r = await api(`/api/neumaticos/${nid}/instalar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehiculo_id: vid, posicion, fecha: hoy(), km_instalacion: kmBus })
+  });
+  btn.closest(".neu-mini-overlay").remove();
+  if (r.ok) { toast("Cubierta instalada", "success"); renderNeumaticos(); }
+  else toast(r.msg, "error");
+}
+
+// ─── Acción: ROTAR (mover de una rueda a otra) ───
+async function rotarPorDrag(nid, posOrigen, posDestino, vid, kmBus) {
+  const r = await api(`/api/neumaticos/${nid}/rotar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehiculo_id: vid, nueva_posicion: posDestino, fecha: hoy(), km_vehiculo: kmBus })
+  });
+  if (r.ok) { toast(`Rotado: ${posOrigen} → ${posDestino}`, "success"); renderNeumaticos(); }
+  else toast(r.msg, "error");
+}
+
+// ─── Acción: RETIRAR (sacar del bus) ───
+function retirarPorDrag(nid, posicion, vid, kmBus) {
+  const o = document.createElement("div");
+  o.className = "neu-mini-overlay visible";
+  o.innerHTML = `
+    <div class="neu-mini">
+      <div class="neu-mini-titulo"><i class="ti ti-arrow-up-circle"></i> Sacar de ${posicion}</div>
+      <label class="neu-mini-lbl">¿Por qué la sacás?</label>
+      <div class="neu-motivos">
+        <button class="neu-motivo" data-m="desgaste" data-e="disponible"><i class="ti ti-trending-down"></i> Desgaste<small>vuelve al stock</small></button>
+        <button class="neu-motivo" data-m="reencauche" data-e="reencauche"><i class="ti ti-refresh"></i> Reencauche<small>a reencauchar</small></button>
+        <button class="neu-motivo" data-m="pinchazo" data-e="disponible"><i class="ti ti-alert-triangle"></i> Pinchazo<small>vuelve al stock</small></button>
+        <button class="neu-motivo" data-m="baja" data-e="baja"><i class="ti ti-trash"></i> Baja<small>fin de vida</small></button>
+      </div>
+      <label class="neu-mini-lbl">KM del bus ahora:</label>
+      <input id="nr-km" class="neu-mini-input" type="text" inputmode="decimal" value="${Math.round(kmBus)}">
+      <div class="neu-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.neu-mini-overlay').remove()">Cancelar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  // Los botones de motivo ejecutan el retiro directo
+  o.querySelectorAll(".neu-motivo").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const km = parseFloat((document.getElementById("nr-km").value || "0").replace(/\./g, "").replace(/,/g, ".")) || kmBus;
+      const r = await api(`/api/neumaticos/${nid}/retirar`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fecha_retiro: hoy(), km_retiro: km, motivo: btn.dataset.m, nuevo_estado: btn.dataset.e })
+      });
+      o.remove();
+      if (r.ok) { toast(r.msg, "success"); renderNeumaticos(); }
+      else toast(r.msg, "error");
+    });
+  });
+}
+
+function irAInventarioNeu() {
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  document.querySelector('.nav-item[data-sec="inventario_neu"]')?.classList.add("active");
+  renderInventarioNeu();
+}
+
+
+async function cargarTruckies(vid) {
+  const truckies = await api(`/api/vehiculos/${vid}/truckies`);
+  const sec = $("#trucky-section");
+  if (!sec) return;
+  sec.innerHTML = `
+    <div class="card">
+      <div class="card-head">
+        <i class="ti ti-disc"></i> Cubiertas de auxilio a bordo (${truckies.length})
+        <button class="btn btn-primary btn-sm" style="margin-left:auto" onclick="abrirAsignarTrucky(${vid})">
+          <i class="ti ti-plus"></i> Asignar trucky
+        </button>
+      </div>
+      <div class="card-body">
+        ${truckies.length === 0 ? `
+          <p class="hint"><i class="ti ti-info-circle"></i>
+          Este vehículo no tiene cubiertas de auxilio a bordo. Tocá <b>Asignar trucky</b> para agregar una del inventario disponible.</p>
+        ` : `
+          <div class="table-wrap" style="border:none;box-shadow:none">
+            <table>
+              <thead><tr>
+                <th>Código</th><th>Marca / Modelo</th><th>Medida</th>
+                <th class="num">KM acum.</th><th class="center">Reenc.</th>
+                <th>Fecha asignación</th><th class="num">KM al asignar</th>
+                <th class="td-action"></th>
+              </tr></thead>
+              <tbody>
+                ${truckies.map(t => `
+                  <tr>
+                    <td><b>${t.codigo}</b></td>
+                    <td>${t.marca || "—"} ${t.modelo || ""}</td>
+                    <td style="color:var(--muted)">${t.medida || "—"}</td>
+                    <td class="num">${fmtNum(t.km_acumulados)}</td>
+                    <td class="center">${t.reencauches > 0 ? `<span class="badge warning">${t.reencauches}x</span>` : "—"}</td>
+                    <td>${t.fecha_asignacion}</td>
+                    <td class="num">${fmtNum(t.km_asignacion)}</td>
+                    <td class="td-action">
+                      <button class="btn btn-ghost btn-sm" onclick="usarTrucky(${t.id}, '${t.codigo}', ${vid})" title="Marcar como usada">
+                        <i class="ti ti-alert-triangle"></i> Usar
+                      </button>
+                      <button class="icon-btn" onclick="retirarTrucky(${t.id}, ${vid})" title="Retirar"><i class="ti ti-arrow-back"></i></button>
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        `}
+      </div>
+    </div>`;
+}
+
+async function abrirAsignarTrucky(vid) {
+  const disponibles = await api("/api/neumaticos?estado=disponible");
+  if (disponibles.length === 0) {
+    if (confirm("No hay neumáticos disponibles. ¿Ir a Inventario para agregar uno?")) {
+      document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+      document.querySelector('.nav-item[data-sec="inventario_neu"]').classList.add("active");
+      renderInventarioNeu();
+    }
+    return;
+  }
+  const lista = disponibles.map((n, i) =>
+    `${i+1}. ${n.codigo} — ${n.marca || ''} ${n.modelo || ''} ${n.medida ? '(' + n.medida + ')' : ''}`
+  ).join("\n");
+  const elegido = prompt(`Cubiertas disponibles:\n\n${lista}\n\nEscribí el número de la cubierta:`);
+  if (!elegido) return;
+  const idx = parseInt(elegido) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= disponibles.length) {
+    toast("Número inválido", "error"); return;
+  }
+  const km = prompt("KM actual del vehículo al momento de asignar:", "0");
+  if (km === null) return;
+
+  const r = await api(`/api/vehiculos/${vid}/truckies`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      neumatico_id: disponibles[idx].id,
+      fecha_asignacion: hoy(),
+      km_asignacion: parseFloat(km) || 0
+    })
+  });
+  if (r.ok) {
+    toast("Trucky asignada", "success");
+    cargarTruckies(vid);
+  } else toast(r.msg, "error");
+}
+
+async function usarTrucky(tid, codigo, vid) {
+  const motivo = prompt(`Usar trucky ${codigo}\n\nMotivo (ej: pinchazo en ruta):`, "Pinchazo en ruta");
+  if (motivo === null) return;
+  const km = prompt("KM del vehículo al momento del uso:", "0");
+  if (km === null) return;
+
+  const r = await api(`/api/truckies/${tid}/usar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fecha_uso: hoy(), km_uso: parseFloat(km) || 0, motivo })
+  });
+  if (r.ok) {
+    toast("Trucky marcada como usada", "success");
+    cargarTruckies(vid);
+  } else toast(r.msg, "error");
+}
+
+async function retirarTrucky(tid, vid) {
+  if (!confirm("¿Retirar esta trucky del coche y devolverla al inventario?")) return;
+  const r = await api(`/api/truckies/${tid}/retirar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (r.ok) {
+    toast("Trucky retirada", "success");
+    cargarTruckies(vid);
+  } else toast(r.msg, "error");
+}
+
+function renderTireCard(n, vid) {
+  if (n.vacia) {
+    return `<div class="tire-card vacia">
+      <div class="tire-card-head">
+        <div>
+          <div class="tire-card-pos">${n.posicion}</div>
+          <div class="tire-card-code" style="color:var(--muted)">${n.posicion_nombre}</div>
+        </div>
+      </div>
+      <div class="tire-card-info">Sin neumático asignado</div>
+      <div class="tire-card-actions">
+        <button class="btn btn-primary btn-sm" onclick="abrirInstalar('${n.posicion}', ${vid})">
+          <i class="ti ti-plus"></i> Instalar
+        </button>
+      </div>
+    </div>`;
+  }
+  return `<div class="tire-card estado-${n.estado_grad}">
+    <div class="tire-card-head">
+      <div>
+        <div class="tire-card-pos">${n.posicion} · ${n.posicion_nombre}</div>
+        <div class="tire-card-code">${n.codigo}</div>
+        <div class="tire-card-info">${n.marca || "—"} ${n.modelo || ""} · ${n.medida || ""}</div>
+        ${n.reencauches > 0 ? `<div class="tire-card-info"><i class="ti ti-refresh"></i> Reencauchado ${n.reencauches}x</div>` : ""}
+      </div>
+      <span class="grad-badge grad-${n.estado_grad}"><span class="dot"></span> ${ESTADO_GRAD_LABEL[n.estado_grad]}</span>
+    </div>
+    <div class="grad-bar-wrap" style="margin-top:6px">
+      <div class="grad-bar estado-${n.estado_grad}" style="width:${n.porcentaje_visual}%"></div>
+    </div>
+    <div class="tire-card-stats">
+      <div>
+        <div class="tire-card-pct">${n.porcentaje_uso.toFixed(1)}%</div>
+        <div class="tire-card-km">${fmtNum(n.km_totales)} / ${fmtNum(n.vida_util_km)} km</div>
+      </div>
+      <div style="text-align:right">
+        <div class="tire-card-pct" style="color:var(--muted);font-size:13px">${fmtNum(n.km_restantes)}</div>
+        <div class="tire-card-km">km restantes</div>
+      </div>
+    </div>
+    <div class="tire-card-actions">
+      <button class="btn btn-ghost btn-sm" onclick="abrirRetirar(${n.neumatico_id}, '${n.codigo}', ${n.km_totales}, '${n.posicion}')">
+        <i class="ti ti-arrow-out-right"></i> Retirar
+      </button>
+    </div>
+  </div>`;
+}
+
+
+// SVG del bus con neumáticos en sus posiciones
+
+// Modal/form para instalar un neumático en una posición
+async function abrirInstalar(posicion, vid) {
+  // Buscar neumáticos disponibles
+  const disponibles = (await api("/api/neumaticos?estado=disponible"));
+  if (disponibles.length === 0) {
+    if (confirm("No hay neumáticos disponibles en el inventario. ¿Querés ir a Inventario para agregar uno?")) {
+      document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+      document.querySelector('.nav-item[data-sec="inventario_neu"]').classList.add("active");
+      renderInventarioNeu();
+    }
+    return;
+  }
+  const opciones = disponibles.map(n =>
+    `${n.codigo} — ${n.marca} ${n.modelo} ${n.medida ? '(' + n.medida + ')' : ''}`
+  );
+  const elegidos = prompt(
+    `Posición: ${posicion}\n\nNeumáticos disponibles:\n` +
+    disponibles.map((n, i) => `${i + 1}. ${opciones[i]}`).join("\n") +
+    `\n\nEscribí el número del neumático a instalar:`
+  );
+  if (!elegidos) return;
+  const idx = parseInt(elegidos) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= disponibles.length) {
+    toast("Número inválido", "error");
+    return;
+  }
+  const neu = disponibles[idx];
+  const km = prompt(`KM actual del vehículo (al momento de la instalación):`, "0");
+  if (km === null) return;
+
+  const r = await api(`/api/neumaticos/${neu.id}/instalar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: vid, posicion: posicion,
+      fecha: hoy(), km_instalacion: parseFloat(km) || 0
+    })
+  });
+  if (r.ok) { toast("Neumático instalado", "success"); renderNeumaticos(); }
+  else toast(r.msg, "error");
+}
+
+
+async function abrirRetirar(nid, codigo, kmActual, posicion) {
+  const motivo = prompt(
+    `Retirar neumático ${codigo} de la posición ${posicion}\n\n` +
+    `Motivo del retiro:\n` +
+    `1. rotación (cambia a otra posición)\n` +
+    `2. desgaste (al inventario, disponible)\n` +
+    `3. reencauche (se envía a reencauchar)\n` +
+    `4. pinchazo / daño\n` +
+    `5. baja definitiva\n\n` +
+    `Escribí el número (1-5):`
+  );
+  if (!motivo) return;
+  const motivos = {
+    "1": { motivo: "rotación", nuevo_estado: "disponible" },
+    "2": { motivo: "desgaste", nuevo_estado: "disponible" },
+    "3": { motivo: "reencauche", nuevo_estado: "reencauche" },
+    "4": { motivo: "pinchazo", nuevo_estado: "disponible" },
+    "5": { motivo: "baja", nuevo_estado: "baja" },
+  };
+  const opc = motivos[motivo.trim()];
+  if (!opc) { toast("Opción inválida", "error"); return; }
+
+  const km = prompt(`KM del vehículo al momento del retiro:`, Math.round(kmActual).toString());
+  if (km === null) return;
+
+  const r = await api(`/api/neumaticos/${nid}/retirar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fecha_retiro: hoy(), km_retiro: parseFloat(km) || 0,
+      motivo: opc.motivo, nuevo_estado: opc.nuevo_estado
+    })
+  });
+  if (r.ok) {
+    toast(r.msg, "success");
+    renderNeumaticos();
+  } else toast(r.msg, "error");
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  INVENTARIO DE NEUMÁTICOS (catálogo general)
+// ════════════════════════════════════════════════════════════════════════
+
+const NOMBRE_ESTADO_NEU = {
+  disponible: "Disponible", instalado: "Instalado",
+  reencauche: "En reencauche", baja: "Dado de baja"
+};
+
+async function renderInventarioNeu() {
+  status("Inventario de neumáticos");
+  const neus = await api("/api/neumaticos");
+  const counts = { disponible: 0, instalado: 0, reencauche: 0, baja: 0 };
+  neus.forEach(n => counts[n.estado]++);
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-box"></i> Inventario de Neumáticos</h1>
+      <p>Catálogo completo · cada cubierta con su historial individual</p>
+    </div>
+    <div class="section">
+
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-icon blue"><i class="ti ti-disc"></i></div>
+          <div class="metric-content"><div class="metric-label">Total</div><div class="metric-value">${neus.length}</div></div>
+        </div>
+        <div class="metric success">
+          <div class="metric-icon green"><i class="ti ti-checks"></i></div>
+          <div class="metric-content"><div class="metric-label">Disponibles</div><div class="metric-value">${counts.disponible}</div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-icon blue"><i class="ti ti-bus"></i></div>
+          <div class="metric-content"><div class="metric-label">Instalados</div><div class="metric-value">${counts.instalado}</div></div>
+        </div>
+        <div class="metric warning">
+          <div class="metric-icon amber"><i class="ti ti-refresh"></i></div>
+          <div class="metric-content"><div class="metric-label">En reencauche</div><div class="metric-value">${counts.reencauche}</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plus"></i> Agregar neumático al inventario</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field"><label>Código *</label><input id="n-cod" placeholder="NEU-007" style="width:130px"></div>
+            <div class="field"><label>Marca</label><input id="n-mar" placeholder="Michelin" style="width:140px"></div>
+            <div class="field"><label>Modelo</label><input id="n-mod" placeholder="X Multi D" style="width:160px"></div>
+            <div class="field"><label>Medida</label><input id="n-med" placeholder="295/80 R22.5" style="width:140px"></div>
+            <div class="field"><label>DOT</label><input id="n-dot" placeholder="DOT 2024-15" style="width:120px"></div>
+          </div>
+          <div class="form-row" style="margin-top:14px">
+            <div class="field"><label>Fecha compra</label><input id="n-fec" type="date"></div>
+            <div class="field"><label>Costo (Gs.)</label><input id="n-cos" placeholder="3500000" style="width:150px"></div>
+            <div class="field"><label>Profundidad inicial (mm)</label><input id="n-pro" placeholder="14" style="width:130px"></div>
+            <div class="field" style="flex:1;min-width:220px"><label>Observaciones</label><input id="n-obs" placeholder="Notas"></div>
+            <button class="btn btn-primary" onclick="guardarNeumatico()"><i class="ti ti-device-floppy"></i> Guardar</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> Stock completo (${neus.length})</div>
+      ${neus.length === 0 ? `<div class="empty"><i class="ti ti-disc-off"></i>Sin neumáticos cargados.<br>Agregá el primero arriba.</div>` : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Código</th><th>Marca / Modelo</th><th>Medida</th><th>DOT</th>
+              <th class="num">KM acum.</th><th class="center">Reenc.</th>
+              <th>Ubicación actual</th><th class="center">Estado</th><th class="td-action"></th>
+            </tr></thead>
+            <tbody>
+              ${neus.map(n => `
+                <tr>
+                  <td><b>${n.codigo}</b></td>
+                  <td>${n.marca || "—"} ${n.modelo || ""}</td>
+                  <td style="color:var(--muted)">${n.medida || "—"}</td>
+                  <td style="color:var(--muted);font-size:12px">${n.dot || "—"}</td>
+                  <td class="num">${fmtNum(n.km_acumulados)}</td>
+                  <td class="center">${n.reencauches > 0 ? `<span class="badge warning">${n.reencauches}x</span>` : "—"}</td>
+                  <td>${n.patente_actual ? `<b>${n.patente_actual}</b> <span style="color:var(--muted)">${n.posicion_actual}</span>` : "—"}</td>
+                  <td class="center"><span class="estado-pill ${n.estado}">${NOMBRE_ESTADO_NEU[n.estado]}</span></td>
+                  <td class="td-action">
+                    <button class="icon-btn" onclick="borrarNeumatico(${n.id},'${n.codigo}')"><i class="ti ti-trash"></i></button>
+                  </td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>
+      `}
+
+      <p class="hint" style="margin-top:14px">
+        <i class="ti ti-bulb"></i>
+        Para instalar un neumático en un vehículo, andá a <b>Neumáticos</b> (con el coche seleccionado) y hacé clic en una posición vacía del esquema del bus.
+      </p>
+    </div>`;
+}
+
+async function guardarNeumatico() {
+  const cod = $("#n-cod").value.trim();
+  if (!cod) { toast("El código es obligatorio", "error"); return; }
+  const costo = ($("#n-cos").value || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/neumaticos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      codigo: cod, marca: $("#n-mar").value, modelo: $("#n-mod").value,
+      medida: $("#n-med").value, dot: $("#n-dot").value,
+      fecha_compra: $("#n-fec").value || null, costo_compra: costo || 0,
+      profundidad_mm: parseFloat($("#n-pro").value || 0),
+      observaciones: $("#n-obs").value
+    })
+  });
+  if (r.ok) {
+    toast("Neumático agregado", "success");
+    ["n-cod","n-mar","n-mod","n-med","n-dot","n-fec","n-cos","n-pro","n-obs"].forEach(id => $("#"+id).value = "");
+    renderInventarioNeu();
+  } else toast(r.msg, "error");
+}
+
+async function borrarNeumatico(id, cod) {
+  if (!confirm(`¿Eliminar el neumático ${cod}?`)) return;
+  const r = await api(`/api/neumaticos/${id}`, { method: "DELETE" });
+  if (r.ok) { toast("Eliminado"); renderInventarioNeu(); }
+  else toast(r.msg, "error");
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  ÓRDENES DE TRABAJO (OT)
+// ════════════════════════════════════════════════════════════════════════
+
+const TIPOS_ITEM = ["control", "preventivo", "correctivo", "neumaticos", "otro"];
+const LABEL_TIPO_ITEM = {
+  control: "Control", preventivo: "Preventivo", correctivo: "Correctivo",
+  neumaticos: "Neumáticos", otro: "Otro"
+};
+const COLOR_TIPO_ITEM = {
+  control: "var(--info)", preventivo: "var(--success)",
+  correctivo: "var(--danger)", neumaticos: "#0891B2", otro: "var(--muted)"
+};
+const LABEL_ESTADO_ITEM = {
+  pendiente: "Pendiente", en_proceso: "En proceso", completado: "Completado"
+};
+const LABEL_ESTADO_OT = {
+  abierta: "Abierta", en_proceso: "En proceso", cerrada: "Cerrada"
+};
+
+let otFiltroEstado = "";
+
+// ═══════════════ PANTALLA DE COMPRAS / DEPÓSITO ═══════════════
+let comprasTab = "en_espera";
+const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestadas", en_camino: "En camino", entregado: "Entregadas" };
+
+async function renderCompras() {
+  status("Compras / Depósito");
+  await refrescarPermisoOTs();
+  const todas = await api("/api/compras/ots");
+  const enEspera = todas.filter(o => o.estado_compras === "en_espera");
+  const presup = todas.filter(o => o.estado_compras === "presupuestado");
+  const enCamino = todas.filter(o => o.estado_compras === "en_camino");
+  const entreg = todas.filter(o => o.estado_compras === "entregado");
+  const lista = comprasTab === "en_espera" ? enEspera
+    : comprasTab === "presupuestado" ? presup
+    : comprasTab === "en_camino" ? enCamino
+    : comprasTab === "entregado" ? entreg : [];
+  const totalEspera = todas.reduce((s, o) => s + ((o.pagos && o.pagos.en_espera) || 0), 0);
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-shopping-cart"></i> Compras / Depósito</h1>
+      <p>Pedidos del taller — presupuestar, autorizar y entregar</p>
+    </div>
+    <div class="section">
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric" style="cursor:pointer;${comprasTab==='en_espera'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('en_espera')">
+          <div class="metric-content"><div class="metric-label">En espera</div>
+          <div class="metric-value" style="color:var(--warning)">${enEspera.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='presupuestado'?'border:2px solid var(--brand-blue)':''}" onclick="setComprasTab('presupuestado')">
+          <div class="metric-content"><div class="metric-label">Presupuestadas</div>
+          <div class="metric-value" style="color:var(--brand-blue)">${presup.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='en_camino'?'border:2px solid #d97706':''}" onclick="setComprasTab('en_camino')">
+          <div class="metric-content"><div class="metric-label">En camino</div>
+          <div class="metric-value" style="color:#d97706">${enCamino.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='entregado'?'border:2px solid var(--success)':''}" onclick="setComprasTab('entregado')">
+          <div class="metric-content"><div class="metric-label">Entregadas</div>
+          <div class="metric-value" style="color:var(--success)">${entreg.length}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='cola'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('cola')">
+          <div class="metric-content"><div class="metric-label">Esperando fondos</div>
+          <div class="metric-value" style="color:var(--warning)">${totalEspera}</div></div></div>
+      </div>
+
+      ${comprasTab === "cola" ? `
+        <div class="section-title"><i class="ti ti-hourglass"></i> Cola de Tesorería — esperando fondos</div>
+        <p class="hint" style="margin-bottom:14px"><i class="ti ti-info-circle"></i> Ítems presupuestados que Tesorería todavía no pudo cubrir. Cuando entren fondos, marcalos y liberalos: la orden retoma su curso.</p>
+        <div id="cola-espera-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      ` : `
+        <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab] || ""} (${lista.length})</div>
+        ${lista.length === 0
+          ? `<div class="empty"><i class="ti ti-shopping-cart-off"></i>No hay pedidos en esta etapa.</div>`
+          : lista.map(o => tarjetaCompra(o)).join("")}
+      `}
+    </div>`;
+
+  if (comprasTab === "cola") renderColaEspera();
+}
+
+function setComprasTab(t) { comprasTab = t; renderCompras(); }
+
+function tarjetaCompra(o) {
+  const coche = o.n_interno ? `Coche ${o.n_interno}` : o.patente;
+  const totalPresup = o.items.reduce((s, i) => s + (i.precio_compras || 0), 0);
+  let acciones = "";
+  if (o.estado_compras === "en_espera") {
+    acciones = `<button class="btn btn-primary" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-cash"></i> Cargar presupuesto</button>`;
+  } else if (o.estado_compras === "presupuestado") {
+    acciones = `
+      <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir para Tesorería</button>
+      <button class="btn btn-ghost" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-edit"></i> Editar precios</button>
+      <button class="btn btn-primary" onclick="abrirFirma(${o.id})"><i class="ti ti-writing-sign"></i> Firma de Tesorería</button>`;
+  } else if (o.estado_compras === "en_camino") {
+    acciones = `
+      <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
+      <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package"></i> Registrar entrega</button>`;
+  } else {
+    acciones = `
+      ${o.taller_entrega || o.recibido_por ? `<span style="font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-right:auto"><i class="ti ti-map-pin"></i> ${o.taller_entrega || "Taller propio"}${o.recibido_por ? ` · recibió <b>${o.recibido_por}</b>` : ""}</span>` : ""}
+      <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
+      <button class="btn btn-ghost" onclick="verEvidencia(${o.id})"><i class="ti ti-photo"></i> Ver evidencia</button>`;
+  }
+
+  return `
+    <div class="card" style="margin-bottom:14px">
+      <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
+        <span><i class="ti ti-clipboard-check"></i> OT #${o.id} · ${coche} · ${o.patente}</span>
+        <span style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:10px">
+          ${o.pagos && o.pagos.parcial ? `<span class="badge warning"><i class="ti ti-hourglass"></i> ${o.pagos.en_espera} esperando fondos · ${gs(o.pagos.monto_espera)}</span>` : ""}
+          ${o.fecha_envio_compras ? "Enviada: " + o.fecha_envio_compras.slice(0,10) : ""}
+        </span>
+      </div>
+      <div class="card-body">
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Trabajo</th><th>Material necesario</th><th>Mecánico</th>
+            ${o.estado_compras !== "en_espera" ? '<th class="num">Precio</th>' : ''}
+          </tr></thead>
+          <tbody>
+            ${o.items.map(it => `<tr class="${it.estado_pago === 'espera' ? 'item-en-espera' : ''}">
+              <td>${it.descripcion}${it.estado_pago === 'espera' ? ' <span class="badge warning" style="font-size:10px"><i class="ti ti-hourglass"></i> espera fondos</span>' : ''}</td>
+              <td><b>${it.material_pedido || "—"}</b></td>
+              <td style="color:var(--muted)">${it.tecnico || "—"}</td>
+              ${o.estado_compras !== "en_espera" ? `<td class="num">${gs(it.precio_compras || 0)}</td>` : ''}
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+        ${o.estado_compras !== "en_espera" ? `<div style="text-align:right;margin-top:8px;font-weight:700;color:var(--brand-blue)">Total: ${gs(totalPresup)}</div>` : ''}
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
+          ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${o.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
+          ${acciones}</div>
+      </div>
+    </div>`;
+}
+
+// Modal para cargar/editar precios del presupuesto
+async function abrirPresupuesto(otId) {
+  const ots = await api("/api/compras/ots");
+  const o = ots.find(x => x.id === otId);
+  if (!o) return;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:640px;width:100%;max-height:90vh;overflow:auto;padding:24px">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Poné el precio de cada material. ${o.patente} · ${o.n_interno ? "Coche " + o.n_interno : ""}</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Trabajo</th><th>Material</th><th>Mecánico</th><th class="num">Precio (Gs.)</th></tr></thead>
+        <tbody>
+          ${o.items.map(it => `<tr>
+            <td style="font-size:13px">${it.descripcion}</td>
+            <td style="font-size:13px"><b>${it.material_pedido || "—"}</b></td>
+            <td style="font-size:13px;color:var(--muted)">${it.tecnico || "—"}</td>
+            <td><input type="number" id="precio-${it.id}" value="${it.precio_compras || ''}" placeholder="0"
+                 style="width:120px;padding:8px;border:1.5px solid var(--border);border-radius:8px;text-align:right"></td>
+          </tr>`).join("")}
+        </tbody>
+      </table></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarPresupuesto(${o.id}, this)"><i class="ti ti-check"></i> Guardar presupuesto</button>
+      </div>
+    </div>`;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function guardarPresupuesto(otId, btn) {
+  const ots = await api("/api/compras/ots");
+  const o = ots.find(x => x.id === otId);
+  const precios = {};
+  let alguno = false;
+  o.items.forEach(it => {
+    const val = document.getElementById(`precio-${it.id}`).value;
+    if (val !== "" && val !== null) { precios[it.id] = parseFloat(val) || 0; alguno = true; }
+  });
+  if (!alguno) { toast("Cargá al menos un precio", "error"); return; }
+  const r = await api(`/api/compras/${otId}/presupuesto`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ precios })
+  });
+  if (r.ok) {
+    toast("Presupuesto guardado", "success");
+    btn.closest(".modal-overlay").remove();
+    renderCompras();
+  } else toast(r.msg || "Error", "error");
+}
+
+// Modal para registrar la entrega con foto obligatoria
+// Comprime una foto antes de subirla (de ~3MB a ~150KB)
+function comprimirFoto(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const maxLado = 1000;
+        let { width, height } = img;
+        if (width > height && width > maxLado) {
+          height = height * maxLado / width; width = maxLado;
+        } else if (height > maxLado) {
+          width = width * maxLado / height; height = maxLado;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.6));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function abrirEntrega(otId) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:24px">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-package"></i> Registrar entrega — OT #${otId}</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Indicá dónde entregás y <b>quién recibe</b> — al registrarlo, la responsabilidad del material pasa a esa persona. La foto es opcional pero recomendada.</p>
+
+      <div class="field" style="margin-bottom:12px">
+        <label>¿Dónde se entrega?</label>
+        <div style="display:flex;gap:8px">
+          <select id="ev-taller-sel" style="flex:1" onchange="document.getElementById('ev-taller-otro').style.display = this.value==='__otro__' ? '' : 'none'">
+            <option value="Taller propio">Taller propio</option>
+            <option value="__otro__">Otro taller...</option>
+          </select>
+        </div>
+        <input id="ev-taller-otro" placeholder="Nombre del taller externo" list="ev-talleres-list" style="display:none;margin-top:8px">
+        <datalist id="ev-talleres-list"></datalist>
+      </div>
+
+      <div class="field" style="margin-bottom:16px">
+        <label>¿Quién recibe el material? *</label>
+        <input id="ev-recibe" placeholder="Nombre de la persona que recibe">
+      </div>
+
+      <input type="file" id="ev-camara" accept="image/*" capture="environment" style="display:none">
+      <input type="file" id="ev-galeria" accept="image/*" style="display:none">
+      <div style="display:flex;gap:10px;margin-bottom:14px">
+        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-camara').click()"><i class="ti ti-camera"></i> Sacar foto</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-galeria').click()"><i class="ti ti-photo"></i> Elegir foto</button>
+      </div>
+      <div id="ev-preview" style="margin-bottom:16px"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-success" id="ev-confirmar" onclick="confirmarEntrega(${otId}, this)"><i class="ti ti-check"></i> Confirmar entrega</button>
+      </div>
+    </div>`;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+
+  // Cargar talleres externos ya usados para el autocompletar
+  api("/api/compras/talleres").then(ts => {
+    const dl = document.getElementById("ev-talleres-list");
+    if (dl && Array.isArray(ts)) dl.innerHTML = ts.map(t => `<option value="${t}">`).join("");
+  });
+
+  let fotoEvidencia = null;
+  async function procesarEv(file) {
+    fotoEvidencia = await comprimirFoto(file);
+    document.getElementById("ev-preview").innerHTML = `<img src="${fotoEvidencia}" style="width:140px;height:140px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">`;
+    document.getElementById("ev-confirmar").disabled = false;
+  }
+  document.getElementById("ev-camara").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
+  document.getElementById("ev-galeria").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
+  window._fotoEvidenciaGetter = () => fotoEvidencia;
+}
+
+async function confirmarEntrega(otId, btn) {
+  const foto = window._fotoEvidenciaGetter ? window._fotoEvidenciaGetter() : null;
+  const recibe = (document.getElementById("ev-recibe")?.value || "").trim();
+  if (!recibe) { toast("Indicá quién recibe el material", "error"); return; }
+  const tallerSel = document.getElementById("ev-taller-sel")?.value || "Taller propio";
+  const taller = tallerSel === "__otro__"
+    ? (document.getElementById("ev-taller-otro")?.value || "").trim() || "Taller externo"
+    : tallerSel;
+  btn.disabled = true;
+  const r = await api(`/api/compras/${otId}/entregar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ foto, taller_entrega: taller, recibido_por: recibe })
+  });
+  if (r.ok) {
+    toast(`Entregado en ${taller} — recibió ${recibe}`, "success");
+    btn.closest(".modal-overlay").remove();
+    renderCompras();
+  } else { toast(r.msg || "Error", "error"); btn.disabled = false; }
+}
+
+async function verEvidencia(otId) {
+  const fotos = await api(`/api/compras/${otId}/evidencia`);
+  if (!fotos.length) { toast("Sin evidencia", "error"); return; }
+  verFotoGrande(fotos[0].datos);
+}
+
+// Compras marca que fue a buscar los repuestos
+async function marcarEnCamino(otId) {
+  if (!confirm("¿Marcar que ya fueron a buscar los repuestos?")) return;
+  const r = await api(`/api/compras/${otId}/en_camino`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
+  });
+  if (r.ok) { toast("Marcado en camino", "success"); renderCompras(); }
+  else toast(r.msg || "Error", "error");
+}
+
+// Convierte 'HH:MM' a minutos del día. Sin horario → muy alto (va al final).
+function minutosHorario(h) {
+  if (!h || !h.includes(":")) return 99999;
+  const [hh, mm] = h.split(":");
+  return parseInt(hh) * 60 + parseInt(mm);
+}
+
+// Badge del horario de salida con color de urgencia
+function badgeSalida(horario) {
+  if (!horario || !horario.includes(":")) return `<span style="color:var(--muted);font-size:12px">—</span>`;
+  // Calcular urgencia según la hora actual
+  const ahora = new Date();
+  const minAhora = ahora.getHours() * 60 + ahora.getMinutes();
+  const minSalida = minutosHorario(horario);
+  const faltan = minSalida - minAhora;
+  let color, bg;
+  if (faltan < 0) { color = "#6b7280"; bg = "#f3f4f6"; }           // ya salió
+  else if (faltan <= 60) { color = "#dc2626"; bg = "#fee2e2"; }     // menos de 1h: urgente
+  else if (faltan <= 180) { color = "#d97706"; bg = "#fef3c7"; }    // menos de 3h: pronto
+  else { color = "#059669"; bg = "#d1fae5"; }                       // tranquilo
+  return `<span style="display:inline-flex;align-items:center;gap:4px;background:${bg};color:${color};padding:3px 9px;border-radius:8px;font-size:13px;font-weight:700"><i class="ti ti-clock"></i> ${horario}</span>`;
+}
+
+async function renderOts() {
+  status("Órdenes de Trabajo");
+  await refrescarPermisoOTs();
+  const filtro = otFiltroEstado ? `?estado=${otFiltroEstado}` : "";
+  const ots = await api("/api/ots" + filtro);
+  const counts = { abierta: 0, en_proceso: 0, cerrada: 0 };
+  (await api("/api/ots")).forEach(o => counts[o.estado] = (counts[o.estado] || 0) + 1);
+
+  // Ordenar las OTs activas por urgencia de horario de salida (el que sale antes, primero).
+  // Las cerradas se dejan por fecha. Las sin horario van al final.
+  if (otFiltroEstado !== "cerrada") {
+    ots.sort((a, b) => {
+      const cerrA = a.estado === "cerrada" ? 1 : 0;
+      const cerrB = b.estado === "cerrada" ? 1 : 0;
+      if (cerrA !== cerrB) return cerrA - cerrB;  // activas arriba
+      const ua = minutosHorario(a.horario_salida);
+      const ub = minutosHorario(b.horario_salida);
+      return ua - ub;  // más temprano = más urgente
+    });
+  }
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-clipboard-check"></i> Órdenes de Trabajo</h1>
+      <p>Trabajos de taller agrupados — basadas en los reportes de los choferes</p>
+    </div>
+    <div class="section">
+
+      <div class="metrics">
+        <div class="metric">
+          <div class="metric-icon blue"><i class="ti ti-clipboard-list"></i></div>
+          <div class="metric-content"><div class="metric-label">Total</div><div class="metric-value">${counts.abierta + counts.en_proceso + counts.cerrada}</div></div>
+        </div>
+        <div class="metric warning">
+          <div class="metric-icon amber"><i class="ti ti-progress"></i></div>
+          <div class="metric-content"><div class="metric-label">Abiertas</div><div class="metric-value">${counts.abierta}</div></div>
+        </div>
+        <div class="metric">
+          <div class="metric-icon blue"><i class="ti ti-tool"></i></div>
+          <div class="metric-content"><div class="metric-label">En proceso</div><div class="metric-value">${counts.en_proceso}</div></div>
+        </div>
+        <div class="metric success">
+          <div class="metric-icon green"><i class="ti ti-circle-check"></i></div>
+          <div class="metric-content"><div class="metric-label">Cerradas</div><div class="metric-value">${counts.cerrada}</div></div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="abrirNuevaOT()"><i class="ti ti-plus"></i> Nueva OT</button>
+        <button class="btn btn-ghost" onclick="abrirReporteFechas()"><i class="ti ti-file-text"></i> Reporte por fechas</button>
+        <div class="tabs">
+          <button class="tab-btn ${otFiltroEstado===''?'active':''}" onclick="filtrarOTs('')"><i class="ti ti-list"></i> Todas</button>
+          <button class="tab-btn ${otFiltroEstado==='abierta'?'active':''}" onclick="filtrarOTs('abierta')"><i class="ti ti-progress"></i> Abiertas</button>
+          <button class="tab-btn ${otFiltroEstado==='en_proceso'?'active':''}" onclick="filtrarOTs('en_proceso')"><i class="ti ti-tool"></i> En proceso</button>
+          <button class="tab-btn ${otFiltroEstado==='cerrada'?'active':''}" onclick="filtrarOTs('cerrada')"><i class="ti ti-circle-check"></i> Cerradas</button>
+        </div>
+      </div>
+
+      ${ots.length === 0 ? `<div class="empty"><i class="ti ti-clipboard-off"></i>Sin OTs ${otFiltroEstado ? 'en este filtro' : 'todavía'}.<br>Tocá <b>Nueva OT</b> para cargar la primera.</div>` : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>OT #</th><th class="center">Salida</th><th>Fecha</th><th>Vehículo</th><th>Conductor</th>
+              <th>Procedencia</th><th class="num">KM</th>
+              <th class="center">Items</th><th class="num">Costo</th>
+              <th class="center">Estado</th><th class="td-action"></th>
+            </tr></thead>
+            <tbody>
+              ${ots.map(o => {
+                const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
+                return `<tr class="clickable" onclick="abrirOT(${o.id})">
+                  <td><b>#${o.id}</b></td>
+                  <td class="center">${badgeSalida(o.horario_salida)}</td>
+                  <td>${o.fecha_apertura}</td>
+                  <td><b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}</td>
+                  <td>${o.conductor || "—"}</td>
+                  <td>${o.procedencia || "—"}</td>
+                  <td class="num">${o.km ? fmtNum(o.km) : "—"}</td>
+                  <td class="center">
+                    <div style="font-size:11px;color:var(--muted)">${o.items_completados}/${o.total_items}</div>
+                    <div class="grad-bar-wrap" style="width:60px;margin:3px auto 0">
+                      <div class="grad-bar" style="width:${progreso}%;background:${progreso === 100 ? 'var(--success)' : progreso > 50 ? 'var(--warning)' : 'var(--info)'}"></div>
+                    </div>
+                  </td>
+                  <td class="num">${gs(o.costo_total || 0)}</td>
+                  <td class="center">
+                    <span class="badge ${o.estado === 'cerrada' ? 'success' : o.estado === 'en_proceso' ? 'warning' : 'danger'}">
+                      <span class="dot"></span> ${LABEL_ESTADO_OT[o.estado]}
+                    </span>
+                  </td>
+                  <td class="td-action">
+                    ${puedeBorrarOTs() ? `<button class="icon-btn ot-borrar" title="Eliminar la OT" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>` : ""}
+                  </td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>`;
+}
+
+function filtrarOTs(estado) {
+  otFiltroEstado = estado;
+  renderOts();
+}
+
+async function abrirNuevaOT() {
+  const vehiculos = await api("/api/vehiculos");
+  if (vehiculos.length === 0) {
+    toast("Cargá vehículos primero", "error");
+    return;
+  }
+  const overlay = document.createElement("div");
+  overlay.id = "modal-ot";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:999;display:grid;place-items:center;padding:20px";
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:760px;width:100%;max-height:92vh;overflow:auto">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <h3 style="font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px">
+          <i class="ti ti-clipboard-plus" style="color:var(--brand-blue)"></i> Nueva Orden de Trabajo
+        </h3>
+        <button class="icon-btn" onclick="cerrarModalOT()"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:22px">
+        <div class="form-row">
+          <div class="field" style="flex:1;min-width:200px"><label>Vehículo *</label>
+            ${buscadorCoche("ot-veh", vehiculos)}
+          </div>
+          <div class="field"><label>Fecha *</label><input id="ot-fecha" type="date" value="${hoy()}"></div>
+          <div class="field"><label>KM</label><input id="ot-km" placeholder="765387" style="width:110px"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field" style="flex:1"><label>Conductor</label><input id="ot-cond" placeholder="Marco Aguiar"></div>
+          <div class="field" style="flex:1"><label>Procedencia</label><input id="ot-proc" placeholder="Loreto"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field" style="flex:1"><label>Observaciones</label><input id="ot-obs" placeholder="Opcional"></div>
+        </div>
+
+        <p style="margin:20px 0 8px;font-weight:600;font-size:13px;color:var(--brand-blue)">
+          <i class="ti ti-list-check"></i> Items de la OT
+        </p>
+        <p class="hint">
+          <i class="ti ti-bulb"></i>
+          Pegá la lista del chofer abajo, una línea por trabajo. El sistema detecta el tipo automáticamente.
+        </p>
+        <textarea id="ot-items-raw" rows="8" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;resize:vertical"
+          placeholder="Cambio de aceite y filtros
+Revisión frenos
+Cambiar goma valijera
+Control general"></textarea>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+          <button class="btn btn-ghost" onclick="cerrarModalOT()">Cancelar</button>
+          <button class="btn btn-primary" onclick="guardarNuevaOT()"><i class="ti ti-device-floppy"></i> Crear OT</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOT(); });
+}
+
+function cerrarModalOT() {
+  const m = document.getElementById("modal-ot");
+  if (m) m.remove();
+}
+
+function detectarTipoItem(desc) {
+  const d = desc.toLowerCase();
+  if (/aceite|filtro|engrase|engranaje|servicio|preventivo|lubric/.test(d)) return "preventivo";
+  if (/cubierta|neumat|cubierto|trucky|llanta|goma rueda|reencauch/.test(d)) return "neumaticos";
+  if (/freno|frenos|rotura|perdida|pérdida|fuga|cambiar|reparar|solucionar|reten|arreglar|romp|fall/.test(d)) return "correctivo";
+  if (/control|revisar|verificar|chequear|inspecc/.test(d)) return "control";
+  return "otro";
+}
+
+async function guardarNuevaOT() {
+  const vid = parseInt($("#ot-veh").value);
+  const fecha = $("#ot-fecha").value;
+  if (!fecha) { toast("La fecha es obligatoria", "error"); return; }
+
+  const raw = $("#ot-items-raw").value.trim();
+  const items = raw.split("\n").map(l => l.trim()).filter(l => l).map(l => {
+    // Sacar guiones, asteriscos, viñetas iniciales
+    const limpia = l.replace(/^[-*•·]\s*/, "");
+    return { descripcion: limpia, tipo: detectarTipoItem(limpia) };
+  });
+
+  const r = await api("/api/ots", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vehiculo_id: vid, fecha_apertura: fecha,
+      km: parseFloat($("#ot-km").value || 0),
+      conductor: $("#ot-cond").value,
+      procedencia: $("#ot-proc").value,
+      observaciones: $("#ot-obs").value,
+      items: items
+    })
+  });
+  if (r.ok) {
+    toast(`OT #${r.ot_id} creada con ${items.length} items`, "success");
+    cerrarModalOT();
+    renderOts();
+  } else toast(r.msg || "Error", "error");
+}
+
+// Modal para elegir fechas y generar el reporte de trabajos en PDF
+function abrirReporteFechas() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const hace7 = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-file-text"></i> Reporte de trabajos</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Elegí el rango de fechas. Se genera un PDF con todas las órdenes de ese período (diario, semanal, lo que necesites).</p>
+      <div style="display:flex;gap:12px;margin-bottom:18px">
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Desde</label>
+          <input type="date" id="rep-desde" value="${hace7}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Hasta</label>
+          <input type="date" id="rep-hasta" value="${hoy}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="generarReporteFechas(this)"><i class="ti ti-download"></i> Generar PDF</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function generarReporteFechas(btn) {
+  const desde = document.getElementById("rep-desde").value;
+  const hasta = document.getElementById("rep-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  if (desde > hasta) { toast("La fecha 'desde' no puede ser mayor que 'hasta'", "error"); return; }
+  window.open(`/api/reporte_trabajos_pdf?desde=${desde}&hasta=${hasta}`, "_blank");
+  btn.closest(".modal-overlay").remove();
+}
+
+// Modal de fechas para el PDF de correctivos
+function abrirReporteCorrectivos() {
+  const hoy = new Date().toISOString().slice(0, 10);
+  const hace30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+  const o = document.createElement("div");
+  o.className = "modal-overlay";
+  o.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  o.innerHTML = `
+    <div style="background:#fff;border-radius:16px;max-width:440px;width:100%;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-printer"></i> Reporte de correctivos</h2>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Elegí el rango de fechas. Se genera un PDF con todas las averías y reparaciones de ese período.</p>
+      <div style="display:flex;gap:12px;margin-bottom:18px">
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Desde</label>
+          <input type="date" id="corr-desde" value="${hace30}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+        <div style="flex:1">
+          <label style="font-size:12.5px;font-weight:600;display:block;margin-bottom:6px">Hasta</label>
+          <input type="date" id="corr-hasta" value="${hoy}" style="width:100%;padding:10px;border:1.5px solid var(--border);border-radius:9px;font-size:15px">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="generarReporteCorrectivos(this)"><i class="ti ti-download"></i> Generar PDF</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function generarReporteCorrectivos(btn) {
+  const desde = document.getElementById("corr-desde").value;
+  const hasta = document.getElementById("corr-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  if (desde > hasta) { toast("La fecha 'desde' no puede ser mayor que 'hasta'", "error"); return; }
+  window.open(`/api/correctivos_pdf?desde=${desde}&hasta=${hasta}`, "_blank");
+  btn.closest(".modal-overlay").remove();
+}
+
+// Enviar una OT al sector Compras
+async function enviarACompras(otId) {
+  if (!confirm("¿Enviar esta OT a Compras? Quedará en espera de presupuesto.")) return;
+  const r = await api(`/api/ots/${otId}/enviar_compras`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nota: "" })
+  });
+  if (r.ok) {
+    toast("OT enviada a Compras", "success");
+    cerrarModalOTDetalle();
+    renderOts();
+  } else toast(r.msg || "Error", "error");
+}
+
+// Ver una foto en grande (toca para cerrar)
+function verFotoGrande(src) {
+  const o = document.createElement("div");
+  o.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.88);z-index:2000;display:grid;place-items:center;padding:20px;cursor:pointer";
+  o.onclick = () => o.remove();
+  o.innerHTML = `<img src="${src}" style="max-width:100%;max-height:100%;border-radius:8px">`;
+  document.body.appendChild(o);
+}
+
+async function abrirOT(otId) {
+  const ot = await api(`/api/ots/${otId}`);
+  if (!ot) return;
+
+  const overlay = document.createElement("div");
+  overlay.id = "modal-ot-detalle";
+  overlay.style.cssText = "position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:999;display:grid;place-items:center;padding:20px";
+
+  const compl = ot.items.filter(i => i.estado === "completado").length;
+  const LABEL_COMPRAS = { en_espera: "En espera (Compras)", presupuestado: "Presupuestado", en_camino: "En camino 🚚", entregado: "Entregado ✓" };
+  const COLOR_COMPRAS = { en_espera: "warning", presupuestado: "cat", en_camino: "warning", entregado: "success" };
+
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:880px;width:100%;max-height:92vh;overflow:auto">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg, var(--info-bg) 0%, var(--surface) 100%)">
+        <div>
+          <h3 style="font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px">
+            <i class="ti ti-clipboard-check" style="color:var(--brand-blue)"></i> OT #${ot.id} · ${ot.patente}
+            ${ot.n_interno ? `<span style="font-weight:500;color:var(--muted)">Coche ${ot.n_interno}</span>` : ""}
+          </h3>
+          <p style="font-size:12.5px;color:var(--muted);margin-top:3px">
+            ${ot.fecha_apertura} · ${ot.conductor || 'Sin conductor'} · ${ot.procedencia || 'Sin procedencia'} · ${ot.km ? fmtNum(ot.km) + ' km' : 'Sin km'}
+          </p>
+        </div>
+        <button class="icon-btn" onclick="cerrarModalOTDetalle()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div style="padding:18px 22px">
+        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px">
+          <span class="badge ${ot.estado === 'cerrada' ? 'success' : ot.estado === 'en_proceso' ? 'warning' : 'danger'}">
+            <span class="dot"></span> ${LABEL_ESTADO_OT[ot.estado]}
+          </span>
+          <span class="badge">${compl}/${ot.items.length} completados</span>
+          ${ot.estado_compras ? `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>` : ''}
+          ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
+        </div>
+
+        <div id="ot-km-box">${otKmCaja(ot)}</div>
+
+        ${ot.fotos && ot.fotos.length ? `
+          <div style="margin-bottom:18px">
+            <div style="font-size:13px;font-weight:600;color:var(--muted);margin-bottom:8px"><i class="ti ti-camera"></i> Fotos del chofer</div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              ${ot.fotos.map(f => `
+                <img src="${f.datos}" alt="${f.nombre}" style="width:120px;height:120px;object-fit:cover;border-radius:10px;border:1px solid var(--border);cursor:pointer"
+                     onclick="verFotoGrande('${f.datos}')">
+              `).join("")}
+            </div>
+            <p style="font-size:11.5px;color:var(--muted);margin-top:6px"><i class="ti ti-info-circle"></i> Las fotos se borran al cerrar la OT.</p>
+          </div>
+        ` : ''}
+
+        ${ot.items.length === 0 ? `<div class="empty"><i class="ti ti-list"></i>Sin items en esta OT</div>` : `
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th class="center">#</th><th>Descripción</th><th class="center">Tipo</th>
+                <th class="center">Estado</th><th>Técnico</th><th>Material necesario</th><th class="td-action"></th>
+              </tr></thead>
+              <tbody>
+                ${ot.items.map((it, idx) => `
+                  <tr>
+                    <td class="center" style="color:var(--muted)">${idx+1}</td>
+                    <td>${it.descripcion}</td>
+                    <td class="center">
+                      <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
+                        ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo===t?'selected':''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
+                      </select>
+                    </td>
+                    <td class="center">
+                      <select onchange="actualizarItem(${it.id},'estado',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+                        <option value="pendiente" ${it.estado==='pendiente'?'selected':''}>Pendiente</option>
+                        <option value="en_proceso" ${it.estado==='en_proceso'?'selected':''}>En proceso</option>
+                        <option value="completado" ${it.estado==='completado'?'selected':''}>Completado</option>
+                      </select>
+                    </td>
+                    <td>
+                      <input type="text" value="${it.tecnico || ''}" placeholder="Nombre del técnico"
+                        onblur="actualizarItem(${it.id},'tecnico',this.value,this)"
+                        onkeydown="if(event.key==='Enter'){this.blur();}"
+                        style="width:130px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+                    </td>
+                    <td>
+                      <input type="text" value="${it.material_pedido || ''}" placeholder="ej: WD40, repuesto X"
+                        onblur="actualizarItem(${it.id},'material_pedido',this.value,this)"
+                        onkeydown="if(event.key==='Enter'){this.blur();}"
+                        style="width:160px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+                    </td>
+                    <td class="td-action">
+                      <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
+                    </td>
+                  </tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        `}
+
+        <div class="form-row" style="margin-top:14px;align-items:flex-end">
+          <div class="field" style="flex:1"><label>Agregar item</label><input id="ot-new-item" placeholder="Descripción del trabajo"></div>
+          <button class="btn btn-ghost" onclick="agregarItemOT(${ot.id})"><i class="ti ti-plus"></i> Agregar</button>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+          ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${ot.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
+          <button class="btn btn-ghost" onclick="window.open('/api/ots/${ot.id}/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir PDF</button>
+          ${!ot.estado_compras ?
+            `<button class="btn btn-primary" onclick="enviarACompras(${ot.id})"><i class="ti ti-shopping-cart"></i> Enviar a Compras</button>` :
+            `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}" style="align-self:center"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>`
+          }
+          ${ot.estado !== 'cerrada' ?
+            `<button class="btn btn-success" onclick="cerrarOT(${ot.id})"><i class="ti ti-circle-check"></i> Cerrar OT</button>` :
+            `<button class="btn btn-ghost" onclick="reabrirOT(${ot.id})"><i class="ti ti-arrow-back"></i> Reabrir</button>`
+          }
+          <button class="btn btn-ghost" onclick="cerrarModalOTDetalle()">Cerrar ventana</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOTDetalle(); });
+}
+
+// Si alguien escribe el técnico y cierra el modal de una, el onblur no llega
+// a dispararse y el dato se pierde. Antes de cerrar se fuerza el guardado.
+function guardarPendientesOT() {
+  const activo = document.activeElement;
+  if (activo && activo.tagName === "INPUT" && activo.closest("#modal-ot-detalle")) {
+    activo.blur();
+  }
+}
+
+// ─── Kilometraje verificado en la OT ───
+// Cuando el coche entra al taller se mira el tablero: acá se confirma o se
+// corrige, y esa lectura pasa a ser el km del coche (Preventivo incluido).
+function otFechaHora(t) {
+  if (!t) return "";
+  const [f, h] = String(t).replace("T", " ").split(" ");
+  return `${f.slice(8, 10)}/${f.slice(5, 7)}${h ? " " + h.slice(0, 5) : ""}`;
+}
+function otKmCaja(ot) {
+  window._otKm = ot;
+  const v = ot.km_verif;
+  const aca = v && v.ot === ot.id;
+  const coche = Math.round(ot.km_coche || 0);
+  const kmOt = Math.round(ot.km || 0);
+  let sub;
+  if (aca) sub = `<span class="ot-km-ok"><i class="ti ti-circle-check"></i> Verificado${v.por ? " por " + hiEsc(v.por) : ""} el ${otFechaHora(v.fecha)}</span>`;
+  else {
+    const partes = ["Sin verificar en esta OT"];
+    if (coche && coche !== kmOt) partes.push(`el sistema tiene ${fmtNum(coche)} km`);
+    if (v) partes.push(`última verificación: OT #${v.ot}, ${otFechaHora(v.fecha)}`);
+    sub = partes.join(" · ");
+  }
+  return `
+    <div class="ot-km ${aca ? "ok" : ""}">
+      <div class="ot-km-ic"><i class="ti ti-gauge"></i></div>
+      <div class="ot-km-info">
+        <div class="ot-km-lbl">Kilometraje del tablero</div>
+        <div class="ot-km-num">${kmOt ? fmtNum(kmOt) + " km" : "sin cargar"}</div>
+        <div class="ot-km-sub">${sub}</div>
+      </div>
+      ${ot.puede_verificar_km ? `<button class="btn ${aca ? "btn-ghost" : "btn-primary"}" onclick="otKmEditar()"><i class="ti ti-${aca ? "pencil" : "gauge"}"></i> ${aca ? "Corregir" : "Verificar km"}</button>` : ""}
+    </div>`;
+}
+function otKmEditar() {
+  const ot = window._otKm; if (!ot) return;
+  const valor = Math.round(ot.km || ot.km_coche || 0);
+  $("#ot-km-box").innerHTML = `
+    <div class="ot-km editando">
+      <div class="ot-km-ic"><i class="ti ti-gauge"></i></div>
+      <div class="ot-km-info">
+        <div class="ot-km-lbl">¿Qué marca el tablero?</div>
+        <div class="ot-km-edit">
+          <input id="ot-km-in" inputmode="numeric" value="${valor ? fmtNum(valor) : ""}" placeholder="ej: 245.300"
+                 onkeydown="if(event.key==='Enter')otKmGuardar(); if(event.key==='Escape')otKmCancelar()">
+          <span>km</span>
+        </div>
+        <div class="ot-km-sub">Queda como km de esta OT y del coche, también para el Preventivo.</div>
+      </div>
+      <div class="ot-km-btns">
+        <button class="btn btn-ghost" onclick="otKmCancelar()">Cancelar</button>
+        <button class="btn btn-primary" onclick="otKmGuardar(this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  const i = $("#ot-km-in"); i.focus(); i.select();
+}
+function otKmCancelar() { $("#ot-km-box").innerHTML = otKmCaja(window._otKm); }
+async function otKmGuardar(btn) {
+  const ot = window._otKm; if (!ot) return;
+  const km = parseFloat(String($("#ot-km-in").value || "").replace(/\./g, "").replace(/,/g, ".").replace(/[^\d.]/g, ""));
+  if (!km || km <= 0) { toast("Poné el kilometraje del tablero", "error"); return; }
+  const antes = Math.round(ot.km_coche || 0);
+  if (antes && km < antes &&
+      !confirm(`El sistema tenía ${fmtNum(antes)} km y ponés ${fmtNum(km)} km.\n\n¿Corregir a ${fmtNum(km)}? Desde ahora manda esta lectura.`)) return;
+  if (btn) btn.disabled = true;
+  const r = await api(`/api/ots/${ot.id}/km`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ km })
+  });
+  if (btn) btn.disabled = false;
+  if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo guardar", "error"); return; }
+  toast(`Km verificado: ${fmtNum(km)} km`, "success");
+  // Se vuelve a abrir la OT para que el km quede igual en todos lados
+  // (encabezado incluido) y la lista de fondo también se actualiza.
+  document.getElementById("modal-ot-detalle")?.remove();
+  if (document.querySelector('.nav-item[data-sec="ots"].active')) renderOts();
+  await abrirOT(ot.id);
+  document.querySelector("#ot-km-box .ot-km")?.classList.add("recien");
+}
+
+function cerrarModalOTDetalle() {
+  guardarPendientesOT();
+  const m = document.getElementById("modal-ot-detalle");
+  if (m) m.remove();
+  renderOts();
+}
+
+async function actualizarItem(itemId, campo, valor, el) {
+  if (campo === "costo") {
+    valor = (valor || "0").toString().replace(/\./g, "").replace(/,/g, ".");
+  }
+  const r = await api(`/api/ot_items/${itemId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ [campo]: valor })
+  });
+
+  // Antes esto decía "Item actualizado" pasara lo que pasara: si el servidor
+  // rechazaba el cambio, el usuario creía que había quedado guardado.
+  const ok = r && r.ok !== false && !r.error;
+  if (ok) {
+    const nombre = { tecnico: "Técnico asignado", estado: "Estado actualizado",
+                     material_pedido: "Material anotado", costo: "Costo actualizado",
+                     tipo: "Tipo actualizado" }[campo] || "Ítem actualizado";
+    toast(nombre, "success");
+    if (el) {           // destello verde para confirmar que quedó
+      el.style.transition = "background .2s";
+      el.style.background = "var(--success-bg)";
+      setTimeout(() => { el.style.background = ""; }, 700);
+    }
+  } else {
+    toast((r && (r.msg || r.error)) || "No se pudo guardar el cambio", "error");
+    if (el) {
+      el.style.borderColor = "var(--danger)";
+      setTimeout(() => { el.style.borderColor = ""; }, 2000);
+    }
+  }
+  return ok;
+}
+
+async function agregarItemOT(otId) {
+  const desc = $("#ot-new-item").value.trim();
+  if (!desc) { toast("Escribí una descripción", "error"); return; }
+  await api(`/api/ots/${otId}/items`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ descripcion: desc, tipo: detectarTipoItem(desc) })
+  });
+  cerrarModalOTDetalle();
+  abrirOT(otId);
+}
+
+async function borrarItemOT(itemId, otId) {
+  if (!confirm("¿Eliminar este item?")) return;
+  await api(`/api/ot_items/${itemId}`, { method: "DELETE" });
+  cerrarModalOTDetalle();
+  abrirOT(otId);
+}
+
+async function cerrarOT(otId) {
+  if (!confirm("¿Cerrar la OT? Los items que queden pendientes se mantendrán.")) return;
+  await api(`/api/ots/${otId}/cerrar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  toast("OT cerrada", "success");
+  cerrarModalOTDetalle();
+}
+
+async function reabrirOT(otId) {
+  await api(`/api/ots/${otId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ estado: "abierta", fecha_cierre: null })
+  });
+  toast("OT reabierta", "success");
+  cerrarModalOTDetalle();
+}
+
+// Eliminar OTs: administración siempre; el resto, si se lo habilitaron en
+// Usuarios. Se puede en cualquier fase (abierta, en proceso, cerrada, en
+// Compras, presupuestada, en camino o entregada) y desde la lista, el detalle
+// o la bandeja de Compras.
+function puedeBorrarOTs() {
+  return window.USUARIO_ROL === "admin" || window.PUEDE_BORRAR_OTS === true;
+}
+// Se relee al entrar a OTs o a Compras: si el admin lo cambia, rige sin
+// volver a iniciar sesión.
+async function refrescarPermisoOTs() {
+  try {
+    const r = await fetch("/api/me/permisos", { credentials: "same-origin" });
+    if (!r.ok) return;
+    const d = await r.json();
+    window.PUEDE_BORRAR_OTS = !!d.borra_ots;
+  } catch (e) { /* sin conexión: queda lo que había */ }
+}
+
+async function borrarOT(otId) {
+  const ot = await api(`/api/ots/${otId}`);
+  if (!ot || ot.error) return;
+  const FASE = { abierta: "abierta", en_proceso: "en proceso", cerrada: "cerrada" };
+  const COMPRAS = { en_espera: "esperando a Compras", presupuestado: "presupuestada", en_camino: "con repuestos en camino", entregado: "con repuestos entregados" };
+  const coche = ot.n_interno ? `coche ${ot.n_interno}` : ot.patente;
+  const fase = [FASE[ot.estado] || ot.estado, COMPRAS[ot.estado_compras]].filter(Boolean).join(", ");
+  const n = (ot.items || []).length;
+  const msg = `¿Eliminar la OT #${otId} (${coche}, ${fase})?\n\n`
+    + `Se borra completa: ${n} ítem${n === 1 ? "" : "s"}, fotos, el presupuesto y la entrega de Compras, `
+    + `y los correctivos que se cargaron solos desde esta OT.\n\nNo se puede deshacer.`;
+  if (!confirm(msg)) return;
+  const r = await api(`/api/ots/${otId}`, { method: "DELETE" });
+  if (!r || !r.ok) return;   // sin permiso: el aviso ya lo muestra api()
+  toast(`OT #${otId} eliminada`, "success");
+  const modal = document.getElementById("modal-ot-detalle");
+  if (modal) modal.remove();
+  // Se refresca la pantalla en la que se está
+  const enCompras = document.querySelector('.nav-item[data-sec="compras"].active');
+  const enCorrectivos = document.querySelector('.nav-item[data-sec="correctivos"].active');
+  if (enCompras) renderCompras();
+  else if (enCorrectivos && typeof renderCorrectivos === "function") renderCorrectivos();
+  else renderOts();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  REPORTE GERENCIAL
+// ════════════════════════════════════════════════════════════════════════
+
+async function renderGerencial() {
+  status("Reporte gerencial");
+  // Por defecto: mes actual
+  const hoyD = new Date();
+  const desde = `${hoyD.getFullYear()}-${String(hoyD.getMonth()+1).padStart(2,'0')}-01`;
+  const ult = new Date(hoyD.getFullYear(), hoyD.getMonth()+1, 0);
+  const hasta = `${ult.getFullYear()}-${String(ult.getMonth()+1).padStart(2,'0')}-${String(ult.getDate()).padStart(2,'0')}`;
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-report"></i> Reporte Gerencial</h1>
+      <p>Resumen ejecutivo de toda la flota — para presentar a gerencia</p>
+    </div>
+    <div class="section">
+
+      <div class="ger-tabs">
+        <button class="ger-tab on" data-tab="flota" onclick="gerencialTab('flota')"><i class="ti ti-truck"></i> Flota completa</button>
+        <button class="ger-tab" data-tab="coche" onclick="gerencialTab('coche')"><i class="ti ti-file-analytics"></i> Dossier por coche</button>
+      </div>
+
+      <div class="ger-panel" data-panel="flota">
+        <div class="card">
+          <div class="card-head"><i class="ti ti-calendar"></i> Seleccionar período</div>
+          <div class="card-body">
+            <div class="form-row">
+              <div class="field"><label>Desde</label><input id="rg-desde" type="date" value="${desde}"></div>
+              <div class="field"><label>Hasta</label><input id="rg-hasta" type="date" value="${hasta}"></div>
+              <button class="btn btn-ghost" onclick="rangoRapido('semana')"><i class="ti ti-calendar-week"></i> Última semana</button>
+              <button class="btn btn-ghost" onclick="rangoRapido('mes')"><i class="ti ti-calendar-month"></i> Este mes</button>
+              <button class="btn btn-ghost" onclick="rangoRapido('mes_pasado')"><i class="ti ti-calendar-stats"></i> Mes pasado</button>
+              <button class="btn btn-primary" onclick="cargarReporteGerencial()"><i class="ti ti-search"></i> Generar</button>
+              <button class="btn btn-pdf" onclick="descargarReporteGerencial()"><i class="ti ti-file-type-pdf"></i> Descargar PDF</button>
+            </div>
+          </div>
+        </div>
+        <div id="rg-resultado"></div>
+      </div>
+
+      <div class="ger-panel" data-panel="coche" style="display:none">
+        <div class="card">
+          <div class="card-head"><i class="ti ti-file-analytics"></i> Dossier completo de un coche</div>
+          <div class="card-body">
+            <div class="form-row" style="align-items:flex-end">
+              <div class="field" style="flex:1;min-width:240px"><label>Coche</label>
+                <div id="dossier-slot"><input id="dossier-coche-sel" type="hidden"></div>
+              </div>
+              <div class="field"><label>Desde</label><input id="dossier-desde" type="date" value="${desde}"></div>
+              <div class="field"><label>Hasta</label><input id="dossier-hasta" type="date" value="${hasta}"></div>
+              <button class="btn btn-primary" onclick="generarDossier()"><i class="ti ti-file-search"></i> Generar dossier</button>
+            </div>
+            <p class="hint" style="margin-top:10px"><i class="ti ti-info-circle"></i> Junta todo el historial del coche en una hoja: OEE, correctivos, neumáticos, costos, y un diagnóstico con foco en soluciones.</p>
+          </div>
+        </div>
+        <div id="dossier-resultado"></div>
+      </div>
+
+    </div>`;
+  cargarReporteGerencial();
+  cargarSelectorDossier();
+}
+
+function rangoRapido(periodo) {
+  const hoyD = new Date();
+  let desde, hasta = hoyD.toISOString().slice(0,10);
+  if (periodo === "semana") {
+    const d = new Date(hoyD); d.setDate(d.getDate() - 7);
+    desde = d.toISOString().slice(0,10);
+  } else if (periodo === "mes") {
+    desde = `${hoyD.getFullYear()}-${String(hoyD.getMonth()+1).padStart(2,'0')}-01`;
+    const ult = new Date(hoyD.getFullYear(), hoyD.getMonth()+1, 0);
+    hasta = ult.toISOString().slice(0,10);
+  } else if (periodo === "mes_pasado") {
+    const mp = new Date(hoyD.getFullYear(), hoyD.getMonth()-1, 1);
+    const ult = new Date(hoyD.getFullYear(), hoyD.getMonth(), 0);
+    desde = mp.toISOString().slice(0,10);
+    hasta = ult.toISOString().slice(0,10);
+  }
+  $("#rg-desde").value = desde;
+  $("#rg-hasta").value = hasta;
+  cargarReporteGerencial();
+}
+
+async function cargarReporteGerencial() {
+  const desde = $("#rg-desde").value;
+  const hasta = $("#rg-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  const r = await api(`/api/reporte_gerencial?desde=${desde}&hasta=${hasta}`);
+  const res = $("#rg-resultado");
+
+  // Si el backend falló, mostrarlo claro en pantalla en vez de morir en silencio
+  if (!r || !Array.isArray(r.ots)) {
+    res.innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>
+      No se pudo generar el reporte.${r && r.error ? "<br><span style='font-size:12px;color:var(--muted)'>" + r.error + "</span>" : ""}
+      <br><span style="font-size:12px;color:var(--muted)">Probá de nuevo; si sigue, revisá los logs del servidor.</span></div>`;
+    return;
+  }
+
+  const pendientes = r.ots.filter(o => o.estado !== "cerrada").length;
+  const cerradas = r.ots.filter(o => o.estado === "cerrada").length;
+
+  res.innerHTML = `
+    <div class="section-title"><i class="ti ti-chart-pie"></i> Resumen del período · ${desde} → ${hasta}</div>
+
+    <div class="metrics">
+      <div class="metric">
+        <div class="metric-icon blue"><i class="ti ti-clipboard-check"></i></div>
+        <div class="metric-content"><div class="metric-label">Órdenes de Trabajo</div><div class="metric-value">${r.ots.length}</div>
+          <div class="metric-foot">${pendientes} abiertas · ${cerradas} cerradas</div></div>
+      </div>
+      <div class="metric success">
+        <div class="metric-icon green"><i class="ti ti-tool"></i></div>
+        <div class="metric-content"><div class="metric-label">Preventivos</div><div class="metric-value">${r.preventivos_count}</div>
+          <div class="metric-foot">${gs(r.preventivos_costo)}</div></div>
+      </div>
+      <div class="metric danger">
+        <div class="metric-icon red"><i class="ti ti-alert-triangle"></i></div>
+        <div class="metric-content"><div class="metric-label">Correctivos</div><div class="metric-value">${r.correctivos_count}</div>
+          <div class="metric-foot">${gs(r.correctivos_costo)}</div></div>
+      </div>
+      <div class="metric">
+        <div class="metric-icon blue"><i class="ti ti-disc"></i></div>
+        <div class="metric-content"><div class="metric-label">Cambios neumáticos</div><div class="metric-value">${r.cambios_neumaticos}</div></div>
+      </div>
+      <div class="metric warning">
+        <div class="metric-icon amber"><i class="ti ti-coin"></i></div>
+        <div class="metric-content"><div class="metric-label">Costo total</div><div class="metric-value">${gsSmall(r.costo_total)}</div></div>
+      </div>
+    </div>
+
+    ${r.items_por_tipo && r.items_por_tipo.length > 0 ? `
+      <div class="section-title"><i class="ti ti-chart-bar"></i> Trabajos por tipo</div>
+      <div class="card"><div class="card-body">
+        ${r.items_por_tipo.map(t => {
+          const total = r.items_por_tipo.reduce((s, x) => s + x.cant, 0);
+          const pct = total ? (t.cant / total) * 100 : 0;
+          return `
+            <div class="cost-row">
+              <div class="cost-label">${LABEL_TIPO_ITEM[t.tipo] || t.tipo}</div>
+              <div class="cost-bar-track"><div class="cost-bar" style="width:${pct}%;background:${COLOR_TIPO_ITEM[t.tipo] || 'var(--brand)'}"></div></div>
+              <div class="cost-pct">${t.cant}</div>
+              <div class="cost-val">${gs(t.costo)}</div>
+            </div>`;
+        }).join("")}
+      </div></div>
+    ` : ""}
+
+    ${r.top_vehiculos && r.top_vehiculos.length > 0 ? `
+      <div class="section-title"><i class="ti ti-trending-up"></i> Top vehículos por costo</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th class="center">#</th><th>Patente</th><th>N° int.</th>
+            <th>Marca / Modelo</th><th class="num">Costo total</th>
+          </tr></thead>
+          <tbody>
+            ${r.top_vehiculos.map((v, i) => `
+              <tr>
+                <td class="center"><b>${i+1}</b></td>
+                <td><b>${v.patente}</b></td>
+                <td>${v.n_interno || "—"}</td>
+                <td>${v.marca || ""} ${v.modelo || ""}</td>
+                <td class="num"><b>${gs(v.costo_total)}</b></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    ` : ""}
+
+    ${r.docs_proximos && r.docs_proximos.length > 0 ? `
+      <div class="section-title"><i class="ti ti-alert-triangle"></i> Documentos por vencer / vencidos</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Patente</th><th>Tipo</th><th>Documento</th><th>Vencimiento</th><th class="center">Días</th></tr></thead>
+          <tbody>
+            ${r.docs_proximos.map(d => `
+              <tr>
+                <td><b>${d.patente}</b></td>
+                <td><span class="badge cat">${d.tipo}</span></td>
+                <td>${d.nombre || "—"}</td>
+                <td>${d.fecha_vencimiento}</td>
+                <td class="center">
+                  ${d.dias_restantes < 0
+                    ? `<span class="badge danger"><span class="dot"></span> Vencido ${Math.abs(d.dias_restantes)}d</span>`
+                    : `<span class="badge warning"><span class="dot"></span> ${d.dias_restantes}d</span>`}
+                </td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    ` : ""}
+  `;
+}
+
+function descargarReporteGerencial() {
+  const desde = $("#rg-desde").value;
+  const hasta = $("#rg-hasta").value;
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  toast("Generando PDF...", "success");
+  window.open(`/api/exportar_reporte_gerencial?desde=${desde}&hasta=${hasta}`, "_blank");
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  USUARIOS Y SESIÓN
+// ════════════════════════════════════════════════════════════════════════
+
+async function cerrarSesion() {
+  if (!confirm("¿Cerrar sesión?")) return;
+  await fetch("/api/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  window.location.href = "/login";
+}
+
+const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo" };
+
+// Los roles que se pueden asignar, en un solo lugar para no repetirlos
+const ROLES_DISPONIBLES = [
+  ["taller", "Taller (operación)"],
+  ["admin", "Administración (todo)"],
+  ["compras", "Compras / Depósito"],
+  ["auditor", "Auditor (combustible e historial)"],
+  ["chofer", "Chofer (solo reportar)"],
+  ["chofer_corp", "Chofer corporativo (rendiciones)"],
+];
+
+async function renderUsuarios() {
+  status("Gestión de usuarios");
+  let usuarios = [];
+  try {
+    usuarios = await api("/api/usuarios");
+    await catalogoSecciones();
+  } catch (e) {
+    content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-lock"></i>Solo el administrador puede gestionar usuarios.</div></div>`;
+    return;
+  }
+  window._usuarios = usuarios;
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-users"></i> Usuarios del sistema</h1>
+      <p>Gestión de accesos — crear usuarios y asignar permisos</p>
+    </div>
+    <div class="section">
+
+      <div class="card">
+        <div class="card-head"><i class="ti ti-user-plus"></i> Nuevo usuario</div>
+        <div class="card-body">
+          <div class="form-row">
+            <div class="field"><label>Usuario *</label><input id="u-user" placeholder="jperez" style="width:140px"></div>
+            <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez"></div>
+            <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" style="width:140px"></div>
+            <div class="field"><label>Rol</label>
+              <select id="u-rol" style="width:230px" onchange="$('#u-secc-wrap').style.display = this.value === 'taller' ? '' : 'none'">
+                ${ROLES_DISPONIBLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="guardarUsuario()"><i class="ti ti-plus"></i> Crear</button>
+          </div>
+          <div id="u-secc-wrap" style="margin-top:14px">
+            <div class="secc-titulo"><i class="ti ti-layout-sidebar"></i> Qué secciones ve</div>
+            ${htmlSecciones("u-secc", [])}
+          </div>
+          <p class="hint" style="margin-top:14px">
+            <i class="ti ti-info-circle"></i>
+            <b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios. <b>Chofer</b>: solo ve una pantalla simple para cargar sus reportes desde el celular. <b>Chofer corporativo</b>: carga sus rendiciones de servicios desde el celular.
+          </p>
+        </div>
+      </div>
+
+      <div class="section-title"><i class="ti ti-list"></i> Usuarios registrados (${usuarios.length})</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Usuario</th><th>Nombre</th><th class="center">Rol</th><th>Acceso</th>
+            <th class="center" title="Puede eliminar órdenes de trabajo en cualquier fase">Elimina OTs</th>
+            <th class="center">Estado</th><th>Último acceso</th><th class="td-action"></th>
+          </tr></thead>
+          <tbody>
+            ${usuarios.map(u => `
+              <tr>
+                <td><b>${u.usuario}</b></td>
+                <td>${u.nombre || "—"}</td>
+                <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span></td>
+                <td style="font-size:12px">${textoAcceso(u)}</td>
+                <td class="center">${celdaBorraOTs(u)}</td>
+                <td class="center">${u.activo ? '<span class="badge success">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
+                <td style="font-size:12px;color:var(--muted)">${u.ultimo_acceso ? u.ultimo_acceso.replace('T',' ') : 'Nunca'}</td>
+                <td class="td-action" style="white-space:nowrap">
+                  <button class="icon-btn" onclick="editarNombreUsuario(${u.id}, '${u.usuario}', '${(u.nombre || '').replace(/'/g, "\\'")}')" title="Corregir nombre"><i class="ti ti-pencil"></i></button>
+                  <button class="icon-btn" onclick="cambiarRolUsuario(${u.id}, '${u.usuario}', '${u.rol}')" title="Cambiar rol"><i class="ti ti-user-cog"></i></button>
+                  ${u.rol === "taller" ? `<button class="icon-btn" onclick="editarSeccionesUsuario(${u.id})" title="Qué secciones ve"><i class="ti ti-layout-sidebar"></i></button>` : ""}
+                  <button class="icon-btn" onclick="cambiarPassUsuario(${u.id}, '${u.usuario}')" title="Cambiar contraseña"><i class="ti ti-key"></i></button>
+                  <button class="icon-btn" onclick="borrarUsuario(${u.id}, '${u.usuario}')" title="Eliminar"><i class="ti ti-trash"></i></button>
+                </td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// Quién puede eliminar OTs: administración siempre; a taller y compras se
+// les habilita con el interruptor. Rige al instante, sin volver a entrar.
+function celdaBorraOTs(u) {
+  if (u.rol === "admin") return '<span style="font-size:12px;color:var(--muted)">Siempre</span>';
+  if (!["taller", "compras"].includes(u.rol)) return '<span style="color:var(--light)">—</span>';
+  return `<label class="plus-toggle" title="Puede eliminar órdenes de trabajo">
+    <input type="checkbox" ${u.borra_ots ? "checked" : ""} onchange="cambiarBorraOTs(${u.id}, this)">
+    <span class="plus-switch"></span></label>`;
+}
+async function cambiarBorraOTs(uid, el) {
+  const quiere = el.checked;
+  el.disabled = true;
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ borra_ots: quiere ? 1 : 0 })
+  });
+  el.disabled = false;
+  if (r && r.ok) {
+    const u = (window._usuarios || []).find(x => x.id === uid);
+    if (u) u.borra_ots = quiere ? 1 : 0;
+    toast(quiere ? `${u ? (u.nombre || u.usuario) : "El usuario"} ya puede eliminar OTs` : "Ya no puede eliminar OTs", "success");
+  } else {
+    el.checked = !quiere;
+  }
+}
+
+// ─── Selector de secciones ───
+let _catSecciones = null;
+async function catalogoSecciones() {
+  if (!_catSecciones) _catSecciones = await api("/api/permisos/secciones");
+  return _catSecciones;
+}
+
+function textoAcceso(u) {
+  if (u.rol === "admin") return '<span style="color:var(--muted)">Todo, con usuarios</span>';
+  if (u.rol !== "taller") return '<span style="color:var(--light)">El de su rol</span>';
+  const s = u.secciones || [];
+  if (!s.length) return "Todo el sistema";
+  const grupos = (_catSecciones || [])
+    .filter(g => g.secciones.some(x => s.includes(x.clave)))
+    .map(g => g.grupo);
+  return `<b>${s.length} secciones</b> <span style="color:var(--muted)">· ${grupos.join(", ")}</span>`;
+}
+
+// Elección "ve todo" o "solo algunas", con las secciones agrupadas como el menú
+function htmlSecciones(id, seleccionadas) {
+  const limitado = seleccionadas.length > 0;
+  return `<div class="secc-box" id="${id}">
+    <div class="secc-modo">
+      <label class="secc-op"><input type="radio" name="${id}-modo" value="todo" ${limitado ? "" : "checked"}
+        onchange="seccModo('${id}')"><span><b>Ve todo el sistema</b><br><small>Como cualquier usuario de taller</small></span></label>
+      <label class="secc-op"><input type="radio" name="${id}-modo" value="algunas" ${limitado ? "checked" : ""}
+        onchange="seccModo('${id}')"><span><b>Solo algunas secciones</b><br><small>Elegís cuáles</small></span></label>
+    </div>
+    <div class="secc-grupos" style="${limitado ? "" : "display:none"}">
+      ${(_catSecciones || []).map(g => `
+        <div class="secc-grupo">
+          <label class="secc-gtit"><input type="checkbox" onchange="seccGrupo(this)"> ${g.grupo}</label>
+          ${g.secciones.map(s => `<label class="secc-item"><input type="checkbox" value="${s.clave}"
+            ${seleccionadas.includes(s.clave) ? "checked" : ""} onchange="seccSync(this)"> ${s.nombre}</label>`).join("")}
+        </div>`).join("")}
+    </div>
+  </div>`;
+}
+function seccModo(id) {
+  const caja = document.getElementById(id);
+  const algunas = caja.querySelector(`input[name="${id}-modo"]:checked`).value === "algunas";
+  caja.querySelector(".secc-grupos").style.display = algunas ? "" : "none";
+  seccRefrescar(caja);
+}
+// Tildar el título del grupo tilda o destilda todas sus secciones
+function seccGrupo(chk) {
+  chk.closest(".secc-grupo").querySelectorAll(".secc-item input").forEach(x => x.checked = chk.checked);
+  chk.indeterminate = false;
+}
+function seccSync(chk) { seccRefrescar(chk.closest(".secc-box")); }
+function seccRefrescar(caja) {
+  caja.querySelectorAll(".secc-grupo").forEach(g => {
+    const items = [...g.querySelectorAll(".secc-item input")];
+    const n = items.filter(x => x.checked).length;
+    const tit = g.querySelector(".secc-gtit input");
+    tit.checked = n === items.length;
+    tit.indeterminate = n > 0 && n < items.length;
+  });
+}
+// Devuelve [] si ve todo, la lista si eligió algunas, o null si no tildó nada
+function leerSecciones(id) {
+  const caja = document.getElementById(id);
+  if (caja.querySelector(`input[name="${id}-modo"]:checked`).value === "todo") return [];
+  const elegidas = [...caja.querySelectorAll(".secc-item input:checked")].map(x => x.value);
+  if (!elegidas.length) {
+    toast("Elegí al menos una sección, o marcá «Ve todo el sistema»", "error");
+    return null;
+  }
+  return elegidas;
+}
+
+async function editarSeccionesUsuario(uid) {
+  await catalogoSecciones();
+  const u = (window._usuarios || []).find(x => x.id === uid);
+  if (!u) return;
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:640px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-layout-sidebar"></i> Qué ve ${u.nombre || u.usuario}</h2>
+          <p>Lo que no tenga tildado no le aparece en el menú, y el sistema tampoco le deja entrar.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="firma-items" style="max-height:62vh;overflow-y:auto">
+        ${htmlSecciones("e-secc", u.secciones || [])}
+        <p class="hint" style="margin-top:12px"><i class="ti ti-info-circle"></i>
+          <span>Con secciones de <b>Corporativos</b> puede ver, liquidar, corregir montos y borrar servicios.
+          Configurar el plus, las tarifas y ver las contraseñas de los choferes sigue siendo solo de administración.</span></p>
+      </div>
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarSeccionesUsuario(${uid}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  seccRefrescar(document.getElementById("e-secc"));
+}
+
+async function guardarSeccionesUsuario(uid, btn) {
+  const secciones = leerSecciones("e-secc");
+  if (secciones === null) return;
+  btn.disabled = true;
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ secciones })
+  });
+  btn.disabled = false;
+  if (r && r.ok) {
+    toast(secciones.length ? `Ahora ve ${secciones.length} secciones` : "Ahora ve todo el sistema", "success");
+    btn.closest(".modal-overlay").remove();
+    renderUsuarios();
+  } else {
+    toast((r && r.msg) || "No se pudo guardar", "error");
+  }
+}
+
+async function guardarUsuario() {
+  const user = $("#u-user").value.trim();
+  const pass = $("#u-pass").value;
+  if (!user || !pass) { toast("Usuario y contraseña obligatorios", "error"); return; }
+  const rol = $("#u-rol").value;
+  const secciones = rol === "taller" ? leerSecciones("u-secc") : [];
+  if (secciones === null) return;    // eligió "algunas" pero no tildó ninguna
+  const r = await api("/api/usuarios", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      usuario: user, password: pass,
+      nombre: $("#u-nombre").value.trim(), rol, secciones
+    })
+  });
+  if (r.ok) {
+    toast("Usuario creado", "success");
+    renderUsuarios();
+  } else toast(r.msg, "error");
+}
+
+async function editarNombreUsuario(uid, usuario, nombreActual) {
+  const nuevo = prompt(
+    `Nombre completo de «${usuario}».\n\nEs el que aparece en las rendiciones, ` +
+    `las liquidaciones y los PDF.`, nombreActual || "");
+  if (nuevo === null) return;
+  if (!nuevo.trim()) { toast("El nombre no puede quedar vacío", "error"); return; }
+
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nombre: nuevo.trim() })
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Nombre actualizado", "success");
+    renderUsuarios();
+  } else {
+    toast((r && r.msg) || "No se pudo cambiar el nombre", "error");
+  }
+}
+
+async function cambiarRolUsuario(uid, usuario, rolActual) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay firma-overlay";
+  overlay.innerHTML = `
+    <div class="firma-modal" style="max-width:460px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-user-cog"></i> Cambiar rol</h2>
+          <p>Usuario <b>${usuario}</b> — hoy es <b>${LABEL_ROL[rolActual] || rolActual}</b></p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="firma-items">
+        ${ROLES_DISPONIBLES.map(([v, t]) => `
+          <label class="firma-item" style="margin-bottom:7px">
+            <input type="radio" name="rol-nuevo" value="${v}" ${v === rolActual ? "checked" : ""} style="width:18px;height:18px">
+            <span class="firma-item-info">
+              <span class="firma-item-desc">${t}</span>
+            </span>
+          </label>`).join("")}
+        <p class="hint" style="margin-top:10px"><i class="ti ti-info-circle"></i> Al cambiar el rol cambia la pantalla que ve al entrar. Si pasa a chofer corporativo, entra directo a cargar rendiciones desde el celular.</p>
+      </div>
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarRolUsuario(${uid}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function guardarRolUsuario(uid, btn) {
+  const sel = document.querySelector('input[name="rol-nuevo"]:checked');
+  if (!sel) { toast("Elegí un rol", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rol: sel.value })
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Rol actualizado", "success");
+    btn.closest(".modal-overlay").remove();
+    renderUsuarios();
+  } else {
+    toast((r && r.msg) || "No se pudo cambiar el rol", "error");
+    btn.disabled = false;
+  }
+}
+
+async function cambiarPassUsuario(uid, usuario) {
+  const nueva = prompt(`Nueva contraseña para "${usuario}":`);
+  if (!nueva) return;
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: nueva })
+  });
+  if (r.ok) toast("Contraseña actualizada", "success");
+  else toast(r.msg || "Error", "error");
+}
+
+async function borrarUsuario(uid, usuario) {
+  if (!confirm(`¿Eliminar al usuario "${usuario}"?`)) return;
+  const r = await api(`/api/usuarios/${uid}`, { method: "DELETE" });
+  if (r.ok) { toast("Usuario eliminado"); renderUsuarios(); }
+  else toast(r.msg || "Error", "error");
+}
+
+
+async function cargarFlotaInicial() {
+  if (!confirm("¿Cargar la flota completa desde el Excel?\n\nSe hace en 2 pasos: primero los 89 vehículos, después los documentos. Puede tardar un minuto.")) return;
+
+  // Paso 1: vehículos
+  status("Cargando vehículos... (paso 1 de 2)");
+  toast("Cargando vehículos, aguardá...", "success");
+  let r = await api("/api/cargar_flota_inicial", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paso: "vehiculos" })
+  });
+  if (!r.ok) {
+    toast(r.msg || "Error al cargar vehículos", "error");
+    return;
+  }
+  toast(r.msg, "success");
+
+  // Paso 2: documentos
+  status("Cargando documentos... (paso 2 de 2)");
+  toast("Ahora los documentos, un momento más...", "success");
+  r = await api("/api/cargar_flota_inicial", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paso: "documentos" })
+  });
+  if (r.ok) {
+    toast("¡Flota cargada completa! " + r.msg, "success");
+  } else {
+    toast("Vehículos cargados. Documentos: " + (r.msg || "error"), "error");
+  }
+  setTimeout(() => renderDashboard(), 1200);
+}
+
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  INVENTARIO DE REPUESTOS (DEPÓSITO) — vista de búsqueda rápida
+// ════════════════════════════════════════════════════════════════════════
+
+const CAT_REPUESTOS = [
+  "Filtros", "Correas y mangueras", "Lubricantes y aditivos",
+  "Rulemanes / rodamientos", "Tensores / bombas", "Embragues / frenos",
+  "Eléctricos", "Tornillería / ferretería", "Neumáticos",
+  "Usados recuperables", "Varios",
+];
+
+// Color de cada zona (coincide con la zonificación física del depósito)
+// pasillo (primera letra) → color. A=alta rotación, B=mecánicos, C=eléctricos, D=usados.
+const COLOR_ZONA = {
+  A: "#185FA5", B: "#3B6D11", C: "#854F0B", D: "#993C1D",
+  _: "#5F5E5A",  // por defecto si no tiene pasillo conocido
+};
+function colorZona(pasillo) {
+  const p = (pasillo || "").trim().toUpperCase().charAt(0);
+  return COLOR_ZONA[p] || COLOR_ZONA._;
+}
+function nombreZona(categoria) {
+  return categoria || "Repuesto";
+}
+
+const LABEL_ESTADO_STOCK = { ok: "en stock", bajo: "queda poco", sin_stock: "sin stock" };
+
+let repBuscar = "";
+let repFiltroCategoria = "";
+let repVistaAdmin = false;   // toggle para mostrar el panel de gestión/cargar
+
+async function renderRepuestos() {
+  status("Inventario de repuestos");
+
+  // Traer resumen (para los números de arriba) y la lista filtrada
+  const resumen = await api("/api/repuestos/resumen");
+  let qs = [];
+  if (repBuscar) qs.push("buscar=" + encodeURIComponent(repBuscar));
+  if (repFiltroCategoria) qs.push("categoria=" + encodeURIComponent(repFiltroCategoria));
+  const reps = await api("/api/repuestos" + (qs.length ? "?" + qs.join("&") : ""));
+
+  const puedeEditar = (window.USUARIO_ROL === "admin" || window.USUARIO_ROL === "taller");
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-packages"></i> Depósito de Repuestos</h1>
+      <div class="page-actions"><button class="btn btn-ghost" onclick="irA('proveedores')"><i class="ti ti-address-book"></i> Proveedores</button></div>
+    </div>
+
+    <div class="section">
+
+      <!-- BUSCADOR GRANDE -->
+      <div class="rep-search-box">
+        <i class="ti ti-search rep-search-ico"></i>
+        <input id="rep-search" class="rep-search-input" autocomplete="off"
+               placeholder="Filtro de aceite, correa, código..."
+               value="${repBuscar.replace(/"/g, "&quot;")}"
+               oninput="repBuscarDebounce(this.value)">
+        ${repBuscar ? `<button class="rep-search-clear" onclick="repLimpiarBusqueda()"><i class="ti ti-x"></i></button>` : ""}
+      </div>
+
+      <!-- chips de categoría para filtrar rápido -->
+      <div class="rep-chips">
+        <button class="rep-chip ${!repFiltroCategoria ? "on" : ""}" onclick="repFiltrarCat('')">Todo</button>
+        ${CAT_REPUESTOS.map(c => `<button class="rep-chip ${repFiltroCategoria === c ? "on" : ""}" onclick="repFiltrarCat('${c.replace(/'/g, "")}')">${c}</button>`).join("")}
+      </div>
+
+      <!-- resumen mini -->
+      <div class="rep-summary">
+        <span><b>${resumen.total_items}</b> repuestos</span>
+        <span class="rep-dot">·</span>
+        <span><b>${gsSmall(resumen.valor_total)}</b> en stock</span>
+        ${resumen.cant_bajos + resumen.cant_sin_stock > 0 ? `
+          <span class="rep-dot">·</span>
+          <span class="rep-alerta-link" onclick="repFiltrarBajos()">
+            <i class="ti ti-alert-triangle"></i> ${resumen.cant_bajos + resumen.cant_sin_stock} para pedir
+          </span>` : ""}
+      </div>
+
+      <!-- RESULTADOS -->
+      <div id="rep-resultados">
+        ${renderListaRepuestos(reps)}
+      </div>
+
+      ${puedeEditar ? `
+        <div class="rep-admin-toggle">
+          <button class="btn btn-ghost" onclick="repToggleAdmin()">
+            <i class="ti ti-${repVistaAdmin ? "chevron-up" : "plus"}"></i>
+            ${repVistaAdmin ? "Ocultar" : "Cargar un repuesto nuevo"}
+          </button>
+        </div>
+        <div id="rep-admin-panel" style="${repVistaAdmin ? "" : "display:none"}">
+          ${renderPanelCargar()}
+        </div>
+      ` : ""}
+
+    </div>`;
+
+  // refocus al buscador si venías escribiendo
+  const inp = $("#rep-search");
+  if (inp && repBuscar) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+}
+
+// ─── Lista de tarjetas de resultado ───
+function renderListaRepuestos(reps) {
+  if (!reps.length) {
+    if (repBuscar || repFiltroCategoria) {
+      return `<div class="empty"><i class="ti ti-search-off"></i>No encontré nada con eso.<br>Probá con otra palabra o el código.</div>`;
+    }
+    return `<div class="empty"><i class="ti ti-package-off"></i>El depósito está vacío.<br>Cargá el primer repuesto abajo.</div>`;
+  }
+  return reps.map(r => {
+    const col = colorZona(r.ubic_pasillo);
+    const est = r.estado_stock;
+    const stkClass = est === "ok" ? "ok" : est === "bajo" ? "bajo" : "sin";
+    const stkIcon = est === "ok" ? "circle-check" : est === "bajo" ? "alert-triangle" : "circle-x";
+    const stkTxt = est === "sin_stock" ? "sin stock"
+                 : `${fmtNum(r.stock_actual)} ${r.unidad}${est === "bajo" ? " — poco" : ""}`;
+    return `
+      <div class="rep-card" style="border-left-color:${col}" onclick="abrirRepuesto(${r.id})">
+        <div class="rep-card-main">
+          <div class="rep-card-info">
+            <div class="rep-card-titulo">${r.descripcion}</div>
+            <div class="rep-card-sub">${[r.aplicacion, r.codigo].filter(Boolean).join(" · ")}${r.n_proveedores > 1 ? ` <span class="rep-card-nprov"><i class="ti ti-building-store"></i> ${r.n_proveedores} proveedores</span>` : ""}</div>
+          </div>
+          <div class="rep-stock-badge ${stkClass}">
+            <i class="ti ti-${stkIcon}"></i> ${stkTxt}
+          </div>
+        </div>
+        ${r.ubicacion ? `
+          <div class="rep-card-ubic" style="background:${col}14">
+            <i class="ti ti-map-pin" style="color:${col};font-size:24px"></i>
+            <div>
+              <div class="rep-card-zona" style="color:${col}">${nombreZona(r.categoria)}</div>
+              <div class="rep-card-codubic" style="color:${col}">${r.ubicacion}</div>
+            </div>
+          </div>
+        ` : `
+          <div class="rep-card-ubic rep-sin-ubic">
+            <i class="ti ti-map-pin-off" style="font-size:20px"></i>
+            <span>Sin ubicación asignada</span>
+          </div>
+        `}
+      </div>`;
+  }).join("");
+}
+
+// ─── Panel de carga (solo admin/taller) ───
+function renderPanelCargar() {
+  return `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-plus"></i> Nuevo repuesto</div>
+      <div class="card-body">
+        <div class="form-row">
+          <div class="field"><label>Código fabricante *</label><input id="r-cod" placeholder="MANN-W1374" style="width:160px"></div>
+          <div class="field" style="flex:1;min-width:200px"><label>Descripción *</label><input id="r-desc" placeholder="Filtro de aceite"></div>
+          <div class="field"><label>Categoría</label>
+            <select id="r-cat">${CAT_REPUESTOS.map(c => `<option value="${c}">${c}</option>`).join("")}</select>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Marca</label><input id="r-mar" placeholder="Mann" style="width:130px"></div>
+          <div class="field"><label>Aplicación (qué coche)</label><input id="r-apl" placeholder="Scania DC12" style="width:170px"></div>
+          <div class="field"><label>Código alt.</label><input id="r-codalt" placeholder="opcional" style="width:130px"></div>
+        </div>
+        ${camposProveedor("r")}
+
+        <div class="rep-ubic-form">
+          <div class="rep-ubic-form-label"><i class="ti ti-map-pin"></i> ¿Dónde se guarda?</div>
+          <div class="rep-ubic-inputs">
+            <div class="field"><label>Pasillo</label><input id="r-up" placeholder="A" maxlength="2" style="width:64px;text-transform:uppercase;text-align:center;font-size:18px;font-weight:600"></div>
+            <span class="rep-ubic-sep">-</span>
+            <div class="field"><label>Estante</label><input id="r-ue" placeholder="02" maxlength="3" style="width:64px;text-align:center;font-size:18px;font-weight:600"></div>
+            <span class="rep-ubic-sep">-</span>
+            <div class="field"><label>Nivel</label><input id="r-un" placeholder="03" maxlength="3" style="width:64px;text-align:center;font-size:18px;font-weight:600"></div>
+            <span class="rep-ubic-sep">-</span>
+            <div class="field"><label>Posición</label><input id="r-uo" placeholder="04" maxlength="3" style="width:64px;text-align:center;font-size:18px;font-weight:600"></div>
+          </div>
+        </div>
+
+        <div class="form-row" style="margin-top:14px">
+          <div class="field"><label>Cantidad inicial</label><input id="r-stk" placeholder="0" style="width:110px"></div>
+          <div class="field"><label>Avisar cuando baje de</label><input id="r-min" placeholder="10" style="width:130px"></div>
+          <div class="field"><label>Unidad</label>
+            <select id="r-uni" style="width:110px">
+              <option value="u">unidad</option><option value="litros">litros</option>
+              <option value="metros">metros</option><option value="kg">kg</option>
+            </select>
+          </div>
+          <div class="field"><label>Precio c/u (Gs.)</label><input id="r-cos" placeholder="85000" style="width:150px"></div>
+          <button class="btn btn-primary" onclick="guardarRepuesto()" style="align-self:flex-end"><i class="ti ti-device-floppy"></i> Guardar</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ─── Búsqueda con debounce (no recargar en cada tecla) ───
+let _repBuscarTimer = null;
+function repBuscarDebounce(v) {
+  repBuscar = v;
+  clearTimeout(_repBuscarTimer);
+  _repBuscarTimer = setTimeout(async () => {
+    let qs = [];
+    if (repBuscar) qs.push("buscar=" + encodeURIComponent(repBuscar));
+    if (repFiltroCategoria) qs.push("categoria=" + encodeURIComponent(repFiltroCategoria));
+    const reps = await api("/api/repuestos" + (qs.length ? "?" + qs.join("&") : ""));
+    const cont = $("#rep-resultados");
+    if (cont) cont.innerHTML = renderListaRepuestos(reps);
+    // mostrar/ocultar la X del buscador
+    const box = document.querySelector(".rep-search-box");
+    let clr = box?.querySelector(".rep-search-clear");
+    if (repBuscar && !clr && box) {
+      clr = document.createElement("button");
+      clr.className = "rep-search-clear"; clr.innerHTML = '<i class="ti ti-x"></i>';
+      clr.onclick = repLimpiarBusqueda; box.appendChild(clr);
+    } else if (!repBuscar && clr) clr.remove();
+  }, 250);
+}
+function repLimpiarBusqueda() { repBuscar = ""; renderRepuestos(); }
+function repFiltrarCat(c) { repFiltroCategoria = (repFiltroCategoria === c ? "" : c); renderRepuestos(); }
+function repFiltrarBajos() { repBuscar = ""; repFiltroCategoria = ""; renderRepuestos().then(filtrarSoloBajosEnPantalla); }
+
+async function filtrarSoloBajosEnPantalla() {
+  const reps = await api("/api/repuestos?solo_bajos=1");
+  const cont = $("#rep-resultados");
+  if (cont) cont.innerHTML = `<div class="rep-filtro-aviso"><i class="ti ti-filter"></i> Mostrando solo lo que hay que pedir <button onclick="renderRepuestos()">ver todo</button></div>` + renderListaRepuestos(reps);
+}
+
+function repToggleAdmin() {
+  repVistaAdmin = !repVistaAdmin;
+  renderRepuestos();
+  if (repVistaAdmin) setTimeout(() => $("#rep-admin-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 100);
+}
+
+// ─── Proveedor y su contacto ───
+// Los proveedores están en un directorio (el listado de la empresa, con RUC y
+// teléfono). Al escribir se busca en el servidor —son miles— y al elegir uno
+// se completan el contacto y el teléfono.
+let _provBuscarT = null;
+function camposProveedor(px, r = {}, titulo = "Proveedor") {
+  const esc = v => String(v || "").replace(/"/g, "&quot;");
+  return `
+    <div class="rep-prov-form">
+      <div class="rep-ubic-form-label"><i class="ti ti-building-store"></i> ${titulo}</div>
+      <div class="form-row">
+        <div class="field"><label>Proveedor <span class="rep-prov-ayuda">(nombre, fantasía o RUC)</span></label>
+          <input id="${px}-prov" list="${px}-prov-lista" value="${esc(r.proveedor)}" placeholder="Escribí para buscar"
+                 style="width:240px" oninput="buscarProveedorForm('${px}')" onchange="completarProveedor('${px}')" autocomplete="off">
+          <datalist id="${px}-prov-lista"></datalist>
+          <div class="rep-prov-ruc" id="${px}-pruc">${[r.proveedor_fantasia, r.proveedor_ruc ? "RUC " + r.proveedor_ruc : ""].filter(Boolean).join(" — ")}</div>
+        </div>
+        <div class="field"><label>Contacto</label><input id="${px}-pcon" value="${esc(r.proveedor_contacto)}" placeholder="ej: Carlos" style="width:150px"></div>
+        <div class="field"><label>Teléfono / WhatsApp</label><input id="${px}-ptel" value="${esc(r.proveedor_telefono)}" placeholder="ej: 0981 123 456" inputmode="tel" style="width:160px"></div>
+      </div>
+    </div>`;
+}
+
+function buscarProveedorForm(px) {
+  clearTimeout(_provBuscarT);
+  const q = ($("#" + px + "-prov").value || "").trim();
+  if (q.length < 2) return;
+  _provBuscarT = setTimeout(async () => {
+    const r = await api("/api/repuestos/proveedores?limite=15&q=" + encodeURIComponent(q));
+    const dl = document.getElementById(px + "-prov-lista");
+    if (dl) dl.innerHTML = (r.proveedores || []).map(p =>
+      `<option value="${p.nombre.replace(/"/g, "&quot;")}">${[p.fantasia, p.ruc ? "RUC " + p.ruc : ""].filter(Boolean).join(" — ")}</option>`).join("");
+  }, 220);
+}
+
+async function completarProveedor(px) {
+  const nombre = ($("#" + px + "-prov").value || "").trim();
+  const ruc = document.getElementById(px + "-pruc");
+  if (!nombre) { if (ruc) ruc.textContent = ""; return; }
+  const p = await api("/api/repuestos/proveedor?nombre=" + encodeURIComponent(nombre));
+  if (ruc) ruc.textContent = p && p.nombre
+    ? [p.fantasia, p.ruc ? "RUC " + p.ruc : ""].filter(Boolean).join(" — ")
+    : "Proveedor nuevo: se agrega al directorio";
+  if (!p || !p.nombre) return;
+  // Solo se completa lo que está vacío: no se pisa algo que escribió el usuario
+  const con = $("#" + px + "-pcon"), tel = $("#" + px + "-ptel");
+  if (con && !con.value && p.contacto) con.value = p.contacto;
+  if (tel && !tel.value && p.telefono) tel.value = p.telefono;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  PROVEEDORES — el directorio de la empresa
+// ════════════════════════════════════════════════════════════════════════
+// La lista completa (son miles) se pagina en el servidor. Se puede recorrer
+// por letra, ver solo los que ya se usan en repuestos, o buscar.
+const provEstado = { q: "", letra: "", uso: false, pagina: 1 };
+const PROV_POR_PAGINA = 25;
+let _provPagT = null;
+
+async function renderProveedores() {
+  status("Proveedores");
+  const r = await api("/api/repuestos/proveedores/resumen");
+  const fmt = n => (n || 0).toLocaleString("es-PY");
+  const letras = ["#", ..."ABCDEFGHIJKLMNÑOPQRSTUVWXYZ"];
+  const puede = ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-address-book"></i> Proveedores</h1>
+      <p>El directorio de la empresa: RUC, teléfono, dirección y la persona de contacto</p>
+      ${puede ? `<div class="page-actions"><button class="btn btn-primary" onclick="dirProvEditar(-1)"><i class="ti ti-plus"></i> Nuevo proveedor</button></div>` : ""}
+    </div>
+    <div class="section">
+      <div class="prov-kpis">
+        <div class="prov-kpi"><span>Proveedores</span><b>${fmt(r.total)}</b></div>
+        <div class="prov-kpi"><span>Con teléfono</span><b>${fmt(r.con_telefono)}</b></div>
+        <div class="prov-kpi"><span>Con contacto cargado</span><b>${fmt(r.con_contacto)}</b></div>
+        <div class="prov-kpi"><span>Usados en repuestos</span><b>${fmt(r.en_uso)}</b></div>
+      </div>
+      <div class="dir-prov-buscar prov-buscar">
+        <i class="ti ti-search"></i>
+        <input id="prov-q" placeholder="Buscar por nombre, nombre de fantasía, RUC, número o contacto" autocomplete="off"
+               value="${provEstado.q.replace(/"/g, "&quot;")}" oninput="provBuscar(this.value)">
+      </div>
+      <div class="prov-filtros">
+        <button class="prov-letra ${!provEstado.letra && !provEstado.uso ? "on" : ""}" data-l="" onclick="provLetra('')">Todos</button>
+        <button class="prov-letra uso ${provEstado.uso ? "on" : ""}" onclick="provSoloUso()"><i class="ti ti-packages"></i> En uso</button>
+        <span class="prov-sep"></span>
+        ${letras.map(l => `<button class="prov-letra ${provEstado.letra === l ? "on" : ""}" data-l="${l}" onclick="provLetra('${l}')">${l}</button>`).join("")}
+      </div>
+      <div id="prov-lista"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  provCargar();
+}
+
+function provBuscar(v) {
+  clearTimeout(_provPagT);
+  _provPagT = setTimeout(() => { provEstado.q = v.trim(); provEstado.pagina = 1; provCargar(); }, 250);
+}
+function provLetra(l) {
+  provEstado.letra = l; provEstado.uso = false; provEstado.pagina = 1;
+  document.querySelectorAll(".prov-letra").forEach(b => b.classList.toggle("on", !b.classList.contains("uso") && b.dataset.l === l));
+  provCargar();
+}
+function provSoloUso() {
+  provEstado.uso = !provEstado.uso; provEstado.letra = ""; provEstado.pagina = 1;
+  document.querySelectorAll(".prov-letra").forEach(b =>
+    b.classList.toggle("on", b.classList.contains("uso") ? provEstado.uso : (!provEstado.uso && b.dataset.l === "")));
+  provCargar();
+}
+function provPagina(n) { provEstado.pagina = n; provCargar(); content.scrollTop = 0; }
+
+async function provCargar() {
+  const cont = $("#prov-lista");
+  if (!cont) return;
+  const p = new URLSearchParams({ pagina: provEstado.pagina, limite: PROV_POR_PAGINA });
+  if (provEstado.q) p.set("q", provEstado.q);
+  if (provEstado.letra) p.set("letra", provEstado.letra);
+  if (provEstado.uso) p.set("uso", "1");
+  const r = await api("/api/repuestos/proveedores?" + p.toString());
+  const lista = r.proveedores || [];
+  window._dirProv = lista;
+  const n = r.coincidencias || 0;
+  const paginas = Math.ceil(n / PROV_POR_PAGINA);
+  if (!lista.length) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-address-book-off"></i>${provEstado.q ? `Ningún proveedor coincide con «${provEstado.q}».` : provEstado.uso ? "Todavía ningún repuesto tiene proveedor cargado." : "No hay proveedores con esa letra."}</div>`;
+    return;
+  }
+  const desde = (provEstado.pagina - 1) * PROV_POR_PAGINA + 1;
+  cont.innerHTML = `
+    <div class="prov-conteo">${n.toLocaleString("es-PY")} proveedor${n === 1 ? "" : "es"} · mostrando ${desde}–${desde + lista.length - 1}</div>
+    <div class="card prov-tabla-card">
+      <table class="prov-tabla">
+        <thead><tr><th>N°</th><th>Proveedor</th><th>RUC</th><th>Teléfono</th><th>Contacto</th><th>Dirección</th><th></th></tr></thead>
+        <tbody>
+          ${lista.map((x, i) => {
+            const wa = numeroWhatsApp(x.telefono);
+            return `<tr onclick="dirProvEditar(${i})">
+              <td class="prov-num">${x.codigo || "—"}</td>
+              <td><div class="prov-nom">${hiEsc(x.fantasia || x.nombre)}</div>${x.fantasia ? `<div class="prov-razon">${hiEsc(x.nombre)}</div>` : ""}${x.repuestos ? `<span class="dir-prov-uso">${x.repuestos} repuesto${x.repuestos === 1 ? "" : "s"}</span>` : ""}</td>
+              <td class="prov-mono">${x.ruc || "—"}</td>
+              <td class="prov-mono">${x.telefono || "—"}</td>
+              <td>${x.contacto || `<span class="prov-vacio">—</span>`}</td>
+              <td class="prov-dir">${x.direccion || "—"}</td>
+              <td class="prov-acc" onclick="event.stopPropagation()">
+                ${wa ? `<a class="icon-btn" target="_blank" rel="noopener" href="https://wa.me/${wa}" title="WhatsApp"><i class="ti ti-brand-whatsapp"></i></a>` : ""}
+                <button class="icon-btn" onclick="dirProvEditar(${i})" title="Editar"><i class="ti ti-edit"></i></button>
+              </td>
+            </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>
+    ${paginador(provEstado.pagina, paginas, "provPagina")}`;
+}
+
+function dirProvEditar(i) {
+  const nuevo = i < 0;
+  const p = nuevo ? {} : (window._dirProv || [])[i];
+  if (!p) return;
+  const puede = ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+  const esc = v => String(v || "").replace(/"/g, "&quot;");
+  const dis = puede ? "" : "disabled";
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1700";
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:480px">
+      <div class="rep-mini-titulo">${nuevo ? "Nuevo proveedor" : hiEsc(p.fantasia || p.nombre)}</div>
+      ${!nuevo && p.fantasia ? `<p class="rep-mini-help">Razón social: ${hiEsc(p.nombre)}</p>` : ""}
+      ${!nuevo && p.codigo ? `<p class="rep-mini-help">Proveedor N° ${p.codigo}${p.repuestos ? ` · usado en ${p.repuestos} repuesto${p.repuestos === 1 ? "" : "s"}` : ""}</p>` : ""}
+      ${nuevo ? `<label class="rep-mini-lbl">Razón social</label><input id="dp-nom" class="rep-mini-input" placeholder="ej: Amanda Mallada">` : ""}
+      <label class="rep-mini-lbl">Nombre de fantasía <span class="rep-mini-opc">cómo lo conocen, para encontrarlo al buscar</span></label>
+      <input id="dp-fan" class="rep-mini-input" value="${esc(p.fantasia)}" placeholder="ej: Repuestos Amanda" ${dis}>
+      <label class="rep-mini-lbl">RUC</label><input id="dp-ruc" class="rep-mini-input" value="${esc(p.ruc)}" ${dis}>
+      <label class="rep-mini-lbl">Contacto (persona)</label><input id="dp-con" class="rep-mini-input" value="${esc(p.contacto)}" placeholder="ej: Carlos" ${dis}>
+      <label class="rep-mini-lbl">Teléfono / WhatsApp</label><input id="dp-tel" class="rep-mini-input" value="${esc(p.telefono)}" inputmode="tel" ${dis}>
+      <label class="rep-mini-lbl">Dirección</label><input id="dp-dir" class="rep-mini-input" value="${esc(p.direccion)}" ${dis}>
+      <label class="rep-mini-lbl">Email</label><input id="dp-ema" class="rep-mini-input" value="${esc(p.email)}" inputmode="email" ${dis}>
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">${puede ? "Cancelar" : "Cerrar"}</button>
+        ${puede ? `<button class="btn btn-primary" onclick="dirProvGuardar(${i}, this)"><i class="ti ti-check"></i> ${nuevo ? "Agregar" : "Guardar"}</button>` : ""}
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => (nuevo ? $("#dp-nom") : $("#dp-con"))?.focus(), 50);
+}
+
+async function dirProvGuardar(i, btn) {
+  const nuevo = i < 0;
+  const datos = { fantasia: $("#dp-fan").value, ruc: $("#dp-ruc").value, contacto: $("#dp-con").value, telefono: $("#dp-tel").value,
+                  direccion: $("#dp-dir").value, email: $("#dp-ema").value };
+  datos.nombre = nuevo ? $("#dp-nom").value.trim() : (window._dirProv || [])[i].nombre;
+  const r = await api("/api/repuestos/proveedor", {
+    method: nuevo ? "POST" : "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(datos),
+  });
+  if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
+  toast(nuevo ? (r.msg || "Proveedor agregado") : "Proveedor actualizado", "success");
+  btn.closest(".rep-modal-overlay").remove();
+  if (nuevo) { provEstado.q = datos.fantasia || datos.nombre; provEstado.letra = ""; provEstado.uso = false; provEstado.pagina = 1; renderProveedores(); }
+  else provCargar();
+}
+
+// Número para WhatsApp: 0981 123 456 → 595981123456
+function numeroWhatsApp(tel) {
+  // Solo celulares (09xx): un teléfono fijo no tiene WhatsApp
+  let d = String(tel || "").replace(/\D/g, "");
+  if (d.startsWith("595")) d = d.slice(3);
+  if (d.startsWith("0")) d = d.slice(1);
+  return /^9\d{8}$/.test(d) ? "595" + d : "";
+}
+
+// ─── Proveedores de un repuesto ───
+// El mismo código se le puede comprar a varios proveedores: el repuesto es
+// uno solo (un stock) y acá se ve quién lo vende y a cuánto. El principal es
+// al que se le pide primero; el más barato se marca solo.
+function puedeProveedoresRep() {
+  return ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+}
+
+function seccionProveedores(r) {
+  const provs = r.proveedores || [];
+  const puede = puedeProveedoresRep();
+  const pedir = r.estado_stock !== "ok";
+  const fecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) + "/" + f.slice(2, 4) : "";
+  const filas = provs.map(p => {
+    const wa = numeroWhatsApp(p.telefono);
+    const msj = encodeURIComponent(`Hola${p.contacto ? " " + p.contacto : ""}, te escribo de La Santaniana. ` +
+      `Necesitamos ${r.descripcion} (código ${p.codigo_prov || r.codigo})${r.aplicacion ? " para " + r.aplicacion : ""}. ¿Tenés disponible y a qué precio?`);
+    const tags = [
+      p.principal && provs.length > 1 ? `<span class="rep-pv-tag principal"><i class="ti ti-star-filled"></i> principal</span>` : "",
+      p.mas_barato ? `<span class="rep-pv-tag barato"><i class="ti ti-arrow-down"></i> más barato</span>` : "",
+    ].join("");
+    return `
+      <div class="rep-pv ${pedir && p.principal ? "pedir" : ""}">
+        <div class="rep-d-prov-ico"><i class="ti ti-building-store"></i></div>
+        <div class="rep-d-prov-info">
+          <div class="rep-d-prov-nom">${hiEsc(p.fantasia || p.proveedor)} ${tags}</div>
+          ${p.fantasia ? `<div class="rep-d-prov-razon">${hiEsc(p.proveedor)}</div>` : ""}
+          <div class="rep-d-prov-sub">${[p.contacto, p.telefono, p.ruc ? "RUC " + p.ruc : "", p.codigo_prov ? "lo vende como " + hiEsc(p.codigo_prov) : ""].filter(Boolean).join(" · ") || "Sin contacto cargado"}</div>
+        </div>
+        <div class="rep-pv-precio">
+          <b>${p.precio > 0 ? gs(p.precio) : "sin precio"}</b>
+          ${p.actualizado ? `<small>${fecha(p.actualizado)}</small>` : ""}
+        </div>
+        <div class="rep-pv-acc">
+          ${wa ? `<a class="btn ${pedir && p.principal ? "btn-primary" : "btn-ghost"} rep-pv-wa" target="_blank" rel="noopener" href="https://wa.me/${wa}?text=${msj}" title="Pedir por WhatsApp"><i class="ti ti-brand-whatsapp"></i>${pedir && p.principal ? " Pedir" : ""}</a>` : ""}
+          ${p.telefono ? `<a class="icon-btn" href="tel:${String(p.telefono).replace(/[^\d+]/g, "")}" title="Llamar"><i class="ti ti-phone"></i></a>` : ""}
+          ${puede && !p.principal ? `<button class="icon-btn" title="Hacerlo el principal" onclick="principalProvRep(${p.id}, ${r.id})"><i class="ti ti-star"></i></button>` : ""}
+          ${puede ? `<button class="icon-btn" title="Cambiar precio" onclick="editarProvRep(${p.id}, ${r.id})"><i class="ti ti-pencil"></i></button>` : ""}
+          ${puede ? `<button class="icon-btn rep-pv-quitar" title="Sacar este proveedor" onclick="quitarProvRep(${p.id}, ${r.id})"><i class="ti ti-x"></i></button>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+  return `
+    <div class="rep-pv-cab">
+      <div class="rep-d-section-lbl" style="margin:0">Proveedores${provs.length ? ` (${provs.length})` : ""}</div>
+      ${puede ? `<button class="btn btn-ghost rep-pv-add" onclick="agregarProvRep(${r.id})"><i class="ti ti-plus"></i> Agregar proveedor</button>` : ""}
+    </div>
+    ${provs.length ? `<div class="rep-pv-lista">${filas}</div>`
+      : `<div class="rep-d-sin-mov">Todavía no tiene proveedor cargado.</div>`}`;
+}
+
+// Sumar un proveedor al repuesto (o actualizarle el precio). Si se pone una
+// cantidad, además entra ese stock como compra a ese proveedor.
+function agregarProvRep(rid, pre = {}) {
+  const r = window._repActual || {};
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  const esc = v => String(v || "").replace(/"/g, "&quot;");
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:560px">
+      <div class="rep-mini-titulo">Agregar proveedor</div>
+      <p class="rep-mini-help">${hiEsc(r.descripcion || "")}${r.codigo ? ` · código <b>${hiEsc(r.codigo)}</b>` : ""}. Es el mismo repuesto y el mismo stock: solo se anota que este proveedor también lo vende.</p>
+      ${camposProveedor("ap", pre)}
+      <div class="form-row" style="margin-top:12px">
+        <div class="field"><label>Precio c/u (Gs.)</label><input id="ap-precio" value="${esc(pre.precio)}" placeholder="85000" inputmode="numeric" style="width:140px"></div>
+        <div class="field"><label>Código del proveedor <span class="rep-mini-opc">si lo vende con otro</span></label><input id="ap-cod" value="${esc(pre.codigo_prov)}" placeholder="opcional" style="width:150px"></div>
+        <div class="field"><label>Entran ahora <span class="rep-mini-opc">opcional</span></label><input id="ap-cant" value="${esc(pre.cantidad)}" placeholder="0" inputmode="decimal" style="width:110px"></div>
+      </div>
+      <div class="rep-mini-btns" style="margin-top:16px">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarProvRep(${rid}, this)"><i class="ti ti-check"></i> Agregar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => $("#ap-prov")?.focus(), 50);
+}
+
+async function confirmarProvRep(rid, btn) {
+  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
+  const proveedor = ($("#ap-prov").value || "").trim();
+  if (!proveedor) { toast("Poné el proveedor", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/repuestos/${rid}/proveedores`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      proveedor, contacto: $("#ap-pcon").value, telefono: $("#ap-ptel").value,
+      precio: parseFloat(limpiar($("#ap-precio").value)) || 0,
+      codigo_prov: $("#ap-cod").value,
+      cantidad: parseFloat(limpiar($("#ap-cant").value)) || 0,
+    })
+  });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+  const cant = parseFloat(limpiar($("#ap-cant").value)) || 0;
+  toast(`${r.nuevo ? "Proveedor agregado" : "Precio actualizado"}${cant ? ` · entraron ${fmtNum(cant)}` : ""}${r.reactivado ? " · el repuesto volvió al depósito" : ""}`, "success");
+  btn.closest(".rep-modal-overlay").remove();
+  refrescarTrasMovimiento(rid);
+}
+
+function editarProvRep(pid, rid) {
+  const p = ((window._repActual || {}).proveedores || []).find(x => x.id === pid);
+  if (!p) return;
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal">
+      <div class="rep-mini-titulo">${hiEsc(p.fantasia || p.proveedor)}</div>
+      <label class="rep-mini-lbl">Precio c/u (Gs.)</label>
+      <input id="ep-precio" class="rep-mini-input" inputmode="numeric" value="${p.precio || ""}" placeholder="85000">
+      <label class="rep-mini-lbl">Código del proveedor <span class="rep-mini-opc">si lo vende con otro</span></label>
+      <input id="ep-cod" class="rep-mini-input" value="${String(p.codigo_prov || "").replace(/"/g, "&quot;")}" placeholder="opcional">
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarEditarProvRep(${pid}, ${rid}, this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => $("#ep-precio")?.select(), 50);
+}
+
+async function confirmarEditarProvRep(pid, rid, btn) {
+  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api(`/api/repuestos/oferta/${pid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ precio: parseFloat(limpiar($("#ep-precio").value)) || 0, codigo_prov: $("#ep-cod").value })
+  });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast("Precio actualizado", "success");
+  btn.closest(".rep-modal-overlay").remove();
+  refrescarTrasMovimiento(rid);
+}
+
+async function quitarProvRep(pid, rid) {
+  const p = ((window._repActual || {}).proveedores || []).find(x => x.id === pid);
+  if (!confirm(`¿Sacar a ${p ? (p.fantasia || p.proveedor) : "este proveedor"} de este repuesto? El stock no cambia.`)) return;
+  const r = await api(`/api/repuestos/oferta/${pid}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo sacar", "error"); return; }
+  toast("Proveedor sacado", "success");
+  refrescarTrasMovimiento(rid);
+}
+
+async function principalProvRep(pid, rid) {
+  const r = await api(`/api/repuestos/oferta/${pid}/principal`, { method: "POST" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo cambiar", "error"); return; }
+  toast("Ahora es el proveedor principal", "success");
+  refrescarTrasMovimiento(rid);
+}
+
+// El código ya estaba cargado: en vez de rebotar, se muestra cuál es y se
+// ofrece sumarle el proveedor que se estaba escribiendo.
+function codigoYaCargado(ex, datos) {
+  const prov = (datos.proveedor || "").trim();
+  const yaLoVende = prov && (ex.proveedores || []).some(n => n.toLowerCase() === prov.toLowerCase());
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:480px">
+      <div class="rep-mini-titulo"><i class="ti ti-copy" style="color:var(--brand-blue)"></i> Ese código ya está cargado</div>
+      <div class="rep-ya-box">
+        <b>${hiEsc(ex.descripcion)}</b>
+        <span>${[ex.codigo, ex.aplicacion].filter(Boolean).map(hiEsc).join(" · ")}</span>
+        <span>${ex.activo ? `En stock: ${fmtNum(ex.stock_actual || 0)} ${ex.unidad || ""}` : "Estaba dado de baja"}</span>
+        ${(ex.proveedores || []).length ? `<div class="rep-ya-provs">${ex.proveedores.map(n => `<span>${hiEsc(n)}</span>`).join("")}</div>` : `<span>Sin proveedor cargado</span>`}
+      </div>
+      <p class="rep-mini-help" style="margin:14px 0">${prov
+        ? (yaLoVende
+            ? `<b>${hiEsc(prov)}</b> ya figura como proveedor de este repuesto: se le actualiza el precio${datos.cantidad ? " y entra el stock" : ""}.`
+            : `Es el mismo repuesto: no se crea otro, se le suma <b>${hiEsc(prov)}</b> como proveedor con su precio${datos.cantidad ? `, y entran ${fmtNum(datos.cantidad)} al mismo stock` : ""}.`)
+        : "Para sumarle otro proveedor, escribilo en el formulario y volvé a guardar, o abrí el repuesto y agregalo desde ahí."}
+        ${!ex.activo ? " Al sumarlo vuelve a aparecer en el depósito." : ""}</p>
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove(); abrirRepuesto(${ex.id})"><i class="ti ti-eye"></i> Ver el repuesto</button>
+        ${prov ? `<button class="btn btn-primary" id="ya-sumar"><i class="ti ti-plus"></i> ${yaLoVende ? "Actualizar precio" : "Sumar proveedor"}</button>` : ""}
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  const b = o.querySelector("#ya-sumar");
+  if (b) b.onclick = async () => {
+    b.disabled = true;
+    const r = await api(`/api/repuestos/${ex.id}/proveedores`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proveedor: prov, contacto: datos.proveedor_contacto, telefono: datos.proveedor_telefono,
+                             precio: datos.costo_unitario || 0, cantidad: datos.cantidad || 0 })
+    });
+    b.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo sumar", "error"); return; }
+    toast(`${r.nuevo ? `${prov} sumado como proveedor` : "Precio actualizado"}${datos.cantidad ? ` · entraron ${fmtNum(datos.cantidad)}` : ""}`, "success");
+    o.remove();
+    repVistaAdmin = false;
+    await renderRepuestos();
+    abrirRepuesto(ex.id);
+  };
+}
+
+async function guardarRepuesto() {
+  const cod = $("#r-cod").value.trim();
+  const desc = $("#r-desc").value.trim();
+  if (!cod) { toast("Falta el código", "error"); return; }
+  if (!desc) { toast("Falta la descripción", "error"); return; }
+  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
+  const r = await api("/api/repuestos", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      codigo: cod, descripcion: desc,
+      categoria: $("#r-cat").value, marca: $("#r-mar").value,
+      aplicacion: $("#r-apl").value, codigo_alt: $("#r-codalt").value,
+      proveedor: $("#r-prov").value,
+      proveedor_contacto: $("#r-pcon").value, proveedor_telefono: $("#r-ptel").value,
+      ubic_pasillo: $("#r-up").value, ubic_estanteria: $("#r-ue").value,
+      ubic_nivel: $("#r-un").value, ubic_posicion: $("#r-uo").value,
+      stock_inicial: parseFloat(limpiar($("#r-stk").value)) || 0,
+      stock_minimo: parseFloat(limpiar($("#r-min").value)) || 0,
+      unidad: $("#r-uni").value,
+      costo_unitario: parseFloat(limpiar($("#r-cos").value)) || 0,
+    })
+  });
+  if (r.ok) { toast("Repuesto guardado", "success"); repVistaAdmin = false; renderRepuestos(); }
+  else if (r.existe && r.repuesto) {
+    codigoYaCargado(r.repuesto, {
+      proveedor: $("#r-prov").value, proveedor_contacto: $("#r-pcon").value, proveedor_telefono: $("#r-ptel").value,
+      costo_unitario: parseFloat(limpiar($("#r-cos").value)) || 0,
+      cantidad: parseFloat(limpiar($("#r-stk").value)) || 0,
+    });
+  }
+  else toast(r.msg, "error");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  DETALLE DE UN REPUESTO (modal con ubicación desglosada y "Saqué 1")
+// ════════════════════════════════════════════════════════════════════════
+
+async function abrirRepuesto(id) {
+  const r = await api(`/api/repuestos/${id}`);
+  if (!r || r.error) { toast("No se encontró el repuesto", "error"); return; }
+  window._repActual = r;
+  const puedeEditar = (window.USUARIO_ROL === "admin" || window.USUARIO_ROL === "taller");
+  const puedeEntrada = puedeEditar || window.USUARIO_ROL === "compras";
+  const col = colorZona(r.ubic_pasillo);
+  const est = r.estado_stock;
+
+  const LABEL_MOV = { entrada: "Entró", salida: "Salió", ajuste: "Ajuste" };
+  const COLOR_MOV = { entrada: "success", salida: "danger", ajuste: "cat" };
+
+  // Frase explicativa de la ubicación en lenguaje natural
+  let fraseUbic = "";
+  if (r.ubic_pasillo || r.ubic_estanteria || r.ubic_nivel || r.ubic_posicion) {
+    let p = [];
+    if (r.ubic_pasillo) p.push(`pasillo <b>${r.ubic_pasillo}</b>`);
+    if (r.ubic_estanteria) p.push(`estantería <b>${r.ubic_estanteria}</b>`);
+    if (r.ubic_nivel) p.push(`nivel <b>${r.ubic_nivel}</b>`);
+    if (r.ubic_posicion) p.push(`posición <b>${r.ubic_posicion}</b>`);
+    fraseUbic = p.join(", ");
+  }
+
+  const estBadge = est === "ok"
+    ? `<div class="rep-d-stockbox ok"><div class="rep-d-stocknum">${fmtNum(r.stock_actual)} ${r.unidad}</div><div class="rep-d-stocklbl">en stock</div></div>`
+    : est === "bajo"
+    ? `<div class="rep-d-stockbox bajo"><div class="rep-d-stocknum">${fmtNum(r.stock_actual)} ${r.unidad}</div><div class="rep-d-stocklbl">queda poco — pedir</div></div>`
+    : `<div class="rep-d-stockbox sin"><div class="rep-d-stocknum">0</div><div class="rep-d-stocklbl">sin stock</div></div>`;
+
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay";
+  o.innerHTML = `
+    <div class="rep-modal">
+      <div class="rep-modal-head" style="background:${col}">
+        <div>
+          <div class="rep-modal-titulo">${r.descripcion}</div>
+          <div class="rep-modal-sub">${[r.aplicacion, r.codigo, r.codigo_alt].filter(Boolean).join(" · ")}</div>
+        </div>
+        <button class="rep-modal-x" onclick="cerrarRepuesto()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="rep-modal-body">
+
+        ${r.ubicacion ? `
+          <div class="rep-d-section-lbl">Dónde está</div>
+          <div class="rep-d-ubic-grid">
+            <div class="rep-d-ubic-cell" style="background:${col}14">
+              <div class="rep-d-ubic-k" style="color:${col}">Pasillo</div>
+              <div class="rep-d-ubic-v" style="color:${col}">${r.ubic_pasillo || "—"}</div>
+            </div>
+            <div class="rep-d-ubic-cell" style="background:${col}14">
+              <div class="rep-d-ubic-k" style="color:${col}">Estante</div>
+              <div class="rep-d-ubic-v" style="color:${col}">${r.ubic_estanteria || "—"}</div>
+            </div>
+            <div class="rep-d-ubic-cell" style="background:${col}14">
+              <div class="rep-d-ubic-k" style="color:${col}">Nivel</div>
+              <div class="rep-d-ubic-v" style="color:${col}">${r.ubic_nivel || "—"}</div>
+            </div>
+            <div class="rep-d-ubic-cell" style="background:${col}14">
+              <div class="rep-d-ubic-k" style="color:${col}">Posición</div>
+              <div class="rep-d-ubic-v" style="color:${col}">${r.ubic_posicion || "—"}</div>
+            </div>
+          </div>
+          <div class="rep-d-ubic-frase">${fraseUbic}</div>
+        ` : `<div class="rep-d-sin-ubic"><i class="ti ti-map-pin-off"></i> Este repuesto no tiene ubicación asignada todavía${puedeEditar ? ". Editalo para agregarla." : ""}</div>`}
+
+        <div class="rep-d-stats">
+          ${estBadge}
+          <div class="rep-d-statbox">
+            <div class="rep-d-statlbl">Mínimo</div>
+            <div class="rep-d-statval">${fmtNum(r.stock_minimo)}</div>
+          </div>
+          <div class="rep-d-statbox">
+            <div class="rep-d-statlbl">Valor del stock</div>
+            <div class="rep-d-statval">${gsSmall(r.valor_stock)}</div>
+          </div>
+        </div>
+
+        ${puedeEntrada ? `
+          <div class="rep-d-acciones-main">
+            <button class="rep-btn-saque" ${r.stock_actual <= 0 ? "disabled" : ""} onclick="saqueRapido(${r.id})">
+              <i class="ti ti-minus"></i> Saqué 1
+            </button>
+            <button class="rep-btn-saque-otro" ${r.stock_actual <= 0 ? "disabled" : ""} onclick="movimientoManual(${r.id}, 'salida')">
+              otra cantidad
+            </button>
+          </div>
+          <div class="rep-d-acciones-sec">
+            <button onclick="movimientoManual(${r.id}, 'entrada')"><i class="ti ti-plus"></i> Entró stock</button>
+            ${puedeEditar ? `<button onclick="ajusteStock(${r.id}, ${r.stock_actual})"><i class="ti ti-adjustments"></i> Ajustar conteo</button>` : ""}
+            ${puedeEditar ? `<button onclick="editarRepuesto(${r.id})"><i class="ti ti-edit"></i> Editar</button>` : ""}
+          </div>
+        ` : ""}
+
+        ${seccionProveedores(r)}
+
+        <div class="rep-d-section-lbl" style="margin-top:22px">Últimos movimientos</div>
+        ${r.movimientos.length === 0
+          ? `<div class="rep-d-sin-mov">Todavía no se registró ningún movimiento.</div>`
+          : `<div class="rep-d-movs">
+              ${r.movimientos.slice(0, 12).map(m => `
+                <div class="rep-d-mov">
+                  <span class="rep-d-mov-tipo ${COLOR_MOV[m.tipo]}">${m.tipo === "salida" ? "−" : m.tipo === "entrada" ? "+" : "="}${fmtNum(m.cantidad)}</span>
+                  <span class="rep-d-mov-mot">${m.motivo || LABEL_MOV[m.tipo]}</span>
+                  <span class="rep-d-mov-meta">${m.fecha}${m.usuario ? " · " + m.usuario : ""}</span>
+                  ${puedeEditar ? `<button class="rep-d-mov-del" onclick="borrarMovimiento(${m.id}, ${r.id})"><i class="ti ti-x"></i></button>` : ""}
+                </div>`).join("")}
+            </div>`}
+
+        ${puedeEditar ? `
+          <div class="rep-d-baja">
+            <button onclick="borrarRepuesto(${r.id}, '${(r.codigo || "").replace(/'/g, "")}')"><i class="ti ti-trash"></i> Dar de baja este repuesto</button>
+          </div>
+        ` : ""}
+
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) cerrarRepuesto(); };
+  document.body.appendChild(o);
+  requestAnimationFrame(() => o.classList.add("visible"));
+}
+
+function cerrarRepuesto() {
+  document.querySelectorAll(".rep-modal-overlay").forEach(o => {
+    o.classList.remove("visible");
+    setTimeout(() => o.remove(), 180);
+  });
+}
+
+// "Saqué 1" — descuenta una unidad al toque, sin preguntar nada
+async function saqueRapido(rid) {
+  const r = await api(`/api/repuestos/${rid}/movimiento`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tipo: "salida", cantidad: 1, motivo: "Saqué del depósito" })
+  });
+  if (r.ok) {
+    toast(`Listo, queda ${fmtNum(r.stock_actual)}`, "success");
+    refrescarTrasMovimiento(rid);
+  } else toast(r.msg, "error");
+}
+
+// Movimiento con cantidad escrita (salida grande o entrada)
+function movimientoManual(rid, tipo) {
+  const esEntrada = tipo === "entrada";
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal">
+      <div class="rep-mini-titulo">${esEntrada ? "Entró stock" : "Saqué del depósito"}</div>
+      <label class="rep-mini-lbl">¿Cuántas unidades?</label>
+      <input id="mm-cant" class="rep-mini-input" type="text" inputmode="decimal" placeholder="1" autofocus>
+      <label class="rep-mini-lbl">Motivo (opcional)</label>
+      <input id="mm-mot" class="rep-mini-input" placeholder="${esEntrada ? "Compra, devolución..." : "Uso en coche 47, rotura..."}">
+      ${esEntrada && ((window._repActual || {}).id === rid) && (window._repActual.proveedores || []).length ? `
+        <label class="rep-mini-lbl">¿De qué proveedor? <span class="rep-mini-opc">actualiza su precio</span></label>
+        <select id="mm-prov" class="rep-mini-input" onchange="const p=(window._repActual.proveedores||[]).find(x=>x.proveedor===this.value); if(p&&p.precio) $('#mm-cos').value=p.precio">
+          <option value="">— sin indicar —</option>
+          ${window._repActual.proveedores.map(p => `<option value="${String(p.proveedor).replace(/"/g, "&quot;")}">${hiEsc(p.fantasia || p.proveedor)}${p.precio ? " · " + gs(p.precio) : ""}</option>`).join("")}
+        </select>` : ""}
+      ${esEntrada ? `<label class="rep-mini-lbl">Precio c/u (opcional)</label><input id="mm-cos" class="rep-mini-input" placeholder="Gs.">` : ""}
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarMovManual(${rid}, '${tipo}', this)">
+          <i class="ti ti-check"></i> ${esEntrada ? "Sumar" : "Descontar"}
+        </button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => document.getElementById("mm-cant")?.focus(), 50);
+}
+
+async function confirmarMovManual(rid, tipo, btn) {
+  const cant = parseFloat((document.getElementById("mm-cant").value || "").replace(/\./g, "").replace(/,/g, "."));
+  if (!cant || cant <= 0) { toast("Poné una cantidad", "error"); return; }
+  const mot = document.getElementById("mm-mot").value;
+  const cosEl = document.getElementById("mm-cos");
+  const cos = cosEl ? parseFloat((cosEl.value || "0").replace(/\./g, "").replace(/,/g, ".")) : 0;
+  const provEl = document.getElementById("mm-prov");
+  const r = await api(`/api/repuestos/${rid}/movimiento`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tipo, cantidad: cant, motivo: mot, costo_unitario: cos || 0,
+                           proveedor: provEl ? provEl.value : "" })
+  });
+  if (r.ok) {
+    toast(`Hecho, queda ${fmtNum(r.stock_actual)}`, "success");
+    btn.closest(".rep-modal-overlay").remove();
+    refrescarTrasMovimiento(rid);
+  } else toast(r.msg, "error");
+}
+
+// Ajuste de inventario físico (fijar el stock al número contado)
+function ajusteStock(rid, actual) {
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal">
+      <div class="rep-mini-titulo">Ajustar conteo</div>
+      <p class="rep-mini-help">Contaste físicamente y el número no coincide. Poné cuántas hay realmente y el sistema lo corrige.</p>
+      <label class="rep-mini-lbl">Cantidad real contada</label>
+      <input id="aj-cant" class="rep-mini-input" type="text" inputmode="decimal" placeholder="${fmtNum(actual)}" autofocus>
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarAjuste(${rid}, this)"><i class="ti ti-check"></i> Corregir</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => document.getElementById("aj-cant")?.focus(), 50);
+}
+
+async function confirmarAjuste(rid, btn) {
+  const cant = parseFloat((document.getElementById("aj-cant").value || "").replace(/\./g, "").replace(/,/g, "."));
+  if (isNaN(cant) || cant < 0) { toast("Poné un número válido", "error"); return; }
+  const r = await api(`/api/repuestos/${rid}/movimiento`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tipo: "ajuste", cantidad: cant, motivo: "Conteo físico" })
+  });
+  if (r.ok) {
+    toast(`Corregido a ${fmtNum(r.stock_actual)}`, "success");
+    btn.closest(".rep-modal-overlay").remove();
+    refrescarTrasMovimiento(rid);
+  } else toast(r.msg, "error");
+}
+
+// Refresca el modal de detalle y la lista de fondo
+function refrescarTrasMovimiento(rid) {
+  cerrarRepuesto();
+  setTimeout(() => abrirRepuesto(rid), 200);
+  // refrescar la lista de fondo si está visible
+  const cont = $("#rep-resultados");
+  if (cont) {
+    let qs = [];
+    if (repBuscar) qs.push("buscar=" + encodeURIComponent(repBuscar));
+    if (repFiltroCategoria) qs.push("categoria=" + encodeURIComponent(repFiltroCategoria));
+    api("/api/repuestos" + (qs.length ? "?" + qs.join("&") : "")).then(reps => {
+      if ($("#rep-resultados")) $("#rep-resultados").innerHTML = renderListaRepuestos(reps);
+    });
+  }
+}
+
+async function borrarMovimiento(mid, rid) {
+  if (!confirm("¿Borrar este movimiento? El stock se recalcula.")) return;
+  const r = await api(`/api/repuestos/movimientos/${mid}`, { method: "DELETE" });
+  if (r.ok) { toast("Movimiento borrado"); refrescarTrasMovimiento(rid); }
+  else toast(r.msg, "error");
+}
+
+async function borrarRepuesto(id, cod) {
+  if (!confirm(`¿Dar de baja ${cod}? Se conserva el historial pero deja de aparecer.`)) return;
+  const r = await api(`/api/repuestos/${id}`, { method: "DELETE" });
+  if (r.ok) { toast("Repuesto dado de baja"); cerrarRepuesto(); renderRepuestos(); }
+  else toast(r.msg, "error");
+}
+
+// Editar: reusa el modal de carga pero precargado
+async function editarRepuesto(id) {
+  const r = await api(`/api/repuestos/${id}`);
+  if (!r || r.error) return;
+  const o = document.createElement("div");
+  o.className = "rep-modal-overlay visible";
+  o.style.zIndex = "1600";
+  o.innerHTML = `
+    <div class="rep-mini-modal" style="max-width:560px">
+      <div class="rep-mini-titulo">Editar repuesto</div>
+      <div class="form-row">
+        <div class="field"><label>Código *</label><input id="e-cod" value="${(r.codigo||'').replace(/"/g,'&quot;')}" style="width:150px"></div>
+        <div class="field" style="flex:1;min-width:180px"><label>Descripción *</label><input id="e-desc" value="${(r.descripcion||'').replace(/"/g,'&quot;')}"></div>
+      </div>
+      <div class="form-row" style="margin-top:12px">
+        <div class="field"><label>Categoría</label><select id="e-cat">${CAT_REPUESTOS.map(c => `<option value="${c}" ${r.categoria===c?"selected":""}>${c}</option>`).join("")}</select></div>
+        <div class="field"><label>Marca</label><input id="e-mar" value="${(r.marca||'').replace(/"/g,'&quot;')}" style="width:120px"></div>
+        <div class="field"><label>Aplicación</label><input id="e-apl" value="${(r.aplicacion||'').replace(/"/g,'&quot;')}" style="width:150px"></div>
+      </div>
+      <div class="rep-ubic-form" style="margin-top:12px">
+        <div class="rep-ubic-form-label"><i class="ti ti-map-pin"></i> Ubicación</div>
+        <div class="rep-ubic-inputs">
+          <div class="field"><label>Pasillo</label><input id="e-up" value="${r.ubic_pasillo||''}" maxlength="2" style="width:60px;text-align:center;text-transform:uppercase;font-size:17px;font-weight:600"></div>
+          <span class="rep-ubic-sep">-</span>
+          <div class="field"><label>Estante</label><input id="e-ue" value="${r.ubic_estanteria||''}" maxlength="3" style="width:60px;text-align:center;font-size:17px;font-weight:600"></div>
+          <span class="rep-ubic-sep">-</span>
+          <div class="field"><label>Nivel</label><input id="e-un" value="${r.ubic_nivel||''}" maxlength="3" style="width:60px;text-align:center;font-size:17px;font-weight:600"></div>
+          <span class="rep-ubic-sep">-</span>
+          <div class="field"><label>Posición</label><input id="e-uo" value="${r.ubic_posicion||''}" maxlength="3" style="width:60px;text-align:center;font-size:17px;font-weight:600"></div>
+        </div>
+      </div>
+      ${camposProveedor("e", r, "Proveedor principal")}
+      <div class="form-row" style="margin-top:12px">
+        <div class="field"><label>Avisar bajo de</label><input id="e-min" value="${r.stock_minimo||0}" style="width:120px"></div>
+        <div class="field"><label>Precio c/u (Gs.)</label><input id="e-cos" value="${r.costo_unitario||0}" style="width:140px"></div>
+      </div>
+      <div class="rep-mini-btns">
+        <button class="btn btn-ghost" onclick="this.closest('.rep-modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarEditar(${id}, this)"><i class="ti ti-device-floppy"></i> Guardar cambios</button>
+      </div>
+    </div>`;
+  o.onclick = (e) => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+async function confirmarEditar(id, btn) {
+  const limpiar = s => (s || "0").replace(/\./g, "").replace(/,/g, ".");
+  const cod = $("#e-cod").value.trim();
+  const desc = $("#e-desc").value.trim();
+  if (!cod || !desc) { toast("Código y descripción son obligatorios", "error"); return; }
+  const r = await api(`/api/repuestos/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      codigo: cod, descripcion: desc, categoria: $("#e-cat").value,
+      marca: $("#e-mar").value, aplicacion: $("#e-apl").value,
+      proveedor: $("#e-prov").value,
+      proveedor_contacto: $("#e-pcon").value, proveedor_telefono: $("#e-ptel").value,
+      ubic_pasillo: $("#e-up").value, ubic_estanteria: $("#e-ue").value,
+      ubic_nivel: $("#e-un").value, ubic_posicion: $("#e-uo").value,
+      stock_minimo: parseFloat(limpiar($("#e-min").value)) || 0,
+      costo_unitario: parseFloat(limpiar($("#e-cos").value)) || 0,
+    })
+  });
+  if (r.ok) {
+    toast("Cambios guardados", "success");
+    btn.closest(".rep-modal-overlay").remove();
+    refrescarTrasMovimiento(id);
+  } else toast(r.msg, "error");
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  DOSSIER POR COCHE (dentro del Reporte Gerencial)
+// ════════════════════════════════════════════════════════════════════════
+
+let dossierVehiculoId = null;
+
+// Cambia entre la pestaña "Flota" y "Por coche"
+function gerencialTab(tab) {
+  document.querySelectorAll(".ger-tab").forEach(t => t.classList.toggle("on", t.dataset.tab === tab));
+  document.querySelectorAll(".ger-panel").forEach(p => p.style.display = p.dataset.panel === tab ? "" : "none");
+  if (tab === "coche" && !$("#dossier-vehiculos-cargados")) {
+    cargarSelectorDossier();
+  }
+}
+
+async function cargarSelectorDossier() {
+  const slot = document.getElementById("dossier-slot");
+  if (!slot) return;
+  const vehiculos = await api("/api/vehiculos");
+  slot.innerHTML = buscadorCoche("dossier-coche-sel", vehiculos,
+                                 { placeholder: "Escribí el N° o la patente" });
+  const marca = document.createElement("span");
+  marca.id = "dossier-vehiculos-cargados";
+  marca.style.display = "none";
+  slot.appendChild(marca);
+}
+
+async function generarDossier() {
+  const vid = $("#dossier-coche-sel").value;
+  const desde = $("#dossier-desde").value;
+  const hasta = $("#dossier-hasta").value;
+  if (!vid) { toast("Elegí un coche", "error"); return; }
+  if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
+  dossierVehiculoId = vid;
+
+  const cont = $("#dossier-resultado");
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div><p>Armando el dossier completo...</p></div>`;
+
+  const d = await api(`/api/dossier/${vid}?desde=${desde}&hasta=${hasta}`);
+  if (!d || d.error) { cont.innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>${d?.error || "No se pudo generar"}</div>`; return; }
+
+  cont.innerHTML = renderDossierCompleto(d);
+}
+
+function renderDossierCompleto(d) {
+  const v = d.vehiculo;
+  const o = d.oee;
+  const m = d.metricas;
+  const diag = d.diagnostico;
+
+  // Color del OEE según valor
+  const oeeColor = o.oee >= 75 ? "var(--success)" : o.oee >= 55 ? "#65A30D" : o.oee >= 35 ? "var(--warning)" : "var(--danger)";
+
+  return `
+    <div class="dossier" id="dossier-hoja">
+
+      <!-- Encabezado del coche -->
+      <div class="dossier-header">
+        <div class="dossier-header-info">
+          <div class="dossier-coche-num">${v.n_interno ? "#" + v.n_interno : v.patente}</div>
+          <div>
+            <div class="dossier-coche-nombre">${v.marca} ${v.modelo}</div>
+            <div class="dossier-coche-pat">${v.patente}${v.anio ? " · " + v.anio : ""} · ${fmtNum(v.km_actual || 0)} km</div>
+          </div>
+        </div>
+        <div class="dossier-periodo">
+          <i class="ti ti-calendar"></i> ${d.periodo.desde} → ${d.periodo.hasta}
+          <span>(${d.periodo.dias} días)</span>
+        </div>
+      </div>
+
+      <!-- DIAGNÓSTICO (lo primero y más importante) -->
+      <div class="dossier-diag dossier-diag-${diag.nivel}">
+        <div class="dossier-diag-head">
+          <i class="ti ti-${diagIcono(diag.nivel)}"></i>
+          <div class="dossier-diag-resumen">${diag.resumen}</div>
+        </div>
+
+        ${diag.fortalezas.length ? `
+          <div class="dossier-diag-block">
+            <div class="dossier-diag-label dossier-label-ok"><i class="ti ti-thumb-up"></i> Lo que está funcionando</div>
+            ${diag.fortalezas.map(f => `<div class="dossier-diag-item"><i class="ti ti-check"></i> ${f}</div>`).join("")}
+          </div>
+        ` : ""}
+
+        ${diag.focos.length ? `
+          <div class="dossier-diag-block">
+            <div class="dossier-diag-label dossier-label-foco"><i class="ti ti-target"></i> Dónde enfocarse</div>
+            ${diag.focos.map(fc => `
+              <div class="dossier-foco">
+                <div class="dossier-foco-area">${fc.area}</div>
+                <div class="dossier-foco-porque">${fc.porque}</div>
+                <div class="dossier-foco-sug"><i class="ti ti-bulb"></i> ${fc.sugerencia}</div>
+              </div>
+            `).join("")}
+          </div>
+        ` : ""}
+
+        ${diag.faltantes && diag.faltantes.length ? `
+          <div class="dossier-faltantes"><i class="ti ti-info-circle"></i> Para un diagnóstico más preciso, falta cargar: ${diag.faltantes.join(", ")}.</div>
+        ` : ""}
+
+        <div class="dossier-diag-cierre"><i class="ti ti-arrow-right"></i> ${diag.cierre}</div>
+      </div>
+
+      <!-- OEE visual -->
+      <div class="dossier-oee">
+        <div class="dossier-oee-main">
+          <svg viewBox="0 0 120 120" class="dossier-oee-ring">
+            <circle cx="60" cy="60" r="50" fill="none" stroke="var(--surface2)" stroke-width="12"/>
+            <circle cx="60" cy="60" r="50" fill="none" stroke="${oeeColor}" stroke-width="12"
+              stroke-dasharray="${2 * Math.PI * 50}" stroke-dashoffset="${2 * Math.PI * 50 * (1 - o.oee / 100)}"
+              stroke-linecap="round" transform="rotate(-90 60 60)" class="dossier-oee-arc"/>
+            <text x="60" y="56" text-anchor="middle" class="dossier-oee-num" fill="${oeeColor}">${o.oee || 0}%</text>
+            <text x="60" y="74" text-anchor="middle" class="dossier-oee-lbl">OEE</text>
+          </svg>
+        </div>
+        <div class="dossier-oee-factores">
+          ${factorBar("Disponibilidad", o.disponibilidad, "días operativo vs. parado en taller")}
+          ${factorBar("Rendimiento", o.rendimiento, "km recorridos vs. meta")}
+          ${factorBar("Confiabilidad", o.calidad, "días sin fallas")}
+        </div>
+      </div>
+
+      <!-- Métricas clave -->
+      <div class="dossier-metricas">
+        ${metricaCard("ti-road", "Km recorridos", fmtNum(m.km_recorridos), "")}
+        ${metricaCard("ti-tool", "Correctivos", m.cant_correctivos, m.cant_correctivos > 0 ? `Gs. ${gsSmall(m.costo_correctivos)}` : "ninguno")}
+        ${metricaCard("ti-clipboard-list", "Órdenes de trabajo", m.cant_ots, "")}
+        ${metricaCard("ti-coin", "Costo por km", m.costo_por_km > 0 ? "Gs. " + fmtNum(m.costo_por_km) : "—", "")}
+        ${metricaCard("ti-alert-triangle", "Km entre fallas", m.km_entre_fallas > 0 ? fmtNum(m.km_entre_fallas) : "—", "")}
+        ${metricaCard("ti-parking", "Días parado", m.dias_fuera, m.dias_operativo + " operativo")}
+      </div>
+
+      <!-- Fallas por tipo -->
+      ${d.fallas_ranking.length ? `
+        <div class="dossier-seccion">
+          <div class="dossier-seccion-titulo"><i class="ti ti-alert-octagon"></i> Fallas por tipo</div>
+          <div class="dossier-fallas">
+            ${d.fallas_ranking.map(f => `
+              <div class="dossier-falla">
+                <div class="dossier-falla-info">
+                  <span class="dossier-falla-tipo">${f.tipo}</span>
+                  <span class="dossier-falla-cant">${f.cantidad} ${f.cantidad === 1 ? "vez" : "veces"}</span>
+                </div>
+                <div class="dossier-falla-costo">Gs. ${gsSmall(f.costo)}</div>
+              </div>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
+
+      <!-- Historial de correctivos -->
+      ${d.correctivos.length ? `
+        <div class="dossier-seccion">
+          <div class="dossier-seccion-titulo"><i class="ti ti-tool"></i> Correctivos del período (${d.correctivos.length})</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Fecha</th><th>Tipo</th><th>Descripción</th><th class="num">Km</th><th class="num">Costo</th></tr></thead>
+              <tbody>
+                ${d.correctivos.map(c => `
+                  <tr>
+                    <td style="font-size:12px">${c.fecha}</td>
+                    <td><span class="badge">${c.tipo_falla || "—"}</span></td>
+                    <td style="font-size:13px">${c.descripcion || "—"}</td>
+                    <td class="num">${fmtNum(c.km)}</td>
+                    <td class="num">${gsSmall(c.costo)}</td>
+                  </tr>`).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ` : ""}
+
+      <!-- Neumáticos -->
+      ${d.neumaticos_actuales.length || d.neumaticos_movimientos.length ? `
+        <div class="dossier-seccion">
+          <div class="dossier-seccion-titulo"><i class="ti ti-disc"></i> Neumáticos</div>
+          ${d.neumaticos_actuales.length ? `
+            <div class="dossier-sub">Instalados actualmente (${d.neumaticos_actuales.length})</div>
+            <div class="dossier-neu-grid">
+              ${d.neumaticos_actuales.map(n => `
+                <div class="dossier-neu-item">
+                  <span class="dossier-neu-pos">${n.posicion}</span>
+                  <span class="dossier-neu-cod">${n.codigo}</span>
+                  <span class="dossier-neu-km">${fmtNum(n.km_acumulados || 0)} km</span>
+                </div>`).join("")}
+            </div>
+          ` : ""}
+          ${d.neumaticos_movimientos.length ? `
+            <div class="dossier-sub" style="margin-top:14px">Movimientos en el período (${d.neumaticos_movimientos.length})</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Cubierta</th><th>Posición</th><th>Instalada</th><th>Retirada</th><th>Motivo</th></tr></thead>
+                <tbody>
+                  ${d.neumaticos_movimientos.map(n => `
+                    <tr>
+                      <td><b>${n.codigo}</b> <span style="color:var(--muted);font-size:11px">${n.marca || ""}</span></td>
+                      <td><span class="badge">${n.posicion}</span></td>
+                      <td style="font-size:12px">${n.fecha_instalacion || "—"}</td>
+                      <td style="font-size:12px">${n.fecha_retiro || "—"}</td>
+                      <td style="font-size:12px">${n.motivo_retiro || (n.fecha_retiro ? "—" : "instalada")}</td>
+                    </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : ""}
+        </div>
+      ` : ""}
+
+      <!-- Acción de imprimir -->
+      <div class="dossier-acciones">
+        <button class="btn btn-ghost" onclick="window.print()"><i class="ti ti-printer"></i> Imprimir / Guardar PDF</button>
+      </div>
+
+    </div>`;
+}
+
+// Helpers visuales del dossier
+function diagIcono(nivel) {
+  return { excelente: "trophy", bueno: "thumb-up", atencion: "alert-triangle", critico: "urgent", sin_datos: "info-circle" }[nivel] || "info-circle";
+}
+
+function factorBar(nombre, valor, ayuda) {
+  const col = valor >= 80 ? "var(--success)" : valor >= 50 ? "var(--warning)" : "var(--danger)";
+  return `
+    <div class="dossier-factor">
+      <div class="dossier-factor-top">
+        <span class="dossier-factor-nombre">${nombre}</span>
+        <span class="dossier-factor-val" style="color:${col}">${valor || 0}%</span>
+      </div>
+      <div class="dossier-factor-bar"><div class="dossier-factor-fill" style="width:${Math.min(valor || 0, 100)}%;background:${col}"></div></div>
+      <div class="dossier-factor-ayuda">${ayuda}</div>
+    </div>`;
+}
+
+function metricaCard(icono, label, valor, sub) {
+  return `
+    <div class="dossier-metrica">
+      <i class="ti ${icono}"></i>
+      <div class="dossier-metrica-val">${valor}</div>
+      <div class="dossier-metrica-lbl">${label}</div>
+      ${sub ? `<div class="dossier-metrica-sub">${sub}</div>` : ""}
+    </div>`;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  HISTORIAL POR COCHE — la vida de cada coche como un recorrido
+// ════════════════════════════════════════════════════════════════════════
+// Dos pantallas. La flota: todos los coches con su actividad del último año,
+// mes a mes. La ficha de un coche: su historia dibujada como una línea de
+// recorrido, igual que el menú; cada registro es una parada y cada año una
+// terminal. Junta todo lo que se le hizo al coche (lo cargado del papel, los
+// correctivos, el plan preventivo y las órdenes de trabajo) y desde ahí mismo
+// se carga lo nuevo.
+//
+// Al tocar un coche, su número viaja desde la tarjeta hasta el cartel de la
+// ficha (View Transitions del navegador; si no las tiene, cambia sin más).
+
+const TIPOS_HIST = [
+  { v: "preventivo", l: "Preventivo", i: "shield-check" },
+  { v: "correctivo", l: "Correctivo", i: "alert-triangle" },
+  { v: "neumaticos", l: "Neumáticos", i: "disc" },
+  { v: "servicio", l: "Servicio", i: "route" },
+  { v: "otro", l: "Otro", i: "notes" },
+];
+const HI_TIPO_NOMBRE = { preventivo: "Preventivo", control: "Control", correctivo: "Correctivo",
+  neumaticos: "Neumáticos", servicio: "Servicio", otro: "Otro" };
+const HI_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+  "septiembre", "octubre", "noviembre", "diciembre"];
+const HI_FILTROS = [
+  ["todos", "Todos"], ["correctivos", "Con correctivos recientes"],
+  ["quietos", "Sin registros en 90 días"], ["vacios", "Sin historial"],
+];
+
+let hi = { flota: null, flotaVieja: false, filtro: "todos", q: "", coche: null, d: null,
+           tipo: "", anio: "", pagina: 1, items: [], sesion: 0, editando: null,
+           lugar: null, scroll: 0, ultimoMes: "" };
+
+const hiEsc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hiColor = g => MT_COLOR[g] || MT_COLOR.otros;
+function hiHoyLocal() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function hiHace(dias) {
+  if (dias == null) return "sin registros";
+  if (dias <= 0) return "hoy";
+  if (dias === 1) return "ayer";
+  if (dias < 31) return `hace ${dias} días`;
+  if (dias < 365) { const m = Math.round(dias / 30.4); return `hace ${m} ${m === 1 ? "mes" : "meses"}`; }
+  const a = Math.floor(dias / 365);
+  return `hace ${a} ${a === 1 ? "año" : "años"}`;
+}
+function hiDominante(c) {
+  let mejor = null, n = 0;
+  for (const g of ["correctivo", "preventivo", "neumaticos", "otros"]) if ((c[g] || 0) > n) { n = c[g]; mejor = g; }
+  return mejor;
+}
+function hiTotal(c) { return (c.preventivo || 0) + (c.correctivo || 0) + (c.neumaticos || 0) + (c.otros || 0); }
+
+// Pasa de una pantalla a otra con transición si el navegador la tiene
+async function hiTransicion(cambiar) {
+  if (document.startViewTransition && !_uiSinMovimiento) {
+    const t = document.startViewTransition(cambiar);
+    try { await t.finished; } catch (e) { /* si se interrumpe, queda el estado final igual */ }
+  } else {
+    cambiar();
+  }
+}
+
+async function renderHistorialCarga() {
+  status("Historial por coche");
+  const abrir = window._hiAbrirCoche;
+  window._hiAbrirCoche = null;
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-timeline-event"></i> Historial por coche</h1>
+      <p>Todo lo que se le hizo a cada coche: lo cargado del papel, los correctivos, el plan preventivo y las órdenes de trabajo</p>
+    </div>
+    <div class="section hi-raiz" id="hi-raiz"><div class="dossier-loading"></div></div>`;
+  hi.flota = null;
+  if (abrir) { await hiAbrirCoche(abrir, null); return; }
+  await hiVerFlota(true);
+}
+
+// ─── La flota ───────────────────────────────────────────────────────────
+
+function hiFiltrados() {
+  const q = hi.q.trim().toLowerCase();
+  return (hi.flota?.coches || []).filter(v => {
+    if (q && !`${v.n_interno || ""} ${v.patente || ""} ${v.marca || ""} ${v.modelo || ""}`.toLowerCase().includes(q)) return false;
+    if (hi.filtro === "correctivos") return v.correctivos_90 > 0;
+    if (hi.filtro === "quietos") return v.registros > 0 && v.ultimos_90 === 0;
+    if (hi.filtro === "vacios") return v.registros === 0;
+    return true;
+  });
+}
+
+async function hiVerFlota(primeraVez = false) {
+  const raiz = $("#hi-raiz");
+  if (!raiz) return;
+  if (!hi.flota || hi.flotaVieja) { hi.flota = await api("/api/historia/flota"); hi.flotaVieja = false; }
+  if (!hi.flota || !hi.flota.coches) { raiz.innerHTML = `<div class="empty">No se pudo traer la flota. Probá de nuevo.</div>`; return; }
+  hi.coche = null;
+  const cs = hi.flota.coches;
+  const cuenta = {
+    todos: cs.length,
+    correctivos: cs.filter(v => v.correctivos_90 > 0).length,
+    quietos: cs.filter(v => v.registros > 0 && v.ultimos_90 === 0).length,
+    vacios: cs.filter(v => v.registros === 0).length,
+  };
+  raiz.innerHTML = `
+    <div class="hi-barra">
+      <label class="hi-buscar">
+        <i class="ti ti-search"></i>
+        <input id="hi-q" placeholder="Buscar por número, patente o modelo" autocomplete="off"
+               value="${hiEsc(hi.q)}" oninput="hi.q=this.value; hiDibujarGrilla()">
+      </label>
+      <div class="hi-filtros">
+        ${HI_FILTROS.map(([k, l]) => `
+          <button class="hi-filtro ${hi.filtro === k ? "on" : ""}" onclick="hiFiltrar('${k}', this)">
+            ${l}<span>${cuenta[k]}</span>
+          </button>`).join("")}
+      </div>
+    </div>
+    <div class="hi-leyenda">
+      <span>Cada coche muestra su último año, mes a mes:</span>
+      ${["preventivo", "correctivo", "neumaticos", "otros"].map(g =>
+        `<span class="hi-ley"><i style="background:${hiColor(g)}"></i>${MT_NOMBRE[g]}</span>`).join("")}
+    </div>
+    <div class="hi-grilla ${primeraVez ? "entra" : ""}" id="hi-grilla"></div>`;
+  hiDibujarGrilla();
+}
+
+function hiFiltrar(k, btn) {
+  hi.filtro = k;
+  document.querySelectorAll(".hi-filtro").forEach(b => b.classList.toggle("on", b === btn));
+  hiDibujarGrilla();
+}
+
+function hiTarjeta(v, i) {
+  const max = Math.max(1, ...v.meses.map(hiTotal));
+  const barras = v.meses.map((c, k) => {
+    const n = hiTotal(c);
+    const mes = hi.flota.meses[k];
+    const nombre = `${HI_MESES[+mes.slice(5) - 1]} ${mes.slice(0, 4)}`;
+    if (!n) return `<i class="hi-barra-mes vacia" title="${nombre}: nada"></i>`;
+    // Una barra por mes, alta según cuántos registros hubo y pintada por tipo
+    let acum = 0;
+    const tramos = ["correctivo", "preventivo", "neumaticos", "otros"].filter(g => c[g]).map(g => {
+      const a = acum; acum += c[g] / n * 100;
+      return `${hiColor(g)} ${a}% ${acum}%`;
+    }).join(", ");
+    const detalle = ["preventivo", "correctivo", "neumaticos", "otros"].filter(g => c[g])
+      .map(g => `${c[g]} ${MT_NOMBRE[g].toLowerCase()}`).join(", ");
+    return `<i class="hi-barra-mes" title="${nombre}: ${detalle}"
+               style="height:${Math.round(22 + 78 * n / max)}%;background:linear-gradient(to top, ${tramos})"></i>`;
+  }).join("");
+  const modelo = `${v.marca || ""} ${v.modelo || ""}`.trim();
+  return `
+    <button class="hi-coche ${v.registros ? "" : "sin"}" data-vid="${v.id}" style="--i:${Math.min(i, 24)}"
+            onclick="hiAbrirCoche(${v.id}, this)" aria-label="Abrir el historial del coche ${hiEsc(v.n_interno || v.patente)}">
+      <span class="hi-coche-cab">
+        <span class="hi-coche-num">${hiEsc(v.n_interno || "—")}</span>
+        ${v.correctivos_90 ? `<span class="hi-coche-alerta" title="Correctivos en los últimos 90 días">${v.correctivos_90}</span>` : ""}
+      </span>
+      <span class="hi-coche-id"><b>${hiEsc(v.patente || "")}</b>${modelo ? `<span>${hiEsc(modelo)}</span>` : ""}</span>
+      <span class="hi-pulso">${barras}</span>
+      <span class="hi-coche-pie">
+        ${v.registros
+          ? `<span><b>${fmtNum(v.registros)}</b> ${v.registros === 1 ? "registro" : "registros"}</span><span>${hiHace(v.dias_desde)}</span>`
+          : `<span>Sin historial cargado</span>`}
+      </span>
+    </button>`;
+}
+
+function hiDibujarGrilla() {
+  const g = $("#hi-grilla");
+  if (!g) return;
+  const lista = hiFiltrados();
+  if (!lista.length) {
+    const msj = hi.q ? `Ningún coche coincide con «${hiEsc(hi.q)}».`
+      : hi.filtro === "correctivos" ? "Ningún coche tuvo correctivos en los últimos 90 días."
+      : hi.filtro === "quietos" ? "Todos los coches con historial tuvieron algún registro en los últimos 90 días."
+      : hi.filtro === "vacios" ? "Todos los coches tienen algo cargado." : "No hay coches activos.";
+    g.innerHTML = `<div class="hi-vacio"><i class="ti ti-bus"></i>${msj}</div>`;
+    return;
+  }
+  g.innerHTML = lista.map(hiTarjeta).join("");
+  setTimeout(() => g.classList.remove("entra"), 900);
+}
+
+// ─── La ficha de un coche ───────────────────────────────────────────────
+
+async function hiTraer(pagina = 1) {
+  const p = new URLSearchParams({ pagina });
+  if (hi.tipo) p.set("tipo", hi.tipo);
+  if (hi.anio) p.set("anio", hi.anio);
+  return api(`/api/historia/coche/${hi.coche}?${p.toString()}`);
+}
+
+async function hiAbrirCoche(vid, tile) {
+  hi.coche = vid; hi.tipo = ""; hi.anio = ""; hi.pagina = 1; hi.sesion = 0;
+  hi.scroll = content.scrollTop;
+  if (tile) tile.classList.add("abriendo");
+  const d = await hiTraer(1);
+  if (tile) tile.classList.remove("abriendo");
+  if (!d || d.error) { toast("No se pudo abrir el historial de ese coche", "error"); hi.coche = null; return; }
+  if (tile) {
+    tile.style.viewTransitionName = "hi-coche";
+    tile.querySelector(".hi-coche-num").style.viewTransitionName = "hi-num";
+  }
+  await hiTransicion(() => {
+    hiPintarFicha(d);
+    content.scrollTop = 0;
+    // El cartel de la ficha toma el lugar de la tarjeta: el número viaja
+    if (tile) {
+      document.querySelector(".hi-hero-cartel").style.viewTransitionName = "hi-coche";
+      document.querySelector(".hi-hero-num").style.viewTransitionName = "hi-num";
+    }
+  });
+  document.querySelectorAll(".hi-hero-cartel, .hi-hero-num").forEach(e => e.style.viewTransitionName = "");
+}
+
+async function hiVolver() {
+  hiCerrarCarga(true);
+  const vid = hi.coche;
+  if (hi.flotaVieja || !hi.flota) { hi.flota = await api("/api/historia/flota"); hi.flotaVieja = false; }
+  const hero = document.querySelector(".hi-hero-cartel"), num = document.querySelector(".hi-hero-num");
+  if (hero) hero.style.viewTransitionName = "hi-coche";
+  if (num) num.style.viewTransitionName = "hi-num";
+  await hiTransicion(() => {
+    hiVerFlota(false);
+    content.scrollTop = hi.scroll;
+    const t = document.querySelector(`.hi-coche[data-vid="${vid}"]`);
+    if (t) {
+      t.style.viewTransitionName = "hi-coche";
+      t.querySelector(".hi-coche-num").style.viewTransitionName = "hi-num";
+      const r = t.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) t.scrollIntoView({ block: "center" });
+    }
+  });
+  const t = document.querySelector(`.hi-coche[data-vid="${vid}"]`);
+  if (t) {
+    t.style.viewTransitionName = "";
+    t.querySelector(".hi-coche-num").style.viewTransitionName = "";
+    t.focus({ preventScroll: true });
+  }
+}
+
+function hiResumen(d) {
+  const r = d.resumen, c = d.coche;
+  if (!r.registros) return `Todavía no tiene nada cargado. Empezá por el papel más viejo que tengas.`;
+  const desde = r.primero ? `${HI_MESES[+r.primero.slice(5, 7) - 1]} de ${r.primero.slice(0, 4)}` : "";
+  const dias = r.ultimo ? Math.round((new Date(hiHoyLocal()) - new Date(r.ultimo.slice(0, 10))) / 86400000) : null;
+  let t = `<b>${fmtNum(r.registros)}</b> ${r.registros === 1 ? "registro" : "registros"}${desde ? ` desde ${desde}` : ""}. `;
+  t += `El último fue <b>${hiHace(dias)}</b>`;
+  t += r.km ? `, y el kilometraje más alto anotado es <b>${fmtNum(Math.round(r.km))} km</b>. ` : ". ";
+  if (r.costo) t += `En total se gastaron <b>${gs(r.costo)}</b>.`;
+  return t;
+}
+
+function hiPintarFicha(d) {
+  hi.d = d;
+  hi.items = d.items;
+  hi.pagina = d.pagina;
+  const raiz = $("#hi-raiz");
+  const c = d.coche;
+  const modelo = `${c.marca || ""} ${c.modelo || ""}`.trim();
+  raiz.innerHTML = `
+    <div class="hi-ficha">
+      <div class="hi-nav">
+        <button class="hi-volver" onclick="hiVolver()"><i class="ti ti-arrow-left"></i> Toda la flota</button>
+        ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
+      </div>
+      <section class="hi-hero">
+        <div class="hi-hero-cartel">
+          <span class="hi-hero-num">${hiEsc(c.n_interno || "—")}</span>
+          <span class="hi-hero-id"><b>${hiEsc(c.patente || "")}</b>${modelo ? `<span>${hiEsc(modelo)}</span>` : ""}</span>
+        </div>
+        <p class="hi-hero-texto" id="hi-resumen">${hiResumen(d)}</p>
+      </section>
+      <section class="hi-vida" id="hi-vida"></section>
+      <div class="hi-tipos" id="hi-tipos"></div>
+      <div class="hi-linea" id="hi-linea"></div>
+      <div class="hi-mas" id="hi-mas"></div>
+    </div>`;
+  hiPintarVida();
+  hiPintarTipos();
+  hiPintarLinea(false);
+}
+
+// Mes a mes, desde el primer registro: dónde se concentró el trabajo
+function hiPintarVida() {
+  const cont = $("#hi-vida");
+  const vida = hi.d.vida || [];
+  if (!vida.length) { cont.innerHTML = ""; cont.style.display = "none"; return; }
+  cont.style.display = "";
+  const porMes = Object.fromEntries(vida.map(v => [v.mes, v]));
+  const desde = +vida[0].mes.slice(0, 4), hasta = Math.max(+hiHoyLocal().slice(0, 4), +vida[vida.length - 1].mes.slice(0, 4));
+  const anios = [];
+  for (let a = hasta; a >= desde; a--) anios.push(a);
+  const filas = anios.map(a => {
+    const celdas = Array.from({ length: 12 }, (_, m) => {
+      const k = `${a}-${String(m + 1).padStart(2, "0")}`;
+      const c = porMes[k];
+      const n = c ? hiTotal(c) : 0;
+      if (!n) return `<span class="hi-celda"></span>`;
+      const g = hiDominante(c);
+      const op = n >= 3 ? 1 : n === 2 ? .72 : .45;
+      const det = ["preventivo", "correctivo", "neumaticos", "otros"].filter(x => c[x]).map(x => `${c[x]} ${MT_NOMBRE[x].toLowerCase()}`).join(", ");
+      return `<button class="hi-celda llena" style="--c:${hiColor(g)};--o:${op}" title="${HI_MESES[m]} de ${a}: ${det}"
+                      onclick="hiIrAnio('${a}', '${k}')"></button>`;
+    }).join("");
+    const total = vida.filter(v => v.mes.startsWith(a)).reduce((s, v) => s + hiTotal(v), 0);
+    return `<button class="hi-vida-anio ${hi.anio === String(a) ? "on" : ""}" onclick="hiIrAnio('${a}')"
+                    ${total ? "" : "disabled"} title="${total ? `Ver solo ${a}` : `Nada en ${a}`}">${a}</button>${celdas}`;
+  }).join("");
+  cont.innerHTML = `
+    <div class="hi-vida-cab"><span>Mes a mes</span><small>Tocá un año o un mes para ver solo ese año</small></div>
+    <div class="hi-vida-grilla">
+      <span></span>${"EFMAMJJASOND".split("").map(l => `<span class="hi-vida-m">${l}</span>`).join("")}
+      ${filas}
+    </div>`;
+}
+
+function hiPintarTipos() {
+  const pt = hi.d.por_tipo || {};
+  const total = (pt.preventivo || 0) + (pt.correctivo || 0) + (pt.neumaticos || 0) + (pt.otros || 0);
+  const ops = [["", "Todo", total, "var(--text)"],
+    ...["preventivo", "correctivo", "neumaticos", "otros"].map(g => [g, MT_NOMBRE[g], pt[g] || 0, hiColor(g)])];
+  $("#hi-tipos").innerHTML = `
+    <span class="hi-tipos-ind" id="hi-tipos-ind"></span>
+    ${ops.map(([k, l, n, col]) => `
+      <button class="hi-tipo ${hi.tipo === k ? "on" : ""}" data-t="${k}" onclick="hiFiltrarTipo('${k}')" ${n || !k ? "" : "disabled"}>
+        ${k ? `<i style="background:${col}"></i>` : ""}${l}<span>${n}</span>
+      </button>`).join("")}
+    ${hi.anio ? `<button class="hi-anio-chip" onclick="hiIrAnio('')" title="Ver todos los años">Solo ${hi.anio} <i class="ti ti-x"></i></button>` : ""}`;
+  requestAnimationFrame(hiMoverIndicador);
+}
+
+function hiMoverIndicador() {
+  const ind = $("#hi-tipos-ind"), act = document.querySelector(".hi-tipo.on");
+  if (!ind || !act) return;
+  ind.style.transform = `translate(${act.offsetLeft}px, ${act.offsetTop}px)`;
+  ind.style.width = act.offsetWidth + "px";
+  ind.style.height = act.offsetHeight + "px";
+  ind.style.background = act.dataset.t ? hiColor(act.dataset.t) : "var(--azul-oscuro)";
+}
+
+async function hiFiltrarTipo(t) {
+  hi.tipo = t;
+  document.querySelectorAll(".hi-tipo").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  hiMoverIndicador();
+  await hiRecargarLinea();
+}
+
+async function hiIrAnio(a, mes = "") {
+  hi.anio = hi.anio === a && !mes ? "" : a;
+  await hiRecargarLinea();
+  hiPintarVida();
+  hiPintarTipos();
+  const destino = mes ? document.querySelector(`.hi-mes[data-mes="${mes}"]`) : $("#hi-tipos");
+  if (destino) destino.scrollIntoView({ behavior: _uiSinMovimiento ? "auto" : "smooth", block: "start" });
+}
+
+async function hiRecargarLinea() {
+  const linea = $("#hi-linea");
+  linea.classList.add("cambiando");
+  const d = await hiTraer(1);
+  if (!d || d.error) return;
+  hi.d = d; hi.items = d.items; hi.pagina = d.pagina;
+  linea.classList.remove("cambiando");
+  hiPintarLinea(false);
+}
+
+// Cuántos registros tiene un año, respetando el tipo elegido
+function hiCuentaAnio(a) {
+  return (hi.d.vida || []).filter(v => v.mes.startsWith(a))
+    .reduce((s, v) => s + (hi.tipo ? (v[hi.tipo] || 0) : hiTotal(v)), 0);
+}
+
+function hiParada(e, i) {
+  const g = e.grupo || "otros";
+  const f = String(e.fecha || "").slice(0, 10);
+  const titulo = e.descripcion || e.categoria || HI_TIPO_NOMBRE[e.tipo] || "Registro";
+  const sub = [e.categoria && e.categoria !== titulo ? e.categoria : "", e.km ? `a los ${fmtNum(Math.round(e.km))} km` : ""].filter(Boolean).join(", ");
+  const detalles = [
+    ["Fecha", `${+f.slice(8)} de ${HI_MESES[+f.slice(5, 7) - 1]} de ${f.slice(0, 4)}`],
+    ["Tipo", HI_TIPO_NOMBRE[e.tipo] || MT_NOMBRE[g]],
+    e.categoria ? ["Categoría", hiEsc(e.categoria)] : null,
+    e.km ? ["Kilometraje", `${fmtNum(Math.round(e.km))} km`] : null,
+    e.costo ? ["Costo", gs(e.costo)] : null,
+    e.taller ? [e.origen === "ot" ? "Técnico" : "Taller", hiEsc(e.taller)] : null,
+    ["De dónde viene", MT_ORIGEN[e.origen] || e.origen],
+  ].filter(Boolean);
+  const dondeCorregir = { plan: "Plan preventivo", ot: "Órdenes de trabajo", correctivos: "Correctivos" }[e.origen];
+  return `
+    <article class="hi-parada" data-k="${e.origen}-${e.id}" style="--c:${hiColor(g)};--i:${Math.min(i, 12)}">
+      <span class="hi-punto"></span>
+      <button class="hi-parada-cab" onclick="hiAbrirParada(this)" aria-expanded="false">
+        <span class="hi-dia">${+f.slice(8) || "—"}</span>
+        <span class="hi-txt"><b>${hiEsc(titulo)}</b>${sub ? `<small>${hiEsc(sub)}</small>` : ""}</span>
+        <span class="hi-tag">${HI_TIPO_NOMBRE[e.tipo] || MT_NOMBRE[g]}</span>
+        <i class="ti ti-chevron-down hi-abre"></i>
+      </button>
+      <div class="hi-parada-mas"><div><div class="hi-parada-dentro">
+        <dl class="hi-datos">${detalles.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
+        ${e.descripcion && e.descripcion.length > 70 ? `<p class="hi-desc-larga">${hiEsc(e.descripcion)}</p>` : ""}
+        <div class="hi-acciones">
+          ${e.borrable && hi.d.puede_cargar
+            ? `<button class="btn btn-ghost" onclick="hiEditar('${e.origen}', ${e.id})"><i class="ti ti-pencil"></i> Corregir</button>
+               <button class="btn btn-ghost hi-borrar" onclick="hiBorrar('${e.origen}', ${e.id}, this)"><i class="ti ti-trash"></i> Borrar</button>`
+            : dondeCorregir && !e.borrable ? `<span class="hi-nota"><i class="ti ti-info-circle"></i> Se corrige desde ${dondeCorregir}.</span>` : ""}
+        </div>
+      </div></div></div>
+    </article>`;
+}
+
+function hiPintarLinea(agregar) {
+  const linea = $("#hi-linea");
+  const items = agregar ? hi.items.slice(-hi.d.items.length) : hi.items;
+  if (!agregar) { linea.innerHTML = ""; hi.ultimoMes = ""; }
+  if (!hi.items.length) {
+    const sinNada = !(hi.d.resumen || {}).registros;
+    linea.innerHTML = `<div class="hi-vacio">${sinNada
+      ? `<i class="ti ti-file-plus"></i>Este coche todavía no tiene historial.${hi.d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar el primer papel</button>` : ""}`
+      : `<i class="ti ti-filter-off"></i>No hay registros de ese tipo${hi.anio ? ` en ${hi.anio}` : ""}.`}</div>`;
+    $("#hi-mas").innerHTML = "";
+    return;
+  }
+  let html = "";
+  items.forEach((e, i) => {
+    const mes = String(e.fecha || "").slice(0, 7);
+    const anioAnt = hi.ultimoMes.slice(0, 4);
+    if (mes.slice(0, 4) !== anioAnt) {
+      const n = hiCuentaAnio(mes.slice(0, 4));
+      html += `<div class="hi-terminal"><span class="hi-terminal-anio">${mes.slice(0, 4)}</span><span class="hi-terminal-n">${n} ${n === 1 ? "registro" : "registros"}</span></div>`;
+    }
+    if (mes !== hi.ultimoMes) html += `<div class="hi-mes" data-mes="${mes}">${HI_MESES[+mes.slice(5) - 1] || "Sin fecha"}</div>`;
+    hi.ultimoMes = mes;
+    html += hiParada(e, i);
+  });
+  linea.insertAdjacentHTML("beforeend", html);
+  const quedan = hi.d.total - hi.items.length;
+  $("#hi-mas").innerHTML = quedan > 0
+    ? `<button class="hi-mas-btn" onclick="hiVerMas(this)">Ver ${Math.min(quedan, 30)} más <span>quedan ${quedan}</span></button>`
+    : hi.items.length > 6 ? `<div class="hi-fin"><span></span>Acá empieza la historia de este coche</div>` : "";
+}
+
+async function hiVerMas(btn) {
+  btn.disabled = true;
+  btn.classList.add("cargando");
+  const d = await hiTraer(hi.pagina + 1);
+  if (!d || d.error) { btn.disabled = false; return; }
+  hi.d = d; hi.pagina = d.pagina;
+  hi.items = hi.items.concat(d.items);
+  hiPintarLinea(true);
+}
+
+function hiAbrirParada(btn) {
+  const p = btn.closest(".hi-parada");
+  const abierta = !p.classList.contains("abierta");
+  p.classList.toggle("abierta", abierta);
+  btn.setAttribute("aria-expanded", abierta);
+}
+
+async function hiBorrar(origen, id, btn) {
+  if (!confirm("¿Borrar este registro del historial? Usalo solo si se cargó por error.")) return;
+  const r = await api(`/api/historial_carga/${origen}/${id}`, { method: "DELETE" });
+  if (!r.ok) { toast(r.msg || "No se pudo borrar", "error"); return; }
+  const p = btn.closest(".hi-parada");
+  p.classList.add("sale");
+  hi.flotaVieja = true;
+  toast("Registro borrado", "success");
+  setTimeout(() => hiRefrescar(), _uiSinMovimiento ? 0 : 320);
+}
+
+// Vuelve a traer la ficha manteniendo los filtros; si se indica, marca lo recién guardado
+async function hiRefrescar(marcar = null, fecha = "") {
+  const claves = [].concat(marcar || []);
+  let d = await hiTraer(1);
+  if (!d || d.error) return;
+  // Si lo recién cargado no entra en lo que se ve (un papel viejo), se salta a su año
+  if (claves.length && !d.items.some(e => claves.includes(`${e.origen}-${e.id}`)) && fecha) {
+    hi.anio = fecha.slice(0, 4);
+    d = await hiTraer(1);
+  }
+  hi.d = d; hi.items = d.items; hi.pagina = d.pagina;
+  const res = $("#hi-resumen");
+  if (res) res.innerHTML = hiResumen(d);
+  hiPintarVida();
+  hiPintarTipos();
+  hiPintarLinea(false);
+  const marcadas = claves.map(k => document.querySelector(`.hi-parada[data-k="${k}"]`)).filter(Boolean);
+  marcadas.forEach(p => { p.classList.add("recien"); setTimeout(() => p.classList.remove("recien"), 2400); });
+  if (marcadas[0]) marcadas[0].scrollIntoView({ behavior: _uiSinMovimiento ? "auto" : "smooth", block: "center" });
+}
+
+// ─── Lectura automática de lo que se escribe en el historial ────────────
+// Se escribe como sale del papel ("cambio de aceite y tensor de correa") y
+// el sistema lo separa en trabajos y le pone a cada uno el tipo y la
+// categoría. Son reglas simples con el vocabulario del taller, no adivina:
+// si algo queda mal, se toca la etiqueta y cambia.
+
+const HI_SIN_TILDE = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+
+// Palabras que arrancan un trabajo: "cambio de...", "se cambió...", "revisión de..."
+const HI_ACCION = /^(se\s+)?(cambi\w*|reemplaz\w*|recambio|repar\w*|arregl\w*|revis\w*|control\w*|coloc\w*|instal\w*|ajust\w*|limpi\w*|lavad\w*|lav[oóa]\w*|engras\w*|lubric\w*|rotaci\w*|rot[oó]|alineac\w*|aline\w*|balance\w*|sold\w*|rectific\w*|regul\w*|calibr\w*|purg\w*|carg\w*|service|servis|servicio|mantenimiento|inspecc\w*|chequeo|cheque\w*|pint\w*|recaucha\w*|desarm\w*|arm[oó]|rellen\w*|complet\w*|agreg\w*|reapret\w*|apret\w*|sustitu\w*|mont\w*|desmont\w*)\b/;
+
+// Un problema contado (el resto de la frase suele ser cómo se arregló):
+// con esto no se separa por coma ni por "y".
+const HI_SINTOMA = /(patin|pierde|perdida|fuga|gote|ruido|suena|vibra|recalient|humo|no arranca|no carga|no anda|no frena|no funciona|\bfalla|\broto\b|\brota\b|rotura|rompi|quebr|fisur|desgast\w* (de mas|excesiv)|\btraba\b|trabad|golpe|\bchoc|se cort|se solt|se quem|quemad|trancad)/;
+
+// Piezas y fluidos: alcanza para reconocer un trabajo escrito sin verbo ("aceite, filtro de aire")
+const HI_PIEZA = /(aceite|filtro|tensor|correa|pastilla|zapata|disco|campana|cinta|bomba|alternador|arranque|burro|embrague|crapodina|plato|amortiguador|pulmon|fuelle|elastico|resorte|buje|rodamiento|ruleman|cruceta|cardan|palier|junta|reten|manguera|radiador|termostato|electroventilador|turbo|inyector|compresor|sensor|valvula|fusible|lampara|foco|luz|luces|bateria|parabrisas|espejo|vidrio|cerradura|terminal|rotula|barra|extremo|neumatic|cubierta|goma|llanta|liquido|refrigerante|adblue|purificador|secador|motor|caja|diferencial|frenos?|direccion|escape|silenciador|cable|regulador|tapa|cilindro|piston|aros|cigüeñal|cigueñal|chapa|asiento|puerta|ventanilla|limpiaparabrisas|escobilla|bocina|tablero|tacografo|gps|camara|aire acondicionado)/;
+
+const HI_NEU = /(neumatic|cubierta|goma|llanta|rotacion|rotar|alineac|alinea|balanceo|balancea|pinch|parche|camara de aire|trucky|auxilio|recauchu|recapad)/;
+const HI_PREV = /(aceite|filtro|engras|lubric|purificador|liquido de frenos|calibraci|adblue|service|servis|revision|revisar|control|inspecc|chequeo|regulacion de valvulas|purga|refrigerante|anticongelante|preventiv)/;
+const HI_REPARA = /(repar|arregl|sold|rectific|reemplaz|recambio|desarm|correctiv)/;
+const HI_OTRO = /(lavad|lavar|limpieza|limpiar|viaje|traslado|documenta|habilitaci|seguro|patente|vtv)/;
+
+const HI_CATEGORIAS = [
+  [/(embrague|crapodina|plato de embrague|disco de embrague)/, "Embrague"],
+  [/(pastilla|zapata|freno|campana|cinta de freno|disco de freno|liquido de frenos|pulmon de freno)/, "Frenos"],
+  [/(aire acondicionado|a\/c\b|climatiz|carga de gas|gas refrigerante)/, "Aire acondicionado"],
+  [/(radiador|refrigera|anticongelante|termostato|electroventilador|bomba de agua|manguera)/, "Refrigeración"],
+  [/(rotacion|rotar)/, "Rotación"],
+  [/(alineac|alinea|balanceo|balancea)/, "Alineación y balanceo"],
+  [/(neumatic|cubierta|goma|llanta|pinch|parche|recauchu|auxilio|trucky)/, "Cambio de neumático"],
+  [/(alternador|arranque|burro|bateria|fusible|lampara|foco|\bluz\b|luces|electric|sensor|cable|regulador de voltaje|bocina|tablero)/, "Eléctrico"],
+  [/(amortiguador|pulmon|fuelle|elastico|resorte|buje|suspension|barra estabiliz)/, "Suspensión"],
+  [/(direccion|rotula|terminal|extremo|bieleta)/, "Dirección"],
+  [/(diferencial|cardan|cruceta|palier)/, "Diferencial"],
+  [/(caja de cambio|caja\b|palanca de cambio|retarder)/, "Caja"],
+  [/(lavado de motor|lavar el motor)/, "Lavado de motor"],
+  [/(filtro)/, "Filtros"],
+  [/(aceite)/, "Cambio de aceite"],
+  [/(engras|lubric)/, "Engrase"],
+  [/(carroceria|parabrisas|espejo|vidrio|cerradura|puerta|chapa|pintura|asiento|ventanilla|escobilla|limpiaparabrisas)/, "Carrocería"],
+  [/(motor|tensor|correa|junta|inyector|turbo|bomba|valvula|culata|piston|cigu|escape|silenciador|adblue|purificador)/, "Motor"],
+];
+
+function hiClasificar(texto) {
+  const t = HI_SIN_TILDE(texto);
+  let tipo;
+  if (HI_NEU.test(t)) tipo = "neumaticos";
+  else if (HI_SINTOMA.test(t) || HI_REPARA.test(t)) tipo = "correctivo";
+  else if (/\bviaje\b|traslado/.test(t)) tipo = "servicio";
+  else if (HI_PREV.test(t)) tipo = "preventivo";
+  else if (HI_OTRO.test(t)) tipo = "otro";
+  else if (HI_PIEZA.test(t)) tipo = "correctivo";     // se cambió una pieza que no es de rutina
+  else tipo = "otro";
+  let cat = (HI_CATEGORIAS.find(([re]) => re.test(t)) || [null, ""])[1];
+  // Una pérdida de aceite es un problema del motor, no un cambio de aceite
+  if (tipo === "correctivo" && cat === "Cambio de aceite") cat = "Motor";
+  return { tipo, categoria: cat };
+}
+
+// "Cambio de aceite" → "Cambio de"; "Se cambió el tensor" → "Cambio de"
+function hiAccionDe(frag) {
+  const m = frag.match(/^\s*(se\s+)?([A-Za-zÁÉÍÓÚáéíóúñÑ]+)(\s+(de(l)?|de la|de los|de las|a la|al)\b)?/i);
+  if (!m || !HI_ACCION.test(HI_SIN_TILDE(m[0]).trim())) return "";
+  if (m[1]) {   // "se cambió" → "Cambio de"
+    const v = HI_SIN_TILDE(m[2]);
+    const nombre = v.startsWith("cambi") ? "Cambio" : v.startsWith("repar") ? "Reparación"
+      : v.startsWith("revis") ? "Revisión" : v.startsWith("coloc") ? "Colocación" : v.startsWith("limpi") ? "Limpieza" : "";
+    return nombre ? nombre + " de" : "";
+  }
+  return (m[2] + (m[3] || "")).trim();
+}
+
+const hiMayus = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+// Separa en trabajos. Corta siempre por renglón, ";" y "+". Por "," o "y"
+// corta solo si los dos lados son trabajos (empiezan con una acción o
+// nombran una pieza) y no se está contando un problema.
+function hiSeparar(texto) {
+  const renglones = String(texto || "").split(/\n|;/).map(s => s.trim()).filter(Boolean);
+  const salida = [];
+  for (const r of renglones) {
+    if (HI_SINTOMA.test(HI_SIN_TILDE(r))) { salida.push(r); continue; }
+    const partes = r.split(/\s*,\s*|\s*\+\s*|\s+y\s+|\s+e\s+(?=[ih])|\s+más\s+/i).map(s => s.trim()).filter(Boolean);
+    const esTrabajo = p => { const t = HI_SIN_TILDE(p); return HI_ACCION.test(t) || HI_PIEZA.test(t); };
+    if (partes.length < 2 || !partes.every(esTrabajo)) { salida.push(r); continue; }
+    let accion = "", accionLarga = "";
+    for (const p of partes) {
+      const propia = hiAccionDe(p);
+      const limpio = p.replace(/^(el|la|los|las)\s+/i, "");
+      let frase;
+      if (propia) { accion = propia; frase = p; }
+      // "Cambio de aceite de caja y diferencial": el segundo es aceite de diferencial
+      else if (accionLarga && HI_LUGAR.test(HI_SIN_TILDE(limpio))) frase = `${accionLarga} ${limpio}`;
+      else frase = accion ? `${accion} ${limpio}` : p;
+      const m = hiNormalizar(frase).match(/^(.+?\b(aceite|filtros?|l[ií]quido)\s+(de|del|de la)\b)/i);
+      accionLarga = m ? m[1] : "";
+      salida.push(frase);
+    }
+  }
+  return salida.map(s => hiMayus(hiNormalizar(s.replace(/\s+/g, " ").replace(/[.,]+$/, "").trim()))).filter(Boolean);
+}
+
+// Partes del coche que llevan aceite o filtro propio
+const HI_LUGAR = /^(caja( de cambios?)?|diferencial(es)?|motor|direccion|retarder|transmision|cabina)$/;
+
+// "se cambió el tensor" → "Cambio de tensor", para que todo quede escrito igual
+function hiNormalizar(s) {
+  const m = s.match(/^se\s+((?:cambi|repar|revis|coloc|limpi|instal|ajust)[a-záéíóú]*)\s+(el\s+|la\s+|los\s+|las\s+)?(.*)$/i);
+  if (!m) return s;
+  const v = HI_SIN_TILDE(m[1]);
+  const nombre = v.startsWith("cambi") ? "Cambio de" : v.startsWith("repar") ? "Reparación de"
+    : v.startsWith("revis") ? "Revisión de" : v.startsWith("coloc") ? "Colocación de"
+    : v.startsWith("limpi") ? "Limpieza de" : v.startsWith("instal") ? "Instalación de" : "Ajuste de";
+  return `${nombre} ${m[3]}`;
+}
+
+function hiLeer(texto) {
+  return hiSeparar(texto).map(d => ({ descripcion: d, ...hiClasificar(d) }));
+}
+
+
+// ─── Cargar del papel / corregir ────────────────────────────────────────
+// Para cargar: fecha y lo que dice el papel, nada más. El sistema lo separa
+// en trabajos y le pone tipo y categoría a cada uno; abajo se ve cómo quedó
+// y, si alguna etiqueta está mal, se toca y cambia.
+
+const HI_CICLO_TIPO = ["preventivo", "correctivo", "neumaticos", "servicio", "otro"];
+const hiGrupoDe = t => (t === "servicio" || t === "otro" || t === "control") ? "otros" : t;
+let _hiLecturaT = null;
+
+function hiAbrirCarga(evento = null) {
+  hiCerrarCarga(true);
+  hi.editando = evento;
+  hi.lectura = [];
+  hi.forzado = {};
+  const c = hi.d.coche;
+  const v = evento || {};
+  const fecha = evento ? String(evento.fecha).slice(0, 10) : (window._hiUltimaFecha || hiHoyLocal());
+  const fondo = document.createElement("div");
+  fondo.className = "hi-cajon-fondo";
+  fondo.onclick = () => hiCerrarCarga();
+  const caj = document.createElement("aside");
+  caj.className = "hi-cajon";
+  caj.setAttribute("role", "dialog");
+  caj.setAttribute("aria-label", evento ? "Corregir registro" : "Cargar del papel");
+  const esCorr = evento && evento.origen === "correctivos";
+  caj.innerHTML = `
+    <header class="hi-cajon-cab">
+      <div>
+        <h2>${evento ? "Corregir registro" : "Cargar del papel"}</h2>
+        <p>Coche ${hiEsc(c.n_interno || c.patente)}</p>
+      </div>
+      <button class="firma-x" onclick="hiCerrarCarga()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+    </header>
+    <div class="hi-cajon-cuerpo">
+      <label class="hi-campo"><span>Fecha</span><input type="date" id="hi-f-fecha" value="${fecha}" max="${hiHoyLocal()}"></label>
+      ${evento ? `
+        <div class="hi-campo"><span>Tipo</span>
+          <div class="hi-tipos-sel">
+            ${TIPOS_HIST.map(t => {
+              const bloqueado = esCorr ? t.v !== "correctivo" : t.v === "correctivo";
+              return `<button type="button" class="hi-tsel ${evento.tipo === t.v ? "on" : ""}" data-t="${t.v}" style="--c:${hiColor(hiGrupoDe(t.v))}"
+                        ${bloqueado ? "disabled" : ""} onclick="hiElegirTipo('${t.v}')"><i class="ti ti-${t.i}"></i>${t.l}</button>`;
+            }).join("")}
+          </div>
+        </div>
+        <label class="hi-campo"><span>Categoría</span>
+          <input id="hi-f-cat" list="hi-cat-lista" value="${hiEsc(v.categoria || "")}">
+          <datalist id="hi-cat-lista">${MT_CATEGORIAS.map(x => `<option value="${x}">`).join("")}</datalist>
+        </label>` : ""}
+      <label class="hi-campo"><span>Qué se hizo</span>
+        <textarea id="hi-f-desc" rows="${evento ? 3 : 4}" ${evento ? "" : `oninput="hiLeerCampo()"`}
+          placeholder="${evento ? "" : "Escribí todo como está en el papel, ej: cambio de aceite y cambio de tensor de correa"}">${hiEsc(v.descripcion || "")}</textarea>
+      </label>
+      ${evento ? "" : `<div class="hi-lectura" id="hi-lectura" aria-live="polite"></div>`}
+      <div class="hi-campo-par">
+        <label class="hi-campo"><span>Km <em>si figura</em></span><input id="hi-f-km" inputmode="numeric" value="${v.km ? Math.round(v.km) : ""}" placeholder="ej: 470500"></label>
+        <label class="hi-campo"><span>Costo Gs. <em>si figura</em></span><input id="hi-f-costo" inputmode="numeric" value="${v.costo ? Math.round(v.costo) : ""}" placeholder="ej: 350000"></label>
+      </div>
+      <label class="hi-campo"><span>Taller o mecánico <em>si figura</em></span><input id="hi-f-taller" value="${hiEsc(v.taller || "")}"></label>
+    </div>
+    <footer class="hi-cajon-pie">
+      <span class="hi-sesion" id="hi-sesion">${!evento && hi.sesion ? `${hi.sesion} cargado${hi.sesion === 1 ? "" : "s"} ahora` : ""}</span>
+      <button class="btn btn-primary" id="hi-f-guardar" onclick="hiGuardar()"><i class="ti ti-check"></i> <span>${evento ? "Guardar cambios" : "Guardar"}</span></button>
+    </footer>`;
+  document.body.append(fondo, caj);
+  caj.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.preventDefault(); hiCerrarCarga(); }
+    else if (e.key === "Enter" && !e.shiftKey && e.target.tagName !== "BUTTON") { e.preventDefault(); hiGuardar(); }
+  });
+  requestAnimationFrame(() => { fondo.classList.add("abierto"); caj.classList.add("abierto"); });
+  setTimeout(() => $("#hi-f-desc")?.focus(), 260);
+}
+
+// Mientras se escribe: cómo lo va a guardar el sistema
+function hiLeerCampo() {
+  clearTimeout(_hiLecturaT);
+  _hiLecturaT = setTimeout(hiPintarLectura, 120);
+}
+
+function hiPintarLectura() {
+  const cont = $("#hi-lectura");
+  if (!cont) return;
+  hi.lectura = hiLeer($("#hi-f-desc").value).map(x => ({ ...x, tipo: hi.forzado[x.descripcion] || x.tipo }));
+  const n = hi.lectura.length;
+  const lbl = document.querySelector("#hi-f-guardar span");
+  if (lbl) lbl.textContent = n > 1 ? `Guardar ${n} registros` : "Guardar";
+  cont.innerHTML = hi.lectura.map((x, i) => `
+    <div class="hi-lec" style="--c:${hiColor(hiGrupoDe(x.tipo))};--i:${i}">
+      <button type="button" class="hi-lec-tipo" onclick="hiCambiarTipoLectura(${i})" title="Tocá para cambiar el tipo">${HI_TIPO_NOMBRE[x.tipo]}</button>
+      <span class="hi-lec-txt">${hiEsc(x.descripcion)}${x.categoria && HI_SIN_TILDE(x.categoria) !== HI_SIN_TILDE(x.descripcion) ? `<small>${hiEsc(x.categoria)}</small>` : ""}</span>
+    </div>`).join("");
+}
+
+function hiCambiarTipoLectura(i) {
+  const x = hi.lectura[i];
+  if (!x) return;
+  x.tipo = HI_CICLO_TIPO[(HI_CICLO_TIPO.indexOf(x.tipo) + 1) % HI_CICLO_TIPO.length];
+  hi.forzado[x.descripcion] = x.tipo;
+  hiPintarLectura();
+}
+
+function hiElegirTipo(t) {
+  document.querySelectorAll(".hi-tsel").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+}
+
+function hiCerrarCarga(inmediato = false) {
+  const caj = document.querySelector(".hi-cajon"), fondo = document.querySelector(".hi-cajon-fondo");
+  if (!caj) return;
+  hi.editando = null;
+  if (inmediato || _uiSinMovimiento) { caj.remove(); fondo?.remove(); return; }
+  caj.classList.remove("abierto"); fondo?.classList.remove("abierto");
+  setTimeout(() => { caj.remove(); fondo?.remove(); }, 300);
+}
+
+function hiEditar(origen, id) {
+  const e = hi.items.find(x => x.origen === origen && x.id === id);
+  if (e) hiAbrirCarga(e);
+}
+
+async function hiGuardar() {
+  const btn = $("#hi-f-guardar");
+  if (!btn || btn.disabled) return;
+  const fecha = $("#hi-f-fecha").value;
+  const desc = $("#hi-f-desc").value.trim();
+  if (!fecha) { toast("Poné la fecha del papel", "error"); $("#hi-f-fecha").focus(); return; }
+  if (fecha > hiHoyLocal()) { toast("La fecha no puede ser posterior a hoy", "error"); $("#hi-f-fecha").focus(); return; }
+  if (!desc) { toast("Escribí qué se hizo", "error"); $("#hi-f-desc").focus(); return; }
+  const num = id => parseFloat(($(id).value || "").replace(/\./g, "").replace(/,/g, ".")) || 0;
+  const comunes = { fecha, km: num("#hi-f-km"), costo: num("#hi-f-costo"), taller: $("#hi-f-taller").value.trim() };
+  const ed = hi.editando;
+  btn.disabled = true;
+  let r;
+  if (ed) {
+    r = await api(`/api/historial_carga/${ed.origen}/${ed.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...comunes, descripcion: desc, categoria: $("#hi-f-cat").value.trim(),
+                             tipo: document.querySelector(".hi-tsel.on")?.dataset.t || ed.tipo }) });
+  } else {
+    hiPintarLectura();   // por si se guardó antes de que termine de leer
+    r = await api("/api/historial_carga/lote", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vehiculo_id: hi.coche, ...comunes, items: hi.lectura }) });
+  }
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  hi.flotaVieja = true;
+  if (ed) {
+    toast("Registro corregido", "success");
+    hiCerrarCarga();
+    await hiRefrescar(`${ed.origen}-${ed.id}`, fecha);
+    return;
+  }
+  const n = r.creados.length;
+  hi.sesion += n;
+  window._hiUltimaFecha = fecha;
+  toast(n > 1 ? `${n} registros guardados` : "Guardado en el historial", "success");
+  // Queda abierto para el próximo papel: la fecha se mantiene
+  ["#hi-f-desc", "#hi-f-km", "#hi-f-costo", "#hi-f-taller"].forEach(id => $(id).value = "");
+  hi.forzado = {};
+  hiPintarLectura();
+  $("#hi-sesion").textContent = `${hi.sesion} cargado${hi.sesion === 1 ? "" : "s"} ahora`;
+  $("#hi-f-desc").focus();
+  await hiRefrescar(r.creados.map(c => `${c.origen}-${c.id}`), fecha);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  STAND-BY PRESUPUESTARIO — firma de tesorería y cola de espera
+// ════════════════════════════════════════════════════════════════════════
+// El dinero se aprueba por ítem, no por orden. Tesorería marca lo que cubre;
+// lo que no, queda en una cola visible en vez de perderse.
+
+async function abrirFirma(otId) {
+  const todas = await api("/api/compras/ots");
+  const o = todas.find(x => x.id === otId);
+  if (!o) { toast("No encontré la orden", "error"); return; }
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay firma-overlay";
+  overlay.innerHTML = `
+    <div class="firma-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-writing-sign"></i> Firma de Tesorería — OT #${o.id}</h2>
+          <p>Marcá lo que Tesorería puede cubrir ahora. Lo que dejes sin marcar queda esperando fondos, y el trabajo avanza igual con lo habilitado.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="firma-items">
+        ${o.items.map(it => `
+          <label class="firma-item">
+            <input type="checkbox" class="firma-check" data-id="${it.id}" data-precio="${it.precio_compras || 0}"
+                   ${it.estado_pago !== "espera" ? "checked" : ""} onchange="firmaRecalcular()">
+            <span class="firma-item-info">
+              <span class="firma-item-desc">${it.descripcion}</span>
+              <span class="firma-item-mat">${it.material_pedido || "—"}</span>
+            </span>
+            <span class="firma-item-precio">${gs(it.precio_compras || 0)}</span>
+          </label>`).join("")}
+      </div>
+
+      <div class="firma-totales">
+        <div class="firma-total-row">
+          <span><i class="ti ti-circle-check" style="color:var(--success)"></i> Se habilita ahora</span>
+          <b id="firma-total-hab">—</b>
+        </div>
+        <div class="firma-total-row">
+          <span><i class="ti ti-hourglass" style="color:var(--warning)"></i> Queda esperando fondos</span>
+          <b id="firma-total-esp">—</b>
+        </div>
+      </div>
+
+      <div class="firma-acciones">
+        <button class="btn btn-ghost" onclick="firmaMarcarTodo(true)">Marcar todo</button>
+        <button class="btn btn-ghost" onclick="firmaMarcarTodo(false)">Desmarcar todo</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="confirmarFirma(${o.id}, this)"><i class="ti ti-check"></i> Confirmar firma</button>
+      </div>
+    </div>`;
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  firmaRecalcular();
+}
+
+function firmaRecalcular() {
+  let hab = 0, esp = 0;
+  document.querySelectorAll(".firma-check").forEach(ch => {
+    const p = parseFloat(ch.dataset.precio) || 0;
+    if (ch.checked) hab += p; else esp += p;
+    ch.closest(".firma-item").classList.toggle("sin-fondos", !ch.checked);
+  });
+  const h = document.getElementById("firma-total-hab");
+  const e = document.getElementById("firma-total-esp");
+  if (h) h.textContent = gs(hab);
+  if (e) { e.textContent = gs(esp); e.style.color = esp > 0 ? "var(--warning)" : "var(--muted)"; }
+}
+
+function firmaMarcarTodo(v) {
+  document.querySelectorAll(".firma-check").forEach(ch => ch.checked = v);
+  firmaRecalcular();
+}
+
+async function confirmarFirma(otId, btn) {
+  const habilitados = [...document.querySelectorAll(".firma-check:checked")].map(ch => +ch.dataset.id);
+  const total = document.querySelectorAll(".firma-check").length;
+  if (habilitados.length === 0 &&
+      !confirm("No marcaste ningún ítem: la orden completa va a quedar esperando fondos. ¿Confirmás?")) return;
+  btn.disabled = true;
+  const r = await api(`/api/compras/${otId}/firmar`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ habilitados })
+  });
+  if (r.ok) {
+    toast(r.msg, habilitados.length < total ? "warning" : "success");
+    btn.closest(".modal-overlay").remove();
+    renderCompras();
+  } else { toast(r.msg || "Error", "error"); btn.disabled = false; }
+}
+
+// ─── Cola de espera de fondos ───
+
+async function renderColaEspera() {
+  const cont = document.getElementById("cola-espera-panel");
+  if (!cont) return;
+  const cola = await api("/api/compras/cola_espera");
+  if (!cola.cantidad) {
+    cont.innerHTML = `<div class="cola-vacia"><i class="ti ti-circle-check"></i> No hay ítems esperando fondos. Todo lo presupuestado está cubierto.</div>`;
+    return;
+  }
+  cont.innerHTML = `
+    <div class="cola-resumen">
+      <div class="cola-stat">
+        <div class="cola-stat-val">${cola.cantidad}</div>
+        <div class="cola-stat-lbl">ítems esperando</div>
+      </div>
+      <div class="cola-stat">
+        <div class="cola-stat-val">${gs(cola.total)}</div>
+        <div class="cola-stat-lbl">demanda sin cubrir</div>
+      </div>
+      <div class="cola-stat">
+        <div class="cola-stat-val">${cola.dias_espera_max}</div>
+        <div class="cola-stat-lbl">días el más viejo</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:34px"><input type="checkbox" onchange="colaMarcarTodo(this.checked)"></th>
+          <th>Esperando desde</th><th>Coche</th><th>Trabajo</th><th>Material</th><th class="num">Monto</th>
+        </tr></thead>
+        <tbody>
+          ${cola.items.map(i => `<tr>
+            <td><input type="checkbox" class="cola-check" data-id="${i.id}" data-precio="${i.precio_compras || 0}" onchange="colaRecalcular()"></td>
+            <td style="font-size:12.5px;white-space:nowrap">${(i.fecha_espera || "").slice(0,10)}</td>
+            <td><b>${i.n_interno ? "#" + i.n_interno : i.patente}</b><br><span style="font-size:11px;color:var(--muted)">OT #${i.ot_id}</span></td>
+            <td style="font-size:13px">${i.descripcion}</td>
+            <td style="font-size:12.5px;color:var(--muted)">${i.material_pedido || "—"}</td>
+            <td class="num">${gs(i.precio_compras || 0)}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="cola-acciones">
+      <span id="cola-seleccion" class="cola-seleccion">Ninguno seleccionado</span>
+      <button class="btn btn-success" id="cola-liberar-btn" onclick="liberarSeleccionados(this)" disabled>
+        <i class="ti ti-lock-open"></i> Liberar seleccionados
+      </button>
+    </div>`;
+}
+
+function colaMarcarTodo(v) {
+  document.querySelectorAll(".cola-check").forEach(ch => ch.checked = v);
+  colaRecalcular();
+}
+
+function colaRecalcular() {
+  const sel = [...document.querySelectorAll(".cola-check:checked")];
+  const total = sel.reduce((s, ch) => s + (parseFloat(ch.dataset.precio) || 0), 0);
+  const lbl = document.getElementById("cola-seleccion");
+  const btn = document.getElementById("cola-liberar-btn");
+  if (lbl) lbl.textContent = sel.length
+    ? `${sel.length} ítem(s) seleccionado(s) — ${gs(total)}`
+    : "Ninguno seleccionado";
+  if (btn) btn.disabled = sel.length === 0;
+}
+
+async function liberarSeleccionados(btn) {
+  const ids = [...document.querySelectorAll(".cola-check:checked")].map(ch => +ch.dataset.id);
+  if (!ids.length) return;
+  btn.disabled = true;
+  const r = await api("/api/compras/liberar", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: ids })
+  });
+  if (r.ok) { toast(r.msg, "success"); renderCompras(); }
+  else { toast(r.msg || "Error", "error"); btn.disabled = false; }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  CORPORATIVOS — Resumen de rendiciones (vista admin)
+// ════════════════════════════════════════════════════════════════════════
+
+async function renderCorpResumen() {
+  status("Resumen de rendiciones corporativas");
+  const choferes = await api("/api/corp/choferes");
+
+  const hoy = new Date();
+  const hace30 = new Date(hoy.getTime() - 30 * 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-clipboard-check"></i> Resumen de Rendiciones</h1>
+      <p>Servicios corporativos cargados por los choferes — filtrá y generá el PDF por chofer</p>
+    </div>
+    <div class="section">
+
+      ${choferes.length === 0 && puedeGestionarCorp() ? `
+        <div class="card" style="border-left:3px solid var(--info);background:var(--info-bg)">
+          <div class="card-body" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+            <i class="ti ti-user-plus" style="font-size:32px;color:var(--info)"></i>
+            <div style="flex:1;min-width:240px">
+              <div style="font-weight:600;color:var(--text);margin-bottom:3px">Todavía no están cargados los choferes de corporativos</div>
+              <div style="font-size:13px;color:var(--muted)">Es un paso único: crea las 31 cuentas (usuario y contraseña = su nombre) para que puedan entrar desde el celular. Después de esto no hace falta repetirlo.</div>
+            </div>
+            <button class="btn btn-primary" onclick="darDeAltaChoferes(this)"><i class="ti ti-user-plus"></i> Dar de alta a los choferes</button>
+          </div>
+        </div>
+      ` : ""}
+
+      <div class="card">
+        <div class="card-head"><i class="ti ti-filter"></i> Filtros</div>
+        <div class="card-body">
+          <div class="form-row" style="align-items:flex-end">
+            <div class="field" style="flex:1;min-width:200px">
+              <label>Chofer</label>
+              <select id="corp-chofer">
+                <option value="">Todos los choferes</option>
+                ${choferes.map(c => `<option value="${c.usuario}">${c.nombre}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label>Desde</label><input id="corp-desde" type="date" value="${fmt(hace30)}"></div>
+            <div class="field"><label>Hasta</label><input id="corp-hasta" type="date" value="${fmt(hoy)}"></div>
+            <button class="btn btn-primary" onclick="cargarRendiciones()"><i class="ti ti-search"></i> Buscar</button>
+            <button class="btn btn-pdf" onclick="descargarRendicionesPDF(true)" title="Una hoja con el total de cada chofer"><i class="ti ti-file-type-pdf"></i> PDF resumido</button>
+            <button class="btn btn-pdf" onclick="descargarRendicionesPDF(false)" title="Una hoja por chofer con el detalle de sus servicios"><i class="ti ti-file-description"></i> PDF detallado</button>
+            ${puedeOperarCorp() ? `
+            <button class="btn btn-ghost" onclick="abrirDescartables()"><i class="ti ti-eraser"></i> Limpiar servicios</button>
+            <button class="btn btn-ghost" onclick="abrirSospechosas()"><i class="ti ti-shield-search"></i> Revisar cargas</button>` : ""}
+            ${puedeGestionarCorp() ? `
+            <button class="btn btn-ghost" onclick="verAccesosChoferes()"><i class="ti ti-key"></i> Accesos</button>
+            <button class="btn btn-ghost" onclick="abrirConfigPlus()"><i class="ti ti-gift"></i> Plus semanal</button>
+            <button class="btn btn-ghost" onclick="abrirTarifas()"><i class="ti ti-currency-guarani"></i> Tarifas</button>` : ""}
+          </div>
+        </div>
+      </div>
+
+      <div id="corp-resultado"><div class="empty"><i class="ti ti-clipboard-search"></i>Elegí los filtros y tocá Buscar.</div></div>
+    </div>`;
+
+  cargarRendiciones();
+}
+
+async function darDeAltaChoferes(btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Creando cuentas...';
+  const r = await api("/api/corp/seed", { method: "POST" });
+  if (r && r.ok) {
+    toast(`${r.creados} chofer(es) dado(s) de alta — ya pueden entrar desde el celular`, "success");
+    renderCorpResumen();
+  } else {
+    toast("No se pudo completar. Probá de nuevo.", "error");
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-user-plus"></i> Dar de alta a los choferes';
+  }
+}
+
+async function cargarRendiciones() {
+  const cont = $("#corp-resultado");
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const params = new URLSearchParams();
+  const chofer = $("#corp-chofer").value;
+  const desde = $("#corp-desde").value;
+  const hasta = $("#corp-hasta").value;
+  if (chofer) params.set("chofer", chofer);
+  if (desde) params.set("desde", desde);
+  if (hasta) params.set("hasta", hasta);
+
+  const resp = await api(`/api/corp/rendiciones?${params.toString()}`);
+  const rends = (resp && resp.rendiciones) || [];
+  const liq = (resp && resp.liquidacion) || [];
+  if (rends.length === 0) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-clipboard-off"></i>No hay rendiciones con esos filtros.</div>`;
+    return;
+  }
+
+  // Métricas rápidas
+  const total = rends.length;
+  const suspendidos = rends.filter(r => r.estado === "suspendido").length;
+  const completados = rends.filter(r => r.estado === "completado").length;
+  const medios = rends.filter(r => r.estado === "entrante" || r.estado === "saliente").length;
+  const aPagar = liq.reduce((s, l) => s + (l.total || 0), 0);
+
+  cont.innerHTML = `
+    <div class="metrics" style="margin-bottom:18px">
+      <div class="metric"><div class="metric-content"><div class="metric-label">Servicios</div><div class="metric-value">${total}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Completos</div><div class="metric-value" style="color:var(--success)">${completados}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Medios (ent./sal.)</div><div class="metric-value" style="color:var(--info)">${medios}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Suspendidos</div><div class="metric-value" style="color:var(--danger)">${suspendidos}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">A liquidar</div><div class="metric-value">Gs. ${fmtNum(aPagar)}</div></div></div>
+    </div>
+
+    ${liq.length ? `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-cash"></i> Liquidación del período</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Chofer</th><th class="center">Servicios</th><th class="center">Completos</th>
+            <th class="center">Medios</th><th class="num">Tramos</th>
+            <th class="center">Semanas</th><th class="num">Plus</th><th class="num">Total</th>
+            ${puedeOperarCorp() ? '<th class="center">Liquidar</th>' : ""}
+          </tr></thead>
+          <tbody>
+            ${liq.map(l => `<tr>
+              <td><b>${l.chofer_nombre}</b>${l.tiene_plus ? ' <span class="badge" style="font-size:10px">plus semanal</span>' : ''}</td>
+              <td class="center">${l.servicios}</td>
+              <td class="center">${l.completados}</td>
+              <td class="center">${l.medios}</td>
+              <td class="num">${fmtNum(l.monto_tramos)}</td>
+              <td class="center">${l.tiene_plus ? l.semanas_trabajadas : "—"}</td>
+              <td class="num">${l.tiene_plus ? fmtNum(l.plus) : "—"}</td>
+              <td class="num"><b>${fmtNum(l.total)}</b></td>
+              ${puedeOperarCorp() ? `<td class="center">${l.chofer_usuario ? `<button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="abrirLiquidacion('${l.chofer_usuario}','${l.chofer_nombre.replace(/'/g,"\\'")}')"><i class="ti ti-cash"></i> Liquidar</button>` : "—"}</td>` : ""}
+            </tr>`).join("")}
+            <tr style="background:var(--info-bg)">
+              <td colspan="7" style="text-align:right;font-weight:600">Total a liquidar</td>
+              <td class="num"><b>Gs. ${fmtNum(aPagar)}</b></td>
+              ${puedeOperarCorp() ? "<td></td>" : ""}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>` : ""}
+
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Fecha</th><th>Chofer</th><th>Cliente</th><th>Tramo</th>
+            <th class="center">Bus</th><th class="center">Horario</th>
+            <th class="num">Km</th><th class="center">Pasaj.</th>
+            <th class="center">Estado</th><th class="num">Monto</th>
+            ${puedeOperarCorp() ? '<th class="center">Acciones</th>' : ""}
+          </tr></thead>
+          <tbody>
+            ${rends.map(r => {
+              const kmRec = (r.km_final || 0) - (r.km_inicial || 0);
+              const kmTxt = (kmRec > 0 && kmRec < 2000) ? fmtNum(kmRec) : "—";
+              const LBL = {completado:"Completo", entrante:"Entrante", saliente:"Saliente", suspendido:"Suspendido"};
+              const cls = r.estado === "suspendido" ? "danger" : (r.estado === "completado" ? "success" : "");
+              return `<tr class="${r.estado === 'suspendido' ? 'item-en-espera' : ''}">
+                <td style="font-size:12.5px;white-space:nowrap">${r.fecha_servicio}</td>
+                <td style="font-size:12.5px">${r.chofer_nombre}</td>
+                <td><span class="badge">${r.cliente}</span></td>
+                <td style="font-size:12.5px;color:var(--muted)">${r.tramo}</td>
+                <td class="center"><b>#${r.bus_interno}</b></td>
+                <td class="center" style="font-size:12px">${r.hora_inicio || "—"}${r.hora_fin ? "–" + r.hora_fin : ""}</td>
+                <td class="num">${kmTxt}</td>
+                <td class="center">${r.pasajeros || "—"}</td>
+                <td class="center">
+                  <span class="badge ${cls}" style="font-size:11px">${LBL[r.estado] || r.estado}</span>
+                  ${r.estado === 'suspendido' && r.observacion ? `<i class="ti ti-info-circle" style="color:var(--danger);cursor:help" title="${r.observacion.replace(/"/g,'&quot;')}"></i>` : ''}
+                </td>
+                <td class="num">
+                  ${r.monto ? fmtNum(r.monto) : "—"}
+                  ${r.monto_fijo ? ' <i class="ti ti-pin-filled" style="color:var(--info)" title="Monto fijado a mano por ' + (r.editado_por || 'admin') + '"></i>' : ''}
+                </td>
+                ${puedeOperarCorp() ? `<td class="center" style="white-space:nowrap">
+                  ${r.liquidado
+                    ? '<span class="badge success" style="font-size:10px"><i class="ti ti-lock"></i> liquidado</span>'
+                    : `<button class="btn-icono" title="Editar monto" onclick="editarMontoRendicion(${r.id}, ${r.monto || 0}, ${r.monto_fijo ? 1 : 0})"><i class="ti ti-pencil"></i></button>
+                       <button class="btn-icono btn-icono-rojo" title="Eliminar servicio" onclick="borrarRendicion(${r.id}, '${(r.chofer_nombre||'').replace(/'/g,"\\'")}', '${r.fecha_servicio}')"><i class="ti ti-trash"></i></button>`}
+                </td>` : ""}
+              </tr>`;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    ${suspendidos > 0 ? `
+      <div class="card" style="border-left:3px solid var(--danger)">
+        <div class="card-head"><i class="ti ti-alert-triangle" style="color:var(--danger)"></i> Servicios suspendidos (${suspendidos})</div>
+        <div class="card-body" style="padding-top:0">
+          ${rends.filter(r => r.estado === 'suspendido').map(r => `
+            <div style="padding:10px 0;border-bottom:1px solid var(--surface3)">
+              <div style="font-size:13px;font-weight:600">${r.fecha_servicio} · ${r.cliente} — ${r.chofer_nombre}</div>
+              <div style="font-size:13px;color:var(--muted);margin-top:2px">${r.tramo}</div>
+              <div style="font-size:13px;color:var(--danger);margin-top:4px"><i class="ti ti-message"></i> ${r.observacion || "(sin detalle)"}</div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+  `;
+}
+
+function descargarRendicionesPDF(resumido) {
+  const params = new URLSearchParams();
+  if (resumido) params.set("resumen", "1");
+  const chofer = $("#corp-chofer").value;
+  const desde = $("#corp-desde").value;
+  const hasta = $("#corp-hasta").value;
+  if (chofer) params.set("chofer", chofer);
+  if (desde) params.set("desde", desde);
+  if (hasta) params.set("hasta", hasta);
+  window.open(`/api/corp/rendiciones_pdf?${params.toString()}`, "_blank");
+}
+
+// ─── Liquidación de semanas: le hacés firmar y marcás como pagado ───
+async function abrirLiquidacion(usuario, nombre) {
+  const semanas = await api(`/api/corp/semanas_liquidables?chofer=${encodeURIComponent(usuario)}`);
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay firma-overlay";
+
+  let cuerpo;
+  if (!Array.isArray(semanas) || semanas.length === 0) {
+    cuerpo = `<div class="empty"><i class="ti ti-circle-check"></i>${nombre} no tiene semanas pendientes de liquidar.</div>`;
+  } else {
+    cuerpo = `
+      <p style="font-size:13px;color:var(--muted);margin:0 0 14px">
+        Marcá la semana que ya le pagaste. Sus rendiciones de esa semana dejan de aparecerle en el celular y su acumulado se reinicia. Vos las seguís viendo acá buscando por fecha.
+      </p>
+      ${semanas.map(s => `
+        <div class="firma-item" style="cursor:default">
+          <div class="firma-item-info">
+            <span class="firma-item-desc">Semana ${s.semana_iso} · ${s.rango}</span>
+            <span class="firma-item-mat">${s.servicios} servicio(s)${s.plus ? " · incluye plus" : ""}</span>
+          </div>
+          <span class="firma-item-precio">${gs(s.total)}</span>
+          <button class="btn btn-success" style="padding:7px 12px;font-size:12.5px;margin-left:10px"
+            onclick="confirmarLiquidacion('${usuario}', ${s.anio}, ${s.semana_iso}, '${s.rango}', this)">
+            <i class="ti ti-check"></i> Liquidar
+          </button>
+        </div>
+      `).join("")}`;
+  }
+
+  overlay.innerHTML = `
+    <div class="firma-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-cash"></i> Liquidar a ${nombre}</h2>
+          <p>Semanas con servicios pendientes de pago.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="firma-items">${cuerpo}</div>
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      </div>
+    </div>`;
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+async function confirmarLiquidacion(usuario, anio, semana, rango, btn) {
+  if (!confirm(`¿Confirmás que ya le pagaste la semana ${semana} (${rango})?\n\nEstas rendiciones dejarán de aparecerle en su celular.`)) return;
+  btn.disabled = true;
+  const r = await api("/api/corp/liquidar", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chofer: usuario, anio, semana_iso: semana })
+  });
+  if (r.ok) {
+    toast(r.msg, "success");
+    btn.closest(".modal-overlay").remove();
+    cargarRendiciones();
+  } else {
+    toast(r.msg || "Error", "error");
+    btn.disabled = false;
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  LIMPIEZA DE DATOS DE PRUEBA
+// ════════════════════════════════════════════════════════════════════════
+// Saca lo que se cargó probando, sin tocar la flota, las cuentas ni las
+// rendiciones de corporativos. Muestra cuánto hay antes de borrar.
+
+async function renderLimpieza() {
+  status("Limpieza de datos de prueba");
+  const d = await api("/api/limpieza/preview");
+  const grupos = (d && d.grupos) || [];
+  const prot = (d && d.protegido) || {};
+  const conDatos = grupos.filter(g => g.registros > 0);
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-eraser"></i> Limpiar datos de prueba</h1>
+      <p>Sacá lo que se cargó probando para arrancar en limpio</p>
+    </div>
+    <div class="section">
+
+      <div class="card" style="border-left:3px solid var(--success);background:var(--success-bg)">
+        <div class="card-body">
+          <div style="font-weight:600;margin-bottom:8px;color:var(--text)">
+            <i class="ti ti-shield-check" style="color:var(--success)"></i> Esto NO se toca nunca
+          </div>
+          <div style="font-size:13.5px;color:var(--muted);line-height:1.7">
+            <b>${prot.vehiculos || 0}</b> vehículos de la flota ·
+            <b>${prot.usuarios || 0}</b> cuentas de usuario (incluidos los 31 choferes de corporativos)<br>
+            También quedan intactos los planes de mantenimiento y la configuración del sistema.
+          </div>
+        </div>
+      </div>
+
+      ${conDatos.length === 0 ? `
+        <div class="empty"><i class="ti ti-mood-happy"></i>No hay datos de prueba para borrar. Todo limpio.</div>
+      ` : `
+      <div class="card">
+        <div class="card-head"><i class="ti ti-list-check"></i> Elegí qué borrar</div>
+        <div class="card-body">
+          <p class="hint" style="margin-bottom:14px"><i class="ti ti-info-circle"></i> Esto no se puede deshacer. Marcá solo lo que estés seguro de querer sacar.</p>
+          ${conDatos.map(g => `
+            <label class="firma-item" style="margin-bottom:8px${g.delicado ? ';border-color:var(--danger)' : ''}">
+              <input type="checkbox" class="limp-check" data-clave="${g.clave}" data-n="${g.registros}" onchange="limpiezaRecalcular()">
+              <span class="firma-item-info">
+                <span class="firma-item-desc">${g.nombre}${g.delicado ? ' <span class="badge" style="font-size:10px;background:var(--danger-bg);color:var(--danger)"><i class="ti ti-alert-triangle"></i> dato operativo</span>' : ''}</span>
+                <span class="firma-item-mat">${g.detalle}</span>
+              </span>
+              <span class="firma-item-precio">${fmtNum(g.registros)}</span>
+            </label>`).join("")}
+        </div>
+      </div>
+
+      <div class="card" id="limp-confirmar" style="display:none;border-left:3px solid var(--danger)">
+        <div class="card-body">
+          <div style="font-weight:600;margin-bottom:6px;color:var(--danger)">
+            <i class="ti ti-alert-triangle"></i> Vas a borrar <span id="limp-total">0</span> registro(s)
+          </div>
+          <p style="font-size:13px;color:var(--muted);margin-bottom:12px">
+            Esta acción no tiene vuelta atrás. Para confirmar, escribí <b>BORRAR</b> en el campo.
+          </p>
+          <div class="form-row" style="align-items:flex-end">
+            <div class="field" style="flex:1;max-width:220px">
+              <label>Escribí BORRAR</label>
+              <input id="limp-texto" placeholder="BORRAR" oninput="limpiezaRecalcular()" autocomplete="off">
+            </div>
+            <button class="btn btn-danger" id="limp-btn" onclick="ejecutarLimpieza(this)" disabled>
+              <i class="ti ti-trash"></i> Borrar definitivamente
+            </button>
+          </div>
+        </div>
+      </div>
+      `}
+
+      <div class="card" style="border-left:3px solid var(--danger)">
+        <div class="card-head" style="color:var(--danger)"><i class="ti ti-alert-octagon"></i> Reinicio total del sistema</div>
+        <div class="card-body">
+          <p style="font-size:13.5px;color:var(--muted);line-height:1.65;margin-bottom:12px">
+            Deja el sistema como recién instalado: <b>sin vehículos, sin usuarios, sin ningún dato</b>.
+            Todos los módulos siguen funcionando y los planes de mantenimiento se regeneran solos al arrancar.
+            Lo único que sobrevive es <b>tu cuenta de administrador</b>, para que puedas volver a entrar.
+          </p>
+          <p class="hint" style="margin-bottom:12px;color:var(--danger)">
+            <i class="ti ti-alert-triangle"></i> Usalo solo para entregar el sistema en cero. Después vas a tener que cargar la flota y dar de alta a los choferes de nuevo.
+          </p>
+          <div class="form-row" style="align-items:flex-end">
+            <div class="field" style="flex:1;max-width:280px">
+              <label>Escribí REINICIAR TODO</label>
+              <input id="reinicio-texto" placeholder="REINICIAR TODO" oninput="reinicioRecalcular()" autocomplete="off">
+            </div>
+            <button class="btn btn-danger" id="reinicio-btn" onclick="ejecutarReinicio(this)" disabled>
+              <i class="ti ti-refresh-alert"></i> Reiniciar el sistema completo
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function reinicioRecalcular() {
+  const txt = document.getElementById("reinicio-texto");
+  const btn = document.getElementById("reinicio-btn");
+  if (btn && txt) btn.disabled = txt.value.trim().toUpperCase() !== "REINICIAR TODO";
+}
+
+async function ejecutarReinicio(btn) {
+  if (!confirm("Esto borra TODO el sistema: flota, usuarios, servicios, repuestos.\n\nSolo queda tu cuenta de admin. No hay vuelta atrás.\n\n¿Confirmás?")) return;
+  if (!confirm("Última confirmación. ¿Reiniciar el sistema completo?")) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Reiniciando...';
+  const r = await api("/api/limpieza/reinicio_total", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirmacion: $("#reinicio-texto").value })
+  });
+  if (r && r.ok) {
+    toast(r.msg, "success");
+    renderLimpieza();
+  } else {
+    toast((r && r.msg) || "No se pudo completar", "error");
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-refresh-alert"></i> Reiniciar el sistema completo';
+  }
+}
+
+function limpiezaRecalcular() {
+  const sel = [...document.querySelectorAll(".limp-check:checked")];
+  const total = sel.reduce((s, ch) => s + (parseInt(ch.dataset.n) || 0), 0);
+  const caja = document.getElementById("limp-confirmar");
+  const btn = document.getElementById("limp-btn");
+  const txt = document.getElementById("limp-texto");
+  if (caja) caja.style.display = sel.length ? "" : "none";
+  const lbl = document.getElementById("limp-total");
+  if (lbl) lbl.textContent = fmtNum(total);
+  if (btn) btn.disabled = !(sel.length && txt && txt.value.trim().toUpperCase() === "BORRAR");
+  document.querySelectorAll(".limp-check").forEach(ch =>
+    ch.closest(".firma-item").classList.toggle("sin-fondos", ch.checked));
+}
+
+async function ejecutarLimpieza(btn) {
+  const grupos = [...document.querySelectorAll(".limp-check:checked")].map(ch => ch.dataset.clave);
+  if (!grupos.length) return;
+  if (!confirm("Última confirmación: esto borra los datos elegidos para siempre. ¿Seguimos?")) return;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i> Borrando...';
+  const r = await api("/api/limpieza/ejecutar", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ grupos, confirmacion: $("#limp-texto").value })
+  });
+  if (r && r.ok) {
+    toast(r.msg, "success");
+    renderLimpieza();
+  } else {
+    toast((r && r.msg) || "No se pudo completar", "error");
+    btn.disabled = false;
+    btn.innerHTML = '<i class="ti ti-trash"></i> Borrar definitivamente';
+  }
+}
+
+
+// ─── Accesos de los choferes: qué usuario y contraseña darle a cada uno ───
+async function verAccesosChoferes() {
+  const d = await api("/api/corp/accesos");
+  const chs = (d && d.choferes) || [];
+  const faltan = (d && d.faltantes) || [];
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay firma-overlay";
+  overlay.innerHTML = `
+    <div class="firma-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-key"></i> Accesos de los choferes</h2>
+          <p>La contraseña inicial es igual al usuario. Entran desde el celular con esos datos.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="firma-items">
+        ${faltan.length ? `<div class="aviso-falta" style="background:var(--warning-bg);color:var(--warning);padding:11px 14px;border-radius:10px;margin-bottom:12px;font-size:13px">
+          <i class="ti ti-alert-triangle"></i> Faltan dar de alta ${faltan.length}: ${faltan.join(", ")}
+        </div>` : ""}
+        ${chs.length === 0
+          ? `<div class="empty"><i class="ti ti-user-off"></i>Todavía no hay choferes dados de alta.</div>`
+          : `<div class="table-wrap"><table>
+              <thead><tr><th>Chofer</th><th>Usuario</th><th>Contraseña</th></tr></thead>
+              <tbody>${chs.map(x => `<tr>
+                <td style="font-size:13px">${x.nombre}</td>
+                <td><b>${x.usuario}</b></td>
+                <td style="color:var(--muted)">${x.usuario}</td>
+              </tr>`).join("")}</tbody></table></div>`}
+      </div>
+      <div class="firma-acciones">
+        <span style="flex:1;font-size:12.5px;color:var(--muted)">${chs.length} de ${(d && d.total_esperado) || 0} choferes con cuenta</span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      </div>
+    </div>`;
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+
+// ─── Editar monto y eliminar servicios del resumen ───
+
+async function editarMontoRendicion(id, actual, esFijo) {
+  const txt = prompt(
+    "Monto de este servicio en guaraníes.\n\n" +
+    (esFijo ? "Está fijado a mano. " : "Hoy se calcula por la tarifa del tramo. ") +
+    "Si lo cambiás queda fijo y el sistema no lo vuelve a recalcular.\n" +
+    "Dejalo vacío para volver al monto por tarifa.",
+    actual ? String(Math.round(actual)) : "");
+  if (txt === null) return;
+
+  const vacio = txt.trim() === "";
+  const r = await api(`/api/corp/rendicion/${id}/monto`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(vacio ? { recalcular: true } : { monto: txt })
+  });
+  toast(r.msg || (r.ok ? "Listo" : "No se pudo"), r.ok ? "success" : "error");
+  if (r.ok) cargarRendiciones();
+}
+
+async function borrarRendicion(id, chofer, fecha) {
+  if (!confirm(`¿Eliminar este servicio de ${chofer} del ${fecha}?\n\nEl tramo queda libre para volver a cargarlo. No se puede deshacer.`)) return;
+  const r = await api(`/api/corp/rendicion/${id}`, { method: "DELETE" });
+  toast(r.msg || (r.ok ? "Eliminado" : "No se pudo"), r.ok ? "success" : "error");
+  if (r.ok) cargarRendiciones();
+}
+
+// ─── Limpieza de servicios suspendidos o cargados a medias ───
+
+async function abrirDescartables() {
+  const params = new URLSearchParams();
+  const desde = $("#corp-desde").value, hasta = $("#corp-hasta").value;
+  if (desde) params.set("desde", desde);
+  if (hasta) params.set("hasta", hasta);
+  const d = await api(`/api/corp/descartables?${params.toString()}`);
+  const items = [...(d.suspendidas || []), ...(d.incompletas || [])];
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay firma-overlay";
+  overlay.innerHTML = `
+    <div class="firma-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-eraser"></i> Limpiar servicios</h2>
+          <p>Suspendidos y cargados a medias, dentro del período filtrado. Los ya liquidados no aparecen.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="firma-items">
+        ${items.length === 0
+          ? `<div class="empty"><i class="ti ti-mood-happy"></i>No hay servicios para limpiar en este período.</div>`
+          : items.map(x => `
+            <label class="firma-item" style="margin-bottom:8px">
+              <input type="checkbox" class="desc-check" data-id="${x.id}" onchange="descRecalcular()">
+              <span class="firma-item-info">
+                <span class="firma-item-desc">${x.chofer_nombre} · ${x.cliente}</span>
+                <span class="firma-item-mat">${x.fecha_servicio} — ${x.tramo}</span>
+                <span class="firma-item-mat" style="color:${x.estado === 'suspendido' ? 'var(--danger)' : 'var(--warning)'}">${x.motivo || (x.estado === 'suspendido' ? 'Suspendido — el servicio no se prestó' : 'Cargado a medias')}</span>
+              </span>
+              <span class="firma-item-precio">${x.monto ? fmtNum(x.monto) : "—"}</span>
+            </label>`).join("")}
+      </div>
+      ${items.length ? `
+      <div class="firma-acciones">
+        <button class="btn btn-ghost" onclick="descMarcarTodo(true)">Marcar todo</button>
+        <button class="btn btn-ghost" onclick="descMarcarTodo(false)">Ninguno</button>
+        <span style="flex:1"></span>
+        <span id="desc-sel" style="font-size:12.5px;color:var(--muted)">Ninguno seleccionado</span>
+        <button class="btn btn-danger" id="desc-btn" onclick="eliminarDescartables(this)" disabled>
+          <i class="ti ti-trash"></i> Eliminar
+        </button>
+      </div>` : `
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      </div>`}
+    </div>`;
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+function descMarcarTodo(v) {
+  document.querySelectorAll(".desc-check").forEach(ch => ch.checked = v);
+  descRecalcular();
+}
+
+function descRecalcular() {
+  const n = document.querySelectorAll(".desc-check:checked").length;
+  const lbl = document.getElementById("desc-sel");
+  const btn = document.getElementById("desc-btn");
+  if (lbl) lbl.textContent = n ? `${n} seleccionado(s)` : "Ninguno seleccionado";
+  if (btn) btn.disabled = n === 0;
+}
+
+async function eliminarDescartables(btn) {
+  const ids = [...document.querySelectorAll(".desc-check:checked")].map(ch => +ch.dataset.id);
+  if (!ids.length) return;
+  if (!confirm(`¿Eliminar ${ids.length} servicio(s)? No se puede deshacer.`)) return;
+  btn.disabled = true;
+  const r = await api("/api/corp/eliminar_lote", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids })
+  });
+  toast(r.msg || "Listo", r.ok ? "success" : "error");
+  if (r.ok) {
+    btn.closest(".modal-overlay").remove();
+    cargarRendiciones();
+  } else btn.disabled = false;
+}
+
+
+// ─── Plus semanal: quién lo cobra y de cuánto es ───
+// Cambia con el tiempo (entran y salen choferes, se mueve el monto), así que
+// se configura desde acá y no en el código.
+
+async function abrirConfigPlus() {
+  const d = await api("/api/corp/config_plus");
+  if (!d || d.error) { toast("No se pudo abrir el plus", "error"); return; }
+  const puede = window.USUARIO_ROL === "admin";
+  window._plusDatos = d;
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:640px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-gift"></i> Plus semanal</h2>
+          <p>Quién lo cobra y cuánto. Los cambios valen de acá en adelante.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="plus-cab">
+        <div class="plus-general">
+          <label>Monto general por semana</label>
+          <div class="plus-input-gs">
+            <span>Gs.</span>
+            <input id="plus-monto" value="${fmtNum(d.monto)}" inputmode="numeric"
+                   ${puede ? "" : "disabled"} oninput="plusRecalcular()">
+          </div>
+          <div class="plus-ayuda">Lo cobra todo el que no tenga un monto propio</div>
+        </div>
+        <div class="plus-resumen">
+          <div class="plus-res-num" id="plus-res-cant">${d.con_plus}</div>
+          <div class="plus-res-lbl">choferes con plus</div>
+          <div class="plus-res-num chico" id="plus-res-costo">Gs. ${fmtNum(d.costo_semanal)}</div>
+          <div class="plus-res-lbl">por semana en total</div>
+        </div>
+      </div>
+
+      <div class="plus-filtros">
+        <input id="plus-buscar" placeholder="Buscar chofer..." oninput="plusFiltrar()">
+        <div class="plus-chips">
+          <button class="chip activo" onclick="plusVer('todos', this)">Todos</button>
+          <button class="chip" onclick="plusVer('con', this)">Con plus</button>
+          <button class="chip" onclick="plusVer('sin', this)">Sin plus</button>
+        </div>
+      </div>
+
+      <div class="firma-items" id="plus-lista" style="max-height:44vh;overflow-y:auto;padding-top:6px">
+        ${d.choferes.map(ch => filaPlus(ch, puede)).join("")}
+      </div>
+
+      <div class="firma-acciones">
+        <span class="hint" style="flex:1"><i class="ti ti-lock"></i> Lo ya pagado queda con el monto de su momento</span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+        ${puede ? `<button class="btn btn-primary" onclick="guardarConfigPlus(this)"><i class="ti ti-check"></i> Guardar</button>` : ""}
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function filaPlus(ch, puede) {
+  const id = ch.usuario.replace(/[^a-z0-9]/gi, "_");
+  return `
+    <div class="plus-fila ${ch.tiene_plus ? "activo" : ""}" data-nombre="${(ch.nombre || "").toUpperCase()}"
+         data-con="${ch.tiene_plus ? 1 : 0}" id="pf-${id}">
+      <label class="plus-toggle">
+        <input type="checkbox" class="plus-chk" value="${(ch.nombre || "").replace(/"/g, "&quot;")}"
+               ${ch.tiene_plus ? "checked" : ""} ${puede ? "" : "disabled"}
+               onchange="plusToggle(this, '${id}')">
+        <span class="plus-switch"></span>
+      </label>
+      <div class="plus-info">
+        <div class="plus-nombre">${ch.nombre}</div>
+        <div class="plus-historia">${ch.plus_cobrado
+          ? `cobró Gs. ${fmtNum(ch.plus_cobrado)} en ${ch.semanas_cobradas} semana(s)`
+          : "todavía no cobró plus"}</div>
+      </div>
+      <div class="plus-monto-propio">
+        <input class="plus-propio" data-nombre="${(ch.nombre || "").replace(/"/g, "&quot;")}"
+               value="${ch.monto_propio != null ? fmtNum(ch.monto_propio) : ""}"
+               placeholder="general" inputmode="numeric"
+               ${puede && ch.tiene_plus ? "" : "disabled"} oninput="plusRecalcular()">
+      </div>
+    </div>`;
+}
+
+function plusToggle(chk, id) {
+  const fila = document.getElementById("pf-" + id);
+  const propio = fila.querySelector(".plus-propio");
+  fila.classList.toggle("activo", chk.checked);
+  fila.dataset.con = chk.checked ? 1 : 0;
+  propio.disabled = !chk.checked;
+  if (!chk.checked) propio.value = "";
+  plusRecalcular();
+}
+
+let plusFiltroActual = "todos";
+function plusVer(cual, btn) {
+  plusFiltroActual = cual;
+  document.querySelectorAll(".plus-chips .chip").forEach(c => c.classList.remove("activo"));
+  btn.classList.add("activo");
+  plusFiltrar();
+}
+
+function plusFiltrar() {
+  const q = (document.getElementById("plus-buscar").value || "").trim().toUpperCase();
+  document.querySelectorAll(".plus-fila").forEach(f => {
+    const okTxt = !q || f.dataset.nombre.includes(q);
+    const okVer = plusFiltroActual === "todos" ||
+                  (plusFiltroActual === "con" && f.dataset.con === "1") ||
+                  (plusFiltroActual === "sin" && f.dataset.con === "0");
+    f.style.display = okTxt && okVer ? "" : "none";
+  });
+}
+
+// El resumen de arriba se actualiza mientras se marca y se escribe, así se ve
+// cuánto va a salir por semana antes de guardar.
+function plusRecalcular() {
+  const num = v => parseFloat(String(v || "").replace(/\./g, "").replace(/,/g, ".")) || 0;
+  const general = num(document.getElementById("plus-monto").value);
+  let cant = 0, costo = 0;
+  document.querySelectorAll(".plus-fila").forEach(f => {
+    if (!f.querySelector(".plus-chk").checked) return;
+    cant++;
+    const propio = f.querySelector(".plus-propio").value.trim();
+    costo += propio ? num(propio) : general;
+  });
+  document.getElementById("plus-res-cant").textContent = cant;
+  document.getElementById("plus-res-costo").textContent = "Gs. " + fmtNum(costo);
+}
+
+async function guardarConfigPlus(btn) {
+  const monto = document.getElementById("plus-monto").value;
+  const choferes = [...document.querySelectorAll(".plus-chk:checked")].map(x => x.value);
+  const montos = {};
+  document.querySelectorAll(".plus-propio").forEach(inp => {
+    if (!inp.disabled && inp.value.trim()) montos[inp.dataset.nombre] = inp.value.trim();
+  });
+  btn.disabled = true;
+  const r = await api("/api/corp/config_plus", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ monto, choferes, montos })
+  });
+  btn.disabled = false;
+  if (r && r.ok) {
+    toast(r.msg || "Plus guardado", "success");
+    btn.closest(".modal-overlay").remove();
+    if (typeof cargarRendiciones === "function" && document.getElementById("corp-desde")) cargarRendiciones();
+  } else {
+    toast((r && r.msg) || "No se pudo guardar", "error");
+  }
+}
+
+
+// ─── Tarifas por tramo: cada tramo con su precio, guardado ───
+// La mitad (entrante o saliente) es siempre la mitad exacta del completo,
+// así que solo se edita el monto del servicio completo.
+
+async function abrirTarifas() {
+  const d = await api("/api/corp/tarifas");
+  const clientes = (d && d.clientes) || [];
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay firma-overlay";
+  overlay.innerHTML = `
+    <div class="firma-modal" style="max-width:720px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-currency-guarani"></i> Tarifas por tramo</h2>
+          <p>Poné cuánto paga cada tramo completo. La mitad (entrante o saliente) se calcula sola.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="firma-items" style="max-height:56vh;overflow-y:auto">
+        ${clientes.map(cl => `
+          <div style="margin-bottom:14px">
+            <div style="font-size:12px;font-weight:700;color:var(--info);text-transform:uppercase;letter-spacing:.7px;margin-bottom:7px">${cl.cliente}</div>
+            ${cl.tramos.map(t => `
+              <div class="tarifa-fila">
+                <span class="tarifa-nombre">${t.tramo}</span>
+                <input type="text" inputmode="numeric" class="tarifa-input"
+                       data-clave="${t.clave.replace(/"/g,'&quot;')}"
+                       value="${t.completo}" oninput="tarifaMitad(this)">
+                <span class="tarifa-mitad">mitad: <b>${fmtNum(t.mitad)}</b></span>
+              </div>`).join("")}
+          </div>`).join("")}
+      </div>
+
+      <div class="firma-acciones">
+        <span style="flex:1;font-size:12.5px;color:var(--muted)">Se aplica a los servicios que se carguen de ahora en más</span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarTarifas(this)"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  overlay.onclick = e => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+}
+
+function tarifaMitad(input) {
+  const v = parseFloat(String(input.value).replace(/\./g, "")) || 0;
+  const lbl = input.parentElement.querySelector(".tarifa-mitad b");
+  if (lbl) lbl.textContent = fmtNum(Math.round(v / 2));
+}
+
+async function guardarTarifas(btn) {
+  const tarifas = {};
+  document.querySelectorAll(".tarifa-input").forEach(i => {
+    tarifas[i.dataset.clave] = i.value;
+  });
+  btn.disabled = true;
+  const r = await api("/api/corp/tarifas", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tarifas })
+  });
+  if (r && r.ok) {
+    toast(r.msg, "success");
+    btn.closest(".modal-overlay").remove();
+    cargarRendiciones();
+  } else {
+    toast((r && r.msg) || "No se pudo guardar", "error");
+    btn.disabled = false;
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  HISTÓRICO DE PAGOS — lo que ya se liquidó a cada chofer
+// ════════════════════════════════════════════════════════════════════════
+
+async function renderCorpHistorial() {
+  status("Histórico de pagos a choferes");
+  const choferes = await api("/api/corp/choferes");
+  const hoy = new Date();
+  const haceUnAnio = new Date(hoy.getFullYear() - 1, hoy.getMonth(), hoy.getDate());
+  const fmt = d => d.toISOString().slice(0, 10);
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-receipt"></i> Histórico de pagos</h1>
+      <p>Todo lo que ya se le liquidó a cada chofer, con fecha y responsable</p>
+    </div>
+    <div class="section">
+      <div class="card">
+        <div class="card-head"><i class="ti ti-filter"></i> Filtros</div>
+        <div class="card-body">
+          <div class="form-row" style="align-items:flex-end">
+            <div class="field" style="flex:1;min-width:200px">
+              <label>Chofer</label>
+              <select id="hist-chofer">
+                <option value="">Todos los choferes</option>
+                ${(choferes || []).map(c => `<option value="${c.usuario}">${c.nombre}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Buscar por</label>
+              <select id="hist-modo" onchange="cargarHistorial()" style="width:210px">
+                <option value="servicio">Fecha de los servicios</option>
+                <option value="pago">Fecha en que se liquidó</option>
+              </select>
+            </div>
+            <div class="field"><label>Desde</label><input id="hist-desde" type="date" value="${fmt(haceUnAnio)}"></div>
+            <div class="field"><label>Hasta</label><input id="hist-hasta" type="date" value="${fmt(hoy)}"></div>
+            <button class="btn btn-primary" onclick="cargarHistorial()"><i class="ti ti-search"></i> Buscar</button>
+            <button class="btn btn-pdf" onclick="descargarHistorialPDF()"><i class="ti ti-file-type-pdf"></i> PDF</button>
+          </div>
+          <p class="hint" style="margin-top:12px" id="hist-aclaracion"></p>
+        </div>
+      </div>
+      <div id="hist-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+
+  cargarHistorial();
+}
+
+async function cargarHistorial() {
+  const cont = $("#hist-resultado");
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const params = new URLSearchParams();
+  const ch = $("#hist-chofer").value, d = $("#hist-desde").value, h = $("#hist-hasta").value;
+  const modo = $("#hist-modo") ? $("#hist-modo").value : "servicio";
+  if (ch) params.set("chofer", ch);
+  if (d) params.set("desde", d);
+  if (h) params.set("hasta", h);
+  params.set("modo", modo);
+
+  const acl = $("#hist-aclaracion");
+  if (acl) acl.innerHTML = modo === "pago"
+    ? '<i class="ti ti-info-circle"></i> Buscando por <b>cuándo se apretó el botón de liquidar</b>. Sirve para cerrar caja de un mes.'
+    : '<i class="ti ti-info-circle"></i> Buscando por <b>la fecha de los servicios pagados</b>. Si liquidaste la semana del 27 de julio en agosto, buscá julio.';
+
+  const resp = await api(`/api/corp/historial_liquidaciones?${params.toString()}`);
+  const pagos = (resp && resp.pagos) || [];
+  const res = (resp && resp.resumen) || { por_chofer: [], total_pagado: 0, cantidad_pagos: 0 };
+
+  if (pagos.length === 0) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-receipt-off"></i>No hay pagos con esas fechas.<br><span style="font-size:12px;color:var(--muted)">${modo === "servicio" ? "Estás buscando por fecha de los servicios. Probá cambiando a «Fecha en que se liquidó»." : "Estás buscando por fecha de liquidación. Probá cambiando a «Fecha de los servicios»."}</span></div>`;
+    return;
+  }
+
+  cont.innerHTML = `
+    <div class="metrics" style="margin-bottom:18px">
+      <div class="metric"><div class="metric-content"><div class="metric-label">Pagos realizados</div><div class="metric-value">${res.cantidad_pagos}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Choferes</div><div class="metric-value">${res.por_chofer.length}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Total pagado</div><div class="metric-value">Gs. ${fmtNum(res.total_pagado)}</div></div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-user-dollar"></i> Total pagado por chofer</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Chofer</th><th class="center">Pagos</th><th class="center">Servicios</th><th class="center">Último pago</th><th class="num">Total</th></tr></thead>
+          <tbody>
+            ${res.por_chofer.map(c => `<tr>
+              <td><b>${c.chofer_nombre}</b></td>
+              <td class="center">${c.pagos}</td>
+              <td class="center">${c.servicios}</td>
+              <td class="center" style="font-size:12px">${(c.ultimo_pago || "").slice(0, 10)}</td>
+              <td class="num"><b>${fmtNum(c.total)}</b></td>
+            </tr>`).join("")}
+            <tr style="background:var(--info-bg)">
+              <td colspan="4" style="text-align:right;font-weight:600">Total pagado</td>
+              <td class="num"><b>Gs. ${fmtNum(res.total_pagado)}</b></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-history"></i> Cada pago realizado (${pagos.length})</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Fecha del pago</th><th>Chofer</th><th>Período cubierto</th>
+            <th class="center">Serv.</th><th class="num">Tramos</th><th class="num">Plus</th>
+            <th class="num">Total</th><th>Autorizó</th>
+          </tr></thead>
+          <tbody>
+            ${pagos.map(p => `<tr>
+              <td style="font-size:12.5px;white-space:nowrap">${(p.fecha_pago || "").replace("T", " ").slice(0, 16)}</td>
+              <td>${p.chofer_nombre}</td>
+              <td style="font-size:12.5px"><b>${p.periodo_desde}</b> a <b>${p.periodo_hasta}</b></td>
+              <td class="center">${p.servicios}</td>
+              <td class="num">${fmtNum(p.monto_tramos)}</td>
+              <td class="num">${p.plus ? fmtNum(p.plus) : "—"}</td>
+              <td class="num"><b>${fmtNum(p.total)}</b></td>
+              <td style="font-size:12px;color:var(--muted)">${p.liquidado_por}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function descargarHistorialPDF() {
+  const params = new URLSearchParams();
+  const ch = $("#hist-chofer").value, d = $("#hist-desde").value, h = $("#hist-hasta").value;
+  if (ch) params.set("chofer", ch);
+  if (d) params.set("desde", d);
+  if (h) params.set("hasta", h);
+  params.set("modo", $("#hist-modo") ? $("#hist-modo").value : "servicio");
+  window.open(`/api/corp/historial_pdf?${params.toString()}`, "_blank");
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  CONTROL POR EMPRESA — cobertura, costo y variables
+// ════════════════════════════════════════════════════════════════════════
+// El resto del módulo mira la plata desde el chofer. Esto la mira desde el
+// cliente: se cubrió lo contratado, cuánto cuesta atenderlo, y por qué hubo
+// servicios fuera de tramo.
+//
+// La pantalla se organiza en tres pestañas para no apilar tablas: la cobertura
+// primero (es la pregunta central), después el costo y los variables.
+
+// El auditor entra a las pantallas de corporativos en modo consulta: ve todo
+// pero no puede liquidar, editar montos, borrar servicios ni tocar tarifas.
+const puedeGestionarCorp = () => window.USUARIO_ROL === "admin";
+// El que tiene secciones de corporativos opera (liquida, corrige, borra),
+// pero configurar lo que se paga sigue siendo del administrador.
+const puedeOperarCorp = () => window.USUARIO_ROL === "admin" ||
+  (window.USUARIO_ROL === "taller" && (window.USUARIO_SECCIONES || []).some(s => s.startsWith("corp_")));
+
+let empTab = "cobertura";
+let empDatos = null;
+
+async function renderCorpEmpresas() {
+  status("Control por empresa");
+  const hoy = new Date();
+  const hace30 = new Date(hoy.getTime() - 30 * 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  empTab = "cobertura";
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-building-factory"></i> Control por empresa</h1>
+      <p>Si se cubrió el servicio contratado, cuánto cuesta cada cliente y por qué hubo servicios variables</p>
+    </div>
+    <div class="section">
+
+      <div class="emp-filtros">
+        <div class="emp-rapidos">
+          <span class="emp-rapidos-lbl">Período</span>
+          <button class="chip" onclick="periodoRapido('semana', this)">Esta semana</button>
+          <button class="chip activo" onclick="periodoRapido('mes', this)">Últimos 30 días</button>
+          <button class="chip" onclick="periodoRapido('mes_actual', this)">Este mes</button>
+          <button class="chip" onclick="periodoRapido('trimestre', this)">3 meses</button>
+        </div>
+
+        <div class="emp-detalle-filtros">
+          <div class="emp-campo">
+            <label>Desde</label>
+            <input id="emp-desde" type="date" value="${fmt(hace30)}" onchange="marcarPersonalizado()">
+          </div>
+          <div class="emp-campo">
+            <label>Hasta</label>
+            <input id="emp-hasta" type="date" value="${fmt(hoy)}" onchange="marcarPersonalizado()">
+          </div>
+          <div class="emp-campo">
+            <label>Ver por</label>
+            <select id="emp-agrup" onchange="cargarControlEmpresa()">
+              <option value="total">Todo junto</option>
+              <option value="dia">Día</option>
+              <option value="semana" selected>Semana</option>
+              <option value="mes">Mes</option>
+            </select>
+          </div>
+          <div style="flex:1"></div>
+          <button class="btn btn-primary" onclick="cargarControlEmpresa()"><i class="ti ti-refresh"></i> Actualizar</button>
+          <button class="btn btn-ghost" onclick="descargarControlPDF()"><i class="ti ti-download"></i> PDF</button>
+        </div>
+
+        <div class="emp-empresas" id="emp-empresas"></div>
+      </div>
+
+      <div id="emp-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+
+  cargarControlEmpresa();
+}
+
+// ─── Filtros ───
+
+function periodoRapido(cual, btn) {
+  document.querySelectorAll(".emp-rapidos .chip").forEach(c => c.classList.remove("activo"));
+  if (btn) btn.classList.add("activo");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  let desde = new Date(hoy);
+  if (cual === "semana") {
+    const dow = (hoy.getDay() + 6) % 7;          // 0 = lunes
+    desde = new Date(hoy.getTime() - dow * 86400000);
+  } else if (cual === "mes") {
+    desde = new Date(hoy.getTime() - 30 * 86400000);
+  } else if (cual === "mes_actual") {
+    desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  } else if (cual === "trimestre") {
+    desde = new Date(hoy.getTime() - 90 * 86400000);
+  }
+  $("#emp-desde").value = fmt(desde);
+  $("#emp-hasta").value = fmt(hoy);
+  // La agrupación que mejor se lee para cada rango
+  $("#emp-agrup").value = cual === "semana" ? "dia" : cual === "trimestre" ? "mes" : "semana";
+  cargarControlEmpresa();
+}
+
+function marcarPersonalizado() {
+  document.querySelectorAll(".emp-rapidos .chip").forEach(c => c.classList.remove("activo"));
+  cargarControlEmpresa();
+}
+
+function filtrarEmpresa(cli, btn) {
+  document.querySelectorAll("#emp-empresas .chip").forEach(c => c.classList.remove("activo"));
+  if (btn) btn.classList.add("activo");
+  cargarControlEmpresa(cli);
+}
+
+let empClienteSel = "";
+
+function paramsEmpresa() {
+  const p = new URLSearchParams();
+  if (empClienteSel) p.set("cliente", empClienteSel);
+  const d = $("#emp-desde").value, h = $("#emp-hasta").value;
+  if (d) p.set("desde", d);
+  if (h) p.set("hasta", h);
+  p.set("agrupacion", $("#emp-agrup").value);
+  return p;
+}
+
+// ─── Carga y armado ───
+
+async function cargarControlEmpresa(cliente) {
+  if (cliente !== undefined) empClienteSel = cliente;
+  const cont = $("#emp-resultado");
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  empDatos = await api(`/api/corp/control_empresa?${paramsEmpresa().toString()}`);
+
+  // Las empresas se ofrecen como botones, no como desplegable
+  const cajaEmp = $("#emp-empresas");
+  if (cajaEmp && !cajaEmp.dataset.listo && empDatos.clientes) {
+    cajaEmp.innerHTML = `<span class="emp-rapidos-lbl">Empresa</span>
+      <button class="chip activo" onclick="filtrarEmpresa('', this)">Todas</button>
+      ${empDatos.clientes.map(c => `<button class="chip" onclick="filtrarEmpresa('${c}', this)">${c}${(empDatos.solo_habiles || []).includes(c) ? " <span class='chip-nota'>L a V</span>" : ""}</button>`).join("")}`;
+    cajaEmp.dataset.listo = "1";
+  }
+
+  pintarControlEmpresa();
+}
+
+function pintarControlEmpresa() {
+  const d = empDatos || {};
+  const agrup = $("#emp-agrup") ? $("#emp-agrup").value : "total";
+  const cob = d.cobertura || [];
+  const cos = d.costos || { filas: [], por_cliente: [], costo_total: 0 };
+  const vars = d.variables || { variables: [], cantidad: 0, sin_justificar: 0, monto_total: 0 };
+
+  const totEsp = cob.reduce((s, c) => s + c.esperados, 0);
+  const totCub = cob.reduce((s, c) => s + c.cubiertos, 0);
+  const totFal = cob.reduce((s, c) => s + c.faltantes, 0);
+  const totPar = cob.reduce((s, c) => s + c.parciales, 0);
+  const totSus = cob.reduce((s, c) => s + c.suspendidos, 0);
+  const pct = totEsp ? Math.round(totCub / totEsp * 1000) / 10 : 0;
+  const nPer = Math.max(1, new Set(cob.flatMap(c => (c.periodos || []).map(p => p.periodo))).size);
+  const porPer = agrup === "total" ? 1 : nPer;
+  const etq = { dia: "por día", semana: "por semana", mes: "por mes", total: "en el período" }[agrup];
+  const faltas = cob.flatMap(c => (c.detalle_faltantes || []).map(f => ({ ...f, cliente: c.cliente })))
+                    .filter(f => f.situacion !== "suspendido");
+
+  // El cálculo arranca en el primer servicio cargado: pedir "3 meses" cuando
+  // hay un mes de datos no debe contar los dos meses previos como faltantes.
+  const desdes = cob.map(c => c.desde_real).filter(Boolean).sort();
+  const rangoReal = {
+    desde: desdes[0] || $("#emp-desde").value,
+    hasta: $("#emp-hasta").value,
+    ajustado: cob.some(c => c.rango_ajustado),
+  };
+
+  const color = pct >= 90 ? "var(--success)" : pct >= 70 ? "var(--warning)" : "var(--danger)";
+  const circ = 2 * Math.PI * 52;
+
+  $("#emp-resultado").innerHTML = `
+    <div class="emp-hero">
+      <div class="emp-anillo">
+        <svg viewBox="0 0 130 130" width="132" height="132" aria-label="Cobertura ${pct} por ciento">
+          <circle cx="65" cy="65" r="52" fill="none" stroke="var(--surface3)" stroke-width="13"/>
+          <circle cx="65" cy="65" r="52" fill="none" stroke="${color}" stroke-width="13"
+            stroke-linecap="round" stroke-dasharray="${circ}"
+            stroke-dashoffset="${circ * (1 - pct / 100)}"
+            transform="rotate(-90 65 65)" class="emp-anillo-arco"/>
+        </svg>
+        <div class="emp-anillo-txt">
+          <div class="emp-anillo-num" style="color:${color}">${pct}<span>%</span></div>
+          <div class="emp-anillo-lbl">cubierto</div>
+        </div>
+      </div>
+
+      <div class="emp-hero-datos">
+        <div class="emp-hero-titulo">
+          ${empClienteSel || "Todas las empresas"}
+          <span class="emp-hero-rango">${rangoReal.desde} al ${rangoReal.hasta}</span>
+          ${rangoReal.ajustado ? `<span class="emp-hero-aviso" title="No hay servicios cargados antes de esa fecha"><i class="ti ti-info-circle"></i> desde el primer servicio cargado</span>` : ""}
+        </div>
+        <div class="emp-hero-grid">
+          <div class="emp-dato">
+            <div class="emp-dato-num">${Math.round(totCub / porPer)}<span class="emp-dato-de">/${Math.round(totEsp / porPer)}</span></div>
+            <div class="emp-dato-lbl">tramos cubiertos ${etq}</div>
+          </div>
+          <div class="emp-dato ${totFal ? "malo" : ""}">
+            <div class="emp-dato-num">${Math.round(totFal / porPer)}</div>
+            <div class="emp-dato-lbl">sin cubrir ${etq}</div>
+          </div>
+          <div class="emp-dato ${totPar ? "medio" : ""}">
+            <div class="emp-dato-num">${Math.round(totPar / porPer)}</div>
+            <div class="emp-dato-lbl">a medias ${etq}</div>
+          </div>
+          <div class="emp-dato">
+            <div class="emp-dato-num" style="font-size:22px">Gs. ${fmtNum(Math.round(cos.costo_total / porPer))}</div>
+            <div class="emp-dato-lbl">costo ${etq}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    ${cob.some(c => (c.tramos_sin_actividad || []).length) ? `
+      <div class="emp-nota" onclick="this.classList.toggle('abierta')">
+        <div class="emp-nota-cab">
+          <i class="ti ti-info-circle"></i>
+          <span>Se controlan solo los tramos que operan de verdad</span>
+          <i class="ti ti-chevron-down emp-nota-flecha"></i>
+        </div>
+        <div class="emp-nota-cuerpo">
+          ${cob.filter(c => c.tramos_sin_actividad.length).map(c => `
+            <div class="emp-nota-linea"><b>${c.cliente}</b>: ${c.tramos_activos} de ${c.tramos_catalogo} tramos del catálogo.
+            ${c.tramos_sin_actividad.length} nunca se reportaron${c.solo_habiles.length ? `, ${c.solo_habiles.length} corren solo de lunes a viernes` : ""}.</div>`).join("")}
+          <div class="emp-nota-pie">Un tramo que nunca se carga queda fuera del control. Si falta alguno que sí debería estar, hay que empezar a reportarlo.</div>
+        </div>
+      </div>` : ""}
+
+    <div class="emp-tabs">
+      <button class="emp-tab ${empTab === "cobertura" ? "activa" : ""}" onclick="verEmpTab('cobertura')">
+        <i class="ti ti-checklist"></i> Cobertura
+      </button>
+      <button class="emp-tab ${empTab === "costo" ? "activa" : ""}" onclick="verEmpTab('costo')">
+        <i class="ti ti-cash"></i> Costo
+      </button>
+      <button class="emp-tab ${empTab === "variables" ? "activa" : ""}" onclick="verEmpTab('variables')">
+        <i class="ti ti-help-circle"></i> Variables
+        ${vars.cantidad ? `<span class="emp-tab-n">${vars.cantidad}</span>` : ""}
+      </button>
+      <button class="emp-tab ${empTab === "faltantes" ? "activa" : ""}" onclick="verEmpTab('faltantes')">
+        <i class="ti ti-alert-triangle"></i> Sin cubrir
+        ${faltas.length ? `<span class="emp-tab-n rojo">${faltas.length}</span>` : ""}
+      </button>
+    </div>
+
+    <div id="emp-panel">${panelEmpresa(empTab, { cob, cos, vars, faltas, agrup, totSus })}</div>`;
+}
+
+function verEmpTab(t) {
+  empTab = t;
+  pintarControlEmpresa();
+}
+
+function panelEmpresa(tab, ctx) {
+  if (tab === "cobertura") return panelCobertura(ctx);
+  if (tab === "costo") return panelCosto(ctx);
+  if (tab === "variables") return panelVariables(ctx);
+  return panelFaltantes(ctx);
+}
+
+// ─── Pestaña: cobertura ───
+
+function panelCobertura({ cob, agrup }) {
+  if (!cob.length) {
+    return `<div class="empty"><i class="ti ti-calendar-off"></i>Elegí un rango de fechas para ver la cobertura.</div>`;
+  }
+  return cob.map((c, i) => {
+    const color = c.cobertura >= 90 ? "var(--success)" : c.cobertura >= 70 ? "var(--warning)" : "var(--danger)";
+    const pers = c.periodos || [];
+    const maxEsp = Math.max(1, ...pers.map(p => p.esperados));
+    return `
+      <div class="emp-card">
+        <div class="emp-card-cab" onclick="toggleEmpCard(${i})">
+          <div class="emp-card-nombre">
+            <span class="emp-card-inicial" style="background:${color}">${c.cliente[0]}</span>
+            <div>
+              <div class="emp-card-titulo">${c.cliente}</div>
+              <div class="emp-card-sub">${c.tramos_activos} tramos activos · ${c.dias} días</div>
+            </div>
+          </div>
+          <div class="emp-card-barra">
+            <div class="emp-barra"><div class="emp-barra-fill" style="width:${c.cobertura}%;background:${color}"></div></div>
+            <div class="emp-card-cifras">
+              <span style="color:${color};font-weight:700">${c.cobertura}%</span>
+              <span class="emp-card-detalle">${c.cubiertos} de ${c.esperados}</span>
+            </div>
+          </div>
+          <div class="emp-card-chips">
+            ${c.faltantes ? `<span class="mini-chip rojo">${c.faltantes} sin cubrir</span>` : `<span class="mini-chip verde">completo</span>`}
+            ${c.parciales ? `<span class="mini-chip ambar">${c.parciales} a medias</span>` : ""}
+            ${c.suspendidos ? `<span class="mini-chip">${c.suspendidos} susp.</span>` : ""}
+          </div>
+          <i class="ti ti-chevron-down emp-card-flecha" id="flecha-${i}"></i>
+        </div>
+
+        <div class="emp-card-cuerpo" id="empcard-${i}" style="display:none">
+          ${agrup === "total" || pers.length <= 1
+            ? `<p class="hint" style="padding:4px 2px">Elegí «Ver por: semana» o «día» arriba para ver la evolución.</p>`
+            : `
+            <div class="emp-mini-graf">
+              ${pers.map(p => {
+                const h = Math.max(8, Math.round(p.esperados / maxEsp * 100));
+                const col = p.cobertura >= 90 ? "var(--success)" : p.cobertura >= 70 ? "var(--warning)" : "var(--danger)";
+                return `<div class="emp-graf-col" title="${p.periodo}: ${p.cubiertos} de ${p.esperados} (${p.cobertura}%)">
+                  <div class="emp-graf-barra" style="height:${h}%">
+                    <div class="emp-graf-cubierto" style="height:${p.esperados ? Math.round(p.cubiertos / p.esperados * 100) : 0}%;background:${col}"></div>
+                  </div>
+                  <div class="emp-graf-pct" style="color:${col}">${p.cobertura}%</div>
+                  <div class="emp-graf-lbl">${etiquetaCorta(p.periodo)}</div>
+                </div>`;
+              }).join("")}
+            </div>
+            <div class="table-wrap" style="margin-top:12px">
+              <table>
+                <thead><tr><th>Período</th><th class="center">Días</th><th class="center">Esperados</th>
+                  <th class="center">Cubiertos</th><th class="center">A medias</th>
+                  <th class="center">Sin cubrir</th><th class="center">Cobertura</th></tr></thead>
+                <tbody>
+                  ${pers.map(p => `<tr>
+                    <td>${p.periodo}</td>
+                    <td class="center">${p.dias}</td>
+                    <td class="center">${p.esperados}</td>
+                    <td class="center" style="color:var(--success)"><b>${p.cubiertos}</b></td>
+                    <td class="center" style="color:var(--warning)">${p.parciales || "—"}</td>
+                    <td class="center" style="color:var(--danger)"><b>${p.faltantes || "—"}</b></td>
+                    <td class="center"><span class="badge ${p.cobertura >= 90 ? "success" : p.cobertura >= 70 ? "" : "danger"}">${p.cobertura}%</span></td>
+                  </tr>`).join("")}
+                </tbody>
+              </table>
+            </div>`}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+function etiquetaCorta(periodo) {
+  const m = String(periodo).match(/Semana (\d+)/);
+  if (m) return "S" + m[1];
+  if (/^\d{4}-\d{2}-\d{2}$/.test(periodo)) return periodo.slice(8) + "/" + periodo.slice(5, 7);
+  if (/^\d{4}-\d{2}$/.test(periodo)) return periodo.slice(5) + "/" + periodo.slice(2, 4);
+  return periodo.slice(0, 6);
+}
+
+function toggleEmpCard(i) {
+  const el = document.getElementById("empcard-" + i);
+  const fl = document.getElementById("flecha-" + i);
+  if (!el) return;
+  const abierto = el.style.display !== "none";
+  el.style.display = abierto ? "none" : "";
+  if (fl) fl.style.transform = abierto ? "" : "rotate(180deg)";
+}
+
+// ─── Pestaña: costo ───
+
+function panelCosto({ cos, agrup }) {
+  const porCli = cos.por_cliente || [];
+  if (!porCli.length) return `<div class="empty"><i class="ti ti-cash-off"></i>No hay servicios cargados en este período.</div>`;
+  const max = Math.max(1, ...porCli.map(c => c.costo));
+
+  return `
+    <div class="emp-costo-cards">
+      ${porCli.map(c => `
+        <div class="emp-costo-card">
+          <div class="emp-costo-cli">${c.cliente}</div>
+          <div class="emp-costo-monto">Gs. ${fmtNum(c.costo)}</div>
+          <div class="emp-barra" style="margin:8px 0 6px">
+            <div class="emp-barra-fill" style="width:${Math.round(c.costo / max * 100)}%;background:var(--info)"></div>
+          </div>
+          <div class="emp-costo-sub">${c.servicios} servicios${c.variables ? ` · ${c.variables} variables` : ""}</div>
+        </div>`).join("")}
+      <div class="emp-costo-card total">
+        <div class="emp-costo-cli">Total</div>
+        <div class="emp-costo-monto">Gs. ${fmtNum(cos.costo_total)}</div>
+        <div class="emp-costo-sub">${porCli.reduce((s, c) => s + c.servicios, 0)} servicios en el período</div>
+      </div>
+    </div>
+
+    ${agrup !== "total" ? `
+    <div class="card" style="margin-top:16px">
+      <div class="card-head"><i class="ti ti-calendar-stats"></i> Detalle por ${agrup}</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Empresa</th><th>Período</th><th class="center">Servicios</th>
+            <th class="center">Variables</th><th class="center">Suspendidos</th><th class="num">Costo</th></tr></thead>
+          <tbody>
+            ${cos.filas.map(f => `<tr>
+              <td><b>${f.cliente}</b></td>
+              <td style="color:var(--muted)">${f.periodo}</td>
+              <td class="center">${f.servicios}</td>
+              <td class="center">${f.variables || "—"}</td>
+              <td class="center">${f.suspendidos || "—"}</td>
+              <td class="num"><b>${fmtNum(f.costo)}</b></td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>` : ""}`;
+}
+
+// ─── Pestaña: variables ───
+
+function panelVariables({ vars }) {
+  if (!vars.cantidad) {
+    return `<div class="empty"><i class="ti ti-circle-check"></i>No hubo servicios fuera de tramo en este período.</div>`;
+  }
+  return `
+    <div class="emp-var-resumen">
+      <div><span class="emp-var-num">${vars.cantidad}</span> servicios variables</div>
+      <div><span class="emp-var-num">Gs. ${fmtNum(vars.monto_total)}</span> en total</div>
+      ${vars.sin_justificar
+        ? `<div class="emp-var-alerta"><i class="ti ti-alert-triangle"></i> ${vars.sin_justificar} sin justificar</div>`
+        : `<div class="emp-var-ok"><i class="ti ti-circle-check"></i> todos justificados</div>`}
+    </div>
+
+    <div class="emp-var-lista">
+      ${vars.variables.map(v => {
+        const pendiente = !(v.observacion || "").trim() && !v.justif_exenta;
+        return `<div class="emp-var-item ${pendiente ? "pendiente" : ""}">
+          <div class="emp-var-cab">
+            <span class="badge">${v.cliente}</span>
+            <span class="emp-var-fecha">${v.fecha_servicio}</span>
+            <span class="emp-var-chofer">${v.chofer_nombre}</span>
+            <span style="flex:1"></span>
+            <span class="emp-var-monto">Gs. ${fmtNum(v.monto)}</span>
+          </div>
+          <div class="emp-var-just">
+            ${(v.observacion || "").trim()
+              ? `<i class="ti ti-quote"></i> ${v.observacion}`
+              : v.justif_exenta
+                ? `<span style="color:var(--light)">cargado antes de exigir justificación</span>`
+                : `<span style="color:var(--danger)"><i class="ti ti-alert-triangle"></i> el chofer no explicó qué servicio fue</span>`}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`;
+}
+
+// ─── Pestaña: sin cubrir ───
+
+function panelFaltantes({ faltas }) {
+  if (!faltas.length) {
+    return `<div class="empty"><i class="ti ti-circle-check"></i>Se cubrieron todos los tramos del período.</div>`;
+  }
+  const g = agruparFaltas(faltas);
+  return `
+    <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> Agrupado por día. Tocá una fila para ver qué tramos fueron.</p>
+    ${g.map((x, i) => `
+      <div class="falta-dia" onclick="toggleFalta(${i})">
+        <span class="falta-fecha">${x.fecha}</span>
+        <span class="badge">${x.cliente}</span>
+        <span style="flex:1"></span>
+        ${x.faltantes ? `<span class="mini-chip rojo">${x.faltantes} sin hacer</span>` : ""}
+        ${x.parciales ? `<span class="mini-chip ambar">${x.parciales} a medias</span>` : ""}
+        <i class="ti ti-chevron-down" style="color:var(--muted);margin-left:8px"></i>
+      </div>
+      <div class="falta-detalle" id="falta-${i}" style="display:none">
+        ${x.items.map(f => `<div class="falta-item">
+          <span style="flex:1">${f.tramo}</span>
+          <span style="font-size:12px;color:${f.situacion === "faltante" ? "var(--danger)" : "var(--warning)"}">
+            ${f.situacion === "faltante" ? "nadie lo reportó" : f.detalle + (f.quien && f.quien !== "—" ? " · " + f.quien : "")}
+          </span>
+        </div>`).join("")}
+      </div>`).join("")}`;
+}
+
+// Los faltantes se agrupan por día y empresa: una lista de cientos de filas
+// sueltas no se puede leer, pero "el martes faltaron 14 tramos de ADM" sí.
+function agruparFaltas(faltas) {
+  const g = {};
+  faltas.forEach(f => {
+    const k = f.fecha + "|" + f.cliente;
+    const d = g[k] || (g[k] = { fecha: f.fecha, cliente: f.cliente, faltantes: 0, parciales: 0, items: [] });
+    if (f.situacion === "faltante") d.faltantes++; else d.parciales++;
+    d.items.push(f);
+  });
+  return Object.values(g).sort((a, b) => b.fecha.localeCompare(a.fecha) || a.cliente.localeCompare(b.cliente));
+}
+
+function toggleFalta(i) {
+  const el = document.getElementById("falta-" + i);
+  if (el) el.style.display = el.style.display === "none" ? "" : "none";
+}
+
+function descargarControlPDF() {
+  window.open(`/api/corp/control_empresa_pdf?${paramsEmpresa().toString()}`, "_blank");
+}
+
+
+// Historial de renovaciones de un documento: cuándo se renovó cada vez y
+// cuánto costó. Sirve para ver la evolución del gasto en seguros.
+async function verHistorialDoc(id) {
+  const docs = await api(`/api/documentos/${id}/historial`);
+  if (!Array.isArray(docs) || !docs.length) { toast("Sin historial", "error"); return; }
+  const doc = docs.find(d => d.id === id) || docs[0];
+  const total = docs.reduce((s, d) => s + (parseFloat(d.costo) || 0), 0);
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:560px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-history"></i> ${doc.tipo}${doc.nombre ? " · " + doc.nombre : ""}</h2>
+          <p>${doc.patente || ""} — ${docs.length} registro(s) · total pagado Gs. ${fmtNum(total)}</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="firma-items">
+        ${docs.map(d => {
+          const vigente = !d.reemplazado_por;
+          return `<div class="firma-item" style="cursor:default${vigente ? ";border-color:var(--success)" : ""}">
+            <span class="firma-item-info">
+              <span class="firma-item-desc">
+                Vence ${d.fecha_vencimiento}
+                ${vigente ? '<span class="badge success" style="font-size:10px;margin-left:6px">vigente</span>'
+                          : '<span class="badge" style="font-size:10px;margin-left:6px;background:var(--surface3);color:var(--muted)">renovado</span>'}
+              </span>
+              <span class="firma-item-mat">
+                ${d.fecha_emision ? "Emitido " + d.fecha_emision : "Sin fecha de emisión"}
+                ${d.proveedor ? " · " + d.proveedor : ""}
+              </span>
+            </span>
+            <span class="firma-item-precio">${d.costo ? "Gs. " + fmtNum(d.costo) : "—"}</span>
+          </div>`;
+        }).join("")}
+      </div>
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  BUSCADOR DE COCHE — se tipea en vez de scrollear 89 opciones
+// ════════════════════════════════════════════════════════════════════════
+// Reemplaza los <select> de vehículos: se escribe el número interno, la
+// patente o la marca y aparecen las coincidencias. Por dentro sigue habiendo
+// un campo oculto con el id del vehículo, así el resto del código no cambia.
+//
+// No se recorta la lista: con 89 coches entran todos con scroll, y recortarla
+// daba la impresión de que faltaban buses.
+
+function buscadorCoche(id, vehiculos, opts = {}) {
+  const sel = opts.seleccionado
+    ? vehiculos.find(v => String(v.id) === String(opts.seleccionado))
+    : null;
+  const texto = sel ? etiquetaCoche(sel) : "";
+  window["_coches_" + id] = vehiculos;
+  return `
+    <div class="bcoche" id="bc-${id}">
+      <i class="ti ti-search bcoche-lupa"></i>
+      <input type="text" class="bcoche-input" id="${id}-txt" autocomplete="off"
+             value="${texto.replace(/"/g, "&quot;")}"
+             placeholder="${opts.placeholder || "Escribí el N° o la patente"}"
+             oninput="bcocheFiltrar('${id}')"
+             onfocus="bcocheFiltrar('${id}')"
+             onblur="bcocheCerrar('${id}')">
+      <input type="hidden" id="${id}" value="${opts.seleccionado || ""}">
+      <button type="button" class="bcoche-x" id="${id}-x" onclick="bcocheLimpiar('${id}')"
+              style="display:${texto ? "" : "none"}"><i class="ti ti-x"></i></button>
+      <div class="bcoche-lista" id="${id}-lista" style="display:none"></div>
+    </div>`;
+}
+
+function etiquetaCoche(v) {
+  const n = v.n_interno ? "#" + v.n_interno + " · " : "";
+  return `${n}${v.patente || ""} — ${v.marca || ""} ${v.modelo || ""}`.trim();
+}
+
+function bcocheFiltrar(id) {
+  const inp = document.getElementById(id + "-txt");
+  const lista = document.getElementById(id + "-lista");
+  const vehiculos = window["_coches_" + id] || [];
+  if (!inp || !lista) return;
+
+  const q = inp.value.trim().toLowerCase();
+  // Se busca por número interno, patente, marca o modelo — lo que el usuario
+  // tenga a mano en el momento.
+  const res = vehiculos.filter(v => {
+    if (!q) return true;
+    return [v.n_interno, v.patente, v.marca, v.modelo]
+      .some(x => String(x || "").toLowerCase().includes(q));
+  });
+
+  if (!res.length) {
+    lista.innerHTML = `<div class="bcoche-vacio">Ningún coche coincide con «${inp.value}»</div>`;
+    lista.style.display = "block";
+    return;
+  }
+  bcocheLiberar(lista);
+  const cab = `<div class="bcoche-cab">${res.length} coche${res.length === 1 ? "" : "s"}${q ? " que coinciden" : " en la flota"}</div>`;
+  lista.innerHTML = cab + res.map(v => `
+    <div class="bcoche-item" onmousedown="bcocheElegir('${id}', ${v.id})">
+      ${v.n_interno ? `<span class="bcoche-num">#${v.n_interno}</span>` : `<span class="bcoche-num sin">—</span>`}
+      <span class="bcoche-pat">${v.patente || ""}</span>
+      <span class="bcoche-mar">${v.marca || ""} ${v.modelo || ""}</span>
+    </div>`).join("");
+  lista.style.display = "block";
+}
+
+// Respaldo para navegadores viejos sin :has(): los contenedores que recortan
+// dejan ver la lista mientras está abierta.
+function bcocheLiberar(lista) {
+  let el = lista.parentElement;
+  while (el && el !== document.body && el.id !== "content") {
+    if (getComputedStyle(el).overflow === "hidden" && !el.classList.contains("main") && !el.classList.contains("app"))
+      el.classList.add("bcoche-abierto");
+    el = el.parentElement;
+  }
+}
+
+function bcocheElegir(id, vid) {
+  const vehiculos = window["_coches_" + id] || [];
+  const v = vehiculos.find(x => String(x.id) === String(vid));
+  if (!v) return;
+  document.getElementById(id).value = v.id;
+  document.getElementById(id + "-txt").value = etiquetaCoche(v);
+  const x = document.getElementById(id + "-x");
+  if (x) x.style.display = "";
+  document.getElementById(id + "-lista").style.display = "none";
+  const cb = window["_cocheCB_" + id];
+  if (typeof cb === "function") cb(v.id);
+}
+
+function bcocheLimpiar(id) {
+  document.getElementById(id).value = "";
+  document.getElementById(id + "-txt").value = "";
+  document.getElementById(id + "-x").style.display = "none";
+  document.getElementById(id + "-txt").focus();
+  const cb = window["_cocheCB_" + id];
+  if (typeof cb === "function") cb("");
+}
+
+function bcocheCerrar(id) {
+  // Se cierra con retraso para que alcance a registrarse el clic en un ítem
+  setTimeout(() => {
+    const lista = document.getElementById(id + "-lista");
+    if (lista) lista.style.display = "none";
+    // Si quedó texto escrito pero no se eligió nada, se limpia para no dejar
+    // la sensación de que hay un coche seleccionado.
+    const hidden = document.getElementById(id);
+    const inp = document.getElementById(id + "-txt");
+    if (hidden && inp && !hidden.value && inp.value) inp.value = "";
+    const x = document.getElementById(id + "-x");
+    if (x && hidden) x.style.display = hidden.value ? "" : "none";
+  }, 160);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  COMBUSTIBLE DE CORPORATIVOS
+// ════════════════════════════════════════════════════════════════════════
+// Las cargas que hacen los choferes desde el celular, con su resumen por
+// período, por chofer y por bus.
+
+let ccTab = "periodo";
+
+async function renderCorpCombustible() {
+  status("Combustible de corporativos");
+  const hoy = new Date();
+  const hace30 = new Date(hoy.getTime() - 30 * 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  ccTab = "periodo";
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-gas-station"></i> Combustible corporativos</h1>
+      <p>Cargas que registran los choferes desde el celular, con su resumen y PDF</p>
+    </div>
+    <div class="section">
+      <div class="emp-filtros">
+        <div class="emp-rapidos">
+          <span class="emp-rapidos-lbl">Período</span>
+          <button class="chip" onclick="combPeriodo('semana', this)">Esta semana</button>
+          <button class="chip activo" onclick="combPeriodo('mes', this)">Últimos 30 días</button>
+          <button class="chip" onclick="combPeriodo('mes_actual', this)">Este mes</button>
+          <button class="chip" onclick="combPeriodo('trimestre', this)">3 meses</button>
+        </div>
+        <div class="emp-detalle-filtros">
+          <div class="emp-campo">
+            <label>Chofer</label>
+            <select id="cbc-chofer" onchange="cargarCombCorp()" style="min-width:170px">
+              <option value="">Todos</option>
+            </select>
+          </div>
+          <div class="emp-campo"><label>Desde</label><input id="cbc-desde" type="date" value="${fmt(hace30)}" onchange="cargarCombCorp()"></div>
+          <div class="emp-campo"><label>Hasta</label><input id="cbc-hasta" type="date" value="${fmt(hoy)}" onchange="cargarCombCorp()"></div>
+          <div class="emp-campo">
+            <label>Ver por</label>
+            <select id="cbc-agrup" onchange="cargarCombCorp()">
+              <option value="total">Todo junto</option>
+              <option value="dia">Día</option>
+              <option value="semana" selected>Semana</option>
+              <option value="mes">Mes</option>
+            </select>
+          </div>
+          <div style="flex:1"></div>
+          <button class="btn btn-primary" onclick="cargarCombCorp()"><i class="ti ti-refresh"></i> Actualizar</button>
+          ${puedeOperarCorp() ? `<button class="btn btn-primary" onclick="abrirCargaOficina()"><i class="ti ti-gas-station"></i> Cargar por un chofer</button>` : ""}
+          <button class="btn btn-ghost" onclick="abrirReferencias()"><i class="ti ti-adjustments"></i> Consumos de referencia</button>
+          <button class="btn btn-ghost" onclick="descargarPorBusPDF()"><i class="ti ti-bus"></i> Informe por coche</button>
+          <button class="btn btn-ghost" onclick="descargarCombCorpPDF()"><i class="ti ti-download"></i> PDF completo</button>
+          <button class="btn btn-ghost" onclick="descargarCombCorpExcel()"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+        </div>
+      </div>
+      <div id="cbc-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+
+  cargarCombCorp();
+}
+
+// ── Carga desde la oficina ─────────────────────────────────────────────────
+// Para los choferes que no usan el celular: la oficina carga el ticket a su
+// nombre. Queda registrado quién la cargó, así no se pierde el rastro.
+let coLugar = "", coEmblema = "";
+
+async function abrirCargaOficina() {
+  const [choferes, vehiculos, cfg] = await Promise.all([
+    api("/api/corp/choferes"), api("/api/vehiculos"), api("/api/corp/config")]);
+  const emblemas = (cfg.emblemas || []).concat(["OTRO"]);
+  coLugar = ""; coEmblema = "";
+  const hoyStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal co-modal">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-gas-station"></i> Cargar combustible por un chofer</h2>
+          <p>Para los choferes que no usan el celular. Copiá los datos del ticket; la carga queda a nombre del chofer y se anota que la cargaste vos.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="co-cuerpo">
+        <div class="co-grid">
+          <div class="co-campo">
+            <label>Chofer</label>
+            <select id="co-chofer" onchange="coChoferOtro()">
+              <option value="">— Elegí el chofer —</option>
+              ${(choferes || []).map(c => {
+                const n = c.nombre || c.usuario;
+                return `<option value="${n.replace(/"/g, "&quot;")}">${n}</option>`;
+              }).join("")}
+              <option value="__otro">Otro (no tiene usuario)…</option>
+            </select>
+            <input id="co-chofer-otro" placeholder="Nombre y apellido del chofer" style="display:none;margin-top:8px">
+          </div>
+          <div class="co-campo">
+            <label>Fecha de la carga</label>
+            <input id="co-fecha" type="date" value="${hoyStr}" max="${hoyStr}">
+          </div>
+          <div class="co-campo co-ancho">
+            <label>Bus</label>
+            ${buscadorCoche("co-veh", vehiculos || [], { placeholder: "Escribí el N° interno o la patente" })}
+          </div>
+          <div class="co-campo">
+            <label>Litros</label>
+            <input id="co-litros" inputmode="decimal" placeholder="ej: 205,47">
+          </div>
+          <div class="co-campo">
+            <label>Kilometraje <span class="co-opc">(si figura)</span></label>
+            <input id="co-odo" inputmode="numeric" placeholder="ej: 470500">
+          </div>
+          <div class="co-campo co-ancho">
+            <label>¿Dónde cargó?</label>
+            <div class="co-lugares">
+              <button type="button" class="co-lugar" data-l="taller" onclick="coElegirLugar('taller')"><i class="ti ti-tool"></i> En el taller</button>
+              <button type="button" class="co-lugar" data-l="tercerizado" onclick="coElegirLugar('tercerizado')"><i class="ti ti-gas-station"></i> En una estación</button>
+            </div>
+            <div id="co-emb-wrap" style="display:none;margin-top:10px">
+              <div class="co-emblemas">
+                ${emblemas.map(e => `<button type="button" class="chip co-emb" data-e="${e}" onclick="coElegirEmblema('${e}')">${e === "OTRO" ? "Otro…" : e}</button>`).join("")}
+              </div>
+              <input id="co-emb-otro" placeholder="Escribí el emblema" style="display:none;margin-top:8px">
+            </div>
+          </div>
+          <div class="co-campo co-ancho">
+            <label>Observación <span class="co-opc">(opcional)</span></label>
+            <input id="co-obs" placeholder="ej: ticket N° 1234">
+          </div>
+        </div>
+      </div>
+      <div class="firma-acciones">
+        <button class="btn btn-primary" id="co-guardar" onclick="coGuardar(false)"><i class="ti ti-device-floppy"></i> Guardar</button>
+        <button class="btn btn-ghost" onclick="coGuardar(true)"><i class="ti ti-plus"></i> Guardar y cargar otra</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(o);
+}
+
+function coChoferOtro() {
+  const otro = $("#co-chofer").value === "__otro";
+  $("#co-chofer-otro").style.display = otro ? "" : "none";
+  if (otro) $("#co-chofer-otro").focus();
+}
+
+function coElegirLugar(l) {
+  coLugar = l;
+  document.querySelectorAll(".co-lugar").forEach(b => b.classList.toggle("sel", b.dataset.l === l));
+  $("#co-emb-wrap").style.display = l === "tercerizado" ? "" : "none";
+  if (l !== "tercerizado") coElegirEmblema("");
+}
+
+function coElegirEmblema(e) {
+  coEmblema = e;
+  document.querySelectorAll(".co-emb").forEach(b => b.classList.toggle("activo", b.dataset.e === e));
+  $("#co-emb-otro").style.display = e === "OTRO" ? "" : "none";
+  if (e === "OTRO") $("#co-emb-otro").focus();
+}
+
+async function coGuardar(otra) {
+  const chSel = $("#co-chofer").value;
+  const chofer = chSel === "__otro" ? $("#co-chofer-otro").value.trim() : chSel;
+  const vid = $("#co-veh").value;
+  const litros = ($("#co-litros").value || "").trim();
+  const emblema = coLugar !== "tercerizado" ? ""
+    : (coEmblema === "OTRO" ? $("#co-emb-otro").value.trim() : coEmblema);
+
+  if (chofer.length < 3) return toast("Elegí el chofer", "error");
+  if (!vid) return toast("Elegí el bus", "error");
+  if (!litros) return toast("Poné los litros del ticket", "error");
+  if (!coLugar) return toast("Marcá si cargó en el taller o en una estación", "error");
+  if (coLugar === "tercerizado" && emblema.length < 2) return toast("Elegí el emblema de la estación", "error");
+
+  const btn = $("#co-guardar"); btn.disabled = true;
+  const r = await api("/api/corp/combustible", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      desde_oficina: true, chofer, vehiculo_id: vid,
+      fecha: $("#co-fecha").value, litros,
+      odometro: ($("#co-odo").value || "").replace(/\./g, ""),
+      lugar_carga: coLugar, emblema,
+      observaciones: $("#co-obs").value.trim(),
+    }),
+  });
+  btn.disabled = false;
+  if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
+
+  toast(`Carga registrada a nombre de ${chofer}`, "success");
+  if (typeof cargarCombCorp === "function" && $("#cbc-resultado")) cargarCombCorp();
+  if (otra) {
+    // Se deja el chofer, la fecha y el lugar: suele cargar varios tickets seguidos
+    bcocheLimpiar("co-veh");
+    $("#co-litros").value = ""; $("#co-odo").value = ""; $("#co-obs").value = "";
+  } else {
+    document.querySelector(".co-modal")?.closest(".modal-overlay")?.remove();
+  }
+}
+
+function combPeriodo(cual, btn) {
+  document.querySelectorAll(".emp-rapidos .chip").forEach(c => c.classList.remove("activo"));
+  if (btn) btn.classList.add("activo");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  let desde = new Date(hoy);
+  if (cual === "semana") {
+    desde = new Date(hoy.getTime() - ((hoy.getDay() + 6) % 7) * 86400000);
+  } else if (cual === "mes") {
+    desde = new Date(hoy.getTime() - 30 * 86400000);
+  } else if (cual === "mes_actual") {
+    desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  } else if (cual === "trimestre") {
+    desde = new Date(hoy.getTime() - 90 * 86400000);
+  }
+  $("#cbc-desde").value = fmt(desde);
+  $("#cbc-hasta").value = fmt(hoy);
+  $("#cbc-agrup").value = cual === "semana" ? "dia" : cual === "trimestre" ? "mes" : "semana";
+  cargarCombCorp();
+}
+
+function paramsCombCorp() {
+  const p = new URLSearchParams();
+  const ch = $("#cbc-chofer").value, d = $("#cbc-desde").value, h = $("#cbc-hasta").value;
+  if (ch) p.set("chofer", ch);
+  if (d) p.set("desde", d);
+  if (h) p.set("hasta", h);
+  p.set("agrupacion", $("#cbc-agrup").value);
+  return p;
+}
+
+async function cargarCombCorp() {
+  const cont = $("#cbc-resultado");
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const d = await api(`/api/corp/combustible?${paramsCombCorp().toString()}`);
+
+  const selCh = $("#cbc-chofer");
+  if (selCh && selCh.options.length <= 1 && d.choferes) {
+    d.choferes.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c.nombre; o.textContent = c.nombre;
+      selCh.appendChild(o);
+    });
+  }
+
+  const r = d.resumen || { cargas: 0, litros: 0, costo: 0, precio_promedio: 0,
+                           por_periodo: [], por_chofer: [], por_bus: [] };
+  const cargas = d.cargas || [];
+  const agrup = $("#cbc-agrup").value;
+
+  // El control analiza TODAS las cargas del coche (taller y corporativos),
+  // así que no puede quedar inaccesible porque no haya cargas corporativas.
+  if (!r.cargas && ccTab !== "control") {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-gas-station-off"></i>No hay cargas de combustible de corporativos en este período.<br>
+      <span style="font-size:12px;color:var(--muted)">Aparecen acá cuando los choferes las registran desde el celular.</span><br>
+      <button class="btn btn-ghost" style="margin-top:12px" onclick="verCombTab('control')"><i class="ti ti-shield-search"></i> Ver el control de consumo de toda la flota</button></div>`;
+    return;
+  }
+
+  const fmtL = v => (v || 0).toLocaleString("es-PY", { maximumFractionDigits: 2 });
+  // Sin precios cargados, las columnas de plata solo muestran ceros: se ocultan
+  const hayCosto = (r.costo || 0) > 0;
+
+  cont.innerHTML = `
+    <div class="metrics" style="margin-bottom:18px">
+      <div class="metric"><div class="metric-content"><div class="metric-label">Cargas</div><div class="metric-value">${r.cargas}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Litros</div><div class="metric-value">${fmtL(r.litros)}</div></div></div>
+      ${hayCosto ? `
+      <div class="metric"><div class="metric-content"><div class="metric-label">Costo total</div><div class="metric-value">Gs. ${fmtNum(r.costo)}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">Precio promedio</div><div class="metric-value">Gs. ${fmtNum(r.precio_promedio)}<span style="font-size:13px;color:var(--muted)">/L</span></div></div></div>` : ""}
+    </div>
+
+    <div class="emp-tabs">
+      <button class="emp-tab ${ccTab === "periodo" ? "activa" : ""}" onclick="verCombTab('periodo')"><i class="ti ti-calendar-stats"></i> Por ${agrup === "total" ? "período" : agrup}</button>
+      <button class="emp-tab ${ccTab === "chofer" ? "activa" : ""}" onclick="verCombTab('chofer')"><i class="ti ti-user"></i> Por chofer</button>
+      <button class="emp-tab ${ccTab === "bus" ? "activa" : ""}" onclick="verCombTab('bus')"><i class="ti ti-bus"></i> Por bus</button>
+      <button class="emp-tab ${ccTab === "detalle" ? "activa" : ""}" onclick="verCombTab('detalle')"><i class="ti ti-list"></i> Detalle <span class="emp-tab-n">${cargas.length}</span></button>
+      <button class="emp-tab ${ccTab === "control" ? "activa" : ""}" onclick="verCombTab('control')"><i class="ti ti-shield-search"></i> Control <span class="emp-tab-n rojo" id="cbc-ctrl-n" style="display:none"></span></button>
+    </div>
+
+    <div id="cbc-panel">${panelComb(ccTab, r, cargas, agrup)}</div>`;
+  cargarControlComb(ccTab === "control");
+}
+
+function verCombTab(t) {
+  ccTab = t;
+  cargarCombCorp();
+}
+
+function panelComb(tab, r, cargas, agrup) {
+  const hayCosto = (r.costo || 0) > 0;
+  if (tab === "control") {
+    return `<div id="cbc-control"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`;
+  }
+  const fmtL = v => (v || 0).toLocaleString("es-PY", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+  if (tab === "periodo") {
+    const max = Math.max(1, ...r.por_periodo.map(p => p.litros));
+    return `<div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>Período</th><th class="center">Cargas</th><th class="num">Litros</th>${hayCosto ? '<th class="num">Costo</th>' : ""}<th style="width:130px"></th></tr></thead>
+      <tbody>
+        ${r.por_periodo.map(p => `<tr>
+          <td><b>${p.periodo}</b></td>
+          <td class="center">${p.cargas}</td>
+          <td class="num">${fmtL(p.litros)} L</td>
+          ${hayCosto ? `<td class="num"><b>${fmtNum(p.costo)}</b></td>` : ""}
+          <td><div class="emp-barra"><div class="emp-barra-fill" style="width:${Math.round(p.litros / max * 100)}%;background:var(--info)"></div></div></td>
+        </tr>`).join("")}
+        <tr style="background:var(--info-bg)">
+          <td style="font-weight:600">Total</td>
+          <td class="center"><b>${r.cargas}</b></td>
+          <td class="num"><b>${fmtL(r.litros)} L</b></td>
+          ${hayCosto ? `<td class="num"><b>Gs. ${fmtNum(r.costo)}</b></td>` : ""}<td></td>
+        </tr>
+      </tbody></table></div></div>`;
+  }
+
+  if (tab === "chofer") {
+    const max = Math.max(1, ...r.por_chofer.map(x => x.litros));
+    return `<div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>Chofer</th><th class="center">Cargas</th><th class="num">Litros</th>${hayCosto ? '<th class="num">Costo</th>' : ""}<th style="width:130px"></th></tr></thead>
+      <tbody>${r.por_chofer.map(x => `<tr>
+        <td><b>${x.chofer}</b></td>
+        <td class="center">${x.cargas}</td>
+        <td class="num">${fmtL(x.litros)} L</td>
+        ${hayCosto ? `<td class="num"><b>${fmtNum(x.costo)}</b></td>` : ""}
+        <td><div class="emp-barra"><div class="emp-barra-fill" style="width:${Math.round(x.litros / max * 100)}%;background:var(--brand-blue)"></div></div></td>
+      </tr>`).join("")}</tbody></table></div></div>`;
+  }
+
+  if (tab === "bus") {
+    const max = Math.max(1, ...r.por_bus.map(x => x.litros));
+    return `<div class="card"><div class="table-wrap"><table>
+      <thead><tr><th>Bus</th><th>Patente</th><th class="center">Cargas</th><th class="num">Litros</th>
+        <th class="center">Consumo<br><span style="font-weight:400;text-transform:none">L cada 100 km</span></th>
+        <th class="center">vs. su motor</th><th class="center"></th>${hayCosto ? '<th class="num">Costo</th>' : ""}<th style="width:110px"></th></tr></thead>
+      <tbody>${r.por_bus.map(x => `<tr>
+        <td><b>#${x.bus}</b></td>
+        <td style="color:var(--muted)">${x.patente || "—"}</td>
+        <td class="center">${x.cargas}</td>
+        <td class="num">${fmtL(x.litros)} L</td>
+        <td class="center"><b style="font-size:14px">${x.litros_100km ? x.litros_100km.toLocaleString("es-PY",{minimumFractionDigits:2}) : "—"}</b></td>
+        <td class="center">${chipDesvio(x.comparacion)}</td>
+        <td class="center"><button class="icon-btn" title="Comparar con otro bus"
+            onclick="abrirComparador('${x.bus}')"><i class="ti ti-arrows-diff"></i></button></td>
+        ${hayCosto ? `<td class="num"><b>${fmtNum(x.costo)}</b></td>` : ""}
+        <td><div class="emp-barra"><div class="emp-barra-fill" style="width:${Math.round(x.litros / max * 100)}%;background:var(--warning)"></div></div></td>
+      </tr>`).join("")}</tbody></table></div></div>`;
+  }
+
+  const esAdmin = window.USUARIO_ROL === "admin";
+  return `<div class="card"><div class="table-wrap"><table>
+    <thead><tr><th>Fecha</th><th>Bus</th><th>Chofer</th><th class="num">Odómetro</th>
+      <th class="num">Litros</th><th class="center">Consumo<br><span style="font-weight:400;text-transform:none">L cada 100 km</span></th>${hayCosto ? '<th class="num">Gs./L</th><th class="num">Total</th>' : ""}
+      ${esAdmin ? '<th class="td-action"></th>' : ""}</tr></thead>
+    <tbody>${cargas.map(c => `<tr>
+      <td style="white-space:nowrap">${c.fecha}</td>
+      <td><b>#${c.n_interno || ""}</b></td>
+      <td style="font-size:12.5px">${c.chofer || "—"}</td>
+      <td class="num">${c.odometro ? fmtNum(c.odometro) : '<span style="color:var(--lighter);font-size:12px">sin km</span>'}</td>
+      <td class="num">${fmtL(c.litros)}</td>
+      <td class="center">${c.litros_100km
+        ? `<b>${c.litros_100km.toLocaleString("es-PY", { minimumFractionDigits: 2 })}</b>`
+        : (c.rendimiento_dudoso
+            ? '<span style="color:var(--danger)" title="Revisá el kilometraje: el número no da">revisar ⚠</span>'
+            : `<span style="color:var(--lighter);font-size:12px">${c.sin_odometro ? "sin km" : "primera carga"}</span>`)}</td>
+      ${hayCosto ? `<td class="num">${fmtNum(c.precio_litro)}</td>
+      <td class="num"><b>${fmtNum(c.costo_total)}</b></td>` : ""}
+      ${esAdmin ? `<td class="td-action" style="white-space:nowrap">
+        <button class="icon-btn" title="Corregir" onclick="editarCargaComb(${c.id})"><i class="ti ti-pencil"></i></button>
+        <button class="icon-btn" title="Eliminar" onclick="borrarCargaComb(${c.id})"><i class="ti ti-trash"></i></button>
+      </td>` : ""}
+    </tr>`).join("")}</tbody></table></div></div>`;
+}
+
+function descargarCombCorpPDF() {
+  window.open(`/api/corp/combustible_pdf?${paramsCombCorp().toString()}`, "_blank");
+}
+
+// El listado de cargas en Excel, con los mismos filtros (fechas y chofer).
+function descargarCombCorpExcel() {
+  window.location = `/api/corp/combustible_excel?${paramsCombCorp().toString()}`;
+}
+
+// Informe de una sola cosa: cuánto consume cada coche. Sin el resto del
+// desglose, para imprimir y repartir.
+function descargarPorBusPDF() {
+  window.open(`/api/corp/combustible_bus_pdf?${paramsCombCorp().toString()}`, "_blank");
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  AGENDA DE TURISMO
+// ════════════════════════════════════════════════════════════════════════
+// La planilla de servicios contratados, pero viva: agrupada por día, con lo
+// que falta asignar destacado y las acciones a un clic.
+
+let agSinAsignar = false;
+let agDatos = null;
+
+async function renderAgendaTurismo() {
+  status("Agenda de turismo");
+  const hoy = new Date();
+  const en30 = new Date(hoy.getTime() + 30 * 86400000);
+  const fmt = d => d.toISOString().slice(0, 10);
+  agSinAsignar = false;
+
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-calendar-event"></i> Agenda de turismo</h1>
+      <p>Los servicios contratados, día por día, con su coche y tripulación</p>
+    </div>
+    <div class="section">
+
+      <div class="ag-barra">
+        <div class="ag-chips">
+          <button class="chip" onclick="agPeriodo('hoy', this)">Hoy</button>
+          <button class="chip" onclick="agPeriodo('semana', this)">Esta semana</button>
+          <button class="chip activo" onclick="agPeriodo('proximos', this)">Próximos 30 días</button>
+          <button class="chip" onclick="agPeriodo('mes', this)">Este mes</button>
+          <button class="chip" onclick="agPeriodo('todo', this)">Todo</button>
+        </div>
+        <div class="ag-acciones">
+          <button class="btn btn-ghost" id="ag-filtro-sin" onclick="agToggleSinAsignar()">
+            <i class="ti ti-alert-circle"></i> Solo sin asignar
+          </button>
+          <button class="btn btn-ghost" onclick="descargarAgendaPDF()"><i class="ti ti-download"></i> PDF</button>
+          <button class="btn btn-primary" onclick="nuevoServicioTurismo()"><i class="ti ti-plus"></i> Agendar servicio</button>
+        </div>
+      </div>
+
+      <div class="ag-fechas">
+        <div class="emp-campo"><label>Desde</label><input id="ag-desde" type="date" value="${fmt(hoy)}" onchange="cargarAgenda()"></div>
+        <div class="emp-campo"><label>Hasta</label><input id="ag-hasta" type="date" value="${fmt(en30)}" onchange="cargarAgenda()"></div>
+        <div class="emp-campo" style="flex:1">
+          <label>Cliente</label>
+          <select id="ag-cliente" onchange="cargarAgenda()"><option value="">Todos</option></select>
+        </div>
+      </div>
+
+      <div id="ag-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+
+  cargarAgenda();
+}
+
+function agPeriodo(cual, btn) {
+  document.querySelectorAll(".ag-chips .chip").forEach(c => c.classList.remove("activo"));
+  if (btn) btn.classList.add("activo");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  let desde = new Date(hoy), hasta = new Date(hoy);
+  if (cual === "hoy") {
+    // desde y hasta son hoy
+  } else if (cual === "semana") {
+    desde = new Date(hoy.getTime() - ((hoy.getDay() + 6) % 7) * 86400000);
+    hasta = new Date(desde.getTime() + 6 * 86400000);
+  } else if (cual === "proximos") {
+    hasta = new Date(hoy.getTime() + 30 * 86400000);
+  } else if (cual === "mes") {
+    desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    hasta = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0);
+  } else if (cual === "todo") {
+    $("#ag-desde").value = ""; $("#ag-hasta").value = "";
+    cargarAgenda(); return;
+  }
+  $("#ag-desde").value = fmt(desde);
+  $("#ag-hasta").value = fmt(hasta);
+  cargarAgenda();
+}
+
+function agToggleSinAsignar() {
+  agSinAsignar = !agSinAsignar;
+  const b = document.getElementById("ag-filtro-sin");
+  b.classList.toggle("btn-primary", agSinAsignar);
+  b.classList.toggle("btn-ghost", !agSinAsignar);
+  cargarAgenda();
+}
+
+function paramsAgenda() {
+  const p = new URLSearchParams();
+  const d = $("#ag-desde").value, h = $("#ag-hasta").value, c = $("#ag-cliente").value;
+  if (d) p.set("desde", d);
+  if (h) p.set("hasta", h);
+  if (c) p.set("cliente", c);
+  if (agSinAsignar) p.set("sin_asignar", "1");
+  return p;
+}
+
+async function cargarAgenda() {
+  const cont = $("#ag-resultado");
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  agDatos = await api(`/api/turismo/agenda?${paramsAgenda().toString()}`);
+
+  const selC = $("#ag-cliente");
+  if (selC && selC.options.length <= 1 && agDatos.clientes) {
+    agDatos.clientes.forEach(c => {
+      const o = document.createElement("option");
+      o.value = c; o.textContent = c;
+      selC.appendChild(o);
+    });
+  }
+
+  const r = agDatos.resumen || { total: 0, sin_asignar: 0, dias: 0, por_cliente: [] };
+  const dias = agDatos.dias || [];
+
+  if (!dias.length) {
+    cont.innerHTML = `
+      <div class="ag-vacio">
+        <i class="ti ti-calendar-off"></i>
+        <div class="ag-vacio-tit">${agSinAsignar ? "Todo asignado" : "No hay servicios en este período"}</div>
+        <div class="ag-vacio-sub">${agSinAsignar
+          ? "Todos los servicios tienen su coche y su tripulación."
+          : "Agendá el primero con el botón de arriba."}</div>
+      </div>`;
+    return;
+  }
+
+  const hoyStr = new Date().toISOString().slice(0, 10);
+
+  cont.innerHTML = `
+    <div class="ag-resumen">
+      <div class="ag-res-item">
+        <div class="ag-res-num">${r.total}</div>
+        <div class="ag-res-lbl">servicio${r.total === 1 ? "" : "s"}</div>
+      </div>
+      <div class="ag-res-sep"></div>
+      <div class="ag-res-item">
+        <div class="ag-res-num">${r.dias}</div>
+        <div class="ag-res-lbl">día${r.dias === 1 ? "" : "s"} con salidas</div>
+      </div>
+      ${r.completados ? `
+        <div class="ag-res-sep"></div>
+        <div class="ag-res-item ok">
+          <div class="ag-res-num">${r.completados}</div>
+          <div class="ag-res-lbl">cumplido${r.completados === 1 ? "" : "s"}</div>
+        </div>` : ""}
+      ${r.sin_asignar ? `
+        <div class="ag-res-sep"></div>
+        <div class="ag-res-item alerta" onclick="if(!agSinAsignar) agToggleSinAsignar()">
+          <div class="ag-res-num">${r.sin_asignar}</div>
+          <div class="ag-res-lbl">sin coche o chofer</div>
+        </div>` : `
+        <div class="ag-res-sep"></div>
+        <div class="ag-res-item ok">
+          <div class="ag-res-num"><i class="ti ti-circle-check"></i></div>
+          <div class="ag-res-lbl">todo asignado</div>
+        </div>`}
+      <div style="flex:1"></div>
+      <div class="ag-res-clientes">
+        ${r.por_cliente.slice(0, 4).map(c =>
+          `<span class="ag-cli-chip">${c.cliente} <b>${c.servicios}</b></span>`).join("")}
+      </div>
+    </div>
+
+    <div class="ag-dias">
+      ${dias.map((d, i) => tarjetaDia(d, i, hoyStr)).join("")}
+    </div>`;
+
+  // Entrada escalonada: los días aparecen uno detrás de otro
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".ag-dia").forEach((el, i) => {
+      setTimeout(() => el.classList.add("visible"), i * 55);
+    });
+  });
+}
+
+function tarjetaDia(d, idx, hoyStr) {
+  const esHoy = d.fecha === hoyStr;
+  const pasado = d.fecha < hoyStr;
+  const [a, m, dd] = d.fecha.split("-");
+  const MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN",
+                 "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+
+  return `
+    <div class="ag-dia ${esHoy ? "hoy" : ""} ${pasado ? "pasado" : ""}" style="transition-delay:${idx * 20}ms">
+      <div class="ag-dia-cab">
+        <div class="ag-fecha-box">
+          <div class="ag-fecha-dia">${dd}</div>
+          <div class="ag-fecha-mes">${MESES[parseInt(m, 10) - 1]}</div>
+        </div>
+        <div class="ag-dia-info">
+          <div class="ag-dia-nombre">${d.dia_servicio}${esHoy ? '<span class="ag-hoy-badge">HOY</span>' : ""}</div>
+          <div class="ag-dia-sub">${d.servicios.length} servicio${d.servicios.length === 1 ? "" : "s"}${
+            d.sin_asignar ? ` · <span style="color:var(--danger);font-weight:600">${d.sin_asignar} sin asignar</span>` : ""}</div>
+        </div>
+      </div>
+
+      <div class="ag-linea">
+        ${d.servicios.map(s => tarjetaServicio(s)).join("")}
+      </div>
+    </div>`;
+}
+
+function tarjetaServicio(s) {
+  const cancelado = s.estado === "cancelado";
+  const completado = s.estado === "completado";
+  const puede = window.USUARIO_ROL === "admin" || window.USUARIO_ROL === "taller";
+
+  return `
+    <div class="ag-serv ${s.sin_asignar && !cancelado ? "pendiente" : ""} ${cancelado ? "cancelado" : ""} ${completado ? "completado" : ""}"
+         onclick="verServicioTurismo(${s.id})">
+      <div class="ag-hora">${s.hora || "—"}</div>
+
+      <div class="ag-serv-cuerpo">
+        <div class="ag-serv-top">
+          <span class="ag-cliente">${s.cliente}</span>
+          ${s.ot_nr ? `<span class="ag-ot">${s.ot_nr}</span>` : ""}
+          ${cancelado ? '<span class="ag-estado cancelado">cancelado</span>' : ""}
+          ${completado ? '<span class="ag-estado completado">completado</span>' : ""}
+          ${s.pasajeros ? `<span class="ag-pax"><i class="ti ti-users"></i> ${s.pasajeros}</span>` : ""}
+        </div>
+
+        <div class="ag-ruta">
+          <span class="ag-punto salida"></span>
+          <span class="ag-lugar">${s.salida || "—"}</span>
+          <i class="ti ti-arrow-narrow-right ag-flecha"></i>
+          <span class="ag-punto destino"></span>
+          <span class="ag-lugar">${s.destino || "—"}</span>
+        </div>
+
+        <div class="ag-asignacion">
+          ${s.coche_interno
+            ? `<span class="ag-tag"><i class="ti ti-bus"></i> #${s.coche_interno}</span>`
+            : `<span class="ag-tag falta"><i class="ti ti-bus"></i> a definir</span>`}
+          ${s.tripulacion
+            ? `<span class="ag-tag"><i class="ti ti-user"></i> ${s.tripulacion}</span>`
+            : `<span class="ag-tag falta"><i class="ti ti-user"></i> a definir</span>`}
+        </div>
+      </div>
+
+      <div class="ag-serv-acciones">
+        ${puede && s.sin_asignar && !cancelado ? `
+          <button class="ag-btn-asignar" onclick="event.stopPropagation();abrirAsignar(${s.id})">
+            <i class="ti ti-user-plus"></i> Asignar
+          </button>` : ""}
+        ${puede && !cancelado ? `
+          <button class="ag-check ${completado ? "hecho" : ""}"
+                  title="${completado ? "Marcado como cumplido — tocá para deshacer" : "Marcar como cumplido"}"
+                  onclick="event.stopPropagation();marcarCumplido(${s.id}, ${completado ? "false" : "true"})">
+            <i class="ti ${completado ? "ti-circle-check-filled" : "ti-circle-check"}"></i>
+            <span>${completado ? "Cumplido" : "Cumplió"}</span>
+          </button>
+          ${!completado ? `
+          <button class="ag-check no" title="El servicio no se hizo"
+                  onclick="event.stopPropagation();marcarCumplido(${s.id}, null)">
+            <i class="ti ti-circle-x"></i><span>No</span>
+          </button>` : ""}` : ""}
+      </div>
+    </div>`;
+}
+
+// ─── Agendar y editar ───
+
+async function nuevoServicioTurismo(id) {
+  const vehiculos = await api("/api/vehiculos");
+  const s = id ? (agDatos.servicios || []).find(x => x.id === id) : null;
+  const hoy = new Date().toISOString().slice(0, 10);
+  const choferes = (agDatos && agDatos.choferes) || [];
+  const clientes = (agDatos && agDatos.clientes) || [];
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal ag-modal" style="max-width:620px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-calendar-plus"></i> ${s ? "Editar servicio" : "Agendar servicio"}</h2>
+          <p>${s ? "Corregí lo que haga falta" : "Podés dejar el coche y la tripulación para después"}</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="ag-form">
+        <div class="ag-form-fila">
+          <div class="field"><label>Fecha *</label><input id="as-fecha" type="date" value="${s ? s.fecha : hoy}" onchange="asDia()"></div>
+          <div class="field"><label>Hora</label><input id="as-hora" type="time" value="${s ? s.hora || "" : ""}" style="width:120px"></div>
+          <div class="field" style="flex:1">
+            <label>Día</label>
+            <div id="as-dia" class="ag-dia-calc">—</div>
+          </div>
+        </div>
+
+        <div class="ag-form-fila">
+          <div class="field" style="flex:1">
+            <label>Cliente *</label>
+            <input id="as-cliente" list="as-clientes" value="${s ? s.cliente : ""}"
+                   placeholder="ej: CLUB GUARANI" oninput="asSugerirOT()">
+            <datalist id="as-clientes">${clientes.map(c => `<option value="${c}">`).join("")}</datalist>
+          </div>
+          <div class="field">
+            <label>OT Nº</label>
+            <input id="as-ot" value="${s ? s.ot_nr || "" : ""}" placeholder="se sugiere solo" style="width:130px">
+          </div>
+        </div>
+
+        <div class="ag-ruta-form">
+          <div class="field">
+            <label><span class="ag-punto salida"></span> Salida</label>
+            <input id="as-salida" value="${s ? (s.salida || "").replace(/"/g, "&quot;") : ""}" placeholder="ej: CANCHA DE INDEPENDIENTE">
+          </div>
+          <i class="ti ti-arrow-down ag-flecha-form"></i>
+          <div class="field">
+            <label><span class="ag-punto destino"></span> Destino</label>
+            <input id="as-destino" value="${s ? (s.destino || "").replace(/"/g, "&quot;") : ""}" placeholder="ej: ITAUGUA / INDEPENDIENTE">
+          </div>
+        </div>
+
+        <div class="ag-form-fila">
+          <div class="field" style="flex:1">
+            <label>Coche</label>
+            ${buscadorCoche("as-veh", vehiculos, {
+              seleccionado: s ? s.vehiculo_id || "" : "",
+              placeholder: "Dejalo vacío si todavía no se define"
+            })}
+          </div>
+          <div class="field">
+            <label>Pasajeros</label>
+            <input id="as-pax" inputmode="numeric" value="${s ? s.pasajeros || "" : ""}" placeholder="—" style="width:90px">
+          </div>
+        </div>
+
+        <div class="ag-form-fila">
+          <div class="field" style="flex:1">
+            <label>Tripulación</label>
+            <input id="as-tripu" list="as-choferes" value="${s ? s.tripulacion || "" : ""}"
+                   placeholder="Dejalo vacío si todavía no se define">
+            <datalist id="as-choferes">${choferes.map(c => `<option value="${c}">`).join("")}</datalist>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Observaciones</label>
+          <input id="as-obs" value="${s ? (s.observaciones || "").replace(/"/g, "&quot;") : ""}" placeholder="opcional">
+        </div>
+      </div>
+
+      <div class="firma-acciones">
+        ${s && window.USUARIO_ROL === "admin"
+          ? `<button class="btn btn-ghost" style="color:var(--danger)" onclick="borrarServicioTurismo(${s.id})"><i class="ti ti-trash"></i> Eliminar</button>` : ""}
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarServicioTurismo(${s ? s.id : "null"}, this)">
+          <i class="ti ti-check"></i> ${s ? "Guardar cambios" : "Agendar"}
+        </button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  asDia();
+  if (!s) asSugerirOT();
+}
+
+function asDia() {
+  const DIAS = ["LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO"];
+  const v = document.getElementById("as-fecha").value;
+  const el = document.getElementById("as-dia");
+  if (!v || !el) return;
+  const d = new Date(v + "T12:00:00");
+  el.textContent = DIAS[(d.getDay() + 6) % 7];
+}
+
+let asOtTimer = null;
+function asSugerirOT() {
+  clearTimeout(asOtTimer);
+  asOtTimer = setTimeout(async () => {
+    const cli = document.getElementById("as-cliente").value.trim();
+    const ot = document.getElementById("as-ot");
+    if (!cli || !ot || ot.dataset.tocado === "1") return;
+    const r = await api(`/api/turismo/sugerir_ot?cliente=${encodeURIComponent(cli)}`);
+    if (r && r.ot_nr) {
+      ot.value = r.ot_nr;
+      ot.onfocus = () => { ot.dataset.tocado = "1"; };
+    }
+  }, 400);
+}
+
+async function guardarServicioTurismo(id, btn) {
+  const cuerpo = {
+    fecha: $("#as-fecha").value,
+    hora: $("#as-hora").value,
+    cliente: $("#as-cliente").value.trim(),
+    ot_nr: $("#as-ot").value.trim(),
+    salida: $("#as-salida").value.trim(),
+    destino: $("#as-destino").value.trim(),
+    vehiculo_id: $("#as-veh").value || null,
+    coche_interno: cocheInternoDe($("#as-veh").value),
+    tripulacion: $("#as-tripu").value.trim(),
+    pasajeros: $("#as-pax").value || 0,
+    observaciones: $("#as-obs").value.trim(),
+  };
+  if (!cuerpo.fecha) { toast("Falta la fecha", "error"); return; }
+  if (!cuerpo.cliente) { toast("Falta el cliente", "error"); $("#as-cliente").focus(); return; }
+
+  btn.disabled = true;
+  const r = await api(id ? `/api/turismo/agenda/${id}` : "/api/turismo/agenda", {
+    method: id ? "PATCH" : "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cuerpo)
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Listo", "success");
+    btn.closest(".modal-overlay").remove();
+    cargarAgenda();
+  } else {
+    toast((r && r.msg) || "No se pudo guardar", "error");
+    btn.disabled = false;
+  }
+}
+
+function cocheInternoDe(vid) {
+  if (!vid) return "";
+  const v = (window["_coches_as-veh"] || window["_coches_asig-veh"] || []).find(x => String(x.id) === String(vid));
+  return v ? (v.n_interno || v.patente || "") : "";
+}
+
+// ─── Ver, asignar y borrar ───
+
+function verServicioTurismo(id) {
+  if (window.USUARIO_ROL === "admin" || window.USUARIO_ROL === "taller") {
+    nuevoServicioTurismo(id);
+  }
+}
+
+async function abrirAsignar(id) {
+  const s = (agDatos.servicios || []).find(x => x.id === id);
+  if (!s) return;
+  const vehiculos = await api("/api/vehiculos");
+  const choferes = (agDatos && agDatos.choferes) || [];
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:480px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-user-plus"></i> Asignar coche y tripulación</h2>
+          <p>${s.cliente} · ${s.fecha}${s.hora ? " a las " + s.hora : ""}</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="ag-form">
+        <div class="ag-ruta-mini">
+          <span class="ag-punto salida"></span> ${s.salida || "—"}
+          <i class="ti ti-arrow-narrow-right"></i>
+          <span class="ag-punto destino"></span> ${s.destino || "—"}
+        </div>
+        <div class="field" style="margin-top:14px">
+          <label>Coche</label>
+          ${buscadorCoche("asig-veh", vehiculos, { seleccionado: s.vehiculo_id || "" })}
+        </div>
+        <div class="field" style="margin-top:12px">
+          <label>Tripulación</label>
+          <input id="asig-tripu" list="asig-choferes" value="${s.tripulacion || ""}" placeholder="Nombre del chofer">
+          <datalist id="asig-choferes">${choferes.map(c => `<option value="${c}">`).join("")}</datalist>
+        </div>
+      </div>
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="guardarAsignacion(${id}, this)"><i class="ti ti-check"></i> Asignar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+  setTimeout(() => { const t = document.getElementById("asig-veh-txt"); if (t) t.focus(); }, 120);
+}
+
+async function guardarAsignacion(id, btn) {
+  const vid = $("#asig-veh").value;
+  const tripu = $("#asig-tripu").value.trim();
+  if (!vid && !tripu) { toast("Elegí al menos el coche o la tripulación", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/turismo/agenda/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      asignar: true, vehiculo_id: vid || null,
+      coche_interno: cocheInternoDe(vid), tripulacion: tripu
+    })
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Asignado", "success");
+    btn.closest(".modal-overlay").remove();
+    cargarAgenda();
+  } else {
+    toast((r && r.msg) || "No se pudo asignar", "error");
+    btn.disabled = false;
+  }
+}
+
+// Marcar si el servicio se cumplió o no. Es lo que se hace al final del día
+// recorriendo la agenda, así que va a un clic desde la lista.
+async function marcarCumplido(id, cumplio) {
+  const estado = cumplio === null ? "cancelado" : (cumplio ? "completado" : "agendado");
+  if (cumplio === null && !confirm("¿Marcar este servicio como NO realizado?")) return;
+  const r = await api(`/api/turismo/agenda/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ estado })
+  });
+  if (r && r.ok) {
+    toast(cumplio === null ? "Marcado como no realizado"
+          : cumplio ? "Servicio cumplido" : "Se deshizo la marca", "success");
+    cargarAgenda();
+  } else {
+    toast((r && r.msg) || "No se pudo actualizar", "error");
+  }
+}
+
+async function borrarServicioTurismo(id) {
+  if (!confirm("¿Eliminar este servicio de la agenda?")) return;
+  const r = await api(`/api/turismo/agenda/${id}`, { method: "DELETE" });
+  if (r && r.ok) {
+    toast(r.msg || "Eliminado", "success");
+    document.querySelectorAll(".modal-overlay").forEach(m => m.remove());
+    cargarAgenda();
+  } else {
+    toast((r && r.msg) || "No se pudo eliminar", "error");
+  }
+}
+
+function descargarAgendaPDF() {
+  window.open(`/api/turismo/agenda_pdf?${paramsAgenda().toString()}`, "_blank");
+}
+
+
+// Compara el consumo del bus con lo esperado para su motor: un Scania K410 y
+// una Sprinter no se miden con la misma vara.
+function chipDesvio(comp) {
+  if (!comp) return `<span style="color:var(--lighter);font-size:11.5px">—</span>`;
+  // Cuando no se puede comparar se dice POR QUÉ: son dos problemas distintos y
+  // se arreglan distinto. Sin esto el porcentaje salía como "undefined%".
+  if (comp.sin_datos) {
+    const txt = { sin_plan: "falta el plan", sin_consumo: "faltan cargas",
+                  sin_datos: "faltan datos" }[comp.estado] || "sin referencia";
+    return `<span style="color:var(--light);font-size:11.5px;border-bottom:1px dotted var(--border);cursor:help"
+      title="${comp.motivo}. ${comp.que_hacer}">${txt}</span>`;
+  }
+  const color = { bien: "success", atencion: "warning", malo: "danger", revisar: "info" }[comp.estado] || "muted";
+  const signo = comp.desvio_pct > 0 ? "+" : "";
+  const flecha = comp.desvio_pct > 3 ? "↑" : comp.desvio_pct < -3 ? "↓" : "=";
+  return `<span class="desvio ${comp.estado}" title="${comp.lectura}. Esperado para ${comp.modelo}: ${comp.esperado_litros_100km} L/100km">
+    ${flecha} ${signo}${comp.desvio_pct}%
+  </span>`;
+}
+
+
+// ─── Revisar cargas ───
+// Mira TODA la base, no el período filtrado en pantalla: los servicios con
+// fecha futura justamente quedan fuera de cualquier filtro normal, que es
+// como se pasan por alto.
+
+async function abrirSospechosas() {
+  const d = await api("/api/corp/sospechosas");
+  const grupos = [
+    { k: "bus_parado", tit: "El coche estaba parado", ico: "ti-tool", color: "var(--danger)",
+      exp: "El bus estaba en el taller o fuera de servicio ese día: no pudo hacer el viaje.",
+      filas: true, campo: "motivo_parado" },
+    { k: "futuras", tit: "Con fecha futura", ico: "ti-calendar-x", color: "var(--danger)",
+      exp: "El servicio todavía no pasó. Son los que ningún filtro por fecha muestra.", filas: true },
+    { k: "dia_imposible", tit: "Demasiados servicios en un día", ico: "ti-alert-triangle", color: "var(--danger)",
+      exp: "Más servicios de los que una persona puede hacer en un día." },
+    { k: "misma_franja", tit: "Dos servicios a la misma hora", ico: "ti-clock-x", color: "var(--danger)",
+      exp: "Nadie está en dos lugares a la vez." },
+    { k: "bus_compartido", tit: "El mismo bus en dos lugares", ico: "ti-bus", color: "var(--warning)",
+      exp: "Dos choferes reportaron el mismo coche en servicios que se pisan." },
+    { k: "no_laborable", tit: "Cliente que no opera ese día", ico: "ti-calendar-off", color: "var(--warning)",
+      exp: "ADM, BALL y LASCA trabajan de lunes a viernes.", filas: true, campo: "motivo_dia" },
+    { k: "en_bloque", tit: "Cargados de una sola vez", ico: "ti-stack-2", color: "var(--warning)",
+      exp: "Varios días distintos cargados en el mismo minuto: la planilla completada de memoria." },
+    { k: "km_raros", tit: "Kilometraje que no cierra", ico: "ti-road-off", color: "var(--warning)",
+      exp: "El odómetro final es menor que el inicial, o la distancia no da para ese tramo.",
+      filas: true, campo: "motivo_km" },
+    { k: "pax_raros", tit: "Más pasajeros que asientos", ico: "ti-users-group", color: "var(--warning)",
+      exp: "Más gente de la que entra en ese coche.", filas: true, campo: "motivo_pax" },
+    { k: "horario_raro", tit: "Jornadas imposibles", ico: "ti-hourglass-off", color: "var(--warning)",
+      exp: "Más de 16 horas de servicio seguidas.", filas: true, campo: "motivo_horario" },
+    { k: "tardias", tit: "Reportados tarde", ico: "ti-clock-exclamation", color: "var(--muted)",
+      exp: "Se cargaron varios días después del servicio.", filas: true, tope: 30 },
+  ];
+
+  const hayAlgo = grupos.some(g => (d[g.k] || []).length);
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:740px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-shield-search"></i> Revisar cargas</h2>
+          <p>${d.revisadas} servicio(s) sin liquidar revisados · ${d.total_revisar} con algo raro</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="firma-items" style="max-height:62vh;overflow-y:auto">
+        ${!hayAlgo ? `
+          <div class="empty"><i class="ti ti-circle-check"></i>
+            <div style="font-weight:600;color:var(--text)">Nada raro para revisar</div>
+            <div style="font-size:12.5px;margin-top:4px">Los ${d.revisadas} servicios sin liquidar tienen fechas coherentes.</div>
+          </div>` : ""}
+
+        ${grupos.map(g => {
+          const lista = d[g.k] || [];
+          if (!lista.length) return "";
+          const items = g.tope ? lista.slice(0, g.tope) : lista;
+          return `
+            <div class="sosp-titulo" style="color:${g.color}"><i class="ti ${g.ico}"></i> ${g.tit} (${lista.length})</div>
+            <p class="hint" style="margin:0 0 10px">${g.exp}</p>
+            ${items.map(x => g.filas ? filaSosp(x, g.campo) : bloqueSosp(x, g.k)).join("")}
+            ${g.tope && lista.length > g.tope ? `<p class="hint">...y ${lista.length - g.tope} más.</p>` : ""}`;
+        }).join("")}
+
+        ${d.sin_registro_de_carga ? `
+          <p class="hint" style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <i class="ti ti-info-circle"></i> Hay ${d.sin_registro_de_carga} servicio(s) cargados antes de que el sistema
+          registrara el momento de carga: de esos solo se pueden detectar las fechas imposibles.</p>` : ""}
+      </div>
+
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+function filaSosp(x, campo) {
+  const motivo = x[campo || "motivo"] || x.motivo || "";
+  return `<div class="sosp-item">
+    <div class="sosp-cab">
+      <b>${x.chofer_nombre}</b>
+      <span class="badge">${x.cliente}</span>
+      <span style="flex:1"></span>
+      <span class="sosp-monto">${x.monto ? "Gs. " + fmtNum(x.monto) : "—"}</span>
+    </div>
+    <div class="sosp-det">Servicio del <b>${x.fecha_servicio}</b> · ${x.tramo}</div>
+    ${motivo ? `<div class="sosp-det" style="color:var(--danger)">${motivo}</div>` : ""}
+    <button class="btn btn-ghost sosp-btn" onclick="borrarSospechosas([${x.id}], this)">
+      <i class="ti ti-trash"></i> Eliminar
+    </button>
+  </div>`;
+}
+
+function bloqueSosp(b, tipo) {
+  const cab = tipo === "bus_compartido"
+    ? `<b>Coche #${b.bus}</b> <span class="mini-chip ambar">${b.choferes.length} choferes</span>`
+    : `<b>${b.chofer_nombre}</b> <span class="mini-chip rojo">${b.cantidad} servicios</span>
+       ${b.justificado ? '<span class="mini-chip ambar" title="El chofer explicó por qué al cargar">justificado</span>' : ""}`;
+  const sub = tipo === "en_bloque"
+    ? `Cargados el <b>${b.momento}</b> · servicios del ${b.fechas.join(", ")}`
+    : `El <b>${b.fecha}</b>`;
+  return `<div class="sosp-item bloque">
+    <div class="sosp-cab">${cab}<span style="flex:1"></span>
+      <span class="sosp-monto">Gs. ${fmtNum(b.monto)}</span></div>
+    <div class="sosp-det">${sub}</div>
+    ${(b.detalle || []).map(t => `<div class="sosp-det" style="padding-left:10px">· ${t}</div>`).join("")}
+    ${(b.justificaciones || []).length ? `
+      <div class="sosp-justif"><i class="ti ti-message-2"></i><div>
+        <div style="font-weight:600;color:var(--text);margin-bottom:2px">Lo que explicó el chofer</div>
+        ${b.justificaciones.map(j => `<div>${j}</div>`).join("")}
+      </div></div>` : ""}
+    <button class="btn btn-ghost sosp-btn" onclick="borrarSospechosas([${b.ids.join(",")}], this)">
+      <i class="ti ti-trash"></i> Eliminar estos ${b.ids.length}
+    </button>
+  </div>`;
+}
+
+async function borrarSospechosas(ids, btn) {
+  if (!confirm(`¿Eliminar ${ids.length} servicio(s)?\n\nLos tramos quedan libres para volver a cargarlos bien. No se puede deshacer.`)) return;
+  btn.disabled = true;
+  const r = await api("/api/corp/eliminar_lote", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids })
+  });
+  if (r && r.ok) {
+    toast(r.msg || "Eliminados", "success");
+    btn.closest(".modal-overlay").remove();
+    cargarRendiciones();
+  } else {
+    toast((r && r.msg) || "No se pudo eliminar", "error");
+    btn.disabled = false;
+  }
+}
+
+
+// ─── Consumo esperado por modelo y motor ───
+// Los valores de arranque son órdenes de magnitud típicos. Lo que mide la
+// flota en sus propias rutas es mejor dato que cualquier ficha técnica, así
+// que se pueden corregir acá.
+
+async function abrirReferencias(opts = {}) {
+  const [refs, coches] = await Promise.all([
+    api("/api/consumo/referencias"), api("/api/consumo/referencias_coche")]);
+  window._refCoches = coches;
+  const puede = window.USUARIO_ROL === "admin";
+  const conBuses = refs.filter(r => r.vehiculos > 0);
+  const sinBuses = refs.filter(r => !r.vehiculos);
+  const nPropios = coches.filter(x => x.propia).length;
+  const fmt2 = v => (v || 0).toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const fila = r => `
+    <div class="ref-fila ${r.vehiculos ? "" : "vacia"}">
+      <div class="ref-nombre">
+        <div class="ref-modelo">${r.nombre}</div>
+        <div class="ref-buses">${r.vehiculos ? `${r.vehiculos} coche${r.vehiculos === 1 ? "" : "s"}` : "sin coches asignados"}</div>
+      </div>
+      <div class="ref-campo">
+        <input id="ref-${r.id}" value="${r.consumo_referencia || ""}" inputmode="decimal"
+               placeholder="—" ${puede ? "" : "disabled"}
+               oninput="refEquivalencia(${r.id})">
+        <span class="ref-unidad">L/100km</span>
+      </div>
+      <div class="ref-equiv" id="ref-eq-${r.id}">${r.km_l ? r.km_l.toLocaleString("es-PY", {minimumFractionDigits: 2}) + " km/L" : ""}</div>
+      ${puede ? `<button class="btn btn-ghost ref-guardar" onclick="guardarReferencia(${r.id}, this)">
+        <i class="ti ti-check"></i></button>` : ""}
+    </div>`;
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:660px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-adjustments"></i> Consumos de referencia</h2>
+          <p>Cuánto debería consumir cada coche. Es contra esto que se compara en el control.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="ref-tabs">
+        <button class="ref-tab" data-t="modelo" onclick="refTab('modelo')"><i class="ti ti-engine"></i> Por modelo</button>
+        <button class="ref-tab" data-t="coche" onclick="refTab('coche')"><i class="ti ti-bus"></i> Por coche
+          ${nPropios ? `<span class="emp-tab-n">${nPropios}</span>` : ""}</button>
+      </div>
+
+      <div class="firma-items" style="max-height:58vh;overflow-y:auto">
+        <div id="ref-tab-modelo">
+          <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i>
+            <span>${puede
+              ? "Vale para todos los coches de ese modelo. Los valores de fábrica son aproximados: corregilos con lo que mida tu flota en sus rutas."
+              : "Solo un administrador puede modificar estos valores."}</span></p>
+          ${conBuses.length ? `<div class="ref-titulo">Modelos en uso</div>${conBuses.map(fila).join("")}` : ""}
+          ${sinBuses.length ? `
+            <div class="ref-titulo" style="margin-top:16px">Sin coches asignados</div>
+            ${sinBuses.map(fila).join("")}` : ""}
+        </div>
+
+        <div id="ref-tab-coche" style="display:none">
+          <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i>
+            <span>Si un coche anda distinto que sus hermanos —por la ruta que hace, los años o su estado— ponele su propio valor:
+            <b>manda sobre el de su modelo</b>. Vacío, usa el del modelo.</span></p>
+          <input id="ref-buscar" class="ref-buscar" placeholder="Buscar por número o patente..." oninput="refFiltrar()">
+          <div id="ref-lista-coches">${coches.map(x => filaRefCoche(x, puede)).join("")}</div>
+        </div>
+      </div>
+
+      <div class="firma-acciones">
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      </div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+
+  // Desde el control se llega directo al coche que hay que ajustar
+  if (opts.coche) {
+    refTab("coche");
+    const b = document.getElementById("ref-buscar");
+    b.value = String(opts.coche);
+    refFiltrar();
+    setTimeout(() => document.querySelector("#ref-lista-coches .ref-fila:not([style*='none']) input")?.focus(), 150);
+  } else {
+    refTab("modelo");
+  }
+}
+
+function filaRefCoche(x, puede) {
+  const fmt2 = v => (v || 0).toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const busca = `${x.n_interno || ""} ${x.patente || ""} ${x.plan || ""}`.toLowerCase();
+  return `
+    <div class="ref-fila ${x.propia ? "propia" : ""}" id="refc-fila-${x.id}" data-busca="${busca}">
+      <div class="ref-nombre">
+        <div class="ref-modelo">#${x.n_interno || "—"} <span style="font-weight:400;color:var(--muted)">${x.patente || ""}</span>
+          ${x.propia ? '<span class="ref-chip-propia">propio</span>' : ""}</div>
+        <div class="ref-buses">${x.plan
+          ? `Su modelo: ${x.ref_modelo ? fmt2(x.ref_modelo) + " L/100km" : "sin valor"}`
+          : "Sin plan asignado"}</div>
+      </div>
+      <div class="ref-campo">
+        <input id="ref-c-${x.id}" value="${x.propia ? String(x.propia).replace(".", ",") : ""}" inputmode="decimal"
+               placeholder="${x.ref_modelo ? fmt2(x.ref_modelo) : "—"}" ${puede ? "" : "disabled"}
+               oninput="refEquivalencia('c-${x.id}')"
+               onkeydown="if(event.key==='Enter') guardarReferenciaCoche(${x.id}, this.closest('.ref-fila').querySelector('.ref-guardar'))">
+        <span class="ref-unidad">L/100km</span>
+      </div>
+      <div class="ref-equiv" id="ref-eq-c-${x.id}">${x.propia ? (100 / x.propia).toFixed(2) + " km/L" : ""}</div>
+      ${puede ? `<button class="btn btn-ghost ref-guardar" title="Guardar" onclick="guardarReferenciaCoche(${x.id}, this)"><i class="ti ti-check"></i></button>
+        <button class="btn btn-ghost ref-quitar" title="Sacarle el valor propio: vuelve a usar el del modelo"
+          style="${x.propia ? "" : "visibility:hidden"}" onclick="quitarReferenciaCoche(${x.id}, this)"><i class="ti ti-arrow-back-up"></i></button>` : ""}
+    </div>`;
+}
+
+function refTab(t) {
+  document.querySelectorAll(".ref-tab").forEach(b => b.classList.toggle("activa", b.dataset.t === t));
+  document.getElementById("ref-tab-modelo").style.display = t === "modelo" ? "" : "none";
+  document.getElementById("ref-tab-coche").style.display = t === "coche" ? "" : "none";
+}
+
+function refFiltrar() {
+  const q = (document.getElementById("ref-buscar").value || "").trim().toLowerCase();
+  document.querySelectorAll("#ref-lista-coches .ref-fila").forEach(f => {
+    f.style.display = !q || f.dataset.busca.includes(q) ? "" : "none";
+  });
+}
+
+async function guardarReferenciaCoche(vid, btn, valor) {
+  const input = document.getElementById("ref-c-" + vid);
+  const v = valor !== undefined ? valor : input.value.trim();
+  if (btn) btn.disabled = true;
+  const r = await api(`/api/consumo/referencias_coche/${vid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ litros_100km: v })
+  });
+  if (btn) btn.disabled = false;
+  if (!(r && r.ok)) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast(r.msg, "success");
+  // Actualizar la fila en el lugar
+  const x = (window._refCoches || []).find(c => c.id === vid);
+  if (x) {
+    x.propia = parseFloat(String(v).replace(",", ".")) || null;
+    document.getElementById("refc-fila-" + vid).outerHTML = filaRefCoche(x, true);
+  }
+  // Lo que esté abierto se recalcula contra el valor nuevo
+  if (typeof cargarCombCorp === "function" && document.getElementById("cbc-panel")) cargarCombCorp();
+}
+
+function quitarReferenciaCoche(vid, btn) {
+  guardarReferenciaCoche(vid, btn, "");
+}
+
+// Se muestra la equivalencia mientras escribe, porque mucha gente piensa en
+// km por litro aunque el dato se cargue en litros cada 100 km.
+function refEquivalencia(id) {
+  const v = parseFloat(String(document.getElementById("ref-" + id).value).replace(",", ".")) || 0;
+  const eq = document.getElementById("ref-eq-" + id);
+  if (eq) eq.textContent = v > 0 ? (100 / v).toFixed(2) + " km/L" : "";
+}
+
+async function guardarReferencia(id, btn) {
+  const v = document.getElementById("ref-" + id).value;
+  btn.disabled = true;
+  const r = await api(`/api/consumo/referencias/${id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ litros_100km: v })
+  });
+  btn.disabled = false;
+  if (r && r.ok) {
+    toast(r.msg || "Guardado", "success");
+    btn.innerHTML = '<i class="ti ti-check"></i>';
+    btn.style.color = "var(--success)";
+    setTimeout(() => { btn.style.color = ""; }, 1200);
+    // La comparación de cada bus cambia, así que se refresca lo que esté abierto
+    if (typeof cargarCombCorp === "function" && document.getElementById("cbc-resultado")) cargarCombCorp();
+  } else {
+    toast((r && r.msg) || "No se pudo guardar", "error");
+  }
+}
+
+
+// ─── Comparar dos buses ───
+// Dos coches iguales que consumen distinto es la pregunta más útil que se le
+// puede hacer a estos datos. La respuesta casi nunca está en el motor: está
+// en qué rutas hizo cada uno, con qué choferes y cuántas paradas.
+
+async function abrirComparador(internoA) {
+  const cont = document.createElement("div");
+  cont.className = "modal-overlay firma-overlay";
+  cont.innerHTML = `
+    <div class="firma-modal" style="max-width:960px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-arrows-diff"></i> Comparar dos coches</h2>
+          <p>Por qué dos buses iguales consumen distinto</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="cmp-elegir">
+        <div class="emp-campo"><label>Coche A</label><input id="cmp-a" value="${internoA || ""}" placeholder="Nº interno" style="width:110px"></div>
+        <i class="ti ti-arrows-diff" style="color:var(--light);font-size:20px;margin:0 4px"></i>
+        <div class="emp-campo"><label>Coche B</label><input id="cmp-b" placeholder="Nº interno" style="width:110px"></div>
+        <div class="emp-campo"><label>Desde</label><input id="cmp-desde" type="date"></div>
+        <div class="emp-campo"><label>Hasta</label><input id="cmp-hasta" type="date"></div>
+        <button class="btn btn-primary" onclick="compararBuses()"><i class="ti ti-search"></i> Comparar</button>
+      </div>
+      <div class="firma-items" id="cmp-resultado" style="max-height:58vh;overflow-y:auto">
+        <p class="hint" style="padding:20px;text-align:center">Poné el número del otro coche y tocá Comparar.</p>
+      </div>
+    </div>`;
+  cont.onclick = e => { if (e.target === cont) cont.remove(); };
+  document.body.appendChild(cont);
+  setTimeout(() => document.getElementById("cmp-b").focus(), 120);
+  document.getElementById("cmp-b").addEventListener("keydown", e => {
+    if (e.key === "Enter") compararBuses();
+  });
+}
+
+async function compararBuses() {
+  const a = $("#cmp-a").value.trim(), b = $("#cmp-b").value.trim();
+  const cont = $("#cmp-resultado");
+  if (!a || !b) { toast("Poné los dos números de coche", "error"); return; }
+  cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+
+  const p = new URLSearchParams({ a, b });
+  if ($("#cmp-desde").value) p.set("desde", $("#cmp-desde").value);
+  if ($("#cmp-hasta").value) p.set("hasta", $("#cmp-hasta").value);
+  const d = await api(`/api/corp/comparar_buses?${p.toString()}`);
+  if (!d || d.error) { cont.innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>${(d && d.error) || "No se pudo comparar"}</div>`; return; }
+
+  const [A, B] = d.buses, dif = d.diferencias;
+  const fmtL = v => (v || 0).toLocaleString("es-PY", { maximumFractionDigits: 2 });
+  const col = x => `
+    <div class="cmp-col">
+      <div class="cmp-cab">
+        <div class="cmp-num">#${x.bus.n_interno}</div>
+        <div class="cmp-sub">${x.bus.patente || ""} · ${x.bus.marca || ""} ${x.bus.modelo || ""}</div>
+      </div>
+      <div class="cmp-consumo">
+        <div class="cmp-valor">${x.consumo.litros_100km ? fmtL(x.consumo.litros_100km) : "—"}</div>
+        <div class="cmp-unidad">litros cada 100 km</div>
+      </div>
+      <div class="cmp-datos">
+        <div><span>Medido sobre</span><b>${fmtNum(x.consumo.km_totales)} km</b></div>
+        <div><span>Litros</span><b>${fmtL(x.consumo.litros_totales)}</b></div>
+        <div><span>Tramos medidos</span><b>${x.tramos_medidos} de ${x.cargas} cargas</b></div>
+        <div><span>Servicios</span><b>${x.uso.servicios}</b></div>
+        <div><span>Días con salidas</span><b>${x.uso.dias_distintos}</b></div>
+        <div><span>Pasajeros</span><b>${fmtNum(x.uso.pasajeros)}</b></div>
+        ${x.dudosos.length ? `<div><span style="color:var(--danger)">Cargas dudosas</span><b style="color:var(--danger)">${x.dudosos.length}</b></div>` : ""}
+      </div>
+      <div class="cmp-lista">
+        <div class="cmp-lista-tit">Clientes</div>
+        ${x.uso.clientes.length ? x.uso.clientes.slice(0, 5).map(c =>
+          `<div class="cmp-item"><span>${c.nombre}</span><b>${c.veces}</b></div>`).join("")
+          : '<div class="cmp-vacio">sin servicios cargados</div>'}
+      </div>
+      <div class="cmp-lista">
+        <div class="cmp-lista-tit">Tramos más hechos</div>
+        ${x.uso.tramos.length ? x.uso.tramos.slice(0, 6).map(t =>
+          `<div class="cmp-item"><span>${t.nombre}</span><b>${t.veces}</b></div>`).join("")
+          : '<div class="cmp-vacio">sin servicios cargados</div>'}
+      </div>
+      <div class="cmp-lista">
+        <div class="cmp-lista-tit">Choferes</div>
+        ${x.uso.choferes.length ? x.uso.choferes.slice(0, 5).map(t =>
+          `<div class="cmp-item"><span>${t.nombre}</span><b>${t.veces}</b></div>`).join("")
+          : '<div class="cmp-vacio">sin datos</div>'}
+      </div>
+    </div>`;
+
+  const dd = dif.consumo_pct;
+  cont.innerHTML = `
+    ${dd !== undefined ? `
+      <div class="cmp-titular ${Math.abs(dd) > 15 ? "fuerte" : ""}">
+        El <b>#${A.bus.n_interno}</b> consume
+        <b>${dd > 0 ? "+" + dd : dd}%</b>
+        ${dd > 0 ? "más" : "menos"} que el <b>#${B.bus.n_interno}</b>
+      </div>` : ""}
+
+    <div class="cmp-grid">${col(A)}${col(B)}</div>
+
+    <div class="cmp-analisis">
+      <div class="cmp-lista-tit" style="margin-bottom:9px">Qué los diferencia</div>
+      ${!dif.mismo_modelo ? `<div class="cmp-punto alerta"><i class="ti ti-alert-triangle"></i>
+        <span>No son el mismo modelo: <b>${A.bus.modelo || "—"}</b> contra <b>${B.bus.modelo || "—"}</b>. Ahí ya hay una explicación.</span></div>` : ""}
+      ${dif.mismo_modelo && !dif.mismo_plan ? `<div class="cmp-punto alerta"><i class="ti ti-alert-triangle"></i>
+        <span>Mismo modelo pero tienen planes de mantenimiento distintos. Revisá cuál está mal asignado.</span></div>` : ""}
+      ${dif.tramos_solo_a.length ? `<div class="cmp-punto"><i class="ti ti-route"></i>
+        <span>Solo el <b>#${A.bus.n_interno}</b> hizo: ${dif.tramos_solo_a.slice(0, 5).join(", ")}${dif.tramos_solo_a.length > 5 ? ` y ${dif.tramos_solo_a.length - 5} más` : ""}</span></div>` : ""}
+      ${dif.tramos_solo_b.length ? `<div class="cmp-punto"><i class="ti ti-route"></i>
+        <span>Solo el <b>#${B.bus.n_interno}</b> hizo: ${dif.tramos_solo_b.slice(0, 5).join(", ")}${dif.tramos_solo_b.length > 5 ? ` y ${dif.tramos_solo_b.length - 5} más` : ""}</span></div>` : ""}
+      ${dif.tramos_compartidos.length ? `<div class="cmp-punto"><i class="ti ti-arrows-join"></i>
+        <span>Los dos hicieron ${dif.tramos_compartidos.length} tramo(s) en común</span></div>` : ""}
+      ${dif.choferes_solo_a.length || dif.choferes_solo_b.length ? `<div class="cmp-punto"><i class="ti ti-steering-wheel"></i>
+        <span>No los manejaron los mismos choferes${dif.choferes_solo_a.length ? `: ${dif.choferes_solo_a.slice(0, 3).join(", ")} solo el #${A.bus.n_interno}` : ""}</span></div>` : ""}
+      ${(A.dudosos.length || B.dudosos.length) ? `<div class="cmp-punto alerta"><i class="ti ti-number-0"></i>
+        <span>Hay cargas con kilometraje que no cierra (${A.dudosos.length + B.dudosos.length} en total). Antes de sacar conclusiones, corregilas: un odómetro mal tipeado cambia todo el cálculo.</span></div>` : ""}
+      ${(A.tramos_medidos < 3 || B.tramos_medidos < 3) ? `<div class="cmp-punto alerta"><i class="ti ti-chart-dots"></i>
+        <span>Con pocos tramos medidos el promedio se mueve mucho. Con tres o cuatro cargas más por coche el número se vuelve confiable.</span></div>` : ""}
+      <p class="hint" style="margin-top:12px"><i class="ti ti-bulb"></i>
+        Entre dos coches iguales, lo que más mueve el consumo es la ruta: ciudad con paradas seguidas gasta mucho más que ruta. Después vienen el peso que llevan, la presión de los neumáticos, filtros sucios y la forma de manejar.</p>
+    </div>`;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  CONTROL ESTADÍSTICO DEL CONSUMO
+// ════════════════════════════════════════════════════════════════════════
+// Cada coche se compara contra su propia historia, no contra una ficha: su
+// consumo normal y una banda alrededor. Lo que sale de la banda se revisa.
+// Es la técnica del control estadístico de procesos, con una mejora: la banda
+// se arma con la mediana, así un tanque robado no la agranda y se esconde.
+
+async function cargarControlComb(mostrar) {
+  const p = new URLSearchParams();
+  const d1 = ($("#cbc-desde") || {}).value, h1 = ($("#cbc-hasta") || {}).value;
+  if (d1) p.set("desde", d1);
+  if (h1) p.set("hasta", h1);
+  const d = await api(`/api/combustible/control?${p.toString()}`);
+  if (!d || d.error) {
+    if (mostrar && $("#cbc-control")) $("#cbc-control").innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>No se pudo cargar el control</div>`;
+    return;
+  }
+  window._ctrlComb = d;
+  // El contador de la pestaña se ve aunque no esté abierta
+  const n = d.resumen.alertas + d.resumen.revisar;
+  const badge = $("#cbc-ctrl-n");
+  if (badge && n) { badge.textContent = n; badge.style.display = ""; }
+  if (mostrar && $("#cbc-control")) $("#cbc-control").innerHTML = panelControl(d);
+}
+
+function panelControl(d) {
+  const r = d.resumen;
+  const fmtL = v => (v || 0).toLocaleString("es-PY", { maximumFractionDigits: 1 });
+  const fmt2 = v => (v || 0).toLocaleString("es-PY", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const chAlto = d.choferes.filter(x => x.desvio_pct !== null && x.desvio_pct >= 10);
+  const nivelTxt = { alerta: "muy fuera", revisar: "fuera", bajo: "de menos" };
+
+  const picos = (d.coches || []).filter(g => g.patron === "puntual" && g.nivel !== "bajo");
+  const parejos = (d.coches || []).filter(g => g.patron === "parejo");
+  const bajos = (d.coches || []).filter(g => g.patron === "puntual" && g.nivel === "bajo");
+  const hayCosto = !r.sin_precio;
+  const gs = v => hayCosto ? "≈ Gs. " + fmtNum(v) : "";
+
+  const filaTanque = (t, conChofer = true) => `
+    <div class="ctrl-tq">
+      <span class="ctrl-tq-fecha">${t.fecha.slice(8)}/${t.fecha.slice(5, 7)}</span>
+      ${conChofer ? `<span class="ctrl-tq-chofer">${t.ambigua
+        ? `${t.involucrados.join(", ")} <span class="ctrl-nota" title="Incluye cargas sin kilometraje: ${t.cargas_sin_km.map(x => x.chofer + " " + x.litros + " L").join(", ")}">· incluye cargas sin km</span>`
+        : (t.chofer || "—")}</span>` : ""}
+      <span class="ctrl-tq-val"><b>${fmt2(t.litros_100km)}</b> L/100km</span>
+      <span class="desvio ${t.nivel === "bajo" ? "revisar" : t.nivel === "alerta" ? "malo" : "atencion"}">${t.desvio_pct > 0 ? "+" : ""}${t.desvio_pct}%</span>
+      ${t.nivel !== "bajo" ? `<span class="ctrl-tq-mas">${fmtL(t.litros_de_mas)} L de más</span>` : ""}
+    </div>`;
+
+  return `
+    <div class="ctrl-hero">
+      <div class="ctrl-met ${picos.length ? "malo" : ""}">
+        <div class="ctrl-num">${picos.length}</div>
+        <div class="ctrl-lbl">coches con picos de consumo</div>
+        <div class="ctrl-sub">${r.alertas + r.revisar} tanque(s) que se dispararon</div>
+      </div>
+      <div class="ctrl-met ${r.litros_de_mas ? "malo" : ""}">
+        <div class="ctrl-num">${fmtL(r.litros_de_mas)} L</div>
+        <div class="ctrl-lbl">consumidos de más en esos picos</div>
+        <div class="ctrl-sub">${hayCosto ? gs(r.gs_de_mas) : `en ${r.alertas + r.revisar} tanque(s)`}</div>
+      </div>
+      <div class="ctrl-met ${parejos.length ? "medio" : ""}">
+        <div class="ctrl-num">${parejos.length}</div>
+        <div class="ctrl-lbl">coches con la referencia a revisar</div>
+        <div class="ctrl-sub">consumen siempre más que su motor</div>
+      </div>
+      <div class="ctrl-met ${r.pct_sin_km >= 20 ? "malo" : ""}">
+        <div class="ctrl-num">${r.pct_sin_km}%</div>
+        <div class="ctrl-lbl">cargas sin kilometraje</div>
+        <div class="ctrl-sub">${r.sin_km} de ${r.cargas} · quedan sin controlar</div>
+      </div>
+    </div>
+
+    ${r.pct_sin_km >= 20 ? `
+      <div class="ctrl-aviso">
+        <i class="ti ti-alert-triangle"></i>
+        <div><b>Una de cada ${Math.max(2, Math.round(100 / r.pct_sin_km))} cargas no tiene kilometraje.</b>
+        Esas cargas no se pueden medir, y sus litros terminan sumados al tanque del siguiente chofer,
+        que no siempre es el responsable. Para que este control sea confiable, el kilometraje tiene que cargarse siempre.</div>
+      </div>` : ""}
+
+    <p class="hint" style="margin:0 0 16px"><i class="ti ti-info-circle"></i>
+      <span>Cada coche se compara contra <b>su propia historia</b>: ${r.buses_con_estandar} de ${r.buses_total} coches ya tienen
+      estándar propio (hacen falta ${d.parametros.tanques_min} tanques medidos). Los demás se comparan contra la referencia de su motor, hasta que junten esos tanques.</span></p>
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-alert-octagon" style="color:var(--danger)"></i> Picos: tanques que se dispararon
+        <span class="hint" style="margin-left:auto;font-weight:400">lo sospechoso — tocá el coche para ver su gráfico</span></div>
+      ${picos.length ? picos.map(g => `
+        <div class="ctrl-coche">
+          <div class="ctrl-coche-cab">
+            <a class="ctrl-link" onclick="verGraficoControl(${g.vehiculo_id})"><b>#${g.bus}</b></a>
+            <span style="color:var(--muted);font-size:12px">${g.patente}</span>
+            <span class="ctrl-nivel ${g.nivel}">${g.nivel === "alerta" ? "muy fuera" : "fuera"}</span>
+            <span style="flex:1"></span>
+            <span class="ctrl-nota">su normal: <b style="color:var(--text)">${fmt2(g.normal)}</b> L/100km${g.estandar === "motor" ? " (según su referencia)" : ""}</span>
+          </div>
+          ${g.tanques.map(t => filaTanque(t)).join("")}
+        </div>`).join("")
+        : `<div class="empty"><i class="ti ti-circle-check"></i>Ningún coche tuvo picos de consumo en este período.</div>`}
+      <p class="hint" style="padding:10px 16px"><i class="ti ti-bulb"></i>
+        <span>Un pico es un tanque que se aparta de lo que ese coche suele consumir. Antes de sospechar, fijate que el kilometraje esté bien cargado:
+        un número mal tipeado da un pico falso. Si el kilometraje está bien, esos litros no los consumió el coche.</span></p>
+    </div>
+
+    ${parejos.length ? `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-adjustments" style="color:var(--warning)"></i> Coches que consumen siempre más que su motor
+        <span class="hint" style="margin-left:auto;font-weight:400">no es un robo: la referencia no les corresponde</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Coche</th><th class="center">Consume siempre</th><th class="center">Su referencia</th>
+          <th class="center">Diferencia</th><th class="center">Tanques</th><th></th></tr></thead>
+        <tbody>${parejos.map(g => `<tr>
+          <td><a class="ctrl-link" onclick="verGraficoControl(${g.vehiculo_id})"><b>#${g.bus}</b></a> <span style="color:var(--muted);font-size:12px">${g.patente}</span></td>
+          <td class="center"><b>${fmt2(g.consumo_real)}</b> <span class="ctrl-nota">L/100km</span></td>
+          <td class="center" style="color:var(--muted)">${fmt2(g.normal)}</td>
+          <td class="center"><span class="desvio atencion">+${Math.round((g.consumo_real - g.normal) / g.normal * 100)}%</span></td>
+          <td class="center">${g.medidos}</td>
+          <td class="center"><button class="btn btn-ghost" style="padding:5px 10px;font-size:12px" onclick="abrirReferencias({coche: '${g.bus}'})">
+            <i class="ti ti-adjustments"></i> Ajustar</button></td>
+        </tr>`).join("")}</tbody></table></div>
+      <p class="hint" style="padding:10px 16px"><i class="ti ti-bulb"></i>
+        <span>Un robo da picos sueltos, no el mismo número tanque tras tanque. Si un coche da siempre parecido pero por encima de su motor,
+        revisá primero que tenga el <b>plan correcto</b> (puede estar cargado como otro modelo). Si el plan está bien, ajustá su referencia.
+        Cuando junte ${d.parametros.tanques_min} tanques pasa a compararse contra sí mismo y sale de esta lista.</span></p>
+    </div>` : ""}
+
+    ${bajos.length ? `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-arrow-down" style="color:var(--info)"></i> Tanques que dieron de menos
+        <span class="hint" style="margin-left:auto;font-weight:400">casi siempre, un kilometraje mal cargado</span></div>
+      ${bajos.map(g => `
+        <div class="ctrl-coche">
+          <div class="ctrl-coche-cab"><b>#${g.bus}</b> <span style="color:var(--muted);font-size:12px">${g.patente}</span></div>
+          ${g.tanques.map(t => filaTanque(t)).join("")}
+        </div>`).join("")}
+    </div>` : ""}
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-steering-wheel"></i> Choferes
+        <span class="hint" style="margin-left:auto;font-weight:400">cuánto se aparta cada uno del consumo normal de los coches que manejó</span></div>
+      ${d.choferes.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Chofer</th><th class="center">Desvío</th>
+          <th class="center" title="Tanques en coches que ya tienen estándar propio: son los únicos contra los que se puede medir al chofer">Comparables</th>
+          <th class="center">Sin kilometraje</th><th class="center">Picos</th><th>Coches</th></tr></thead>
+        <tbody>${d.choferes.map(x => `<tr>
+          <td><b>${x.chofer}</b></td>
+          <td class="center">${x.desvio_pct === null ? '<span style="color:var(--light)" title="Hacen falta al menos 2 tanques en coches con estándar propio">—</span>'
+            : `<span class="desvio ${x.desvio_pct >= 15 ? "malo" : x.desvio_pct >= 7 ? "atencion" : x.desvio_pct <= -15 ? "revisar" : "bien"}">${x.desvio_pct > 0 ? "+" : ""}${x.desvio_pct}%</span>`}</td>
+          <td class="center">${x.medidos} de ${x.cargas}</td>
+          <td class="center" style="${x.pct_sin_km >= 30 ? "color:var(--danger);font-weight:700" : "color:var(--muted)"}">${x.pct_sin_km}%</td>
+          <td class="center">${x.alertas || "—"}</td>
+          <td style="font-size:12px;color:var(--muted)">${x.buses.slice(0, 5).map(b => "#" + b).join(", ")}${x.buses.length > 5 ? "…" : ""}</td>
+        </tr>`).join("")}</tbody></table></div>
+        <p class="hint" style="padding:10px 16px"><i class="ti ti-bulb"></i>
+          <span>Un chofer que da más en <b>todos</b> los coches que maneja no es el coche: es la forma de manejar, o combustible que no llega al tanque.
+          Un chofer con muchas cargas sin kilometraje queda fuera del control — esa también es una señal.
+          ${r.buses_con_estandar < r.buses_total / 2 ? ` El desvío de cada chofer se va completando a medida que sus coches juntan ${d.parametros.tanques_min} tanques.` : ""}</span></p>`
+        : `<div class="empty"><i class="ti ti-user-off"></i>Sin cargas con chofer en este período.</div>`}
+    </div>
+
+    ${d.cargas_grandes.length ? `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-droplet-plus"></i> Cargas más grandes de lo que suele entrar en el coche</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Coche</th><th>Fecha</th><th>Chofer</th><th class="num">Cargó</th><th class="num">Suele cargar</th><th class="num">Diferencia</th></tr></thead>
+        <tbody>${d.cargas_grandes.map(g => `<tr class="ctrl-fila-mal">
+          <td><b>#${g.bus}</b></td><td>${g.fecha}</td><td>${g.chofer || "—"}${g.sin_km ? ' <span class="ctrl-nota">sin km</span>' : ""}</td>
+          <td class="num"><b>${fmtL(g.litros)} L</b></td><td class="num" style="color:var(--muted)">${fmtL(g.habitual)} L</td>
+          <td class="num" style="color:var(--danger)"><b>+${fmtL(g.exceso)} L</b></td>
+        </tr>`).join("")}</tbody></table></div>
+      <p class="hint" style="padding:10px 16px"><i class="ti ti-info-circle"></i>
+        Esto no necesita kilometraje: un tanque no se estira. Si un coche siempre carga alrededor de lo mismo y aparece una carga mucho mayor, esos litros fueron a otro lado.</p>
+    </div>` : ""}
+
+    ${d.mismo_dia.length ? `
+    <div class="card">
+      <div class="card-head"><i class="ti ti-copy"></i> Dos cargas del mismo coche el mismo día</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Coche</th><th>Fecha</th><th class="num">Total</th><th>Cargas</th></tr></thead>
+        <tbody>${d.mismo_dia.map(m => `<tr>
+          <td><b>#${m.bus}</b></td><td>${m.fecha}</td><td class="num"><b>${fmtL(m.litros)} L</b></td>
+          <td style="font-size:12.5px">${m.detalle.map(x => `${x.chofer}: ${fmtL(x.litros)} L${x.hora ? " a las " + x.hora : ""}`).join(" · ")}</td>
+        </tr>`).join("")}</tbody></table></div>
+    </div>` : ""}
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-chart-line"></i> Estándar propio de cada coche</div>
+      ${d.buses.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Coche</th><th class="center">Consumo normal</th><th class="center">Banda aceptable</th>
+          <th class="center">Su motor dice</th>${hayCosto ? '<th class="num">Costo por km</th>' : ""}<th class="center">Fuera</th><th></th></tr></thead>
+        <tbody>${d.buses.map(b => `<tr>
+          <td><b>#${b.bus}</b> <span style="color:var(--muted);font-size:12px">${b.patente}</span></td>
+          <td class="center"><b>${fmt2(b.mediana)}</b> <span class="ctrl-nota">L/100km</span></td>
+          <td class="center" style="color:var(--muted)">${fmt2(b.lci)} – ${fmt2(b.lcs)}</td>
+          <td class="center" style="color:var(--muted)">${b.referencia_motor ? fmt2(b.referencia_motor) : "—"}</td>
+          ${hayCosto ? `<td class="num">Gs. ${fmtNum(b.cpk)}</td>` : ""}
+          <td class="center">${b.alertas ? `<span class="mini-chip rojo">${b.alertas}</span>` : "—"}</td>
+          <td class="center"><button class="icon-btn" title="Ver gráfico de control" onclick="verGraficoControl(${b.vehiculo_id})"><i class="ti ti-chart-dots"></i></button></td>
+        </tr>`).join("")}</tbody></table></div>`
+        : `<div class="empty"><i class="ti ti-chart-line"></i>Todavía ningún coche tiene ${d.parametros.tanques_min} tanques medidos para armar su estándar.</div>`}
+    </div>`;
+}
+
+// Gráfico de control del coche: cada punto es un tanque, con la línea del
+// normal y los límites. Igual al del control estadístico de procesos.
+function verGraficoControl(vid) {
+  const d = window._ctrlComb;
+  const b = d && d.buses.find(x => x.vehiculo_id === vid);
+  if (!b) { toast("Ese coche todavía no tiene suficientes tanques medidos para su gráfico", "error"); return; }
+  const pts = b.serie;
+  const W = 860, H = 340, ml = 52, mr = 104, mt = 22, mb = 42;
+  // La escala se limita cerca de la zona de control: si un tanque extremo
+  // manda el eje, todos los demás quedan aplastados y no se ve nada. Los que
+  // se salen de escala se marcan arriba con su valor.
+  const techo = b.lcs_alerta + (b.lcs_alerta - b.mediana) * 1.4;
+  const dentro = pts.map(p => p.l100).filter(v => v <= techo);
+  const ymin = Math.max(0, Math.min(b.lci, ...dentro) * 0.93);
+  const ymax = Math.min(Math.max(b.lcs_alerta, ...dentro) * 1.06, techo);
+  const x = i => ml + (pts.length <= 1 ? (W - ml - mr) / 2 : i * (W - ml - mr) / (pts.length - 1));
+  const y = v => mt + (H - mt - mb) * (1 - (Math.min(v, ymax) - ymin) / (ymax - ymin || 1));
+
+  // Etiquetas de las líneas al costado, separadas para que no se pisen
+  const lineas = [
+    { v: b.lcs_alerta, color: "#B3122E", dash: true, txt: "alerta" },
+    { v: b.lcs, color: "#DC2641", dash: false, txt: "límite" },
+    { v: b.mediana, color: "#B97D0A", dash: false, txt: "normal" },
+    { v: b.lci, color: "#1E5A96", dash: true, txt: "mínimo" },
+  ];
+  let ultimo = -Infinity;
+  lineas.forEach(l => { l.ty = Math.max(y(l.v) + 4, ultimo + 14); ultimo = l.ty; });
+  const dibLineas = lineas.map(l => `
+    <line x1="${ml}" x2="${W - mr}" y1="${y(l.v)}" y2="${y(l.v)}" stroke="${l.color}" stroke-width="1.6" ${l.dash ? 'stroke-dasharray="6 4"' : ""}/>
+    <text x="${W - mr + 8}" y="${l.ty}" font-size="11.5" fill="${l.color}" font-weight="600">${l.txt} ${l.v.toFixed(1)}</text>`).join("");
+
+  const ticks = [];
+  for (let i = 0; i <= 4; i++) {
+    const v = ymin + (ymax - ymin) * i / 4;
+    ticks.push(`<text x="${ml - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#A5A49E">${v.toFixed(0)}</text>
+      <line x1="${ml}" x2="${W - mr}" y1="${y(v)}" y2="${y(v)}" stroke="#F1EFEA"/>`);
+  }
+  const color = v => v > b.lcs_alerta ? "#B3122E" : v > b.lcs ? "#DC2641" : v < b.lci ? "#1E5A96" : "#2F7C46";
+  const cada = Math.max(1, Math.ceil(pts.length / 8));
+  const punto = (p, i) => {
+    const t = `<title>${p.fecha} · ${p.chofer || "sin chofer"}\n${p.l100.toFixed(2)} L/100km${p.km ? ` · ${p.km} km con ${p.litros} L` : ""}</title>`;
+    if (p.l100 > ymax) {
+      // Fuera de escala: flecha arriba con el valor real
+      const cx = x(i), cy = mt + 2;
+      return `<g><polygon points="${cx},${cy} ${cx - 7},${cy + 12} ${cx + 7},${cy + 12}" fill="#B3122E">${t}</polygon>
+        <text x="${cx}" y="${cy + 26}" text-anchor="middle" font-size="11" font-weight="700" fill="#B3122E">${p.l100.toFixed(0)}</text></g>`;
+    }
+    return `<circle cx="${x(i)}" cy="${y(p.l100)}" r="5.5" fill="${color(p.l100)}" stroke="#fff" stroke-width="2">${t}</circle>`;
+  };
+  const svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block">
+    ${ticks.join("")}
+    <rect x="${ml}" y="${y(b.lcs)}" width="${W - ml - mr}" height="${Math.max(0, y(b.lci) - y(b.lcs))}" fill="#2F7C46" opacity=".07"/>
+    ${dibLineas}
+    <polyline fill="none" stroke="#C4C3BD" stroke-width="1.4" points="${pts.map((p, i) => `${x(i)},${y(p.l100)}`).join(" ")}"/>
+    ${pts.map(punto).join("")}
+    ${pts.map((p, i) => i % cada === 0 ? `<text x="${x(i)}" y="${H - mb + 18}" text-anchor="middle" font-size="10.5" fill="#6E6D66">${p.fecha.slice(5).split("-").reverse().join("/")}</text>` : "").join("")}
+    <text x="14" y="${mt + (H - mt - mb) / 2}" font-size="11" fill="#6E6D66" transform="rotate(-90 14 ${mt + (H - mt - mb) / 2})" text-anchor="middle">litros cada 100 km</text>
+  </svg>`;
+
+  const o = document.createElement("div");
+  o.className = "modal-overlay firma-overlay";
+  o.innerHTML = `
+    <div class="firma-modal" style="max-width:900px">
+      <div class="firma-head">
+        <div>
+          <h2><i class="ti ti-chart-dots"></i> Gráfico de control · #${b.bus}</h2>
+          <p>Cada punto es un tanque. Lo que sale de la franja verde se revisa.</p>
+        </div>
+        <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
+      </div>
+      <div style="padding:16px 22px 6px">
+        ${svg}
+        <div class="ctrl-leyenda">
+          <span><i style="background:#2F7C46"></i> dentro de lo normal</span>
+          <span><i style="background:#DC2641"></i> fuera del límite</span>
+          <span><i style="background:#B3122E"></i> muy fuera</span>
+          <span><i style="background:#1E5A96"></i> consumió de menos</span>
+        </div>
+        <div class="ctrl-datos-bus">
+          <div><span>Consumo normal</span><b>${b.mediana.toFixed(2)} L/100km</b></div>
+          <div><span>Banda aceptable</span><b>${b.lci.toFixed(1)} – ${b.lcs.toFixed(1)}</b></div>
+          <div><span>Promedio común ± desvío</span><b>${b.promedio.toFixed(2)} ± ${b.desv_estandar.toFixed(2)}</b></div>
+          <div><span>Tanques medidos</span><b>${b.tanques}</b></div>
+          ${b.cpk ? `<div><span>Costo por km</span><b>Gs. ${fmtNum(b.cpk)}</b></div>` : ""}
+          <div><span>Su motor dice</span><b>${b.referencia_motor ? b.referencia_motor.toFixed(1) + " L/100km" : "—"}</b></div>
+        </div>
+        <p class="hint" style="margin:10px 0 4px"><i class="ti ti-info-circle"></i>
+          Si el promedio común y el normal difieren mucho, hay tanques extremos arrastrando el promedio: justamente lo que la mediana evita.</p>
+      </div>
+      <div class="firma-acciones"><span style="flex:1"></span>
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button></div>
+    </div>`;
+  o.onclick = e => { if (e.target === o) o.remove(); };
+  document.body.appendChild(o);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  CARGAS — dónde cargan combustible los choferes
+// ════════════════════════════════════════════════════════════════════════
+// En el taller (tanque propio) o en una estación de afuera, y en ese caso de
+// qué emblema. Sirve para ver cuánto sale del tanque propio y cuánto se
+// compra afuera, y dónde.
+
+const COLOR_TALLER = "#1E5A96";
+const COLORES_EMBLEMA = ["#B97D0A", "#0F8A7E", "#6D4BB0", "#DC2641", "#2F7C46", "#5B6B7F", "#C2410C", "#0E7490"];
+const COLOR_SIN_DATO = "#C8C7C1";
+
+async function renderCorpCargas() {
+  status("Cargas");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-map-pin"></i> Cargas</h1>
+      <p>Dónde cargan combustible los choferes: en el taller o en estaciones de afuera</p>
+    </div>
+    <div class="section">
+      <div class="emp-filtros">
+        <div class="emp-rapidos">
+          <span class="emp-rapidos-lbl">Período</span>
+          <button class="chip" onclick="cargasPeriodo(7, this)">Últimos 7 días</button>
+          <button class="chip activo" onclick="cargasPeriodo(30, this)">Últimos 30 días</button>
+          <button class="chip" onclick="cargasPeriodo('mes', this)">Este mes</button>
+          <button class="chip" onclick="cargasPeriodo(90, this)">3 meses</button>
+        </div>
+        <div class="emp-detalle-filtros">
+          <div class="emp-campo"><label>Desde</label><input id="cg-desde" type="date" value="${fmt(new Date(hoy.getTime() - 30 * 86400000))}" onchange="cargarCargas()"></div>
+          <div class="emp-campo"><label>Hasta</label><input id="cg-hasta" type="date" value="${fmt(hoy)}" onchange="cargarCargas()"></div>
+          <div style="flex:1"></div>
+          <button class="btn btn-primary" onclick="cargarCargas()"><i class="ti ti-refresh"></i> Actualizar</button>
+        </div>
+      </div>
+      <div id="cg-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  cargarCargas();
+}
+
+function cargasPeriodo(cual, btn) {
+  document.querySelectorAll(".emp-rapidos .chip").forEach(c => c.classList.remove("activo"));
+  if (btn) btn.classList.add("activo");
+  const hoy = new Date();
+  const fmt = d => d.toISOString().slice(0, 10);
+  const desde = cual === "mes" ? new Date(hoy.getFullYear(), hoy.getMonth(), 1)
+                               : new Date(hoy.getTime() - cual * 86400000);
+  $("#cg-desde").value = fmt(desde);
+  $("#cg-hasta").value = fmt(hoy);
+  cargarCargas();
+}
+
+async function cargarCargas() {
+  const cont = $("#cg-resultado");
+  const p = new URLSearchParams({ desde: $("#cg-desde").value, hasta: $("#cg-hasta").value });
+  const d = await api(`/api/corp/cargas?${p.toString()}`);
+  if (!d || d.error) { cont.innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>No se pudieron traer las cargas</div>`; return; }
+  if (!d.total.cargas) {
+    cont.innerHTML = `<div class="empty"><i class="ti ti-gas-station-off"></i>No hay cargas de combustible en este período.</div>`;
+    return;
+  }
+  const fmtL = v => (v || 0).toLocaleString("es-PY", { maximumFractionDigits: 1 });
+  const r = d.resumen;
+  // Cada lugar con su color: el taller siempre azul, cada emblema el suyo
+  let i = 0;
+  const colorDe = {};
+  d.lugares.forEach(l => {
+    colorDe[l.lugar] = l.tipo === "taller" ? COLOR_TALLER
+      : l.tipo === "sin_dato" ? COLOR_SIN_DATO
+      : COLORES_EMBLEMA[i++ % COLORES_EMBLEMA.length];
+  });
+  const nombreLugar = n => n === "TALLER" ? "Taller" : n === "SIN DATO" ? "Sin dato"
+    : n.charAt(0) + n.slice(1).toLowerCase();
+
+  cont.innerHTML = `
+    <div class="cg-kpis">
+      <div class="cg-kpi">
+        <div class="cg-kpi-lbl">Total del período</div>
+        <div class="cg-kpi-num">${fmtL(d.total.litros)} L</div>
+        <div class="cg-kpi-sub">${d.total.cargas} cargas</div>
+      </div>
+      <div class="cg-kpi" style="--c:${COLOR_TALLER}">
+        <div class="cg-kpi-lbl"><span class="cg-punto"></span>En el taller</div>
+        <div class="cg-kpi-num">${fmtL(r.taller.litros)} L</div>
+        <div class="cg-kpi-sub">${r.taller.cargas} cargas · <b>${r.taller.pct}%</b> de los litros</div>
+      </div>
+      <div class="cg-kpi" style="--c:#B97D0A">
+        <div class="cg-kpi-lbl"><span class="cg-punto"></span>En estaciones</div>
+        <div class="cg-kpi-num">${fmtL(r.tercerizado.litros)} L</div>
+        <div class="cg-kpi-sub">${r.tercerizado.cargas} cargas · <b>${r.tercerizado.pct}%</b> de los litros</div>
+      </div>
+    </div>
+
+    <div class="cg-graficos">
+      <div class="card cg-card">
+        <div class="cg-tit">Taller o afuera</div>
+        ${donaCargas(r)}
+      </div>
+      <div class="card cg-card">
+        <div class="cg-tit">Dónde más se carga</div>
+        <div class="cg-ranking">
+          ${d.lugares.map((l, k) => `
+            <div class="cg-fila" style="--c:${colorDe[l.lugar]};--d:${k * 70}ms">
+              <div class="cg-fila-cab">
+                <span class="cg-pos">${k + 1}</span>
+                <span class="cg-nombre">${nombreLugar(l.lugar)}</span>
+                <span class="cg-litros"><b>${fmtL(l.litros)} L</b> · ${l.pct}%</span>
+              </div>
+              <div class="cg-barra"><div class="cg-barra-fill" style="width:${Math.max(2, l.litros / d.lugares[0].litros * 100)}%"></div></div>
+              <div class="cg-fila-sub">${l.cargas} carga${l.cargas === 1 ? "" : "s"}</div>
+            </div>`).join("")}
+        </div>
+      </div>
+    </div>
+
+    ${r.sin_dato.cargas ? `<p class="hint" style="margin:0 0 14px"><i class="ti ti-info-circle"></i>
+      <span>${r.sin_dato.cargas} carga(s) son de antes de que se preguntara dónde se cargó, por eso figuran "sin dato".</span></p>` : ""}
+
+    <div class="card">
+      <div class="card-head"><i class="ti ti-list"></i> Detalle <span class="emp-tab-n">${d.cargas.length}</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Fecha</th><th>Bus</th><th>Chofer</th><th class="num">Litros</th><th>Dónde</th></tr></thead>
+        <tbody>${d.cargas.map(x => {
+          const n = x.lugar === "taller" ? "TALLER" : x.lugar === "tercerizado" ? (x.emblema || "SIN EMBLEMA") : "SIN DATO";
+          return `<tr>
+            <td style="white-space:nowrap">${x.fecha}</td>
+            <td><b>#${x.bus}</b> <span style="color:var(--muted);font-size:12px">${x.patente}</span></td>
+            <td>${x.chofer || "—"}</td>
+            <td class="num">${fmtL(x.litros)}</td>
+            <td><span class="cg-chip" style="--c:${colorDe[n] || COLOR_SIN_DATO}">${nombreLugar(n)}</span></td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+}
+
+// Dona taller / estaciones / sin dato, con el porcentaje del taller al centro
+function donaCargas(r) {
+  const partes = [
+    { n: "Taller", v: r.taller.litros, c: COLOR_TALLER },
+    { n: "Estaciones", v: r.tercerizado.litros, c: "#B97D0A" },
+    { n: "Sin dato", v: r.sin_dato.litros, c: COLOR_SIN_DATO },
+  ].filter(p => p.v > 0);
+  const total = partes.reduce((s, p) => s + p.v, 0) || 1;
+  const R = 70, C = 2 * Math.PI * R;
+  let acum = 0;
+  const arcos = partes.map(p => {
+    const largo = p.v / total * C;
+    const a = `<circle r="${R}" cx="90" cy="90" fill="none" stroke="${p.c}" stroke-width="26"
+      stroke-dasharray="${largo} ${C - largo}" stroke-dashoffset="${-acum}" class="cg-arco">
+      <title>${p.n}: ${Math.round(p.v / total * 100)}%</title></circle>`;
+    acum += largo;
+    return a;
+  }).join("");
+  return `<div class="cg-dona">
+    <svg viewBox="0 0 180 180" width="190" height="190" style="transform:rotate(-90deg)">
+      <circle r="${R}" cx="90" cy="90" fill="none" stroke="var(--surface3)" stroke-width="26"/>
+      ${arcos}
+    </svg>
+    <div class="cg-dona-centro"><b>${r.taller.pct}%</b><span>en el taller</span></div>
+  </div>
+  <div class="cg-leyenda">${partes.map(p => `<span><i style="background:${p.c}"></i>${p.n} · ${Math.round(p.v / total * 100)}%</span>`).join("")}</div>`;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  MANTENIMIENTOS — historia de cada coche (libro de a bordo + día a día)
+// ════════════════════════════════════════════════════════════════════════
+// Junta lo del libro de a bordo, los correctivos, los preventivos del plan y
+// las órdenes de trabajo en una sola historia por coche. Liviano a propósito:
+// la lista trae 10 coches por página, el buscador espera a que termines de
+// escribir, y nunca se traen todos los coches de golpe.
+
+const MT_COLOR = { preventivo: "#2F7C46", correctivo: "#DC2641", neumaticos: "#6D4BB0", otros: "#5B6B7F" };
+const MT_NOMBRE = { preventivo: "Preventivo", correctivo: "Correctivo", neumaticos: "Neumáticos", otros: "Otros" };
+const MT_ORIGEN = { historial_eventos: "Libro / día a día", correctivos: "Correctivo", plan: "Plan preventivo", ot: "Orden de trabajo" };
+const MT_CATEGORIAS = ["Cambio de aceite", "Filtros", "Engrase", "Frenos", "Embrague", "Suspensión", "Dirección",
+  "Eléctrico", "Motor", "Caja", "Diferencial", "Refrigeración", "Aire acondicionado", "Carrocería", "Rotación",
+  "Cambio de neumático", "Alineación y balanceo", "Lavado de motor"];
+let mtEstado = { q: "", pagina: 1, coche: null, hpagina: 1, tipo: "" };
+let mtBuscarTimer = null;
+
+async function renderMantenimientos() {
+  status("Mantenimientos");
+  mtEstado = { q: "", pagina: 1, coche: null, hpagina: 1, tipo: "" };
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-book"></i> Mantenimientos</h1>
+      <p>La historia de mantenimiento de cada coche: lo del libro de a bordo y lo que se va haciendo día a día</p>
+    </div>
+    <div class="section">
+      <div id="mt-stats"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      <div id="mt-cuerpo"></div>
+    </div>`;
+  mtCargarStats();
+  if (window._mtAbrirCoche) {
+    const vid = window._mtAbrirCoche; window._mtAbrirCoche = null;
+    mtVerCoche(vid);
+  } else {
+    mtVerLista();
+  }
+}
+
+// ─── Estadísticas ───
+async function mtCargarStats() {
+  const caja = $("#mt-stats");
+  const e = await api("/api/mant/estadisticas");
+  if (!e || e.error) { caja.innerHTML = ""; return; }
+  const max = Math.max(1, ...e.meses.map(m => m.preventivo + m.correctivo + m.neumaticos + m.otros));
+  const nomMes = m => ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"][+m.slice(5) - 1];
+  const totalCorr = e.totales.correctivo;
+  caja.innerHTML = `
+    <div class="mt-kpis">
+      <div class="mt-kpi" style="--c:var(--brand-blue)">
+        <div class="mt-kpi-lbl">Últimos 30 días</div>
+        <div class="mt-kpi-num">${e.ultimos_30.registros}</div>
+        <div class="mt-kpi-sub">mantenimientos${e.ultimos_30.costo ? ` · Gs. ${fmtNum(Math.round(e.ultimos_30.costo))}` : ""}</div>
+      </div>
+      <div class="mt-kpi mt-kpi-link" style="--c:${MT_COLOR.preventivo}" role="button" tabindex="0"
+           onclick="mtVerTipo('preventivo')" onkeydown="if(event.key==='Enter')mtVerTipo('preventivo')">
+        <div class="mt-kpi-lbl">Preventivo <i class="ti ti-arrow-right mt-kpi-ir"></i></div>
+        <div class="mt-kpi-num">${e.pct_preventivo === null ? "—" : e.pct_preventivo + "%"}</div>
+        <div class="mt-kpi-barra"><div style="width:${e.pct_preventivo || 0}%"></div></div>
+        <div class="mt-kpi-sub">de los arreglos son preventivos (6 meses)</div>
+      </div>
+      <div class="mt-kpi mt-kpi-link" style="--c:${MT_COLOR.correctivo}" role="button" tabindex="0"
+           onclick="mtVerTipo('correctivo')" onkeydown="if(event.key==='Enter')mtVerTipo('correctivo')">
+        <div class="mt-kpi-lbl">Correctivos <i class="ti ti-arrow-right mt-kpi-ir"></i></div>
+        <div class="mt-kpi-num">${totalCorr}</div>
+        <div class="mt-kpi-sub">fallas reparadas en 6 meses</div>
+      </div>
+      <div class="mt-kpi" style="--c:${e.sin_mant_90 ? "#B97D0A" : MT_COLOR.preventivo}">
+        <div class="mt-kpi-lbl">Sin mantenimiento</div>
+        <div class="mt-kpi-num">${e.sin_mant_90}</div>
+        <div class="mt-kpi-sub">de ${e.activos} coches, en los últimos 90 días</div>
+      </div>
+    </div>
+    <div class="mt-graficos">
+      <div class="card mt-card">
+        <div class="mt-tit">Mantenimientos por mes</div>
+        <div class="mt-barras">
+          ${e.meses.map((m, k) => {
+            const tot = m.preventivo + m.correctivo + m.neumaticos + m.otros;
+            return `<div class="mt-col" title="${tot} en total">
+              <div class="mt-pila" style="height:${tot / max * 100}%;--d:${k * 60}ms">
+                ${["otros", "neumaticos", "correctivo", "preventivo"].map(g => m[g]
+                  ? `<div style="flex:${m[g]};background:${MT_COLOR[g]}" title="${MT_NOMBRE[g]}: ${m[g]}"></div>` : "").join("")}
+              </div>
+              <div class="mt-col-n">${tot || ""}</div>
+              <div class="mt-col-mes">${nomMes(m.mes)}</div>
+            </div>`;
+          }).join("")}
+        </div>
+        <div class="mt-leyenda">${Object.keys(MT_COLOR).map(g => `<span><i style="background:${MT_COLOR[g]}"></i>${MT_NOMBRE[g]}</span>`).join("")}</div>
+      </div>
+      <div class="card mt-card">
+        <div class="mt-tit">Más correctivos · 90 días</div>
+        ${e.top_correctivos.length ? e.top_correctivos.map((t, k) => `
+          <div class="mt-top" onclick="mtVerCoche(${t.vehiculo_id})">
+            <span class="mt-top-pos">${k + 1}</span>
+            <span class="mt-top-coche"><b>#${t.n_interno}</b> <span>${t.patente || ""}</span></span>
+            <span class="mt-top-barra"><span style="width:${t.n / e.top_correctivos[0].n * 100}%"></span></span>
+            <span class="mt-top-n">${t.n}</span>
+          </div>`).join("")
+          : `<div class="empty" style="padding:24px 8px"><i class="ti ti-circle-check"></i>Ningún correctivo en 90 días</div>`}
+      </div>
+    </div>`;
+}
+
+// ─── Lista de coches, de a 10 ───
+function mtVerLista() {
+  mtEstado.coche = null;
+  $("#mt-stats").style.display = "";
+  $("#mt-cuerpo").innerHTML = `
+    <div class="card">
+      <div class="mt-buscador">
+        <i class="ti ti-search"></i>
+        <input id="mt-q" placeholder="Buscá por número, patente o marca..." value="${mtEstado.q.replace(/"/g, "&quot;")}"
+               oninput="mtBuscar(this.value)" autocomplete="off">
+        <span id="mt-total" class="mt-total"></span>
+      </div>
+      <div id="mt-lista"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      <div id="mt-pag"></div>
+    </div>`;
+  mtCargarLista();
+}
+
+function mtBuscar(v) {
+  clearTimeout(mtBuscarTimer);
+  mtBuscarTimer = setTimeout(() => { mtEstado.q = v.trim(); mtEstado.pagina = 1; mtCargarLista(); }, 300);
+}
+
+async function mtCargarLista() {
+  const p = new URLSearchParams({ q: mtEstado.q, pagina: mtEstado.pagina });
+  const d = await api(`/api/mant/coches?${p.toString()}`);
+  if (!d || d.error) return;
+  mtEstado.pagina = d.pagina;
+  $("#mt-total").textContent = `${d.total} coche${d.total === 1 ? "" : "s"}`;
+  const estadoDias = x => x.dias_desde === null ? ["nunca", "Sin registros", "var(--light)"]
+    : x.dias_desde > 90 ? ["rojo", `hace ${x.dias_desde} días`, MT_COLOR.correctivo]
+    : x.dias_desde > 60 ? ["ambar", `hace ${x.dias_desde} días`, "#B97D0A"]
+    : ["verde", x.dias_desde === 0 ? "hoy" : `hace ${x.dias_desde} día${x.dias_desde === 1 ? "" : "s"}`, MT_COLOR.preventivo];
+  $("#mt-lista").innerHTML = d.coches.length ? d.coches.map(x => {
+    const [cls, txt, col] = estadoDias(x);
+    return `
+    <div class="mt-fila" onclick="mtVerCoche(${x.id})">
+      <div class="mt-num">#${x.n_interno || "—"}</div>
+      <div class="mt-coche">
+        <b>${x.patente || ""}</b>
+        <span>${[x.marca, x.modelo].filter(Boolean).join(" ")}</span>
+      </div>
+      <div class="mt-ultimo">
+        <span class="mt-punto" style="background:${col}"></span>
+        <div><div class="mt-ultimo-lbl">Último mantenimiento</div><b style="color:${cls === "nunca" ? "var(--light)" : "var(--text)"}">${txt}</b></div>
+      </div>
+      <div class="mt-cifra"><b>${x.registros}</b><span>registros</span></div>
+      <div class="mt-cifra"><b style="color:${x.correctivos ? MT_COLOR.correctivo : "var(--light)"}">${x.correctivos}</b><span>correctivos</span></div>
+      <i class="ti ti-chevron-right mt-flecha"></i>
+    </div>`;
+  }).join("") : `<div class="empty"><i class="ti ti-search"></i>Ningún coche coincide con "${mtEstado.q}"</div>`;
+  $("#mt-pag").innerHTML = paginador(d.pagina, d.paginas, "mtIrPagina");
+}
+
+function mtIrPagina(n) {
+  mtEstado.pagina = n;
+  mtCargarLista();
+  $("#mt-cuerpo").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Paginador reutilizable: ‹ 1 … 4 5 6 … 9 ›
+function paginador(actual, total, fn) {
+  if (total <= 1) return "";
+  const nums = new Set([1, total, actual - 1, actual, actual + 1].filter(n => n >= 1 && n <= total));
+  if (total <= 7) for (let i = 1; i <= total; i++) nums.add(i);
+  const lista = [...nums].sort((a, b) => a - b);
+  let html = `<button class="pg-btn" ${actual === 1 ? "disabled" : ""} onclick="${fn}(${actual - 1})"><i class="ti ti-chevron-left"></i></button>`;
+  let prev = 0;
+  for (const n of lista) {
+    if (n - prev > 1) html += `<span class="pg-sep">…</span>`;
+    html += `<button class="pg-btn ${n === actual ? "activo" : ""}" onclick="${fn}(${n})">${n}</button>`;
+    prev = n;
+  }
+  html += `<button class="pg-btn" ${actual === total ? "disabled" : ""} onclick="${fn}(${actual + 1})"><i class="ti ti-chevron-right"></i></button>`;
+  return `<div class="paginador">${html}</div>`;
+}
+
+// ─── La historia de un coche ───
+async function mtVerCoche(vid, tipo = "") {
+  mtEstado.coche = vid; mtEstado.hpagina = 1; mtEstado.tipo = tipo;
+  $("#mt-stats").style.display = "none";
+  $("#mt-cuerpo").innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  content.scrollTop = 0;
+  await mtCargarCoche(true);
+}
+
+async function mtCargarCoche(armar = false) {
+  const vid = mtEstado.coche;
+  const p = new URLSearchParams({ pagina: mtEstado.hpagina, tipo: mtEstado.tipo });
+  const d = await api(`/api/mant/coche/${vid}?${p.toString()}`);
+  if (!d || d.error) { toast("No se pudo abrir el coche", "error"); return; }
+  const r = d.resumen, v = d.coche;
+  const fecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) + "/" + f.slice(0, 4) : "—";
+  if (armar || !$("#mt-historia")) {
+    const hoy = new Date().toISOString().slice(0, 10);
+    $("#mt-cuerpo").innerHTML = `
+      <button class="btn btn-ghost" style="margin-bottom:12px" onclick="mtVolver()"><i class="ti ti-arrow-left"></i> ${mtEstado.desdeTipo ? "Volver a " + (mtEstado.desdeTipo === "preventivo" ? "preventivos" : "correctivos") : "Volver a la lista"}</button>
+      <div class="mt-cab card">
+        <div class="mt-cab-num">#${v.n_interno || "—"}</div>
+        <div class="mt-cab-datos">
+          <h2>${v.patente || ""} <span>${[v.marca, v.modelo].filter(Boolean).join(" ")}</span></h2>
+          <div class="mt-cab-chips" id="mt-resumen"></div>
+        </div>
+      </div>
+
+      <div class="card mt-form">
+        <div class="mt-tit" style="margin-bottom:10px"><i class="ti ti-plus"></i> Agregar mantenimiento</div>
+        <div class="mt-tipos" id="mt-tipos">
+          ${[["preventivo", "Preventivo"], ["correctivo", "Correctivo"], ["neumaticos", "Neumáticos"], ["servicio", "Servicio"], ["otro", "Otro"]]
+            .map(([k, n]) => `<button type="button" class="mt-tipo ${k === "preventivo" ? "sel" : ""}" data-t="${k}"
+              style="--c:${MT_COLOR[k] || MT_COLOR.otros}" onclick="mtElegirTipo('${k}')">${n}</button>`).join("")}
+        </div>
+        <div class="mt-campos">
+          <div class="emp-campo"><label>Fecha</label><input type="date" id="mt-fecha" value="${hoy}" max="${hoy}"></div>
+          <div class="emp-campo" style="flex:1.4"><label>Qué se hizo</label>
+            <input id="mt-cat" list="mt-cats" placeholder="Ej: Cambio de aceite">
+            <datalist id="mt-cats">${MT_CATEGORIAS.map(x => `<option value="${x}">`).join("")}</datalist></div>
+          <div class="emp-campo"><label>Kilometraje</label><input id="mt-km" inputmode="numeric" placeholder="Del tablero"></div>
+          <div class="emp-campo"><label>Costo (Gs.)</label><input id="mt-costo" inputmode="numeric" placeholder="Opcional"></div>
+        </div>
+        <div class="mt-campos">
+          <div class="emp-campo" style="flex:2"><label>Detalle</label><input id="mt-desc" placeholder="Ej: Aceite 15W40, filtro de aceite y de combustible"></div>
+          <div class="emp-campo"><label>Taller o mecánico</label><input id="mt-taller" placeholder="Opcional"></div>
+          <button class="btn btn-primary" id="mt-guardar" onclick="mtGuardar()" style="align-self:flex-end"><i class="ti ti-check"></i> Guardar</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="mt-filtros" id="mt-filtros">
+          ${[["", "Todos"], ["preventivo", "Preventivos"], ["correctivo", "Correctivos"], ["neumaticos", "Neumáticos"], ["otros", "Otros"]]
+            .map(([k, n]) => `<button class="chip ${k === mtEstado.tipo ? "activo" : ""}" data-f="${k}" onclick="mtFiltrar('${k}')">${n}</button>`).join("")}
+        </div>
+        <div id="mt-historia"></div>
+        <div id="mt-hpag"></div>
+      </div>`;
+  }
+  $("#mt-resumen").innerHTML = `
+    <span><b>${r.registros}</b> registros</span>
+    <span style="--c:${MT_COLOR.preventivo}"><b>${r.preventivos}</b> preventivos</span>
+    <span style="--c:${MT_COLOR.correctivo}"><b>${r.correctivos}</b> correctivos</span>
+    ${r.costo ? `<span><b>Gs. ${fmtNum(Math.round(r.costo))}</b> invertidos</span>` : ""}
+    ${r.ultimo ? `<span>Último: <b>${fecha(r.ultimo)}</b></span>` : ""}
+    ${r.primero ? `<span>Desde: <b>${fecha(r.primero)}</b></span>` : ""}`;
+  $("#mt-historia").innerHTML = d.items.length ? d.items.map(x => `
+    <div class="mt-item" style="--c:${MT_COLOR[x.grupo]}">
+      <div class="mt-item-fecha">${fecha(x.fecha)}</div>
+      <div class="mt-item-linea"></div>
+      <div class="mt-item-cuerpo">
+        <div class="mt-item-tit">
+          <span class="mt-item-chip">${MT_NOMBRE[x.grupo]}</span>
+          <b>${x.categoria && x.categoria !== "Orden de trabajo" ? x.categoria : x.descripcion}</b>
+        </div>
+        ${x.categoria && x.categoria !== "Orden de trabajo" && x.descripcion && x.descripcion !== x.categoria
+          ? `<div class="mt-item-desc">${x.descripcion}</div>` : ""}
+        <div class="mt-item-meta">
+          ${x.km ? `<span><i class="ti ti-gauge"></i>${fmtNum(Math.round(x.km))} km</span>` : ""}
+          ${x.costo ? `<span><i class="ti ti-cash"></i>Gs. ${fmtNum(Math.round(x.costo))}</span>` : ""}
+          ${x.taller ? `<span><i class="ti ti-tool"></i>${x.taller}</span>` : ""}
+          <span class="mt-item-origen">${x.borrable ? "Libro / día a día" : (MT_ORIGEN[x.origen] || "")}</span>
+        </div>
+      </div>
+      ${x.borrable ? `<button class="icon-btn mt-borrar" title="Borrar (cargado por error)" onclick="mtBorrar('${x.origen}', ${x.id})"><i class="ti ti-trash"></i></button>` : ""}
+    </div>`).join("")
+    : `<div class="empty"><i class="ti ti-book-off"></i>${mtEstado.tipo ? "Nada de este tipo todavía." : "Este coche no tiene mantenimientos cargados todavía. Empezá por lo del libro de a bordo."}</div>`;
+  $("#mt-hpag").innerHTML = paginador(d.pagina, d.paginas, "mtIrHPagina");
+}
+
+// Todos los preventivos o correctivos de la flota (los mismos 6 meses que
+// cuenta la tarjeta). Tocar uno abre la historia de ese coche ya filtrada.
+async function mtVerTipo(tipo, pagina = 1) {
+  mtEstado.coche = null; mtEstado.desdeTipo = null; mtEstado.tpagina = pagina;
+  $("#mt-stats").style.display = "none";
+  const caja = $("#mt-cuerpo");
+  if (!$("#mt-tipo-lista")) caja.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const d = await api(`/api/mant/registros?tipo=${tipo}&pagina=${pagina}`);
+  if (!d || d.error) { toast("No se pudo abrir la lista", "error"); mtVolverLista(); return; }
+  const fecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) + "/" + f.slice(0, 4) : "—";
+  const nombre = tipo === "preventivo" ? "Preventivos" : "Correctivos";
+  caja.innerHTML = `
+    <button class="btn btn-ghost" style="margin-bottom:12px" onclick="mtVolverLista()"><i class="ti ti-arrow-left"></i> Volver</button>
+    <div class="card">
+      <div class="card-head" style="--c:${MT_COLOR[tipo]}">
+        <span class="mt-tipo-punto" style="background:${MT_COLOR[tipo]}"></span>
+        ${nombre} de toda la flota
+        <span class="emp-tab-n">${d.total}</span>
+        <span class="hint" style="margin-left:auto;font-weight:400">desde el ${fecha(d.desde)} · tocá uno para ver ese coche</span>
+      </div>
+      <div id="mt-tipo-lista">
+        ${d.items.length ? d.items.map(x => `
+          <div class="mt-item mt-item-flota" style="--c:${MT_COLOR[x.grupo]}" onclick="mtAbrirDesdeTipo(${x.vehiculo_id}, '${tipo}')">
+            <div class="mt-item-fecha">${fecha(x.fecha)}</div>
+            <div class="mt-item-linea"></div>
+            <div class="mt-item-cuerpo">
+              <div class="mt-item-tit">
+                <span class="mt-item-coche">#${x.n_interno || "—"}</span>
+                <b>${x.categoria && x.categoria !== "Orden de trabajo" ? x.categoria : x.descripcion}</b>
+              </div>
+              ${x.categoria && x.categoria !== "Orden de trabajo" && x.descripcion && x.descripcion !== x.categoria
+                ? `<div class="mt-item-desc">${x.descripcion}</div>` : ""}
+              <div class="mt-item-meta">
+                ${x.patente ? `<span><i class="ti ti-bus"></i>${x.patente}</span>` : ""}
+                ${x.km ? `<span><i class="ti ti-gauge"></i>${fmtNum(Math.round(x.km))} km</span>` : ""}
+                ${x.costo ? `<span><i class="ti ti-cash"></i>Gs. ${fmtNum(Math.round(x.costo))}</span>` : ""}
+                ${x.taller ? `<span><i class="ti ti-tool"></i>${x.taller}</span>` : ""}
+              </div>
+            </div>
+            <i class="ti ti-chevron-right mt-flecha"></i>
+          </div>`).join("")
+          : `<div class="empty"><i class="ti ti-circle-check"></i>No hay ${nombre.toLowerCase()} cargados en este período.</div>`}
+      </div>
+      ${paginador(d.pagina, d.paginas, `(n => mtVerTipo('${tipo}', n))`)}
+    </div>`;
+  content.scrollTop = 0;
+}
+function mtAbrirDesdeTipo(vid, tipo) {
+  const pag = mtEstado.tpagina;
+  mtVerCoche(vid, tipo);
+  mtEstado.desdeTipo = tipo; mtEstado.tpagina = pag;
+}
+function mtVolverLista() {
+  mtEstado.desdeTipo = null;
+  mtVerLista();
+  if (mtEstado.statsViejas) { mtEstado.statsViejas = false; mtCargarStats(); }
+}
+
+function mtIrHPagina(n) { mtEstado.hpagina = n; mtCargarCoche(); }
+function mtFiltrar(t) {
+  mtEstado.tipo = t; mtEstado.hpagina = 1;
+  document.querySelectorAll("#mt-filtros .chip").forEach(b => b.classList.toggle("activo", b.dataset.f === t));
+  mtCargarCoche();
+}
+function mtElegirTipo(t) {
+  document.querySelectorAll("#mt-tipos .mt-tipo").forEach(b => b.classList.toggle("sel", b.dataset.t === t));
+}
+function mtVolver() {
+  if (mtEstado.desdeTipo) { const t = mtEstado.desdeTipo; mtEstado.desdeTipo = null; mtVerTipo(t, mtEstado.tpagina || 1); return; }
+  mtVerLista();
+  if (mtEstado.statsViejas) { mtEstado.statsViejas = false; mtCargarStats(); }
+}
+
+async function mtGuardar() {
+  const tipo = document.querySelector("#mt-tipos .mt-tipo.sel")?.dataset.t || "otro";
+  const cat = $("#mt-cat").value.trim(), desc = $("#mt-desc").value.trim();
+  const fecha = $("#mt-fecha").value;
+  if (!fecha) { toast("Poné la fecha", "error"); return; }
+  if (!cat && !desc) { toast("Contá qué se hizo", "error"); $("#mt-cat").focus(); return; }
+  const num = id => parseFloat(($(id).value || "").replace(/\./g, "").replace(",", ".")) || 0;
+  const btn = $("#mt-guardar"); btn.disabled = true;
+  const r = await api("/api/historial_carga", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehiculo_id: mtEstado.coche, fecha, tipo, categoria: cat,
+      descripcion: desc || cat, km: num("#mt-km"), costo: num("#mt-costo"), taller: $("#mt-taller").value.trim() })
+  });
+  btn.disabled = false;
+  if (!(r && r.ok)) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast("Mantenimiento guardado", "success");
+  ["#mt-cat", "#mt-desc", "#mt-km", "#mt-costo"].forEach(id => $(id).value = "");
+  mtEstado.statsViejas = true;
+  mtEstado.hpagina = 1;
+  mtCargarCoche();
+}
+
+async function mtBorrar(origen, id) {
+  if (!confirm("¿Borrar este registro? Usalo solo si se cargó por error.")) return;
+  const r = await api(`/api/historial_carga/${origen}/${id}`, { method: "DELETE" });
+  if (r && r.ok) { toast("Registro borrado", "success"); mtEstado.statsViejas = true; mtCargarCoche(); }
+  else toast((r && r.msg) || "No se pudo borrar", "error");
+}
+
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  NÚMEROS QUE CUENTAN — los valores grandes suben hasta su valor
+// ════════════════════════════════════════════════════════════════════════
+// Se aplica solo a los números de las tarjetas de resumen, una vez por
+// número que aparece. Respeta el formato (Gs., %, L, puntos de miles, coma
+// decimal) y no hace nada si el equipo pide reducir el movimiento.
+const UI_NUMEROS = ".metric-value, .mt-kpi-num, .cg-kpi-num, .ctrl-num";
+const _uiSinMovimiento = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function _uiContar(el) {
+  if (el.dataset.contado) return;
+  el.dataset.contado = "1";
+  if (_uiSinMovimiento || el.children.length > 1) return;
+  // El primer texto numérico: "Gs. 15.690.000", "58%", "2.207,5 L", "35,39"
+  const nodo = [...el.childNodes].find(n => n.nodeType === 3 && /\d/.test(n.textContent));
+  if (!nodo) return;
+  const m = nodo.textContent.match(/^(.*?)(\d{1,3}(?:\.\d{3})+|\d+)(,\d+)?(.*)$/s);
+  if (!m) return;
+  const [, antes, entero, dec, despues] = m;
+  const decimales = dec ? dec.length - 1 : 0;
+  const final = parseFloat(entero.replace(/\./g, "") + (dec ? "." + dec.slice(1) : ""));
+  if (!isFinite(final) || final === 0) return;
+  const fmt = v => v.toLocaleString("es-PY", { minimumFractionDigits: decimales, maximumFractionDigits: decimales })
+                     .replace(/,(?=\d{3})/g, ".");
+  const dur = 650, t0 = performance.now();
+  const paso = t => {
+    const p = Math.min(1, (t - t0) / dur);
+    const e = 1 - Math.pow(1 - p, 3);              // arranca rápido, frena al final
+    nodo.textContent = antes + fmt(final * e) + despues;
+    if (p < 1) requestAnimationFrame(paso);
+    else nodo.textContent = antes + entero + (dec || "") + despues;   // el texto exacto original
+  };
+  requestAnimationFrame(paso);
+}
+
+(function () {
+  const raiz = document.getElementById("content");
+  if (!raiz || !window.MutationObserver) return;
+  let pendiente = false;
+  new MutationObserver(() => {
+    if (pendiente) return;
+    pendiente = true;
+    requestAnimationFrame(() => {
+      pendiente = false;
+      raiz.querySelectorAll(UI_NUMEROS).forEach(_uiContar);
+    });
+  }).observe(raiz, { childList: true, subtree: true });
+})();
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  IDENTIDAD — el sistema como una red de recorridos
+// ════════════════════════════════════════════════════════════════════════
+
+function saludoDelDia() {
+  const ahora = new Date();
+  const h = ahora.getHours();
+  const saludo = h < 12 ? "Buen día" : h < 19 ? "Buenas tardes" : "Buenas noches";
+  const nombre = (document.getElementById("user-name")?.textContent || "").trim().split(/[\s,]+/)[0];
+  const fecha = ahora.toLocaleDateString("es-PY", { weekday: "long", day: "numeric", month: "long" });
+  return `${saludo}${nombre ? ", " + nombre : ""}. Hoy es ${fecha}.`;
+}
+
+// ─── El colectivo que recorre el menú ───
+// Cada grupo del menú es una línea y cada sección una parada. Al cambiar de
+// sección, el colectivo viaja por la línea hasta la parada nueva. La duración
+// depende de la distancia, así un salto largo se siente como un viaje largo.
+(function rutaDelMenu() {
+  const nav = document.querySelector(".sidebar .nav");
+  if (!nav) return;
+  const bus = document.createElement("div");
+  bus.className = "nav-bus";
+  bus.innerHTML = "<span></span>";
+  nav.appendChild(bus);
+  let ultimaY = null, timer = null;
+  function mover() {
+    const a = nav.querySelector(".nav-item.active");
+    if (!a || a.offsetParent === null) { bus.style.opacity = 0; return; }
+    const y = a.offsetTop + a.offsetHeight / 2;
+    if (y === ultimaY) { bus.style.opacity = 1; return; }
+    if (ultimaY === null || _uiSinMovimiento) {
+      bus.style.transition = "none";
+    } else {
+      const d = Math.abs(y - ultimaY);
+      const ms = Math.round(Math.min(780, 260 + d * 0.85));
+      bus.style.transition = `transform ${ms}ms cubic-bezier(.5,.05,.2,1), opacity .2s`;
+      bus.classList.toggle("baja", y > ultimaY);
+      bus.classList.toggle("sube", y < ultimaY);
+      bus.classList.add("viaja");
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        bus.classList.remove("viaja");
+        bus.classList.remove("llego"); void bus.offsetWidth; bus.classList.add("llego");
+      }, ms);
+    }
+    bus.style.transform = `translate(-50%, ${y}px) translateY(-50%)`;
+    bus.style.opacity = 1;
+    ultimaY = y;
+  }
+  new MutationObserver(() => requestAnimationFrame(mover))
+    .observe(nav, { attributes: true, attributeFilter: ["class", "style"], subtree: true });
+  window.addEventListener("resize", () => { ultimaY = null; mover(); });
+  requestAnimationFrame(mover);
+})();
+
+// ─── Títulos como letrero de destino ───
+// Cuando cambiás de pantalla, las letras del título giran como en los
+// carteles de las terminales y se acomodan una atrás de la otra.
+let _flapUltimo = "";
+function flapTitulo(h1) {
+  const nodo = [...h1.childNodes].find(n => n.nodeType === 3 && n.textContent.trim());
+  if (!nodo) return;
+  const texto = nodo.textContent, limpio = texto.trim();
+  if (limpio === _flapUltimo) return;
+  _flapUltimo = limpio;
+  if (_uiSinMovimiento) return;
+  const flap = document.createElement("span");
+  flap.className = "flap";
+  [...texto].forEach(ch => { const s = document.createElement("span"); s.className = "flap-c"; s.textContent = ch; flap.appendChild(s); });
+  nodo.replaceWith(flap);
+  const letras = [...flap.children];
+  letras.forEach(s => { s.style.width = s.getBoundingClientRect().width + "px"; });
+  // Letras al azar de la misma caja que la final, así el ancho casi no salta
+  const MAY = "ABCDEFGHIJKLMNOPRSTUVZ", MIN = "abcdeghinoprstuvz", NUM = "0123456789";
+  let fuente = MAY;
+  const azar = () => fuente[Math.floor(Math.random() * fuente.length)];
+  let ultimo = 0;
+  letras.forEach((s, i) => {
+    const fin = s.textContent;
+    if (!fin.trim()) return;
+    const giros = 3 + Math.floor(Math.random() * 4);
+    const inicio = i * 31;
+    ultimo = Math.max(ultimo, inicio + giros * 55);
+    s.classList.add("girando");
+    s.dataset.caja = /\d/.test(fin) ? "n" : fin === fin.toUpperCase() ? "M" : "m";
+    const deCaja = () => { fuente = s.dataset.caja === "n" ? NUM : s.dataset.caja === "M" ? MAY : MIN; return azar(); };
+    s.textContent = deCaja();
+    let k = 0;
+    const paso = () => {
+      if (!flap.isConnected) return;
+      if (++k >= giros) { s.textContent = fin; s.classList.remove("girando"); s.classList.add("cae"); return; }
+      s.textContent = deCaja();
+      setTimeout(paso, 55);
+    };
+    setTimeout(paso, inicio);
+  });
+  // Al terminar vuelve a ser texto común (para copiar, buscar, imprimir)
+  setTimeout(() => { if (flap.isConnected) flap.replaceWith(document.createTextNode(texto)); }, ultimo + 420);
+}
+(function () {
+  const raiz = document.getElementById("content");
+  if (!raiz || !window.MutationObserver) return;
+  const vistos = new WeakSet();
+  new MutationObserver(() => requestAnimationFrame(() => {
+    const h1 = raiz.querySelector(".page-header h1");
+    if (h1 && !vistos.has(h1)) { vistos.add(h1); flapTitulo(h1); }
+  })).observe(raiz, { childList: true, subtree: false });
+})();
+
+// ─── ¿A dónde vamos? — ir a cualquier coche o sección escribiendo ───
+const DEST_COCHE_SECCIONES = [["historial_carga", "Historial"], ["mantenimientos", "Mantenimientos"], ["costos", "Costos"],
+                              ["kpis", "KPIs"], ["mantenimiento", "Preventivo"]];
+let _dest = { sel: 0, items: [], coches: null, cochesAt: 0 };
+
+function destRecordar(sec) {
+  try {
+    const r = JSON.parse(sessionStorage.getItem("destRecientes") || "[]").filter(x => x !== sec);
+    r.unshift(sec);
+    sessionStorage.setItem("destRecientes", JSON.stringify(r.slice(0, 5)));
+  } catch (e) { /* sin almacenamiento: no pasa nada */ }
+}
+function destRecientes() {
+  try { return JSON.parse(sessionStorage.getItem("destRecientes") || "[]"); } catch (e) { return []; }
+}
+const destNorm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+const destEsc = s => String(s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function destMarcar(texto, q) {
+  const t = String(texto || "");
+  if (!q) return destEsc(t);
+  const i = destNorm(t).indexOf(q);
+  if (i < 0) return destEsc(t);
+  return destEsc(t.slice(0, i)) + "<mark>" + destEsc(t.slice(i, i + q.length)) + "</mark>" + destEsc(t.slice(i + q.length));
+}
+
+// Las secciones que esta persona ve en su menú, con el grupo al que pertenecen
+function destSecciones() {
+  const out = [];
+  let grupo = "";
+  document.querySelectorAll(".sidebar .nav > .nav-section, .sidebar .nav > .nav-item[data-sec]").forEach(el => {
+    if (el.classList.contains("nav-section")) { grupo = el.textContent.trim(); return; }
+    if (el.style.display === "none" || getComputedStyle(el).display === "none") return;
+    out.push({ tipo: "seccion", sec: el.dataset.sec, nombre: el.textContent.trim(), grupo,
+               icono: (el.querySelector(".ti")?.className || "ti ti-point").replace(/\s+/g, " ") });
+  });
+  return out;
+}
+
+async function abrirDestino() {
+  if (document.getElementById("destino-overlay")) return;
+  cerrarSidebar?.();
+  const o = document.createElement("div");
+  o.className = "destino-overlay";
+  o.id = "destino-overlay";
+  o.innerHTML = `
+    <div class="destino" role="dialog" aria-label="Buscar coche o sección">
+      <div class="destino-cab">
+        <label for="destino-q">¿A dónde vamos?</label>
+        <div class="destino-campo">
+          <i class="ti ti-map-pin"></i>
+          <input id="destino-q" autocomplete="off" spellcheck="false" placeholder="Un coche, una patente o una sección">
+        </div>
+      </div>
+      <div class="destino-linea"></div>
+      <div class="destino-lista" id="destino-lista"></div>
+      <div class="destino-teclas">
+        <span><kbd>↑</kbd><kbd>↓</kbd> moverse</span>
+        <span><kbd>Enter</kbd> ir</span>
+        <span><kbd>Esc</kbd> cerrar</span>
+      </div>
+    </div>`;
+  o.addEventListener("mousedown", e => { if (e.target === o) cerrarDestino(); });
+  document.body.appendChild(o);
+  const q = document.getElementById("destino-q");
+  q.addEventListener("input", () => { _dest.sel = 0; destDibujar(); });
+  q.addEventListener("keydown", destTeclas);
+  q.focus();
+  destDibujar();
+  // Los coches se traen una vez y se guardan un rato
+  if (!_dest.coches || Date.now() - _dest.cochesAt > 5 * 60 * 1000) {
+    const vs = await api("/api/vehiculos");
+    if (Array.isArray(vs)) { _dest.coches = vs; _dest.cochesAt = Date.now(); destDibujar(); }
+  }
+}
+
+function cerrarDestino() {
+  document.getElementById("destino-overlay")?.remove();
+}
+
+function destDibujar() {
+  const lista = document.getElementById("destino-lista");
+  if (!lista) return;
+  const qCruda = (document.getElementById("destino-q")?.value || "").trim();
+  const q = destNorm(qCruda).replace(/^#/, "");
+  const secciones = destSecciones();
+  const grupos = [];
+
+  if (!q) {
+    const rec = destRecientes().map(s => secciones.find(x => x.sec === s)).filter(Boolean).slice(0, 4);
+    if (rec.length) grupos.push(["Hace un rato", rec]);
+    grupos.push(["Todas las secciones", secciones]);
+  } else {
+    const coches = (_dest.coches || []).map(v => {
+      const num = destNorm(v.n_interno), pat = destNorm(v.patente);
+      const otros = destNorm(`${v.marca || ""} ${v.modelo || ""}`);
+      const p = num === q ? 0 : num.startsWith(q) ? 1 : pat.startsWith(q) ? 2 : pat.includes(q) ? 3
+              : num.includes(q) ? 4 : otros.includes(q) ? 5 : 99;
+      return { tipo: "coche", v, p };
+    }).filter(x => x.p < 99).sort((a, b) => a.p - b.p || String(a.v.n_interno).localeCompare(String(b.v.n_interno), "es", { numeric: true }))
+      .slice(0, 7);
+    const secs = secciones.map(s => {
+      const n = destNorm(s.nombre), g = destNorm(s.grupo);
+      const p = n.startsWith(q) ? 0 : n.split(/\s+/).some(w => w.startsWith(q)) ? 1 : n.includes(q) ? 2 : g.includes(q) ? 3 : 99;
+      return { ...s, p };
+    }).filter(s => s.p < 99).sort((a, b) => a.p - b.p);
+    // Si parece un número de coche, los coches van primero
+    if (/^\d/.test(q)) {
+      if (coches.length) grupos.push(["Coches", coches]);
+      if (secs.length) grupos.push(["Secciones", secs]);
+    } else {
+      if (secs.length) grupos.push(["Secciones", secs]);
+      if (coches.length) grupos.push(["Coches", coches]);
+    }
+  }
+
+  _dest.items = grupos.flatMap(g => g[1]);
+  if (_dest.sel >= _dest.items.length) _dest.sel = Math.max(0, _dest.items.length - 1);
+  if (!_dest.items.length) {
+    lista.innerHTML = `<div class="destino-vacio">${_dest.coches === null && /^\d/.test(q)
+      ? "Buscando coches…"
+      : `Nada con «${destEsc(qCruda)}». Probá con el número del coche, la patente o el nombre de una sección.`}</div>`;
+    return;
+  }
+  let k = 0;
+  lista.innerHTML = grupos.map(([titulo, items]) => `
+    <div class="destino-grupo">${titulo}</div>
+    ${items.map(it => {
+      const i = k++;
+      if (it.tipo === "coche") {
+        const v = it.v;
+        return `<div class="destino-item ${i === _dest.sel ? "sel" : ""}" data-i="${i}">
+          <div class="destino-num">#${destMarcar(v.n_interno, q)}</div>
+          <div class="destino-txt"><b>${destMarcar(v.patente, q)}</b><small>${destEsc([v.marca, v.modelo].filter(Boolean).join(" "))}</small></div>
+          <div class="destino-atajos">${DEST_COCHE_SECCIONES.filter(([s]) => puedeVerSeccion(s))
+            .map(([s, n]) => `<button type="button" data-i="${i}" data-sec="${s}">${n}</button>`).join("")}</div>
+        </div>`;
+      }
+      return `<div class="destino-item ${i === _dest.sel ? "sel" : ""}" data-i="${i}">
+        <div class="destino-ico"><i class="${it.icono}"></i></div>
+        <div class="destino-txt"><b>${destMarcar(it.nombre, q)}</b><small>${destEsc(it.grupo)}</small></div>
+      </div>`;
+    }).join("")}`).join("");
+  lista.querySelectorAll(".destino-item").forEach(el => {
+    el.addEventListener("mousemove", () => { if (_dest.sel !== +el.dataset.i) { _dest.sel = +el.dataset.i; destMarcarSel(); } });
+    el.addEventListener("click", e => {
+      const b = e.target.closest("button[data-sec]");
+      destIr(_dest.items[+el.dataset.i], b ? b.dataset.sec : null);
+    });
+  });
+}
+
+function destMarcarSel() {
+  document.querySelectorAll("#destino-lista .destino-item").forEach(el => el.classList.toggle("sel", +el.dataset.i === _dest.sel));
+  document.querySelector("#destino-lista .destino-item.sel")?.scrollIntoView({ block: "nearest" });
+}
+
+function destTeclas(e) {
+  if (e.key === "Escape") { e.preventDefault(); cerrarDestino(); return; }
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = _dest.items.length;
+    if (!n) return;
+    _dest.sel = (_dest.sel + (e.key === "ArrowDown" ? 1 : -1) + n) % n;
+    destMarcarSel();
+  }
+  if (e.key === "Enter") { e.preventDefault(); const it = _dest.items[_dest.sel]; if (it) destIr(it); }
+}
+
+function destNavegar(sec) {
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  document.querySelector(`.nav-item[data-sec="${sec}"]`)?.classList.add("active");
+  irA(sec);
+}
+
+function destIr(it, secCoche = null) {
+  cerrarDestino();
+  if (it.tipo === "seccion") {
+    if (["costos", "kpis", "mantenimiento", "neumaticos"].includes(it.sec) && !cocheActual) {
+      elegirCocheYIr(it.sec);
+      return;
+    }
+    destNavegar(it.sec);
+    return;
+  }
+  const v = it.v;
+  setCoche(v);
+  let sec = secCoche || (puedeVerSeccion("historial_carga") ? "historial_carga"
+    : puedeVerSeccion("mantenimientos") ? "mantenimientos" : "costos");
+  if (!puedeVerSeccion(sec)) sec = "costos";
+  if (sec === "mantenimientos") window._mtAbrirCoche = v.id;
+  if (sec === "historial_carga") window._hiAbrirCoche = v.id;
+  destNavegar(sec);
+}
+
+document.addEventListener("keydown", e => {
+  const escribiendo = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "") || document.activeElement?.isContentEditable;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); abrirDestino(); }
+  else if (e.key === "/" && !escribiendo) { e.preventDefault(); abrirDestino(); }
+});
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  RENDICIONES DE VIAJE (Turismo)
+// ════════════════════════════════════════════════════════════════════════
+// Antes del viaje se le da al chofer un anticipo; a la vuelta trae los
+// comprobantes y la oficina los carga acá (sin foto). Administración la
+// aprueba y después se registra si el chofer devolvió o si se le pagó.
+//
+//     anticipos − gastos = saldo      saldo > 0 → devuelve · saldo < 0 → se le paga
+//
+// Lista: arriba lo gastado en viajes (90 días) por rubro y los pendientes;
+// abajo cada viaje como un pasaje, con lo gastado contra el anticipo.
+// Detalle: el pasaje grande con los pasos, la cuenta, y la carga rápida de
+// comprobantes (rubro → monto → Enter).
+
+const rv = {
+  filtro: "activas", q: "", datos: null, id: null, det: null,
+  cat: "combustible", moneda: "GS", fecha: "", cot: {},
+  puedeCargar: false, esAdmin: false,
+  viajes: [], presus: null, nuevo: { modo: "agenda", sel: null, presuTocado: false },
+};
+
+const RV_CATS = [
+  { clave: "combustible", nombre: "Combustible", corto: "Combustible", icono: "gas-station", ph: "Estación y ciudad (ej. Petropar Coronel Oviedo)" },
+  { clave: "combustible_ext", nombre: "Combustible en el exterior", corto: "Combustible exterior", icono: "world", ph: "Estación y ciudad (ej. YPF Resistencia)" },
+  { clave: "peajes", nombre: "Peajes", corto: "Peajes", icono: "road", ph: "Qué peajes (ej. Ruta 2, ida)" },
+  { clave: "comida", nombre: "Comida / viáticos", corto: "Comida / viáticos", icono: "tools-kitchen-2", ph: "Comidas o viático de quién" },
+  { clave: "hotel", nombre: "Hotel / estadía", corto: "Hotel / estadía", icono: "bed", ph: "Hotel y noches" },
+  { clave: "estacionamiento", nombre: "Estacionamiento", corto: "Estacionamiento", icono: "parking", ph: "Dónde" },
+  { clave: "lavado", nombre: "Lavado", corto: "Lavado", icono: "droplets", ph: "Dónde y qué se lavó" },
+  { clave: "dinatran", nombre: "DINATRAN", corto: "DINATRAN", icono: "building-bank", ph: "Permiso, habilitación…" },
+  { clave: "carta_azul", nombre: "Carta azul", corto: "Carta azul", icono: "file-certificate", ph: "Carta azul" },
+  { clave: "otros", nombre: "Otros", corto: "Otros", icono: "dots", ph: "Qué fue" },
+];
+const RV_CAT = Object.fromEntries(RV_CATS.map(c => [c.clave, c]));
+const RV_MONEDAS = { GS: "Gs.", USD: "US$", ARS: "AR$", BRL: "R$" };
+const RV_ESTADOS = {
+  abierta: { txt: "Cargando", icono: "pencil", clase: "e-abierta" },
+  presentada: { txt: "Para aprobar", icono: "hourglass-high", clase: "e-presentada" },
+  aprobada: { txt: "Por saldar", icono: "checks", clase: "e-aprobada" },
+  saldada: { txt: "Saldada", icono: "circle-check", clase: "e-saldada" },
+};
+const RV_FILTROS = [["activas", "Activas"], ["abierta", "Cargando"], ["presentada", "Para aprobar"],
+                    ["aprobada", "Por saldar"], ["saldada", "Saldadas"], ["todas", "Todas"]];
+const RV_DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+const RV_MESES = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"];
+const RV_MESES_L = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+// ─── Utilidades ───
+const rvEsc = s => trEsc(s);
+// "1.250.000" → 1250000 · "50,5" → 50.5 · "12.50" → 12.5 (igual que el servidor)
+function rvNum(v) {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return v;
+  let s = String(v).trim().replace(/\s/g, "");
+  if (s.includes(",")) s = s.replace(/\./g, "").replace(",", ".");
+  else if ((s.match(/\./g) || []).length > 1 || /^\d*\.\d{3}$/.test(s)) s = s.replace(/\./g, "");
+  const n = parseFloat(s);
+  return isNaN(n) ? 0 : n;
+}
+// 1234.5 → "1.234,5"
+function rvDec(n, dec = 2) {
+  n = Number(n) || 0;
+  const neg = n < 0;
+  let [ent, fr] = Math.abs(n).toFixed(dec).split(".");
+  ent = ent.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  fr = (fr || "").replace(/0+$/, "");
+  return (neg ? "-" : "") + ent + (fr ? "," + fr : "");
+}
+const rvCot = v => (Number(v) < 100 ? rvDec(v, 2) : rvDec(v, 0));
+const rvMon = (monto, moneda) => `${RV_MONEDAS[moneda] || moneda} ${rvDec(monto, 2)}`;
+const rvD = f => (f ? new Date(String(f).slice(0, 10) + "T12:00:00") : null);
+const rvF = f => (f ? `${String(f).slice(8, 10)}/${String(f).slice(5, 7)}` : "—");
+const rvDiaSem = (f, corto) => { const d = rvD(f); if (!d) return ""; const n = RV_DIAS[d.getDay()]; return corto ? n.slice(0, 3) : n; };
+const rvDiasEntre = (a, b) => Math.round((rvD(b) - rvD(a)) / 86400000);
+const rvPl = (n, s, p) => `${n} ${n === 1 ? s : (p || s + "s")}`;
+// "JUAN CARLOS AYALA" → "Juan Carlos Ayala"
+function rvNombre(s) {
+  const chicas = new Set(["de", "del", "la", "las", "los", "y"]);
+  return String(s || "").toLowerCase().split(/(\s+|\/)/).map((p, i) =>
+    (i > 0 && chicas.has(p)) ? p : p.charAt(0).toUpperCase() + p.slice(1)).join("");
+}
+const rvCorto = s => rvNombre(String(s || "").split(/\s+/).slice(0, 2).join(" "));
+// La moneda que más se usa en el destino (para el combustible del exterior)
+function rvMonedaDestino(dest) {
+  const t = String(dest || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (/BUENOS AIRES|CLORINDA|FORMOSA|POSADAS|RESISTENCIA|CORRIENTES|ROSARIO|CORDOBA|MENDOZA|SALTA|BARILOCHE|MAR DEL PLATA|SANTA FE|TUCUMAN|PUERTO IGUAZU|ARGENTINA/.test(t)) return "ARS";
+  if (/FOZ|FLORIANOPOLIS|CAMBORIU|RIO DE JANEIRO|SAO PAULO|CURITIBA|PORTO ALEGRE|GRAMADO|BRASIL|BRAZIL|PONTA PORA|GUAIRA|CASCAVEL|BOMBINHAS/.test(t)) return "BRL";
+  return null;
+}
+function rvSaldoDe(r) {
+  return (r.estado === "aprobada" || r.estado === "saldada") ? r.saldo_ref : r.saldo;
+}
+// Cómo se dice el saldo según en qué paso está
+function rvSaldoTxt(r) {
+  const s = rvSaldoDe(r);
+  if (r.estado === "saldada") {
+    if (s > 0) return { clase: "cerrado", txt: `Devolvió ${gs(s)}` };
+    if (s < 0) return { clase: "cerrado", txt: `Se le pagó ${gs(-s)}` };
+    return { clase: "cerrado", txt: "Cerró justo" };
+  }
+  if (r.estado === "abierta") {
+    if (!r.gastos) return { clase: "parcial", txt: "Sin gastos cargados" };
+    if (s > 0) return { clase: "parcial", txt: `Devolvería ${gs(s)}` };
+    if (s < 0) return { clase: "parcial debe", txt: `Habría que pagarle ${gs(-s)}` };
+    return { clase: "parcial", txt: "Cerraría justo" };
+  }
+  if (s > 0) return { clase: "dev", txt: `Devuelve ${gs(s)}` };
+  if (s < 0) return { clase: "debe", txt: `Hay que pagarle ${gs(-s)}` };
+  return { clase: "justo", txt: "Cierra justo" };
+}
+// La barrita de lo gastado contra el anticipo. La escala es lo mayor entre los
+// dos: si no se pasó, la barra entera es el anticipo; si se pasó, donde termina
+// el azul es el anticipo y lo rojo es lo que puso el chofer de su bolsillo.
+function rvMedidor(anticipos, gastos, clase = "") {
+  const max = Math.max(anticipos, gastos) || 1;
+  const pasa = gastos > anticipos;
+  const wAz = (pasa ? anticipos : gastos) / max * 100;
+  const wRo = pasa ? (gastos - anticipos) / max * 100 : 0;
+  const ro = wRo <= 0 ? "" : wAz > 0
+    ? `<i class="ro" style="left:calc(${wAz}% + 2px);width:calc(${wRo}% - 2px)"></i>`
+    : `<i class="ro" style="left:0;width:${wRo}%"></i>`;
+  return `<div class="rv-medidor ${clase}" role="img" aria-label="Gastado ${gs(gastos)} de ${gs(anticipos)} de anticipo">
+    ${wAz > 0 ? `<i class="az" style="width:${wAz}%"></i>` : ""}${ro}
+  </div>`;
+}
+// Las cotizaciones que vienen del servidor (solo monedas conocidas)
+function rvCotLimpia(c) {
+  const out = {};
+  if (c && typeof c === "object") Object.keys(RV_MONEDAS).forEach(k => { if (k !== "GS" && Number(c[k]) > 0) out[k] = Number(c[k]); });
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  LISTA
+// ════════════════════════════════════════════════════════════════════════
+async function renderRendicionesTurismo() {
+  status("Rendiciones de viaje: anticipos y gastos de los viajes de turismo");
+  rv.id = null;
+  rv.presus = null;
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-receipt-2"></i> Rendiciones de viaje</h1>
+      <p>Anticipo contra gastos de cada viaje: la oficina carga los comprobantes y administración aprueba</p>
+      <div class="page-actions" id="rv-acciones"></div>
+    </div>
+    <div class="section rv-raiz" id="rv-raiz">
+      <div id="rv-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  const d = await api("/api/turismo/rendiciones");
+  if (!d || !d.rendiciones) {
+    $("#rv-cuerpo").innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer las rendiciones</b><span>Probá de nuevo en un rato.</span></div>`;
+    return;
+  }
+  rv.datos = d;
+  rv.puedeCargar = !!d.puede_cargar;
+  rv.esAdmin = !!d.es_admin;
+  const acc = $("#rv-acciones");
+  if (acc && rv.puedeCargar && d.total) acc.innerHTML = `<button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>`;
+  rvPintarLista();
+}
+
+function rvPintarLista() {
+  const cuerpo = $("#rv-cuerpo");
+  if (!cuerpo || !rv.datos) return;
+  const d = rv.datos, r = d.resumen;
+  if (!d.total) {
+    cuerpo.innerHTML = `
+      <div class="rv-vacio grande">
+        <span class="rv-vacio-ic"><i class="ti ti-receipt-2"></i></span>
+        <b>Todavía no hay rendiciones de viaje</b>
+        <span>Se arma a partir del viaje de la agenda: se carga el anticipo que se le dio al chofer y, a la vuelta, sus comprobantes.</span>
+        ${rv.puedeCargar ? `<button class="btn btn-primary" onclick="rvNueva()"><i class="ti ti-plus"></i> Nueva rendición</button>` : ""}
+      </div>`;
+    return;
+  }
+  cuerpo.innerHTML = `
+    ${rvHero(r)}
+    ${rvKpis(r)}
+    <div class="rv-barra">
+      <div class="rv-filtros" role="group" aria-label="Qué rendiciones ver" id="rv-filtros"></div>
+      <label class="rv-buscar">
+        <i class="ti ti-search"></i>
+        <input id="rv-q" type="search" value="${rvEsc(rv.q)}" placeholder="Buscar OT, cliente, destino, coche o chofer" oninput="rvBuscar(this.value)" autocomplete="off">
+      </label>
+    </div>
+    <div id="rv-lista"></div>`;
+  rvPintarFiltrosYLista();
+}
+
+function rvHero(r) {
+  const cats = r.categorias_90 || [];
+  const total = r.gastado_90 || 0;
+  if (!total) {
+    return `<section class="rv-hero solo">
+      <div class="rv-hero-num">
+        <span class="rv-hero-et">Gastos de viaje · últimos 90 días</span>
+        <b>${gs(0)}</b>
+        <span class="rv-hero-sub">Cuando se carguen los comprobantes de los viajes, acá se ve en qué se gasta.</span>
+      </div></section>`;
+  }
+  const top = cats.slice(0, 5);
+  const resto = cats.slice(5);
+  const filas = top.concat(resto.length ? [{ nombre: `Otros ${resto.length} rubros`, icono: "dots", total: resto.reduce((a, c) => a + c.total, 0) }] : []);
+  const max = Math.max(...filas.map(c => c.total)) || 1;
+  return `
+    <section class="rv-hero">
+      <div class="rv-hero-num">
+        <span class="rv-hero-et">Gastos de viaje · últimos 90 días</span>
+        <b>${gs(total)}</b>
+        <span class="rv-hero-sub">en ${rvPl(r.viajes_90, "viaje")} · promedio <strong>${gs(r.promedio_viaje_90)}</strong> por viaje</span>
+        <span class="rv-hero-sub"><strong>${gs(r.por_dia_90)}</strong> por día de viaje</span>
+      </div>
+      <div class="rv-hero-rubros">
+        <span class="rv-hero-et">En qué se gasta</span>
+        ${filas.map((c, i) => `
+          <div class="rv-hr" title="${rvEsc(c.nombre)}: ${gs(c.total)}">
+            <i class="ti ti-${c.icono}"></i>
+            <span class="rv-hr-n">${rvEsc(c.nombre)}</span>
+            <span class="rv-hr-bar"><i style="width:${Math.max(c.total / max * 100, 1.5)}%;animation-delay:${i * 60}ms"></i></span>
+            <span class="rv-hr-v">${gs(c.total)}</span>
+            <span class="rv-hr-p">${Math.round(c.total / total * 100)}%</span>
+          </div>`).join("")}
+      </div>
+    </section>`;
+}
+
+function rvKpis(r) {
+  const tile = (f, icono, et, num, sub, extra = "") => {
+    const dentro = `
+      <span class="rv-kpi-ic"><i class="ti ti-${icono}"></i></span>
+      <span class="rv-kpi-et">${et}</span>
+      <b>${num}</b>
+      <span class="rv-kpi-sub">${sub}</span>`;
+    return f
+      ? `<button class="rv-kpi ${RV_ESTADOS[f].clase} ${rv.filtro === f ? "on" : ""} ${extra}" data-f="${f}" onclick="rvFiltrar('${f}')" aria-pressed="${rv.filtro === f}">${dentro}</button>`
+      : `<div class="rv-kpi e-calle ${extra}">${dentro}</div>`;
+  };
+  const pend = r.para_aprobar;
+  const saldar = [];
+  if (r.devuelven) saldar.push(`<span class="rv-k-dev">Devuelven ${gs(r.devuelven)}</span>`);
+  if (r.se_les_debe) saldar.push(`<span class="rv-k-debe">Se les debe ${gs(r.se_les_debe)}</span>`);
+  return `<div class="rv-kpis">
+    ${tile("abierta", "pencil", "Cargando", r.cargando, r.cargando ? "viajes con comprobantes por cargar" : "nada a medio cargar")}
+    ${tile("presentada", "hourglass-high", "Para aprobar", pend,
+           pend ? (rv.esAdmin ? "esperan tu aprobación" : "esperando a administración") : "nada esperando aprobación",
+           pend && rv.esAdmin ? "alerta" : "")}
+    ${tile("aprobada", "checks", "Por saldar", r.por_saldar, saldar.length ? saldar.join("") : "nada por devolver ni pagar")}
+    ${tile(null, "wallet", "Anticipos sin rendir", gs(r.en_la_calle), "lo que tienen los choferes de viajes que todavía no se aprobaron", "plata")}
+  </div>`;
+}
+
+function rvFiltrar(f) {
+  rv.filtro = f;
+  document.querySelectorAll(".rv-kpi[data-f]").forEach(k => { k.classList.toggle("on", k.dataset.f === f); k.setAttribute("aria-pressed", k.dataset.f === f); });
+  rvPintarFiltrosYLista();
+}
+let _rvBuscarT = null;
+function rvBuscar(q) {
+  clearTimeout(_rvBuscarT);
+  _rvBuscarT = setTimeout(() => { rv.q = q.trim(); rvPintarFiltrosYLista(); }, 120);
+}
+
+function rvFiltradas() {
+  const todas = rv.datos?.rendiciones || [];
+  const Q = rv.q.toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return todas.filter(x => {
+    if (rv.filtro === "activas" && x.estado === "saldada") return false;
+    if (RV_ESTADOS[rv.filtro] && x.estado !== rv.filtro) return false;
+    if (!Q) return true;
+    const txt = [x.agenda_ot, x.cliente, x.salida, x.destino, x.coche, x.chofer, x.tripulacion, `#${x.id}`]
+      .join(" ").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return Q.split(/\s+/).every(p => txt.includes(p));
+  });
+}
+
+function rvPintarFiltrosYLista() {
+  const todas = rv.datos?.rendiciones || [];
+  const cuenta = k => k === "todas" ? todas.length : k === "activas" ? todas.filter(x => x.estado !== "saldada").length
+    : todas.filter(x => x.estado === k).length;
+  const f = $("#rv-filtros");
+  if (f) f.innerHTML = RV_FILTROS.map(([k, t]) =>
+    `<button class="sv-chip ${rv.filtro === k ? "on" : ""}" onclick="rvFiltrar('${k}')">${t}<span class="rv-cuenta">${cuenta(k)}</span></button>`).join("");
+  const lista = $("#rv-lista");
+  if (!lista) return;
+  const sel = rvFiltradas();
+  if (!sel.length) {
+    const nombre = { activas: "activas", abierta: "cargándose", presentada: "esperando aprobación", aprobada: "por saldar", saldada: "saldadas", todas: "" }[rv.filtro];
+    lista.innerHTML = `<div class="rv-vacio">
+      <i class="ti ti-${rv.q ? "search-off" : "mood-happy"}"></i>
+      <b>${rv.q ? `Nada con “${rvEsc(rv.q)}”` : `No hay rendiciones ${nombre}`}</b>
+      <span>${rv.q ? "Probá con otra parte del nombre, el número de OT o el coche." : rv.filtro === "presentada" ? "Todo lo que se presentó ya está aprobado." : "Elegí otro filtro para ver las demás."}</span>
+    </div>`;
+    return;
+  }
+  // Agrupadas por mes de salida
+  const grupos = [];
+  sel.forEach(x => {
+    const k = (x.fecha_salida || "").slice(0, 7);
+    let g = grupos[grupos.length - 1];
+    if (!g || g.k !== k) { g = { k, items: [] }; grupos.push(g); }
+    g.items.push(x);
+  });
+  lista.innerHTML = grupos.map(g => {
+    const [a, m] = g.k.split("-");
+    const gastado = g.items.reduce((s, x) => s + x.gastos, 0);
+    return `<div class="rv-mes">
+        <h3>${m ? RV_MESES_L[+m - 1] + " " + a : "Sin fecha"}</h3>
+        <span>${rvPl(g.items.length, "viaje")} · ${gs(gastado)} gastado</span>
+      </div>
+      ${g.items.map(rvTarjeta).join("")}`;
+  }).join("");
+}
+
+function rvTarjeta(x) {
+  const e = RV_ESTADOS[x.estado] || RV_ESTADOS.abierta;
+  const s = rvSaldoTxt(x);
+  const d = rvD(x.fecha_salida);
+  const pct = x.anticipos ? Math.round(x.gastos / x.anticipos * 100) : null;
+  const pasa = x.anticipos && x.gastos > x.anticipos;
+  let pie;
+  if (!x.anticipos) pie = x.gastos ? "Sin anticipo: todo lo puso el chofer" : "Sin anticipo cargado";
+  else if (pasa) pie = `Se pasó ${gs(x.gastos - x.anticipos)} (${pct}%)`;
+  else if (!x.gastos) pie = "Todavía no se cargó ningún gasto";
+  else pie = `Se gastó el ${pct}% del anticipo`;
+  const regreso = x.fecha_regreso && x.fecha_regreso !== x.fecha_salida ? ` al ${rvF(x.fecha_regreso)}` : "";
+  return `
+    <article class="rv-card ${e.clase}" tabindex="0" role="link" onclick="rvAbrir(${x.id})"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();rvAbrir(${x.id})}"
+             aria-label="Rendición ${x.id}: ${rvEsc(x.salida)} a ${rvEsc(x.destino)}, ${e.txt}">
+      <div class="rv-cal" title="${rvDiaSem(x.fecha_salida)} ${rvF(x.fecha_salida)}${regreso}">
+        <b>${d ? String(d.getDate()).padStart(2, "0") : "—"}</b>
+        <span>${d ? RV_MESES[d.getMonth()] : ""}</span>
+        <small>${rvPl(x.dias || 1, "día")}</small>
+      </div>
+      <div class="rv-info">
+        <div class="rv-ruta"><span>${rvEsc(x.salida || "—")}</span><i class="ti ti-arrow-narrow-right"></i><span>${rvEsc(x.destino || "—")}</span></div>
+        <div class="rv-cli"><span>${rvEsc(x.cliente || "Sin cliente")}</span>${x.agenda_ot ? `<span class="rv-ot">OT ${rvEsc(x.agenda_ot)}</span>` : `<span class="rv-ot">#${x.id}</span>`}</div>
+        <div class="rv-datos">
+          ${x.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(x.coche)}</span>` : ""}
+          ${x.chofer ? `<span><i class="ti ti-steering-wheel"></i>${rvEsc(rvNombre(x.chofer))}</span>` : ""}
+          <span><i class="ti ti-receipt"></i>${rvPl(x.n_gastos || 0, "comprobante")}</span>
+        </div>
+      </div>
+      <div class="rv-plata">
+        <div class="rv-plata-txt"><span>Gastado <b>${gs(x.gastos)}</b></span><span class="rv-plata-ant" title="Anticipo">${x.anticipos ? `de ${gs(x.anticipos)}` : "sin anticipo"}</span></div>
+        ${rvMedidor(x.anticipos, x.gastos)}
+        <div class="rv-plata-pie ${pasa ? "pasa" : ""}">${pie}</div>
+      </div>
+      <div class="rv-lado">
+        <span class="rv-estado ${e.clase}"><i class="ti ti-${e.icono}"></i>${e.txt}</span>
+        <span class="rv-saldo ${s.clase}">${s.txt}</span>
+      </div>
+    </article>`;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  NUEVA RENDICIÓN
+// ════════════════════════════════════════════════════════════════════════
+function rvModal({ titulo, icono, sub = "", cuerpo, pie, ancho = 520, clase = "" }) {
+  const o = document.createElement("div");
+  o.className = "modal-overlay rv-modal-fondo";
+  o.innerHTML = `
+    <div class="rv-modal ${clase}" style="max-width:${ancho}px" role="dialog" aria-modal="true" aria-label="${rvEsc(titulo.replace(/<[^>]+>/g, ""))}" tabindex="-1">
+      <div class="rv-modal-cab">
+        <span class="rv-modal-ic"><i class="ti ti-${icono}"></i></span>
+        <div class="rv-modal-tit"><h2>${titulo}</h2>${sub ? `<p>${sub}</p>` : ""}</div>
+        <button class="rv-modal-x" onclick="this.closest('.modal-overlay').remove()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="rv-modal-cuerpo">${cuerpo}</div>
+      <div class="rv-modal-pie">${pie}</div>
+    </div>`;
+  o.addEventListener("mousedown", e => { if (e.target === o) o.remove(); });
+  o.addEventListener("keydown", e => { if (e.key === "Escape") { e.stopPropagation(); o.remove(); } });
+  document.body.appendChild(o);
+  setTimeout(() => (o.querySelector("[autofocus]") || o.querySelector(".rv-modal")).focus(), 40);
+  return o;
+}
+const rvOpcMonedas = sel => Object.entries(RV_MONEDAS).map(([k, t]) => `<option value="${k}" ${k === sel ? "selected" : ""}>${t}</option>`).join("");
+
+async function rvNueva() {
+  rv.nuevo = { modo: "agenda", sel: null, presuTocado: false };
+  const hoyS = trHoy();
+  rvModal({
+    titulo: "Nueva rendición", icono: "receipt-2", ancho: 780, clase: "rv-m-nueva",
+    sub: "Elegí el viaje y, si ya se le dio, el anticipo al chofer. Los gastos se cargan después.",
+    cuerpo: `
+      <div class="rv-seg" role="tablist">
+        <button class="on" data-modo="agenda" onclick="rvNuevoModo('agenda')"><i class="ti ti-calendar-event"></i> Viaje de la agenda</button>
+        <button data-modo="mano" onclick="rvNuevoModo('mano')"><i class="ti ti-pencil"></i> Cargar a mano</button>
+      </div>
+      <div id="rv-n-agenda">
+        <label class="rv-buscar">
+          <i class="ti ti-search"></i>
+          <input id="rv-n-q" type="search" placeholder="Buscar por OT, cliente, destino, coche o chofer" oninput="rvNuevoListar()" autocomplete="off" autofocus>
+        </label>
+        <div class="rv-viajes" id="rv-n-viajes"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      </div>
+      <div id="rv-n-mano" class="rv-n-grid" hidden>
+        <label class="rv-f g2"><span>Cliente</span><input id="rv-n-cliente" placeholder="Quién contrató el viaje"></label>
+        <label class="rv-f"><span>Sale de</span><input id="rv-n-salida" value="Asunción"></label>
+        <label class="rv-f"><span>Destino</span><input id="rv-n-destino" placeholder="A dónde va"></label>
+        <label class="rv-f"><span>Fecha de salida</span><input type="date" id="rv-n-fs" value="${hoyS}"
+          onchange="const r = $('#rv-n-fr'); if (this.value && (!r.value || r.value < this.value)) r.value = this.value"></label>
+        <label class="rv-f"><span>Fecha de regreso</span><input type="date" id="rv-n-fr" value="${hoyS}"></label>
+        <label class="rv-f"><span>Coche</span><input id="rv-n-coche" placeholder="N° interno" inputmode="numeric"></label>
+        <label class="rv-f"><span>Pasajeros</span><input id="rv-n-pax" inputmode="numeric" placeholder="0"></label>
+      </div>
+      <div class="rv-n-sec">
+        <div class="rv-n-tit"><i class="ti ti-wallet"></i> Anticipo <small>si todavía no se le dio, se agrega después</small></div>
+        <div class="rv-n-fila">
+          <label class="rv-f f-quien"><span>Quién rinde</span><input id="rv-n-chofer" placeholder="El chofer que recibe la plata"></label>
+          <label class="rv-f f-monto"><span>Monto</span>
+            <div class="rv-monto"><input id="rv-n-ant" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvConv('rv-n')" onblur="rvFormatear(this, 'rv-n-mon')">
+            <select id="rv-n-mon" onchange="rvMonedaCambio('rv-n')" aria-label="Moneda">${rvOpcMonedas("GS")}</select></div>
+          </label>
+          <label class="rv-f f-cot" hidden><span>Cotización</span><input id="rv-n-cot" inputmode="decimal" oninput="rvConv('rv-n')" placeholder="Gs. por unidad"></label>
+          <label class="rv-f f-fecha"><span>Se le dio el</span><input type="date" id="rv-n-fecha" value="${hoyS}"></label>
+        </div>
+        <div class="rv-conv" id="rv-n-conv"></div>
+      </div>
+      <div class="rv-n-sec">
+        <div class="rv-n-tit"><i class="ti ti-scale"></i> Presupuesto del viaje <small>para comparar lo presupuestado con lo gastado</small></div>
+        <select id="rv-n-presu" class="rv-sel" onchange="rv.nuevo.presuTocado = true"><option value="">Sin presupuesto</option></select>
+      </div>`,
+    pie: `<span class="rv-pie-info" id="rv-n-info"></span>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="rv-n-ok" onclick="rvCrear(this)"><i class="ti ti-check"></i> Abrir rendición</button>`,
+  });
+  const [viajes, presus, cot] = await Promise.all([
+    api("/api/turismo/rendiciones/viajes"), api("/api/turismo/rendiciones/presupuestos"),
+    api("/api/turismo/rendiciones/cotizaciones")]);
+  rv.viajes = Array.isArray(viajes) ? viajes : [];
+  rv.presus = Array.isArray(presus) ? presus : [];
+  rv.cot = rvCotLimpia(cot);
+  const sp = $("#rv-n-presu");
+  if (sp) sp.innerHTML = `<option value="">Sin presupuesto</option>` + rv.presus.map(p =>
+    `<option value="${p.id}">#${p.id} · ${rvEsc(p.destino || "—")} · ${rvEsc(p.cliente || "sin cliente")} · ${rvF(p.fecha)} · ${gs(p.precio_final)}</option>`).join("");
+  if (!rv.viajes.some(v => !v.rendicion_id)) rvNuevoModo(rv.viajes.length ? "agenda" : "mano");
+  rvNuevoListar();
+}
+
+function rvNuevoModo(m) {
+  rv.nuevo.modo = m;
+  document.querySelectorAll(".rv-seg button").forEach(b => b.classList.toggle("on", b.dataset.modo === m));
+  const ag = $("#rv-n-agenda"), ma = $("#rv-n-mano");
+  if (ag) ag.hidden = m !== "agenda";
+  if (ma) ma.hidden = m !== "mano";
+  if (m === "mano") setTimeout(() => $("#rv-n-cliente")?.focus(), 30);
+  rvNuevoInfo();
+}
+
+function rvNuevoListar() {
+  const cont = $("#rv-n-viajes");
+  if (!cont) return;
+  const Q = ($("#rv-n-q")?.value || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+  const hoyS = trHoy();
+  const lista = rv.viajes.map((v, i) => ({ v, i })).filter(({ v }) => {
+    if (!Q) return true;
+    const t = [v.ot_nr, v.cliente, v.salida, v.destino, v.coche, v.tripulacion].join(" ").toUpperCase()
+      .normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return Q.split(/\s+/).every(p => t.includes(p));
+  });
+  if (!rv.viajes.length) {
+    cont.innerHTML = `<div class="rv-vacio chico"><i class="ti ti-calendar-off"></i><b>No hay viajes en la agenda</b><span>De los últimos dos meses y medio y el próximo. Cargalo a mano.</span></div>`;
+    return;
+  }
+  if (!lista.length) {
+    cont.innerHTML = `<div class="rv-vacio chico"><i class="ti ti-search-off"></i><b>Ningún viaje con eso</b><span>Si no está en la agenda, cargalo a mano.</span></div>`;
+    return;
+  }
+  cont.innerHTML = lista.map(({ v, i }) => {
+    const d = rvD(v.fecha_salida);
+    const dias = rvDiasEntre(v.fecha_salida, v.fecha_regreso) + 1;
+    const falta = rvDiasEntre(hoyS, v.fecha_salida);
+    const cuando = falta > 0 ? `<span class="rv-v-tag prox">Sale ${falta === 1 ? "mañana" : `en ${falta} días`}</span>`
+      : (falta <= 0 && rvDiasEntre(hoyS, v.fecha_regreso) >= 0) ? `<span class="rv-v-tag viaje">De viaje</span>` : "";
+    const sel = rv.nuevo.sel === i;
+    const cab = `
+      <span class="rv-v-cal"><b>${d ? String(d.getDate()).padStart(2, "0") : "—"}</b><small>${d ? RV_MESES[d.getMonth()] : ""}</small></span>
+      <span class="rv-v-info">
+        <b>${rvEsc(v.salida || "—")} <i class="ti ti-arrow-narrow-right"></i> ${rvEsc(v.destino || "—")} ${cuando}</b>
+        <small>${rvEsc(v.cliente)}${v.ot_nr ? ` · OT ${rvEsc(v.ot_nr)}` : ""} · ${rvF(v.fecha_salida)}${v.fecha_regreso !== v.fecha_salida ? ` al ${rvF(v.fecha_regreso)}` : ""} · ${rvPl(dias, "día")}</small>
+      </span>
+      <span class="rv-v-der">${v.coche ? `<b>Coche ${rvEsc(v.coche)}</b>` : `<b class="sin">Sin coche</b>`}<small>${rvEsc(rvNombre(v.tripulacion) || "Sin tripulación")}</small></span>`;
+    if (v.rendicion_id) {
+      return `<div class="rv-viaje tiene">${cab}
+        <span class="rv-v-ya">Ya tiene la rendición #${v.rendicion_id}
+          <button class="rv-link" onclick="this.closest('.modal-overlay').remove(); rvAbrir(${v.rendicion_id})">Abrir <i class="ti ti-arrow-right"></i></button></span></div>`;
+    }
+    return `<button type="button" class="rv-viaje ${sel ? "on" : ""}" onclick="rvNuevoElegir(${i})" aria-pressed="${sel}">${cab}
+      <span class="rv-v-check"><i class="ti ti-check"></i></span></button>`;
+  }).join("");
+}
+
+function rvNuevoElegir(i) {
+  rv.nuevo.sel = i;
+  const v = rv.viajes[i];
+  rvNuevoListar();
+  const ch = $("#rv-n-chofer");
+  if (ch) ch.value = rvNombre(v.chofer || "");
+  const f = $("#rv-n-fecha");
+  if (f && v.fecha_salida) f.value = v.fecha_salida < trHoy() ? v.fecha_salida : trHoy();
+  // Si hay un presupuesto del mismo cliente con el mismo destino, se ofrece solo
+  if (!rv.nuevo.presuTocado && rv.presus?.length) {
+    const norm = s => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const palabras = s => norm(s).split(/[^A-Z0-9]+/).filter(p => p.length > 3);
+    const dest = palabras(v.destino);
+    const p = rv.presus.find(p => norm(p.cliente) === norm(v.cliente) && palabras(p.destino).some(x => dest.includes(x)))
+      || rv.presus.find(p => norm(p.cliente) === norm(v.cliente));
+    $("#rv-n-presu").value = p ? p.id : "";
+  }
+  rvNuevoInfo();
+}
+
+function rvNuevoInfo() {
+  const el = $("#rv-n-info");
+  if (!el) return;
+  const v = rv.viajes[rv.nuevo.sel];
+  el.innerHTML = rv.nuevo.modo === "agenda" && v
+    ? `<i class="ti ti-circle-check"></i> ${rvEsc(v.salida)} → ${rvEsc(v.destino)} · ${rvF(v.fecha_salida)}`
+    : "";
+}
+
+// Monto + moneda + cotización: lo comparten la carga rápida, el anticipo y las correcciones
+function rvMonedaCambio(p) {
+  const mon = $(`#${p}-mon`)?.value || "GS";
+  const cot = $(`#${p}-cot`);
+  const caja = cot?.closest(".rv-f");
+  if (caja) caja.hidden = mon === "GS";
+  if (cot && mon !== "GS" && !rvNum(cot.value) && rv.cot[mon]) cot.value = rvCot(rv.cot[mon]);
+  if (p === "rv-c") rv.moneda = mon;
+  rvConv(p);
+}
+function rvConv(p) {
+  const el = $(`#${p}-conv`);
+  if (!el) return;
+  const mon = $(`#${p}-mon`)?.value || "GS";
+  const monto = rvNum($(`#${p}-ant, #${p}-monto`)?.value);
+  const cot = rvNum($(`#${p}-cot`)?.value);
+  let txt = "";
+  if (mon !== "GS" && monto > 0) {
+    txt = cot > 0 ? `<span>${rvMon(monto, mon)} × ${rvCot(cot)} = <b>${gs(monto * cot)}</b></span>`
+                  : `<span class="falta">Poné cuántos guaraníes vale cada ${RV_MONEDAS[mon]}</span>`;
+  }
+  el.innerHTML = txt + (p === "rv-c" ? `<span class="rv-tecla"><kbd>Enter</kbd> agrega el gasto</span>` : "");
+}
+function rvFormatear(inp, idMon) {
+  const mon = $(`#${idMon}`)?.value || "GS";
+  const n = rvNum(inp.value);
+  if (!inp.value.trim() || !n) return;
+  inp.value = mon === "GS" ? rvDec(Math.round(n), 0) : rvDec(n, 2);
+}
+
+async function rvCrear(btn) {
+  let body = {};
+  if (rv.nuevo.modo === "agenda") {
+    const v = rv.viajes[rv.nuevo.sel];
+    if (!v) { toast("Elegí el viaje de la lista (o cargalo a mano)", "error"); return; }
+    body.agenda_ids = v.ids;
+  } else {
+    body = {
+      cliente: $("#rv-n-cliente").value, salida: $("#rv-n-salida").value, destino: $("#rv-n-destino").value,
+      fecha_salida: $("#rv-n-fs").value, fecha_regreso: $("#rv-n-fr").value, coche: $("#rv-n-coche").value,
+      pasajeros: $("#rv-n-pax").value,
+    };
+    if (!body.cliente.trim() && !body.destino.trim()) { toast("Poné al menos el cliente o el destino", "error"); return; }
+    if (body.fecha_regreso && body.fecha_salida && body.fecha_regreso < body.fecha_salida) { toast("El regreso es antes de la salida", "error"); return; }
+  }
+  const chofer = $("#rv-n-chofer").value.trim();
+  if (chofer) body.chofer = chofer;
+  const ant = rvNum($("#rv-n-ant").value);
+  if (ant > 0) {
+    const mon = $("#rv-n-mon").value, cot = rvNum($("#rv-n-cot").value);
+    if (mon !== "GS" && !(cot > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); return; }
+    Object.assign(body, { anticipo: ant, anticipo_moneda: mon, anticipo_cotizacion: cot, anticipo_fecha: $("#rv-n-fecha").value });
+  }
+  const presu = $("#rv-n-presu").value;
+  if (presu) body.presupuesto_id = +presu;
+  btn.disabled = true;
+  const r = await api("/api/turismo/rendiciones", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo abrir la rendición", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Rendición abierta: ya se pueden cargar los gastos", "success");
+  rvAbrir(r.id);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  DETALLE DE UNA RENDICIÓN
+// ════════════════════════════════════════════════════════════════════════
+async function rvAbrir(id) {
+  rv.id = id;
+  status("Rendición de viaje");
+  content.scrollTop = 0;
+  content.innerHTML = `<div class="section rv-raiz rv-det" id="rv-det"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`;
+  const [r, cot] = await Promise.all([api(`/api/turismo/rendiciones/${id}`), api("/api/turismo/rendiciones/cotizaciones")]);
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo abrir la rendición", "error"); renderRendicionesTurismo(); return; }
+  if (rv.id !== id) return;
+  rv.cot = rvCotLimpia(cot);
+  rv.esAdmin = !!r.es_admin;
+  rv.puedeCargar = !!r.puede_cargar;
+  const d = r.rendicion;
+  const ult = d.gastos_lista[d.gastos_lista.length - 1];
+  rv.fecha = ult ? ult.fecha : (d.fecha_salida && d.fecha_salida <= trHoy() ? d.fecha_salida : trHoy());
+  rv.moneda = "GS";
+  rv.cat = "combustible";
+  $("#rv-det").innerHTML = `
+    <button class="rv-volver" onclick="rvVolver()"><i class="ti ti-arrow-left"></i> Rendiciones de viaje</button>
+    <section class="rv-ticket" id="rv-d-ticket"></section>
+    <div id="rv-d-aviso"></div>
+    <section class="rv-balance" id="rv-d-balance"></section>
+    <div class="rv-d-grid">
+      <div class="rv-d-izq">
+        <section class="rv-bloque rv-gastos">
+          <div class="rv-bloque-cab" id="rv-d-gcab"></div>
+          <div id="rv-carga-lugar"></div>
+          <div id="rv-d-gastos"></div>
+        </section>
+      </div>
+      <div class="rv-d-der">
+        <section class="rv-bloque" id="rv-d-anticipos"></section>
+        <section class="rv-bloque" id="rv-d-rubros"></section>
+        <section class="rv-bloque" id="rv-d-presu"></section>
+        <section class="rv-bloque" id="rv-d-obs"></section>
+      </div>
+    </div>`;
+  rvPintarDetalle(d);
+}
+
+function rvVolver() {
+  renderRendicionesTurismo();
+}
+
+function rvPintarDetalle(d, nuevoMov) {
+  rv.det = d;
+  const editable = d.editable && rv.puedeCargar;
+  $("#rv-d-ticket").innerHTML = rvTicket(d);
+  $("#rv-d-aviso").innerHTML = d.estado === "abierta" && d.devuelta_motivo ? `
+    <div class="rv-aviso"><i class="ti ti-message-2-exclamation"></i>
+      <div><b>Administración la devolvió para corregir</b><span>${rvEsc(d.devuelta_motivo)}</span></div></div>` : "";
+  $("#rv-d-balance").innerHTML = rvBalance(d);
+  $("#rv-d-gcab").innerHTML = `
+    <h3><i class="ti ti-receipt"></i> Gastos del viaje</h3>
+    <span class="rv-cab-dato">${rvPl(d.gastos_lista.length, "comprobante")} · <b>${gs(d.gastos)}</b></span>`;
+  // La carga rápida se arma una sola vez: así no se pierde lo que se está escribiendo
+  const lugar = $("#rv-carga-lugar");
+  if (editable && !$("#rv-carga")) { lugar.innerHTML = rvCargaHtml(d); rvCargaEventos(); }
+  if (!editable) lugar.innerHTML = "";
+  $("#rv-d-gastos").innerHTML = rvGastos(d, editable);
+  $("#rv-d-anticipos").innerHTML = rvAnticipos(d, editable);
+  const rub = $("#rv-d-rubros");
+  rub.innerHTML = rvRubros(d);
+  rub.hidden = !d.por_categoria.length;
+  const pre = $("#rv-d-presu");
+  const firmaP = JSON.stringify([d.id, d.comparacion, rv.puedeCargar]);
+  if (pre.dataset.firma !== firmaP) {
+    pre.dataset.firma = firmaP;
+    pre.innerHTML = rvPresu(d);
+    pre.hidden = !pre.innerHTML.trim();
+    if (!d.comparacion && rv.puedeCargar) rvPresuOpciones();
+  }
+  const obs = $("#rv-d-obs");
+  const firmaO = JSON.stringify([d.id, d.observaciones, rv.puedeCargar]);
+  if (obs.dataset.firma !== firmaO) {
+    obs.dataset.firma = firmaO;
+    obs.innerHTML = rvObs(d);
+    obs.hidden = !obs.innerHTML.trim();
+  }
+  if (nuevoMov) document.getElementById(`rv-mov-${nuevoMov}`)?.classList.add("nuevo");
+}
+
+function rvTicket(d) {
+  const ida = d.fecha_salida, vuelta = d.fecha_regreso || d.fecha_salida;
+  const fechas = vuelta !== ida ? `${rvDiaSem(ida, true)} ${rvF(ida)} al ${rvDiaSem(vuelta, true)} ${rvF(vuelta)}` : `${rvDiaSem(ida)} ${rvF(ida)}`;
+  const trip = (d.tripulacion || "").trim();
+  return `
+    <div class="rv-t-top">
+      <div class="rv-t-et">
+        <span class="rv-t-ot">${[d.agenda_ot && `OT ${rvEsc(d.agenda_ot)}`, `Rendición #${d.id}`].filter(Boolean).join(" · ")}</span>
+        <span class="rv-t-cli">${rvEsc(d.cliente || "Sin cliente")}</span>
+      </div>
+      <div class="rv-t-acc">
+        ${d.editable && rv.puedeCargar ? `<button class="rv-t-btn" onclick="rvEditarViaje()"><i class="ti ti-pencil"></i><span>Editar viaje</span></button>` : ""}
+        <button class="rv-t-btn" onclick="rvPdf()"><i class="ti ti-file-type-pdf"></i><span>PDF para firmar</span></button>
+        ${rv.esAdmin ? `<button class="rv-t-btn peligro" onclick="rvBorrar()" title="Borrar la rendición" aria-label="Borrar la rendición"><i class="ti ti-trash"></i></button>` : ""}
+      </div>
+    </div>
+    <div class="rv-t-ruta">
+      <b>${rvEsc(d.salida || "—")}</b>
+      <span class="rv-t-linea" aria-hidden="true"><i class="ti ti-bus"></i></span>
+      <b>${rvEsc(d.destino || "—")}</b>
+    </div>
+    <div class="rv-t-datos">
+      <span><i class="ti ti-calendar"></i>${fechas} · ${rvPl(d.dias || 1, "día")}</span>
+      ${d.coche ? `<span><i class="ti ti-bus"></i>Coche ${rvEsc(d.coche)}</span>` : ""}
+      ${d.chofer ? `<span><i class="ti ti-steering-wheel"></i>Rinde ${rvEsc(rvNombre(d.chofer))}</span>` : ""}
+      ${trip && rvNombre(trip) !== rvNombre(d.chofer) ? `<span><i class="ti ti-users"></i>${rvEsc(rvNombre(trip))}</span>` : ""}
+      ${d.pasajeros ? `<span><i class="ti ti-armchair"></i>${d.pasajeros} pasajeros</span>` : ""}
+    </div>
+    ${rvPasos(d)}`;
+}
+
+function rvPasos(d) {
+  const orden = ["abierta", "presentada", "aprobada", "saldada"];
+  const i = orden.indexOf(d.estado);
+  const pasos = [
+    ["Cargando", d.creado_por, d.creado_el],
+    ["Presentada", d.presentado_por, d.presentado_el],
+    ["Aprobada", d.aprobado_por, d.aprobado_el],
+    ["Saldada", d.saldado_por, d.saldado_el],
+  ];
+  return `<ol class="rv-pasos" aria-label="Pasos de la rendición">${pasos.map(([t, q, f], k) => {
+    const hecho = k < i || (k === 3 && i === 3);
+    const cls = hecho ? "hecho" : k === i ? "actual" : "";
+    return `<li class="${cls}" ${k === i ? 'aria-current="step"' : ""}>
+      <span class="rv-paso-p">${hecho ? '<i class="ti ti-check"></i>' : k + 1}</span>
+      <span class="rv-paso-t">${t}</span>
+      <span class="rv-paso-s">${k <= i && q ? `${rvEsc(rvCorto(q))} · ${rvF(f)}` : "&nbsp;"}</span>
+    </li>`;
+  }).join("")}</ol>`;
+}
+
+function rvBalance(d) {
+  const s = rvSaldoDe(d);
+  const nA = d.anticipos_lista.length, nG = d.gastos_lista.length;
+  let cls = "justo", que = "cierra justo";
+  if (s > 0) { cls = "dev"; que = d.estado === "saldada" ? "devolvió el chofer" : d.estado === "abierta" ? "devolvería el chofer" : "devuelve el chofer"; }
+  if (s < 0) { cls = "debe"; que = d.estado === "saldada" ? "se le pagó al chofer" : d.estado === "abierta" ? "habría que pagarle" : "hay que pagarle al chofer"; }
+  const pasa = d.anticipos && d.gastos > d.anticipos;
+  const pct = d.anticipos ? Math.round(d.gastos / d.anticipos * 100) : null;
+  const pie = !d.anticipos ? (d.gastos ? "No hubo anticipo: todo lo puso el chofer" : "Sin anticipo ni gastos todavía")
+    : pasa ? `Se pasó ${gs(d.gastos - d.anticipos)} del anticipo (${pct}%)`
+    : `Se gastó el ${pct}% del anticipo`;
+  return `
+    <div class="rv-bal-izq">
+      <div class="rv-bal-cifras">
+        <div class="rv-bal-c">
+          <span class="rv-bal-et"><i class="ti ti-wallet"></i> Anticipos</span>
+          <b>${gs(d.anticipos)}</b>
+          <small>${nA ? rvPl(nA, "entrega") : "ninguno"}</small>
+        </div>
+        <span class="rv-bal-op" aria-hidden="true">−</span>
+        <div class="rv-bal-c">
+          <span class="rv-bal-et"><i class="ti ti-receipt"></i> Gastos</span>
+          <b>${gs(d.gastos)}</b>
+          <small>${rvPl(nG, "comprobante")}${d.litros ? ` · ${rvDec(d.litros, 1)} L` : ""}</small>
+        </div>
+        <span class="rv-bal-op" aria-hidden="true">=</span>
+        <div class="rv-bal-c saldo ${cls}">
+          <span class="rv-bal-et"><i class="ti ti-${s > 0 ? "arrow-back-up" : s < 0 ? "cash" : "equal"}"></i> Saldo</span>
+          <b>${gs(Math.abs(s))}</b>
+          <small>${que}</small>
+        </div>
+      </div>
+      <div class="rv-bal-med">
+        ${rvMedidor(d.anticipos, d.gastos, "grande")}
+        <div class="rv-bal-pie ${pasa ? "pasa" : ""}"><span>${pie}</span>${d.gasto_por_dia ? `<span>${gs(d.gasto_por_dia)} por día</span>` : ""}</div>
+      </div>
+    </div>
+    <div class="rv-bal-der ${RV_ESTADOS[d.estado]?.clase || ""}">${rvSiguiente(d)}</div>`;
+}
+
+// Qué falta para cerrar la rendición, y el botón para hacerlo
+function rvSiguiente(d) {
+  const s = rvSaldoDe(d);
+  const info = (icono, t, sub) => `<div class="rv-sig"><i class="ti ti-${icono} rv-sig-ic"></i><div><b>${t}</b>${sub ? `<span>${sub}</span>` : ""}</div></div>`;
+  const reabrir = rv.esAdmin ? `<button class="rv-link" onclick="rvAccion('reabrir')"><i class="ti ti-arrow-back-up"></i> Reabrir para corregir</button>` : "";
+  if (d.estado === "abierta") {
+    if (!rv.puedeCargar) return info("pencil", "Se están cargando los comprobantes");
+    if (!d.anticipos_lista.length && !d.gastos_lista.length) return info("pencil", "Cargá el anticipo y los gastos", "Cuando estén todos los comprobantes, se presenta para que administración la apruebe.");
+    return `${info("send", "¿Están todos los comprobantes?", "Presentala para que administración la apruebe. Después ya no se puede cambiar, salvo que la devuelvan.")}
+      <button class="btn btn-primary rv-sig-btn" onclick="rvAccion('presentar')"><i class="ti ti-send"></i> Presentar para aprobar</button>`;
+  }
+  if (d.estado === "presentada") {
+    if (!rv.esAdmin) return info("hourglass-high", "Esperando que administración la apruebe", "Si hay que corregir algo, la devuelven con el motivo.");
+    const q = s > 0 ? `Al aprobarla, el chofer tiene que devolver ${gs(s)}.` : s < 0 ? `Al aprobarla, queda para pagarle ${gs(-s)} al chofer.` : "Cierra justo: al aprobarla queda saldada.";
+    return `${info("checklist", "Revisá los gastos y aprobala", q)}
+      <div class="rv-sig-btns">
+        <button class="btn btn-ghost" onclick="rvDevolver()"><i class="ti ti-arrow-back-up"></i> Devolver</button>
+        <button class="btn rv-btn-ok" onclick="rvAccion('aprobar')"><i class="ti ti-check"></i> Aprobar</button>
+      </div>`;
+  }
+  if (d.estado === "aprobada") {
+    const t = s > 0 ? `El chofer tiene que devolver ${gs(s)}` : `Hay que pagarle ${gs(-s)} al chofer`;
+    if (!rv.esAdmin) return info("clock-dollar", `Aprobada. ${t}`, "Administración registra cuando se hace.");
+    return `${info("clock-dollar", t, "Cuando se haga, registralo y la cuenta del viaje queda cerrada.")}
+      <button class="btn btn-primary rv-sig-btn" onclick="rvSaldar()"><i class="ti ti-${s > 0 ? "arrow-back-up" : "cash"}"></i> ${s > 0 ? "Registrar devolución" : "Registrar pago"}</button>
+      ${reabrir}`;
+  }
+  const como = [d.saldo_forma, d.saldo_nota].filter(Boolean).join(" · ");
+  const quien = d.saldado_por ? ` · ${rvCorto(d.saldado_por)}` : "";
+  return `${info("circle-check", "Cuenta cerrada", `${s > 0 ? `Devolvió ${gs(s)}` : s < 0 ? `Se le pagó ${gs(-s)}` : "Cerró justo"}${como ? ` · ${rvEsc(como)}` : ""} · ${rvF(d.saldado_el)}${rvEsc(quien)}`)}
+    ${reabrir}`;
+}
+
+// ─── Carga rápida de gastos ───
+function rvCargaHtml(d) {
+  const c = RV_CAT[rv.cat];
+  return `
+    <div class="rv-carga" id="rv-carga">
+      <div class="rv-cats" role="radiogroup" aria-label="Rubro del gasto">
+        ${RV_CATS.map(x => `<button type="button" role="radio" aria-checked="${x.clave === rv.cat}" class="rv-cat ${x.clave === rv.cat ? "on" : ""}"
+             data-cat="${x.clave}" onclick="rvElegirCat('${x.clave}')"><i class="ti ti-${x.icono}"></i>${x.corto}</button>`).join("")}
+      </div>
+      <div class="rv-campos">
+        <label class="rv-f f-det"><span>Detalle</span><input id="rv-c-det" placeholder="${rvEsc(c.ph)}" maxlength="160" autocomplete="off"></label>
+        <label class="rv-f f-monto"><span>Monto</span>
+          <div class="rv-monto"><input id="rv-c-monto" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvConv('rv-c')" onblur="rvFormatear(this, 'rv-c-mon')">
+          <select id="rv-c-mon" onchange="rvMonedaCambio('rv-c')" aria-label="Moneda">${rvOpcMonedas(rv.moneda)}</select></div>
+        </label>
+        <label class="rv-f f-cot" ${rv.moneda === "GS" ? "hidden" : ""}><span>Cotización</span><input id="rv-c-cot" inputmode="decimal" placeholder="Gs. c/u" oninput="rvConv('rv-c')" value="${rv.moneda !== "GS" && rv.cot[rv.moneda] ? rvCot(rv.cot[rv.moneda]) : ""}"></label>
+      </div>
+      <div class="rv-campos">
+        <label class="rv-f f-fecha"><span>Fecha</span><input type="date" id="rv-c-fecha" value="${rv.fecha}"></label>
+        <label class="rv-f f-lt" ${rv.cat.startsWith("combustible") ? "" : "hidden"}><span>Litros</span><input id="rv-c-lt" inputmode="decimal" placeholder="0" autocomplete="off"></label>
+        <label class="rv-f f-comp"><span>Comprobante</span><input id="rv-c-comp" placeholder="N° de factura o ticket" maxlength="40" autocomplete="off"></label>
+        <button class="btn btn-primary rv-agregar" id="rv-c-btn" onclick="rvAgregarGasto()"><i class="ti ti-plus"></i> Agregar</button>
+      </div>
+      <div class="rv-conv" id="rv-c-conv"><span class="rv-tecla"><kbd>Enter</kbd> agrega el gasto</span></div>
+    </div>`;
+}
+function rvCargaEventos() {
+  document.querySelectorAll("#rv-carga input, #rv-carga select").forEach(el =>
+    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); rvAgregarGasto(); } }));
+}
+
+function rvElegirCat(k) {
+  rv.cat = k;
+  const c = RV_CAT[k];
+  document.querySelectorAll(".rv-cat").forEach(b => {
+    const on = b.dataset.cat === k;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", on);
+  });
+  const det = $("#rv-c-det");
+  if (det) det.placeholder = c.ph;
+  const lt = $("#rv-c-lt")?.closest(".rv-f");
+  if (lt) lt.hidden = !k.startsWith("combustible");
+  // El combustible de acá se paga en guaraníes; el de afuera, en la plata de allá
+  const mon = $("#rv-c-mon");
+  if (mon) {
+    if (k === "combustible" && mon.value !== "GS") { mon.value = "GS"; rvMonedaCambio("rv-c"); }
+    if (k === "combustible_ext" && mon.value === "GS") {
+      const m = rvMonedaDestino(rv.det?.destino) || Object.keys(rv.cot)[0];
+      if (m) { mon.value = m; rvMonedaCambio("rv-c"); }
+    }
+  }
+  $("#rv-c-det")?.focus();
+}
+
+async function rvAgregarGasto() {
+  const btn = $("#rv-c-btn");
+  if (!btn || btn.disabled) return;
+  const mon = $("#rv-c-mon").value;
+  const body = {
+    tipo: "gasto", categoria: rv.cat, fecha: $("#rv-c-fecha").value, detalle: $("#rv-c-det").value,
+    monto: $("#rv-c-monto").value, moneda: mon, cotizacion: $("#rv-c-cot").value,
+    litros: rv.cat.startsWith("combustible") ? $("#rv-c-lt").value : "", comprobante: $("#rv-c-comp").value,
+  };
+  if (!(rvNum(body.monto) > 0)) { toast("Poné el monto del comprobante", "error"); $("#rv-c-monto").focus(); return; }
+  if (mon !== "GS" && !(rvNum(body.cotizacion) > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); $("#rv-c-cot").focus(); return; }
+  btn.disabled = true;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}/movs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo agregar", "error"); return; }
+  rv.fecha = body.fecha;
+  if (mon !== "GS") rv.cot[mon] = rvNum(body.cotizacion);
+  ["rv-c-det", "rv-c-monto", "rv-c-lt", "rv-c-comp"].forEach(id => { const el = document.getElementById(id); if (el) el.value = ""; });
+  rvPintarDetalle(r.rendicion, r.mov_id);
+  const nuevo = r.rendicion.gastos_lista.find(m => m.id === r.mov_id);
+  const conv = $("#rv-c-conv");
+  if (conv && nuevo) {
+    conv.innerHTML = `<span class="rv-hecho"><i class="ti ti-circle-check"></i> Agregado: ${rvEsc(nuevo.categoria_nombre)} ${gs(nuevo.monto_gs)}</span><span class="rv-tecla"><kbd>Enter</kbd> agrega el gasto</span>`;
+    clearTimeout(rv._hechoT);
+    rv._hechoT = setTimeout(() => { if ($("#rv-c-conv")?.querySelector(".rv-hecho")) rvConv("rv-c"); }, 3200);
+  }
+  $("#rv-c-det")?.focus();
+}
+
+function rvGastos(d, editable) {
+  const g = d.gastos_lista;
+  if (!g.length) {
+    return `<div class="rv-vacio chico"><i class="ti ti-receipt-off"></i><b>Todavía no hay gastos</b>
+      <span>${editable ? "Elegí el rubro, poné el monto y Enter. Se suman solos al saldo." : "No se cargó ningún comprobante."}</span></div>`;
+  }
+  const dias = new Map();
+  g.forEach(m => { if (!dias.has(m.fecha)) dias.set(m.fecha, []); dias.get(m.fecha).push(m); });
+  return [...dias.entries()].map(([f, movs]) => {
+    let et = "";
+    if (d.fecha_salida && f < d.fecha_salida) et = "Antes de salir";
+    else if (d.fecha_salida && f > (d.fecha_regreso || d.fecha_salida)) et = "Después del viaje";
+    else if (d.fecha_salida) et = `Día ${rvDiasEntre(d.fecha_salida, f) + 1}`;
+    const tot = movs.reduce((a, m) => a + (m.monto_gs || 0), 0);
+    return `<div class="rv-dia">
+      <div class="rv-dia-cab"><span>${et ? `<b>${et}</b> · ` : ""}${rvDiaSem(f)} ${rvF(f)}</span><span>${gs(tot)}</span></div>
+      ${movs.map(m => rvFilaMov(m, editable)).join("")}
+    </div>`;
+  }).join("");
+}
+
+function rvFilaMov(m, editable) {
+  const ext = m.moneda && m.moneda !== "GS" ? `${rvMon(m.monto, m.moneda)} × ${rvCot(m.cotizacion)}` : "";
+  const sub = [m.detalle, m.comprobante && `Comp. ${m.comprobante}`].filter(Boolean);
+  return `<div class="rv-mov" id="rv-mov-${m.id}">
+    <span class="rv-mov-ic"><i class="ti ti-${m.tipo === "anticipo" ? "cash" : m.icono}"></i></span>
+    <div class="rv-mov-txt"><b>${rvEsc(m.tipo === "anticipo" ? (m.detalle || "Anticipo") : m.categoria_nombre)}</b>
+      ${m.tipo !== "anticipo" && sub.length ? `<span>${sub.map(rvEsc).join(" · ")}</span>` : ""}
+      ${m.tipo === "anticipo" ? `<span>${rvDiaSem(m.fecha, true)} ${rvF(m.fecha)}${ext ? ` · ${ext}` : ""}</span>` : ""}</div>
+    <div class="rv-mov-ext">${m.litros ? `<span class="rv-lt">${rvDec(m.litros, 1)} L</span>` : ""}${ext ? `<span>${ext}</span>` : ""}</div>
+    <b class="rv-mov-gs">${gs(m.monto_gs)}</b>
+    ${editable ? `<span class="rv-mov-acc">
+      <button onclick="rvEditarMov(${m.id})" title="Corregir" aria-label="Corregir"><i class="ti ti-pencil"></i></button>
+      <button onclick="rvBorrarMov(${m.id})" title="Borrar" aria-label="Borrar"><i class="ti ti-trash"></i></button></span>` : ""}
+  </div>`;
+}
+
+function rvAnticipos(d, editable) {
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-wallet"></i> Anticipos</h3><span class="rv-cab-dato"><b>${gs(d.anticipos)}</b></span></div>
+    ${d.anticipos_lista.length ? `<div class="rv-ants">${d.anticipos_lista.map(m => rvFilaMov(m, editable)).join("")}</div>`
+      : `<p class="rv-nada">No se cargó ningún anticipo${editable ? ". Si se le dio plata al chofer antes de salir, agregala acá." : "."}</p>`}
+    ${editable ? `<button class="rv-mas" onclick="rvMovModal('anticipo')"><i class="ti ti-plus"></i> Agregar anticipo</button>` : ""}`;
+}
+
+function rvRubros(d) {
+  const cats = d.por_categoria;
+  if (!cats.length) return "";
+  const max = cats[0].total || 1;
+  const tot = d.gastos || 1;
+  // El litro promedio: el de acá y el de afuera por separado
+  const precio = clave => {
+    const ms = d.gastos_lista.filter(m => m.categoria === clave && m.litros > 0);
+    const lt = ms.reduce((a, m) => a + m.litros, 0);
+    return lt ? { lt, gsl: ms.reduce((a, m) => a + m.monto_gs, 0) / lt } : null;
+  };
+  const pa = precio("combustible"), pe = precio("combustible_ext");
+  const datos = [];
+  if (pa) datos.push(`<span><i class="ti ti-gas-station"></i>Acá: ${rvDec(pa.lt, 1)} L a <b>${gs(pa.gsl)}</b> el litro</span>`);
+  if (pe) datos.push(`<span><i class="ti ti-world"></i>Afuera: ${rvDec(pe.lt, 1)} L a <b>${gs(pe.gsl)}</b> el litro</span>`);
+  if (d.pasajeros && d.gastos) datos.push(`<span><i class="ti ti-armchair"></i><b>${gs(d.gastos / d.pasajeros)}</b> por pasajero</span>`);
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-chart-bar"></i> En qué se gastó</h3></div>
+    <div class="rv-rubros">
+      ${cats.map((c, i) => `
+        <div class="rv-rub" title="${rvEsc(c.nombre)}: ${rvPl(c.n, "comprobante")}${c.litros ? ` · ${rvDec(c.litros, 1)} L` : ""}">
+          <span class="rv-rub-n"><i class="ti ti-${c.icono}"></i>${rvEsc(c.nombre)}</span>
+          <span class="rv-rub-v">${gs(c.total)}<small>${Math.round(c.total / tot * 100)}%</small></span>
+          <span class="rv-rub-bar"><i style="width:${Math.max(c.total / max * 100, 1.5)}%;animation-delay:${i * 50}ms"></i></span>
+        </div>`).join("")}
+    </div>
+    ${datos.length ? `<div class="rv-rub-datos">${datos.join("")}</div>` : ""}`;
+}
+
+function rvPresu(d) {
+  const c = d.comparacion;
+  if (!c) {
+    if (!rv.puedeCargar) return "";
+    return `
+      <div class="rv-bloque-cab"><h3><i class="ti ti-scale"></i> Contra el presupuesto</h3></div>
+      <p class="rv-nada">Vinculá el presupuesto de este viaje y se ve, rubro por rubro, si se gastó más o menos de lo calculado. Sirve para presupuestar mejor el próximo.</p>
+      <div class="rv-vinc">
+        <select id="rv-presu-sel" class="rv-sel"><option value="">Cargando presupuestos…</option></select>
+        <button class="btn btn-ghost" onclick="rvVincular()"><i class="ti ti-link"></i> Vincular</button>
+      </div>`;
+  }
+  const max = Math.max(...c.filas.map(f => Math.max(f.presupuestado, f.real))) || 1;
+  const dif = c.diferencia;
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-scale"></i> Contra el presupuesto</h3>
+      <span class="rv-dif ${dif > 0 ? "mas" : dif < 0 ? "menos" : ""}"><i class="ti ti-${dif > 0 ? "trending-up" : dif < 0 ? "trending-down" : "equal"}"></i>${dif > 0 ? "+" : dif < 0 ? "−" : ""}${gs(Math.abs(dif))}</span>
+    </div>
+    <div class="rv-pres">
+      ${c.filas.map(f => {
+        const pasa = f.real > f.presupuestado;
+        const wP = f.presupuestado / max * 100, wR = Math.min(f.real, f.presupuestado || f.real) / max * 100;
+        return `<div class="rv-pr" title="Presupuestado ${gs(f.presupuestado)} · gastado ${gs(f.real)}">
+          <span class="rv-pr-n">${rvEsc(f.nombre)}</span>
+          <span class="rv-pr-d ${f.diferencia > 0 ? "mas" : f.diferencia < 0 ? "menos" : ""}">${f.diferencia > 0 ? "+" : f.diferencia < 0 ? "−" : ""}${gs(Math.abs(f.diferencia))}${f.pct != null ? ` <small>${f.pct > 0 ? "+" : ""}${Math.round(f.pct)}%</small>` : ""}</span>
+          <span class="rv-pr-bar">
+            <i class="pres" style="width:${wP}%"></i>
+            <i class="real" style="width:${pasa && f.presupuestado ? wP : wR}%"></i>
+            ${pasa && f.presupuestado ? `<i class="pasa" style="left:calc(${wP}% + 2px);width:calc(${(f.real - f.presupuestado) / max * 100}% - 2px)"></i>` : ""}
+            ${pasa && !f.presupuestado ? `<i class="pasa" style="left:0;width:${f.real / max * 100}%"></i>` : ""}
+          </span>
+          <span class="rv-pr-v">${gs(f.real)} <small>de ${gs(f.presupuestado)}</small></span>
+        </div>`;
+      }).join("")}
+    </div>
+    <div class="rv-pr-ley">
+      <span><i class="sq real"></i>Gastado</span><span><i class="sq pres"></i>Presupuestado</span><span><i class="sq pasa"></i>Lo que se pasó</span>
+    </div>
+    <div class="rv-pr-pie">
+      <span>Presupuesto #${c.presupuesto_id}${c.destino ? ` · ${rvEsc(c.destino)}` : ""} · total ${gs(c.total_presupuestado)} en estos rubros</span>
+      ${rv.puedeCargar ? `<button class="rv-link" onclick="rvDesvincular()">Cambiar</button>` : ""}
+    </div>`;
+}
+
+async function rvPresuOpciones() {
+  const sel = $("#rv-presu-sel");
+  if (!sel) return;
+  if (!rv.presus) rv.presus = await api("/api/turismo/rendiciones/presupuestos");
+  if (!Array.isArray(rv.presus)) rv.presus = [];
+  const s2 = $("#rv-presu-sel");
+  if (!s2) return;
+  if (!rv.presus.length) {
+    s2.innerHTML = `<option value="">No hay presupuestos de turismo guardados</option>`;
+    return;
+  }
+  const norm = s => String(s || "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const d = rv.det;
+  const conCliente = rv.presus.filter(p => norm(p.cliente) && norm(p.cliente) === norm(d.cliente));
+  const op = p => `<option value="${p.id}">#${p.id} · ${rvEsc(p.destino || "—")} · ${rvEsc(p.cliente || "sin cliente")} · ${rvF(p.fecha)} · ${gs(p.precio_final)}</option>`;
+  s2.innerHTML = `<option value="">Elegí el presupuesto…</option>`
+    + (conCliente.length ? `<optgroup label="Del mismo cliente">${conCliente.map(op).join("")}</optgroup>` : "")
+    + `<optgroup label="Todos">${rv.presus.map(op).join("")}</optgroup>`;
+  if (conCliente.length === 1) s2.value = conCliente[0].id;
+}
+
+async function rvVincular() {
+  const v = $("#rv-presu-sel")?.value;
+  if (!v) { toast("Elegí el presupuesto", "error"); return; }
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ presupuesto_id: +v }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo vincular", "error"); return; }
+  toast("Presupuesto vinculado", "success");
+  rvPintarDetalle(r.rendicion);
+}
+async function rvDesvincular() {
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ presupuesto_id: "" }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo cambiar", "error"); return; }
+  rvPintarDetalle(r.rendicion);
+}
+
+function rvObs(d) {
+  const obs = d.observaciones || "";
+  if (!rv.puedeCargar) {
+    return obs ? `<div class="rv-bloque-cab"><h3><i class="ti ti-notes"></i> Observaciones</h3></div><p class="rv-obs-txt">${rvEsc(obs)}</p>` : "";
+  }
+  return `
+    <div class="rv-bloque-cab"><h3><i class="ti ti-notes"></i> Observaciones</h3></div>
+    <textarea id="rv-obs" class="rv-obs" rows="3" maxlength="500" placeholder="Algo que administración tenga que saber del viaje (un gasto sin comprobante, una multa, un arreglo en la ruta…)"
+      oninput="$('#rv-obs-btn').hidden = this.value === (rv.det.observaciones || '')">${rvEsc(obs)}</textarea>
+    <div class="rv-obs-pie"><button class="btn btn-ghost btn-sm" id="rv-obs-btn" hidden onclick="rvGuardarObs(this)"><i class="ti ti-device-floppy"></i> Guardar</button></div>`;
+}
+async function rvGuardarObs(btn) {
+  btn.disabled = true;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ observaciones: $("#rv-obs").value }) });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+  toast("Observaciones guardadas", "success");
+  rvPintarDetalle(r.rendicion);
+}
+
+// ─── Corregir / agregar un movimiento (modal) ───
+function rvMovModal(tipo, m) {
+  const esG = tipo === "gasto";
+  const v = m || { fecha: tipo === "anticipo" ? (rv.det.fecha_salida && rv.det.fecha_salida < trHoy() ? rv.det.fecha_salida : trHoy()) : rv.fecha,
+                   moneda: "GS", monto: "", cotizacion: "", detalle: "", litros: "", comprobante: "", categoria: rv.cat };
+  const mon = v.moneda || "GS";
+  const montoTxt = v.monto ? (mon === "GS" ? rvDec(Math.round(v.monto), 0) : rvDec(v.monto, 2)) : "";
+  rvModal({
+    titulo: m ? (esG ? "Corregir gasto" : "Corregir anticipo") : "Agregar anticipo",
+    icono: esG ? "receipt" : "wallet", ancho: 540,
+    sub: esG ? "Lo que dice el comprobante." : "La plata que se le dio al chofer para el viaje.",
+    cuerpo: `
+      <div class="rv-n-grid">
+        ${esG ? `<label class="rv-f g2"><span>Rubro</span><select id="rv-m-cat" onchange="$('#rv-m-lt').closest('.rv-f').hidden = !this.value.startsWith('combustible')">
+          ${RV_CATS.map(c => `<option value="${c.clave}" ${c.clave === v.categoria ? "selected" : ""}>${c.nombre}</option>`).join("")}</select></label>` : ""}
+        <label class="rv-f"><span>Fecha</span><input type="date" id="rv-m-fecha" value="${rvEsc(v.fecha)}"></label>
+        <label class="rv-f f-monto"><span>Monto</span>
+          <div class="rv-monto"><input id="rv-m-monto" inputmode="decimal" value="${montoTxt}" placeholder="0" oninput="rvConv('rv-m')" onblur="rvFormatear(this, 'rv-m-mon')" autofocus>
+          <select id="rv-m-mon" onchange="rvMonedaCambio('rv-m')" aria-label="Moneda">${rvOpcMonedas(mon)}</select></div>
+        </label>
+        <label class="rv-f" ${mon === "GS" ? "hidden" : ""}><span>Cotización</span><input id="rv-m-cot" inputmode="decimal" oninput="rvConv('rv-m')" value="${mon !== "GS" ? rvCot(v.cotizacion || rv.cot[mon] || 0) : ""}" placeholder="Gs. por unidad"></label>
+        ${esG ? `<label class="rv-f" ${String(v.categoria).startsWith("combustible") ? "" : "hidden"}><span>Litros</span><input id="rv-m-lt" inputmode="decimal" value="${v.litros ? rvDec(v.litros, 2) : ""}" placeholder="0"></label>` : ""}
+        <label class="rv-f g2"><span>Detalle</span><input id="rv-m-det" value="${rvEsc(v.detalle)}" maxlength="160" placeholder="${esG ? "Dónde, qué" : "Ej. Anticipo en dólares"}"></label>
+        ${esG ? `<label class="rv-f g2"><span>Comprobante</span><input id="rv-m-comp" value="${rvEsc(v.comprobante)}" maxlength="40" placeholder="N° de factura o ticket"></label>` : ""}
+      </div>
+      <div class="rv-conv" id="rv-m-conv"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvGuardarMov(this, '${tipo}', ${m ? m.id : "null"})"><i class="ti ti-check"></i> ${m ? "Guardar" : "Agregar"}</button>`,
+  });
+  rvConv("rv-m");
+  document.querySelectorAll(".rv-modal input").forEach(el => el.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); el.closest(".rv-modal").querySelector(".rv-modal-pie .btn-primary").click(); }
+  }));
+}
+function rvEditarMov(mid) {
+  const m = [...rv.det.gastos_lista, ...rv.det.anticipos_lista].find(x => x.id === mid);
+  if (m) rvMovModal(m.tipo, m);
+}
+async function rvGuardarMov(btn, tipo, mid) {
+  const mon = $("#rv-m-mon").value;
+  const body = { tipo, fecha: $("#rv-m-fecha").value, monto: $("#rv-m-monto").value, moneda: mon,
+                 cotizacion: $("#rv-m-cot").value, detalle: $("#rv-m-det").value };
+  if (tipo === "gasto") Object.assign(body, { categoria: $("#rv-m-cat").value, comprobante: $("#rv-m-comp").value,
+                                              litros: $("#rv-m-cat").value.startsWith("combustible") ? $("#rv-m-lt").value : 0 });
+  if (!(rvNum(body.monto) > 0)) { toast("Poné el monto", "error"); return; }
+  if (mon !== "GS" && !(rvNum(body.cotizacion) > 0)) { toast(`Poné la cotización del ${RV_MONEDAS[mon]}`, "error"); return; }
+  btn.disabled = true;
+  const r = mid
+    ? await api(`/api/turismo/rendiciones/movs/${mid}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+    : await api(`/api/turismo/rendiciones/${rv.id}/movs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo guardar", "error"); return; }
+  if (mon !== "GS") rv.cot[mon] = rvNum(body.cotizacion);
+  btn.closest(".modal-overlay").remove();
+  toast(mid ? "Corregido" : "Anticipo agregado", "success");
+  rvPintarDetalle(r.rendicion, mid || r.mov_id);
+}
+async function rvBorrarMov(mid) {
+  const m = [...rv.det.gastos_lista, ...rv.det.anticipos_lista].find(x => x.id === mid);
+  if (!m) return;
+  const que = m.tipo === "anticipo" ? `el anticipo de ${gs(m.monto_gs)}` : `el gasto de ${m.categoria_nombre.toLowerCase()} de ${gs(m.monto_gs)}`;
+  if (!confirm(`¿Borrar ${que}?`)) return;
+  const fila = document.getElementById(`rv-mov-${mid}`);
+  fila?.classList.add("saliendo");
+  const r = await api(`/api/turismo/rendiciones/movs/${mid}`, { method: "DELETE" });
+  if (!r || !r.ok) { fila?.classList.remove("saliendo"); toast(r?.msg || "No se pudo borrar", "error"); return; }
+  setTimeout(() => rvPintarDetalle(r.rendicion), fila ? 180 : 0);
+}
+
+// ─── Datos del viaje ───
+function rvEditarViaje() {
+  const d = rv.det;
+  rvModal({
+    titulo: "Datos del viaje", icono: "route", ancho: 620,
+    sub: d.agenda_ot ? `Vino de la agenda (OT ${rvEsc(d.agenda_ot)}). Lo que cambies acá no cambia la agenda.` : "",
+    cuerpo: `<div class="rv-n-grid">
+      <label class="rv-f g2"><span>Cliente</span><input id="rv-e-cliente" value="${rvEsc(d.cliente)}" autofocus></label>
+      <label class="rv-f"><span>Sale de</span><input id="rv-e-salida" value="${rvEsc(d.salida)}"></label>
+      <label class="rv-f"><span>Destino</span><input id="rv-e-destino" value="${rvEsc(d.destino)}"></label>
+      <label class="rv-f"><span>Fecha de salida</span><input type="date" id="rv-e-fs" value="${rvEsc(d.fecha_salida)}"></label>
+      <label class="rv-f"><span>Fecha de regreso</span><input type="date" id="rv-e-fr" value="${rvEsc(d.fecha_regreso)}"></label>
+      <label class="rv-f"><span>Coche</span><input id="rv-e-coche" value="${rvEsc(d.coche)}" inputmode="numeric"></label>
+      <label class="rv-f"><span>Pasajeros</span><input id="rv-e-pax" value="${d.pasajeros || ""}" inputmode="numeric"></label>
+      <label class="rv-f"><span>Quién rinde</span><input id="rv-e-chofer" value="${rvEsc(rvNombre(d.chofer))}"></label>
+      <label class="rv-f"><span>Tripulación</span><input id="rv-e-trip" value="${rvEsc(rvNombre(d.tripulacion))}"></label>
+    </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvGuardarViaje(this)"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function rvGuardarViaje(btn) {
+  const body = { cliente: $("#rv-e-cliente").value, salida: $("#rv-e-salida").value, destino: $("#rv-e-destino").value,
+                 fecha_salida: $("#rv-e-fs").value, fecha_regreso: $("#rv-e-fr").value, coche: $("#rv-e-coche").value,
+                 pasajeros: $("#rv-e-pax").value, chofer: $("#rv-e-chofer").value, tripulacion: $("#rv-e-trip").value };
+  if (body.fecha_regreso && body.fecha_salida && body.fecha_regreso < body.fecha_salida) { toast("El regreso es antes de la salida", "error"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r || !r.ok) { btn.disabled = false; toast(r?.msg || "No se pudo guardar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Viaje actualizado", "success");
+  rvPintarDetalle(r.rendicion);
+}
+
+// ─── Pasos: presentar, aprobar, devolver, saldar, reabrir ───
+async function rvAccion(accion, extra = {}) {
+  const d = rv.det, s = rvSaldoDe(d);
+  const preguntas = {
+    presentar: `¿Presentar la rendición?\n\nQueda para que administración la apruebe. Después ya no se pueden cambiar los gastos, salvo que la devuelvan.`,
+    aprobar: `¿Aprobar la rendición #${d.id}?\n\n${s > 0 ? `El chofer tiene que devolver ${gs(s)}.` : s < 0 ? `Hay que pagarle ${gs(-s)} al chofer.` : "Cierra justo: queda saldada."}`,
+    reabrir: `¿Reabrir la rendición #${d.id}?\n\nVuelve a "Cargando" para corregir los gastos${d.estado !== "abierta" ? " y hay que aprobarla de nuevo" : ""}.`,
+  };
+  if (preguntas[accion] && !confirm(preguntas[accion])) return;
+  const r = await api(`/api/turismo/rendiciones/${rv.id}/estado`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accion, ...extra }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo", "error"); return false; }
+  toast(r.msg || "Listo", "success");
+  // Si se reabre, la carga rápida vuelve a aparecer con lo último
+  rvPintarDetalle(r.rendicion);
+  $("#rv-d-ticket")?.classList.add("cambio");
+  setTimeout(() => $("#rv-d-ticket")?.classList.remove("cambio"), 900);
+  return true;
+}
+
+function rvDevolver() {
+  rvModal({
+    titulo: "Devolver para corregir", icono: "arrow-back-up", ancho: 500,
+    sub: "Vuelve a la oficina con el motivo. Cuando la corrijan, la presentan de nuevo.",
+    cuerpo: `<label class="rv-f"><span>¿Qué hay que corregir?</span>
+      <textarea id="rv-dv-motivo" class="rv-obs" rows="3" maxlength="300" autofocus placeholder="Ej. Falta el comprobante del hotel; el peaje del día 2 está cargado dos veces"></textarea></label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvConfirmarDevolver(this)"><i class="ti ti-arrow-back-up"></i> Devolver</button>`,
+  });
+}
+async function rvConfirmarDevolver(btn) {
+  const motivo = $("#rv-dv-motivo").value.trim();
+  if (motivo.length < 4) { toast("Escribí qué hay que corregir", "error"); return; }
+  btn.disabled = true;
+  const ok = await rvAccion("devolver", { motivo });
+  if (ok) btn.closest(".modal-overlay")?.remove(); else btn.disabled = false;
+}
+
+function rvSaldar() {
+  const s = rvSaldoDe(rv.det);
+  const formas = s > 0 ? ["Efectivo", "Transferencia", "Descuento del próximo anticipo", "Otro"]
+                       : ["Efectivo", "Transferencia", "Con el sueldo", "Otro"];
+  rvModal({
+    titulo: s > 0 ? "Registrar devolución" : "Registrar pago", icono: s > 0 ? "arrow-back-up" : "cash", ancho: 520,
+    sub: s > 0 ? `El chofer devuelve <b>${gs(s)}</b>.` : `Se le paga <b>${gs(-s)}</b> al chofer.`,
+    cuerpo: `
+      <div class="rv-f"><span>¿Cómo?</span>
+        <div class="rv-formas" role="radiogroup">${formas.map((f, i) => `<button type="button" role="radio" aria-checked="${i === 0}" class="rv-forma ${i === 0 ? "on" : ""}"
+          onclick="document.querySelectorAll('.rv-forma').forEach(b => { b.classList.toggle('on', b === this); b.setAttribute('aria-checked', b === this); })">${f}</button>`).join("")}</div>
+      </div>
+      <div class="rv-n-grid" style="margin-top:12px">
+        <label class="rv-f"><span>Fecha</span><input type="date" id="rv-s-fecha" value="${trHoy()}"></label>
+        <label class="rv-f"><span>Nota</span><input id="rv-s-nota" maxlength="200" placeholder="Ej. recibo N° 0012"></label>
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="rvConfirmarSaldo(this)"><i class="ti ti-check"></i> Registrar</button>`,
+  });
+}
+async function rvConfirmarSaldo(btn) {
+  const forma = document.querySelector(".rv-forma.on")?.textContent || "Efectivo";
+  btn.disabled = true;
+  const ok = await rvAccion("saldar", { forma, fecha: $("#rv-s-fecha").value, nota: $("#rv-s-nota").value });
+  if (ok) btn.closest(".modal-overlay")?.remove(); else btn.disabled = false;
+}
+
+function rvPdf() {
+  window.open(`/api/turismo/rendiciones/${rv.id}/pdf`, "_blank");
+}
+
+async function rvBorrar() {
+  const d = rv.det;
+  if (!confirm(`¿Borrar la rendición #${d.id} (${d.salida || ""} → ${d.destino || ""})?\n\nSe borran ${rvPl(d.anticipos_lista.length, "anticipo")} y ${rvPl(d.gastos_lista.length, "gasto")}. No se puede deshacer.`)) return;
+  const r = await api(`/api/turismo/rendiciones/${d.id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo borrar", "error"); return; }
+  toast(`Rendición #${d.id} borrada`, "success");
+  renderRendicionesTurismo();
+}
