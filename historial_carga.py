@@ -305,7 +305,7 @@ def _fuentes(filtro_vid=None, desde=None, hasta=None):
         t.categoria, t.tarea AS descripcion, '' AS taller, 'plan' AS origen, m.id,
         0 AS de_historial
         FROM mantenimientos_realizados m JOIN tareas_plan t ON t.id = m.tarea_plan_id
-        WHERE {w}"""); params += p
+        WHERE COALESCE(m.origen, 'manual') NOT IN ('ot', 'inicial') AND {w}"""); params += p
 
     w, p = where("o.vehiculo_id", "COALESCE(i.fecha_completado, o.fecha_apertura)")
     partes.append(f"""SELECT o.vehiculo_id, COALESCE(i.fecha_completado, o.fecha_apertura) AS fecha,
