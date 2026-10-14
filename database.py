@@ -498,6 +498,17 @@ def inicializar_db():
                          ("%celeste%", "%celeste%"))
     except Exception:
         pass
+    # Quién puede corregir el kilometraje (el "Verificar km" de la OT) además
+    # de administración y taller. La primera vez se le habilita a Gayoso, que
+    # fue para quien se pidió; después se maneja desde el panel de Usuarios.
+    try:
+        if "edita_km" not in columnas_de_tabla(conn, "usuarios"):
+            conn.execute("ALTER TABLE usuarios ADD COLUMN edita_km INTEGER DEFAULT 0")
+            conn.execute("""UPDATE usuarios SET edita_km=1
+                            WHERE LOWER(COALESCE(nombre,'')) LIKE ? OR LOWER(usuario) LIKE ?""",
+                         ("%gayoso%", "%gayoso%"))
+    except Exception:
+        pass
 
     conn.commit()
 
@@ -2580,7 +2591,8 @@ def obtener_usuarios():
     rows = conn.execute("""SELECT id, usuario, nombre, rol, activo,
                            fecha_creacion, ultimo_acceso,
                            COALESCE(secciones, '') AS secciones,
-                           COALESCE(borra_ots, 0) AS borra_ots FROM usuarios
+                           COALESCE(borra_ots, 0) AS borra_ots,
+                           COALESCE(edita_km, 0) AS edita_km FROM usuarios
                            ORDER BY usuario""").fetchall()
     conn.close()
     from permisos import desde_texto
@@ -2589,6 +2601,7 @@ def obtener_usuarios():
         d = dict(r)
         d["secciones"] = desde_texto(d.get("secciones"))
         d["borra_ots"] = 1 if (d.get("rol") == "admin" or d.get("borra_ots")) else 0
+        d["edita_km"] = 1 if (d.get("rol") in ("admin", "taller") or d.get("edita_km")) else 0
         salida.append(d)
     return salida
 
@@ -2613,6 +2626,27 @@ def puede_borrar_ots(uid, rol=None):
     return r["rol"] == "admin" or bool(r["b"])
 
 
+def puede_editar_km(uid, rol=None):
+    """Si ese usuario puede corregir el kilometraje de un coche (el
+    "Verificar km" de la OT): administración y taller siempre; el resto, solo
+    si se lo habilitaron en el panel de Usuarios. Se lee de la base en cada
+    pedido, así el cambio rige al instante."""
+    if rol in ("admin", "taller"):
+        return True
+    if not uid:
+        return False
+    conn = get_connection()
+    try:
+        r = conn.execute("""SELECT rol, COALESCE(activo, 1) AS activo, COALESCE(edita_km, 0) AS k
+                            FROM usuarios WHERE id=?""", (uid,)).fetchone()
+    except Exception:
+        r = None
+    conn.close()
+    if not r or not r["activo"]:
+        return False
+    return r["rol"] in ("admin", "taller") or bool(r["k"])
+
+
 def secciones_de_usuario(uid):
     """Las secciones del usuario según la base, al momento: si el
     administrador se las cambia, rige desde el próximo clic, sin tener que
@@ -2630,7 +2664,7 @@ def secciones_de_usuario(uid):
 
 # Lo único que se puede modificar de un usuario. Antes el SQL se armaba con
 # los nombres de campo que vinieran en el pedido, sin filtrar.
-CAMPOS_USUARIO = {"nombre", "rol", "activo", "password_hash", "secciones", "borra_ots"}
+CAMPOS_USUARIO = {"nombre", "rol", "activo", "password_hash", "secciones", "borra_ots", "edita_km"}
 
 
 def actualizar_usuario(uid, **kwargs):
@@ -2644,6 +2678,8 @@ def actualizar_usuario(uid, **kwargs):
         kwargs["secciones"] = a_texto(kwargs["secciones"])
     if "borra_ots" in kwargs:
         kwargs["borra_ots"] = 1 if kwargs["borra_ots"] in (1, True, "1", "true", "si", "sí") else 0
+    if "edita_km" in kwargs:
+        kwargs["edita_km"] = 1 if kwargs["edita_km"] in (1, True, "1", "true", "si", "sí") else 0
     kwargs = {k: v for k, v in kwargs.items() if k in CAMPOS_USUARIO}
     if not kwargs:
         return

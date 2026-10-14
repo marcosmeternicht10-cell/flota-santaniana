@@ -5,6 +5,7 @@ Moneda: Guaraní (₲)
 """
 
 import os
+import re
 import threading
 import datetime
 from functools import wraps
@@ -234,11 +235,19 @@ def _puede_borrar_ots_sesion():
         return session.get("rol") == "admin"
 
 
+def _puede_editar_km_sesion():
+    try:
+        from database import puede_editar_km
+        return puede_editar_km(session.get("usuario_id"), session.get("rol"))
+    except Exception:
+        return session.get("rol") in ("admin", "taller")
+
+
 @app.route("/api/me/permisos", methods=["GET"])
 def api_mis_permisos():
     """Permisos de acción del usuario, leídos de la base al momento (si el
     administrador se los cambia, rigen sin volver a entrar)."""
-    return jsonify({"borra_ots": _puede_borrar_ots_sesion()})
+    return jsonify({"borra_ots": _puede_borrar_ots_sesion(), "edita_km": _puede_editar_km_sesion()})
 
 
 @app.before_request
@@ -283,7 +292,9 @@ def proteger_rutas():
     # El auditor consulta, no modifica: se le bloquean los endpoints que
     # escriben, aunque llegue por fuera de la pantalla.
     if session.get("rol") == "auditor" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        permitidos_auditor = (p == "/api/logout" or p.startswith("/api/combustible"))
+        permitidos_auditor = (p == "/api/logout" or p.startswith("/api/combustible")
+                              # salvo que se le haya habilitado corregir el km
+                              or (re.fullmatch(r"/api/ots/\d+/km", p) is not None and _puede_editar_km_sesion()))
         if not permitidos_auditor:
             return jsonify({"error": "El rol auditor no puede modificar datos"}), 403
 
@@ -570,6 +581,8 @@ def api_actualizar_usuario(uid):
         detalle = f"nombre: {nuevo_nombre}"
     elif "borra_ots" in d:
         detalle = "puede eliminar OTs: " + ("sí" if d.get("borra_ots") in (1, True, "1", "true") else "no")
+    elif "edita_km" in d:
+        detalle = "puede corregir el km: " + ("sí" if d.get("edita_km") in (1, True, "1", "true") else "no")
     auditar(f"Modificó un usuario (ID {uid})", "Usuarios", detalle)
     msg = "Usuario actualizado."
     if filas_corp:
@@ -1169,15 +1182,18 @@ def api_ot(ot_id):
     from database import km_verificacion
     ot["km_coche"] = km_actual_vehiculo(ot["vehiculo_id"])
     ot["km_verif"] = km_verificacion(ot["vehiculo_id"])
-    ot["puede_verificar_km"] = session.get("rol") in ("admin", "taller")
+    ot["puede_verificar_km"] = _puede_editar_km_sesion()
     return jsonify(ot)
 
 
 @app.route("/api/ots/<int:ot_id>/km", methods=["POST"])
-@rol_requerido("admin", "taller")
 def api_verificar_km_ot(ot_id):
     """El taller miró el tablero al abrir la OT y confirma o corrige el km.
-    Esa lectura pasa a ser el km del coche (también para el Preventivo)."""
+    Esa lectura pasa a ser el km del coche (también para el Preventivo).
+    Lo pueden hacer administración, taller y quien tenga habilitado
+    "Corrige km" en el panel de Usuarios."""
+    if not _puede_editar_km_sesion():
+        return jsonify({"ok": False, "error": "No tenés permiso para corregir el kilometraje"}), 403
     from database import verificar_km_en_ot
     d = request.json or {}
     try:
@@ -1675,9 +1691,10 @@ def api_set_horario_salida(vid):
 
 
 @app.route("/api/vehiculos/<int:vid>/km_manual", methods=["POST"])
-@rol_requerido("admin", "taller")
 def api_set_km_manual(vid):
     """Corrige a mano el odómetro de un vehículo."""
+    if not _puede_editar_km_sesion():
+        return jsonify({"ok": False, "error": "No tenés permiso para corregir el kilometraje"}), 403
     d = request.json or {}
     try:
         km = float(d.get("km", 0) or 0)
