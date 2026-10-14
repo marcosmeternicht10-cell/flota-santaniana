@@ -272,14 +272,14 @@ async function renderDashboard() {
         <div class="metric ${data.mant_vencidos > 0 ? 'danger' : ''}">
           <div class="metric-icon red"><i class="ti ti-alert-circle"></i></div>
           <div class="metric-content">
-            <div class="metric-label">Mantenimientos vencidos</div>
+            <div class="metric-label">Coches con preventivo vencido</div>
             <div class="metric-value">${data.mant_vencidos}</div>
           </div>
         </div>
         <div class="metric ${data.mant_proximos > 0 ? 'warning' : ''}">
           <div class="metric-icon amber"><i class="ti ti-clock-hour-4"></i></div>
           <div class="metric-content">
-            <div class="metric-label">Próximos vencimientos</div>
+            <div class="metric-label">Coches con preventivo próximo</div>
             <div class="metric-value">${data.mant_proximos}</div>
           </div>
         </div>
@@ -377,6 +377,7 @@ async function renderDashboard() {
                     ${v.estado_general === "pronto" ? `<span class="badge warning"><span class="dot"></span> ${v.pronto} próximas</span>` : ""}
                     ${v.estado_general === "ok" ? `<span class="badge success"><span class="dot"></span> Al día</span>` : ""}
                     ${v.estado_general === "sin_plan" ? `<span class="badge">Sin plan</span>` : ""}
+                    ${["sin_dato", "sin_km"].includes(v.estado_general) ? `<span class="badge">Sin datos</span>` : ""}
                   </td>
                 </tr>
               `).join("")}
@@ -1688,352 +1689,9 @@ function exportarPdf() {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-//  MANTENIMIENTO (preventivo, por vehículo)
+//  PREVENTIVO: el plan de cada coche, la agenda del taller y los planes
+//  están al final del archivo (sección PLAN PREVENTIVO).
 // ════════════════════════════════════════════════════════════════════════
-async function renderMantenimiento() {
-  const v = cocheActual;
-  status(`Mantenimiento preventivo del coche ${v.patente}`);
-  const planVeh = await api(`/api/vehiculos/${v.id}/plan`);
-  const planes = await api("/api/planes");
-  content.innerHTML = `
-    <div class="page-header">
-      <h1><i class="ti ti-tool"></i> Mantenimiento · ${v.patente}</h1>
-      <p>${v.marca} ${v.modelo} — control preventivo por kilometraje</p>
-    </div>
-    <div class="section">
-      ${planVeh.plan ? `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-        <button class="btn btn-ghost" onclick="window.open('/api/vehiculos/${v.id}/plan_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir plan</button>
-      </div>` : ""}
-      ${planVeh.plan ? renderOdometro(planVeh) : renderSinPlan(planes, v)}
-      ${planVeh.plan ? `
-        <div class="tabs">
-          <button class="tab-btn ${mantTab==='estado'?'active':''}" onclick="setMantTab('estado')"><i class="ti ti-gauge"></i> Estado actual</button>
-          <button class="tab-btn ${mantTab==='realizar'?'active':''}" onclick="setMantTab('realizar')"><i class="ti ti-plus"></i> Registrar</button>
-          <button class="tab-btn ${mantTab==='historial'?'active':''}" onclick="setMantTab('historial')"><i class="ti ti-history"></i> Historial</button>
-        </div>
-        <div id="mant-body"></div>
-      ` : ""}
-    </div>`;
-  if (planVeh.plan) cargarMantTab(planVeh);
-}
-function renderOdometro(p) {
-  const v = cocheActual;
-  const coche = v && v.n_interno ? v.n_interno : "—";
-  return `<div class="odometer-card">
-    <div>
-      <div class="odo-label">Odómetro estimado</div>
-      <div class="odo-value">${fmtNum(p.km_actual)} km</div>
-      <div class="odo-verif">${p.km_verif
-        ? `<i class="ti ti-circle-check"></i> Verificado en la OT #${p.km_verif.ot} · ${otFechaHora(p.km_verif.fecha)}${p.km_verif.por ? " · " + hiEsc(p.km_verif.por) : ""}`
-        : `<i class="ti ti-info-circle"></i> El km se verifica al abrir una OT del coche`}</div>
-      <div class="odo-plan"><i class="ti ti-bus"></i> Coche: <b>${coche}</b></div>
-    </div>
-    <div id="odo-resumen" class="odo-resumen"></div>
-  </div>`;
-}
-
-function renderSinPlan(planes, v) {
-  return `<div class="card">
-    <div class="card-head"><i class="ti ti-alert-triangle" style="color:var(--warning)"></i> Sin plan asignado</div>
-    <div class="card-body">
-      <p style="margin-bottom:14px;color:var(--muted);font-size:13.5px">Asignale un plan para empezar a controlar los vencimientos.</p>
-      <div class="form-row">
-        <div class="field" style="flex:1;min-width:280px"><label>Plan de mantenimiento</label>
-          <select id="m-plan">
-            <option value="">-- Elegí un plan --</option>
-            ${planes.map(p => `<option value="${p.id}">${p.nombre} (${p.cant_tareas} tareas)</option>`).join("")}
-          </select>
-        </div>
-        <div class="field"><label>KM actual del odómetro</label><input id="m-km" placeholder="250000" style="width:140px"></div>
-        <button class="btn btn-primary" onclick="asignarPlanCoche(${v.id})"><i class="ti ti-link"></i> Asignar plan</button>
-      </div>
-    </div>
-  </div>`;
-}
-async function asignarPlanCoche(vid) {
-  const pid = $("#m-plan").value;
-  if (!pid) { toast("Elegí un plan", "error"); return; }
-  await api(`/api/vehiculos/${vid}/plan`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ plan_id: pid, km_inicial: parseFloat($("#m-km").value || 0) })
-  });
-  toast("Plan asignado", "success");
-  renderMantenimiento();
-}
-function setMantTab(t) {
-  mantTab = t;
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  event.target.closest(".tab-btn").classList.add("active");
-  api(`/api/vehiculos/${cocheActual.id}/plan`).then(p => cargarMantTab(p));
-}
-async function cargarMantTab(planVeh) {
-  if (mantTab === "estado") await tabEstado();
-  else if (mantTab === "realizar") await tabRealizar(planVeh);
-  else if (mantTab === "historial") await tabHistorial();
-}
-async function tabEstado() {
-  const v = cocheActual;
-  const data = await api(`/api/vehiculos/${v.id}/estado_mantenimiento`);
-  const estado = data.estado || [];
-  const counts = { vencido: 0, pronto: 0, ok: 0 };
-  estado.forEach(e => counts[e.estado] = (counts[e.estado] || 0) + 1);
-  if ($("#odo-resumen")) $("#odo-resumen").innerHTML = `
-    ${counts.vencido > 0 ? `<span class="odo-tag vencido"><i class="ti ti-alert-circle"></i> ${counts.vencido} vencidas</span>` : ""}
-    ${counts.pronto > 0 ? `<span class="odo-tag pronto"><i class="ti ti-clock-hour-4"></i> ${counts.pronto} próximas</span>` : ""}
-    ${counts.ok > 0 ? `<span class="odo-tag ok"><i class="ti ti-circle-check"></i> ${counts.ok} al día</span>` : ""}`;
-
-  const iconoEstado = { optimo: "circle-check", bueno: "circle-check", regular: "clock-hour-4", atencion: "alert-triangle", vencido: "alert-circle" };
-  const labelEstado = { optimo: "Óptimo", bueno: "Bueno", regular: "Regular", atencion: "Atención", vencido: "Vencido" };
-
-  $("#mant-body").innerHTML = !estado.length ? `<div class="empty">El plan no tiene tareas cargadas.</div>` : `
-    <div class="alert-list">
-      ${estado.map(e => `
-        <div class="alert-row ${e.estado}">
-          <i class="ti ti-${iconoEstado[e.estado_grad] || 'circle'}"></i>
-          <div style="min-width:0">
-            <div class="alert-task">${e.tarea}
-              ${e.categoria ? `<span class="badge cat">${e.categoria}</span>` : ""}
-              <span class="grad-badge grad-${e.estado_grad}"><span class="dot"></span> ${labelEstado[e.estado_grad]} · ${e.porcentaje.toFixed(0)}%</span>
-            </div>
-            <div class="alert-meta" style="margin:6px 0 6px">
-              ${e.ultimo_km !== null
-                ? `Último: ${fmtNum(e.ultimo_km)} km${e.ultima_fecha ? ` · ${e.ultima_fecha}` : ""}`
-                : "Sin registro previo"}
-              · Cada ${fmtNum(e.intervalo_km)} km · Próximo: ${fmtNum(e.proximo_km)} km
-            </div>
-            <div class="grad-bar-wrap" style="max-width:520px">
-              <div class="grad-bar estado-${e.estado_grad}" style="width:${e.porcentaje_visual}%"></div>
-            </div>
-          </div>
-          <div class="alert-km">
-            <div class="alert-km-restante">
-              ${e.estado === "vencido" ? `▲ ${fmtNum(Math.abs(e.km_restantes))}` : fmtNum(e.km_restantes)}
-            </div>
-            <div class="alert-meta">${e.estado === 'vencido' ? 'km pasados' : 'km restantes'}</div>
-          </div>
-          <button class="btn btn-primary btn-sm" onclick="abrirRegistrar(${e.tarea_id})"><i class="ti ti-check"></i> Registrar</button>
-        </div>
-      `).join("")}
-    </div>`;
-}
-function abrirRegistrar(tareaId) {
-  mantTab = "realizar";
-  document.querySelectorAll(".tab-btn").forEach((b, i) => b.classList.toggle("active", i === 1));
-  api(`/api/vehiculos/${cocheActual.id}/plan`).then(p => tabRealizar(p, tareaId));
-}
-async function tabRealizar(planVeh, preseleccion = null) {
-  const tareas = await api(`/api/planes/${planVeh.plan.plan_id}/tareas`);
-  $("#mant-body").innerHTML = `
-    <div class="card">
-      <div class="card-head"><i class="ti ti-circle-plus"></i> Registrar mantenimiento realizado</div>
-      <div class="card-body">
-        <p class="hint"><i class="ti ti-bulb"></i> Cuando el taller termina una tarea del plan, registrala acá. El sistema actualiza el próximo vencimiento solo.</p>
-        <div class="form-row" style="margin-top:14px">
-          <div class="field" style="flex:1;min-width:280px"><label>Tarea realizada</label>
-            <select id="mr-tarea">
-              ${tareas.map(t => `<option value="${t.id}" ${t.id==preseleccion?'selected':''}>${t.tarea} (cada ${fmtNum(t.intervalo_km)} km)</option>`).join("")}
-            </select>
-          </div>
-          <div class="field"><label>Fecha</label><input id="mr-fecha" type="date" value="${hoy()}"></div>
-          <div class="field"><label>KM del coche</label><input id="mr-km" placeholder="${planVeh.km_actual.toFixed(0)}" style="width:130px"></div>
-          <div class="field"><label>Costo (Gs.)</label><input id="mr-costo" placeholder="0" style="width:150px"></div>
-          <div class="field" style="flex:1;min-width:250px"><label>Observaciones</label><input id="mr-obs" placeholder="Marca de aceite, taller, etc"></div>
-          <button class="btn btn-primary" onclick="guardarMantenimiento()"><i class="ti ti-device-floppy"></i> Guardar</button>
-        </div>
-      </div>
-    </div>`;
-}
-async function guardarMantenimiento() {
-  const km = parseFloat($("#mr-km").value);
-  if (!km) { toast("Ingresá el km del coche", "error"); return; }
-  const costo = ($("#mr-costo").value || "0").replace(/\./g, "").replace(/,/g, ".");
-  const r = await api("/api/mantenimientos", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      vehiculo_id: cocheActual.id, tarea_plan_id: parseInt($("#mr-tarea").value),
-      fecha: $("#mr-fecha").value, km, costo: costo || 0, observaciones: $("#mr-obs").value
-    })
-  });
-  if (r.ok) {
-    toast("Mantenimiento registrado", "success");
-    mantTab = "estado";
-    renderMantenimiento();
-  } else toast("Error al guardar", "error");
-}
-async function tabHistorial() {
-  const hist = await api(`/api/vehiculos/${cocheActual.id}/mantenimientos`);
-  $("#mant-body").innerHTML = !hist.length ? `<div class="empty"><i class="ti ti-history"></i>Sin mantenimientos registrados</div>` : `
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Fecha</th><th>Tarea</th><th>Categoría</th><th class="num">KM</th><th class="num">Costo</th><th>Observaciones</th><th class="td-action"></th></tr></thead>
-        <tbody>${hist.map(h => `
-          <tr><td>${h.fecha}</td><td>${h.tarea}</td>
-            <td>${h.categoria ? `<span class="badge cat">${h.categoria}</span>` : "—"}</td>
-            <td class="num">${fmtNum(h.km)}</td><td class="num">${gs(h.costo)}</td>
-            <td>${h.observaciones || "—"}</td>
-            <td class="td-action"><button class="icon-btn" onclick="borrarMantenimiento(${h.id})"><i class="ti ti-trash"></i></button></td>
-          </tr>`).join("")}
-        </tbody>
-      </table>
-    </div>`;
-}
-async function borrarMantenimiento(id) {
-  if (!confirm("¿Eliminar este registro?")) return;
-  await api(`/api/mantenimientos/${id}`, { method: "DELETE" });
-  toast("Eliminado"); renderMantenimiento();
-}
-
-// ════════════════════════════════════════════════════════════════════════
-//  PLANES (biblioteca global)
-// ════════════════════════════════════════════════════════════════════════
-async function renderPlanes() {
-  status("Catálogo de planes de mantenimiento");
-  const planes = await api("/api/planes");
-  content.innerHTML = `
-    <div class="page-header">
-      <h1><i class="ti ti-clipboard-text"></i> Planes de Mantenimiento</h1>
-      <p>Catálogo reutilizable de planes por modelo de motor/coche</p>
-    </div>
-    <div class="section">
-      <div class="card">
-        <div class="card-head"><i class="ti ti-plus"></i> Crear plan nuevo</div>
-        <div class="card-body">
-          <div class="form-row">
-            <div class="field" style="flex:1;min-width:240px"><label>Nombre del plan</label><input id="p-nom" placeholder="ej: Mercedes O-500 RSD"></div>
-            <div class="field" style="flex:2;min-width:280px"><label>Descripción (opcional)</label><input id="p-desc" placeholder="Notas, marca de motor, etc"></div>
-            <button class="btn btn-primary" onclick="crearPlanWeb()"><i class="ti ti-plus"></i> Crear plan</button>
-          </div>
-        </div>
-      </div>
-      <div class="section-title"><i class="ti ti-list"></i> Planes existentes</div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Plan</th><th>Descripción</th><th class="center">Tareas</th><th class="center">Vehículos</th><th class="td-action"></th></tr></thead>
-          <tbody>
-            ${planes.map(p => `<tr class="clickable" onclick="abrirPlan(${p.id})">
-              <td><b>${p.nombre}</b></td>
-              <td style="color:var(--muted);font-size:12.5px">${p.descripcion || "—"}</td>
-              <td class="center"><span class="badge">${p.cant_tareas}</span></td>
-              <td class="center"><span class="badge cat">${p.cant_vehiculos}</span></td>
-              <td class="td-action"><button class="icon-btn" onclick="event.stopPropagation();borrarPlan(${p.id},'${p.nombre.replace(/'/g,"\\'")}')"><i class="ti ti-trash"></i></button></td>
-            </tr>`).join("")}
-          </tbody>
-        </table>
-      </div>
-      <p class="hint" style="margin-top:8px"><i class="ti ti-bulb"></i> Hacé clic en un plan para ver y editar sus tareas.</p>
-      <div id="plan-detalle"></div>
-    </div>`;
-}
-async function crearPlanWeb() {
-  const nom = $("#p-nom").value.trim();
-  if (!nom) { toast("Ingresá un nombre", "error"); return; }
-  const r = await api("/api/planes", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ nombre: nom, descripcion: $("#p-desc").value.trim() })
-  });
-  if (r.ok) { toast("Plan creado", "success"); renderPlanes(); } else toast(r.msg, "error");
-}
-async function borrarPlan(id, nom) {
-  if (!confirm(`¿Eliminar el plan "${nom}"?`)) return;
-  const r = await api(`/api/planes/${id}`, { method: "DELETE" });
-  if (r.ok) { toast("Plan eliminado"); renderPlanes(); } else toast(r.msg, "error");
-}
-async function abrirPlan(pid) {
-  planActual = pid;
-  const tareas = await api(`/api/planes/${pid}/tareas`);
-  const planes = await api("/api/planes");
-  const plan = planes.find(p => p.id === pid);
-
-  // Si hay coche seleccionado y tiene ESTE plan, traer su estado real
-  let estadoTareas = {};
-  let cocheInfo = null;
-  if (cocheActual) {
-    const planVeh = await api(`/api/vehiculos/${cocheActual.id}/plan`);
-    if (planVeh.plan && planVeh.plan.plan_id === pid) {
-      const ed = await api(`/api/vehiculos/${cocheActual.id}/estado_mantenimiento`);
-      cocheInfo = { patente: cocheActual.patente, km_actual: planVeh.km_actual };
-      (ed.estado || []).forEach(e => { estadoTareas[e.tarea_id] = e; });
-    }
-  }
-
-  $("#plan-detalle").innerHTML = `
-    <div class="section-title"><i class="ti ti-tool"></i> Tareas del plan: ${plan.nombre}</div>
-    ${cocheInfo ? `
-      <div style="background:linear-gradient(135deg, var(--info-bg) 0%, var(--surface) 100%);border:1px solid var(--info-bd);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px">
-        <i class="ti ti-info-circle" style="font-size:20px;color:var(--info)"></i>
-        <div style="font-size:13px">
-          Mostrando el estado real de <b>${cocheInfo.patente}</b>
-          (odómetro: <b>${fmtNum(cocheInfo.km_actual)} km</b>)
-        </div>
-      </div>
-    ` : `
-      <p class="hint" style="margin-bottom:10px">
-        <i class="ti ti-bulb"></i>
-        Seleccioná un coche que tenga este plan para ver el porcentaje de uso real en cada tarea.
-      </p>
-    `}
-    <div class="card">
-      <div class="card-head"><i class="ti ti-plus"></i> Agregar tarea</div>
-      <div class="card-body">
-        <div class="form-row">
-          <div class="field" style="flex:1;min-width:200px"><label>Tarea</label><input id="t-nom" placeholder="ej: Cambio de aceite de motor"></div>
-          <div class="field"><label>Intervalo (km)</label><input id="t-km" placeholder="15000" style="width:140px"></div>
-          <div class="field"><label>Categoría</label><input id="t-cat" placeholder="ej: Lubricación" style="width:180px"></div>
-          <button class="btn btn-primary" onclick="agregarTareaWeb()"><i class="ti ti-plus"></i> Agregar</button>
-        </div>
-      </div>
-    </div>
-    <div class="table-wrap" style="margin-top:14px">
-      <table>
-        <thead><tr>
-          <th>Tarea</th><th>Categoría</th><th class="num">Intervalo (km)</th>
-          <th style="min-width:220px">Estado de uso</th>
-          <th class="td-action"></th>
-        </tr></thead>
-        <tbody>${tareas.map(t => {
-          const e = estadoTareas[t.id];
-          let celdaEstado;
-          if (e) {
-            const labelEst = { optimo:'Óptimo', bueno:'Bueno', regular:'Regular', atencion:'Atención', vencido:'Vencido' };
-            celdaEstado = `
-              <div style="display:flex;align-items:center;gap:10px">
-                <div class="grad-bar-wrap" style="flex:1;max-width:140px">
-                  <div class="grad-bar estado-${e.estado_grad}" style="width:${e.porcentaje_visual}%"></div>
-                </div>
-                <span class="grad-badge grad-${e.estado_grad}" style="white-space:nowrap">
-                  <span class="dot"></span> ${e.porcentaje.toFixed(0)}%
-                </span>
-              </div>`;
-          } else {
-            celdaEstado = `<span style="color:var(--lighter);font-size:12px">—</span>`;
-          }
-          return `<tr>
-            <td>${t.tarea}</td>
-            <td>${t.categoria ? `<span class="badge cat">${t.categoria}</span>` : "—"}</td>
-            <td class="num">${fmtNum(t.intervalo_km)}</td>
-            <td>${celdaEstado}</td>
-            <td class="td-action"><button class="icon-btn" onclick="borrarTarea(${t.id})"><i class="ti ti-trash"></i></button></td>
-          </tr>`;
-        }).join("")}</tbody>
-      </table>
-    </div>`;
-  $("#plan-detalle").scrollIntoView({ behavior: "smooth" });
-}
-async function agregarTareaWeb() {
-  const nom = $("#t-nom").value.trim();
-  const km = parseInt($("#t-km").value);
-  if (!nom || !km) { toast("Tarea e intervalo son obligatorios", "error"); return; }
-  await api(`/api/planes/${planActual}/tareas`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tarea: nom, intervalo_km: km, categoria: $("#t-cat").value.trim() })
-  });
-  toast("Tarea agregada", "success"); abrirPlan(planActual);
-}
-async function borrarTarea(id) {
-  if (!confirm("¿Eliminar esta tarea?")) return;
-  await api(`/api/tareas/${id}`, { method: "DELETE" });
-  toast("Tarea eliminada"); abrirPlan(planActual);
-}
 
 // ════════════════════════════════════════════════════════════════════════
 //  CORRECTIVOS (averías)
@@ -6175,6 +5833,7 @@ async function abrirOT(otId) {
         </div>
 
         <div id="ot-km-box">${otKmCaja(ot)}</div>
+        <div id="pv-ot-box"></div>
         <div id="ot-dep-box" class="ot-dep"></div>
 
         ${ot.fotos && ot.fotos.length ? `
@@ -6199,9 +5858,9 @@ async function abrirOT(otId) {
               </tr></thead>
               <tbody>
                 ${ot.items.map((it, idx) => `
-                  <tr>
+                  <tr class="pv-ot-tr">
                     <td class="center" style="color:var(--muted)">${idx+1}</td>
-                    <td>${it.descripcion}</td>
+                    <td><div class="pv-it-desc">${it.descripcion}</div></td>
                     <td class="center">
                       <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
                         ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo===t?'selected':''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
@@ -6230,6 +5889,7 @@ async function abrirOT(otId) {
                       <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
                     </td>
                   </tr>
+                  <tr class="pv-it-fila"><td></td><td colspan="6"><div class="pv-it" id="pv-it-${it.id}" data-desc="${String(it.descripcion || "").replace(/"/g, "&quot;")}"></div></td></tr>
                 `).join("")}
               </tbody>
             </table>
@@ -6260,6 +5920,7 @@ async function abrirOT(otId) {
   document.body.appendChild(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOTDetalle(); });
   otDepCargar(ot);
+  pvOtCargar(ot);
 }
 
 // Si alguien escribe el técnico y cierra el modal de una, el onblur no llega
@@ -6373,6 +6034,8 @@ async function actualizarItem(itemId, campo, valor, el) {
                      material_pedido: "Material anotado", costo: "Costo actualizado",
                      tipo: "Tipo actualizado" }[campo] || "Ítem actualizado";
     toast(nombre, "success");
+    // Si el ítem es del plan, al completarlo se cargó en el preventivo
+    if (campo === "estado" || campo === "descripcion") pvOtRefrescar();
     if (el) {           // destello verde para confirmar que quedó
       el.style.transition = "background .2s";
       el.style.background = "var(--success-bg)";
@@ -15153,4 +14816,1556 @@ async function otDepDevolver(mid) {
   otDep.usados = res.usados; otDep.total = res.total;
   toast("Devuelto al depósito", "success");
   otDepPintar();
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  PLAN PREVENTIVO
+// ════════════════════════════════════════════════════════════════════════
+// Todo por km: qué le toca a cada coche, para qué día cae (según lo que
+// anda por día), la agenda del taller con cupos, la conexión con la OT y el
+// cumplimiento. Mismo idioma que Tráfico y Rendiciones: la banda azul oscuro
+// del logo, números en Barlow, estados con ícono y nombre (nunca solo color).
+const pv = {
+  tab: "flota", filtro: "todos", q: "", flota: null,
+  mes: null, dia: null, agenda: null, sug: null,
+  cu: null, cuTodos: false, planes: null, planSel: null, planQ: "",
+  coche: null, vehiculos: null, desdeHub: false,
+};
+const PV_ESTADO = {
+  vencido:  { t: "Vencido",   i: "alert-octagon",  c: "pe-venc" },
+  pronto:   { t: "Próximo",   i: "clock-hour-4",   c: "pe-pronto" },
+  ok:       { t: "Al día",    i: "circle-check",   c: "pe-ok" },
+  sin_dato: { t: "Sin datos", i: "help-hexagon",   c: "pe-sd" },
+  sin_km:   { t: "Sin km",    i: "gauge",          c: "pe-sd" },
+  sin_plan: { t: "Sin plan",  i: "clipboard-off",  c: "pe-sp" },
+};
+const PV_TURNO = {
+  agendado:  { t: "Agendado",     i: "calendar-event" },
+  en_taller: { t: "En el taller", i: "tool" },
+  cumplido:  { t: "Cumplido",     i: "circle-check" },
+  cancelado: { t: "Cancelado",    i: "calendar-x" },
+  ausente:   { t: "No vino",      i: "user-x" },
+};
+const PV_DSEM = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const PV_DSEM_L = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const PV_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const pvPuede = () => ["admin", "taller"].includes(window.USUARIO_ROL);
+const pvKm = n => fmtNum(Math.round(Math.abs(n || 0)));
+const pvEsc = s => trEsc(s);
+const pvHoy = () => (pv.flota && pv.flota.hoy) || trHoy();
+function pvD(f) { const [a, m, d] = String(f).slice(0, 10).split("-").map(Number); return new Date(a, m - 1, d); }
+function pvF(f) { if (!f) return ""; const d = pvD(f); return `${PV_DSEM[d.getDay()]} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`; }
+function pvFL(f) { if (!f) return ""; const d = pvD(f); return `${PV_DSEM_L[d.getDay()]} ${d.getDate()} de ${PV_MESES[d.getMonth()]}`; }
+// Fecha corta; si es de otro año, con el año (un "venció 21/09" de hace dos años engaña)
+function pvFA(f) { if (!f) return ""; return pvD(f).getFullYear() === pvD(pvHoy()).getFullYear() ? pvF(f) : pvFC(f); }
+function pvFC(f) { if (!f) return ""; const d = pvD(f); return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getFullYear()).slice(2)}`; }
+function pvEntre(a, b) { return Math.round((pvD(b) - pvD(a)) / 86400000); }
+function pvCuando(f) {
+  const n = pvEntre(pvHoy(), f);
+  if (n === 0) return "hoy";
+  if (n === 1) return "mañana";
+  if (n === -1) return "ayer";
+  return n > 0 ? `en ${n} días` : `hace ${-n} días`;
+}
+function pvPill(e, extra = "") {
+  const x = PV_ESTADO[e] || PV_ESTADO.sin_dato;
+  return `<span class="pv-pill ${x.c} ${extra}"><i class="ti ti-${x.i}"></i>${x.t}</span>`;
+}
+function pvTurnoChip(t, corto, sinFecha) {
+  if (!t) return "";
+  const x = PV_TURNO[t.estado] || PV_TURNO.agendado;
+  const atr = t.estado === "agendado" && t.fecha < pvHoy();
+  return `<span class="pv-turno t-${t.estado} ${atr ? "atrasado" : ""}"><i class="ti ti-${atr ? "alert-triangle" : x.i}"></i>${
+    t.estado === "en_taller" ? `En el taller${t.ot_id ? ` · OT #${t.ot_id}` : ""}`
+    : t.estado === "agendado" ? (sinFecha ? (atr ? "No se registró" : "Agendado")
+        : `${atr ? "No se registró · " : (corto ? "" : "Turno ")}${pvF(t.fecha)}${t.hora ? " " + t.hora : ""}`)
+    : x.t}</span>`;
+}
+function pvNombreGrupo(pr) {
+  if (!pr) return "";
+  const n = pr.tareas.length;
+  if (n >= 3) return `Service de ${pvKm(pr.intervalo_km)} km`;
+  return pr.tareas.join(" y ");
+}
+function pvGrupoSub(pr) {
+  if (!pr) return "";
+  return pr.tareas.length >= 3 ? `${pr.tareas.length} tareas: ${pr.tareas.slice(0, 3).join(", ")}${pr.tareas.length > 3 ? "…" : ""}` : "";
+}
+function pvVence(pr, km_dia) {
+  if (!pr) return "";
+  if (pr.km_restantes < 0) {
+    const d = km_dia ? Math.round(-pr.km_restantes / km_dia) : null;
+    return `<b class="tx-venc">Pasado ${pvKm(pr.km_restantes)} km</b>${d != null ? ` · venció ${d <= 0 ? "hoy" : d === 1 ? "ayer" : `hace ≈ ${d} días`}` : ""}`;
+  }
+  return `Faltan <b>${pvKm(pr.km_restantes)} km</b>${pr.fecha_estimada ? ` · ≈ ${pvFA(pr.fecha_estimada)} <span class="pv-cuando">(${pvCuando(pr.fecha_estimada)})</span>` : ""}`;
+}
+function pvBarra(pct, estado) {
+  const v = Math.max(0, Math.min(100, pct || 0));
+  return `<span class="pv-bar ${(PV_ESTADO[estado] || {}).c || ""}"><i style="width:${v}%"></i></span>`;
+}
+async function pvVehiculos() {
+  if (!pv.vehiculos) pv.vehiculos = await api("/api/vehiculos");
+  return pv.vehiculos || [];
+}
+function pvCargando() { return `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`; }
+function pvError(msg) { return `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>${msg || "No se pudo traer el preventivo"}</b><span>Probá de nuevo en un rato.</span></div>`; }
+async function pvPost(url, body, metodo = "POST") {
+  const r = await api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  return r || {};
+}
+
+// ─── La pantalla: Flota / Agenda del taller / Cumplimiento / Planes ───
+async function renderPlanes() {
+  status("Plan preventivo: qué le toca a cada coche y cuándo entra al taller");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-calendar-check"></i> Plan preventivo</h1>
+      <p>Qué le toca a cada coche, cuándo entra al taller y si se cumple. Todo por kilómetro.</p>
+      <div class="page-actions" id="pv-acc"></div>
+    </div>
+    <div class="section pv-raiz" id="pv-raiz">
+      <div class="pv-tabs" role="tablist">
+        ${[["flota", "bus", "Flota"], ["agenda", "calendar-event", "Agenda<span class=\"pv-tab-l\"> del taller</span>"], ["cumplimiento", "chart-bar", "Cumplimiento"], ["planes", "clipboard-list", "Planes"]]
+          .map(([k, i, t]) => `<button role="tab" class="pv-tab ${pv.tab === k ? "on" : ""}" data-t="${k}" onclick="pvIr('${k}')"><i class="ti ti-${i}"></i><span>${t}</span></button>`).join("")}
+      </div>
+      <div id="pv-cuerpo">${pvCargando()}</div>
+    </div>`;
+  pvIr(pv.tab);
+}
+function pvIr(tab) {
+  pv.tab = tab;
+  document.querySelectorAll(".pv-tab").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  const acc = $("#pv-acc");
+  if (acc) acc.innerHTML = "";
+  const c = $("#pv-cuerpo");
+  if (c) c.innerHTML = pvCargando();
+  ({ flota: pvFlota, agenda: pvAgenda, cumplimiento: pvCumplimiento, planes: pvPlanes })[tab]();
+}
+
+// ─── FLOTA ───
+async function pvFlota() {
+  const f = await api("/api/prev/flota");
+  if (!$("#pv-cuerpo") || pv.tab !== "flota") return;        // se fue a otra pantalla mientras cargaba
+  if (!f || !f.coches) { $("#pv-cuerpo").innerHTML = pvError(); return; }
+  pv.flota = f;
+  const acc = $("#pv-acc");
+  if (acc && pvPuede()) acc.innerHTML = `<button class="btn btn-ghost" onclick="pvIr('agenda')"><i class="ti ti-calendar-plus"></i> Agenda del taller</button>`;
+  pvFlotaPintar();
+}
+function pvFlotaFiltrados() {
+  const f = pv.flota, q = pv.q.trim().toLowerCase();
+  const lim = (f.config && f.config.aviso_dias) || 15;
+  return f.coches.filter(c => {
+    if (pv.filtro === "vencido" && c.estado !== "vencido") return false;
+    if (pv.filtro === "pronto" && c.estado !== "pronto") return false;
+    if (pv.filtro === "ok" && c.estado !== "ok") return false;
+    if (pv.filtro === "sin_dato" && !["sin_dato", "sin_km"].includes(c.estado)) return false;
+    if (pv.filtro === "sin_plan" && c.estado !== "sin_plan") return false;
+    if (pv.filtro === "sin_turno" && (c.turno || !["vencido", "pronto"].includes(c.estado))) return false;
+    if (q && ![c.n_interno, c.patente, c.marca, c.modelo, c.plan_nombre].some(x => String(x || "").toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+function pvFlotaPintar() {
+  const f = pv.flota, k = f.kpis;
+  const lim = (f.config && f.config.aviso_dias) || 15;
+  const conPlan = k.con_plan || 0;
+  const tramos = [["vencido", k.vencidos], ["pronto", k.pronto], ["ok", k.al_dia], ["sin_dato", k.sin_dato], ["sin_plan", k.sin_plan]];
+  const total = k.coches || 1;
+  const sinTurno = f.coches.filter(c => ["vencido", "pronto"].includes(c.estado) && !c.turno).length;
+  const chips = [["todos", "Todos", k.coches], ["vencido", "Vencidos", k.vencidos], ["pronto", `Próximos ${lim} días`, k.pronto],
+                 ["sin_turno", "Sin turno", sinTurno], ["ok", "Al día", k.al_dia], ["sin_dato", "Sin datos", k.sin_dato], ["sin_plan", "Sin plan", k.sin_plan]];
+  $("#pv-cuerpo").innerHTML = `
+    <div class="pv-hero">
+      <div class="pv-hero-num">
+        <span class="pv-et">Estado de la flota</span>
+        <b>${k.al_dia + k.pronto}<small> de ${conPlan}</small></b>
+        <span class="pv-hero-sub">coches con el preventivo al día${k.pronto ? `, <strong>${k.pronto}</strong> con algo que vence en los próximos ${lim} días` : ""}.
+          ${k.vencidos ? `<strong>${k.vencidos}</strong> con tareas vencidas.` : "Ninguno con tareas vencidas."}
+          ${k.pct_a_tiempo != null ? `<br>En el último año, <strong>${k.pct_a_tiempo} %</strong> de las tareas se hizo a tiempo.` : ""}</span>
+      </div>
+      <div class="pv-hero-der">
+        <span class="pv-et">Coches por estado</span>
+        <div class="pv-stack">${tramos.filter(([, n]) => n).map(([e, n]) => `<i class="${PV_ESTADO[e].c}" style="flex:${n}" title="${PV_ESTADO[e].t}: ${n}"></i>`).join("")}</div>
+        <div class="pv-leyenda">${tramos.map(([e, n]) => `<button class="pv-ley ${PV_ESTADO[e].c}" onclick="pvFiltro('${e === "ok" ? "ok" : e}')"><i class="ti ti-${PV_ESTADO[e].i}"></i><span>${PV_ESTADO[e].t}</span><b>${n}</b></button>`).join("")}</div>
+        ${k.con_turno ? `<div class="pv-hero-turnos"><i class="ti ti-calendar-event"></i> ${k.con_turno} coche${k.con_turno === 1 ? "" : "s"} con turno en el taller</div>` : ""}
+      </div>
+    </div>
+    ${k.sin_dato && pvPuede() ? `
+      <div class="pv-aviso">
+        <i class="ti ti-help-hexagon"></i>
+        <div><b>${k.sin_dato} coche${k.sin_dato === 1 ? "" : "s"} sin datos para calcular</b>
+          <span>Falta cargar cuándo se hizo cada tarea por última vez (o empezar a contar desde hoy). Son dos minutos por coche.</span></div>
+        <button class="btn btn-primary" onclick="pvSiguienteSinDato()"><i class="ti ti-player-play"></i> Empezar a cargar</button>
+      </div>` : ""}
+    <div class="rv-barra pv-barra">
+      <div class="rv-filtros">${chips.map(([v, t, n]) => `<button class="sv-chip ${pv.filtro === v ? "on" : ""}" onclick="pvFiltro('${v}')">${t}<span class="rv-cuenta">${n}</span></button>`).join("")}</div>
+      <label class="rv-buscar"><i class="ti ti-search"></i><input id="pv-q" value="${pvEsc(pv.q)}" placeholder="Coche, patente, marca o plan" oninput="pv.q=this.value;pvFlotaLista()"></label>
+    </div>
+    <div id="pv-lista"></div>`;
+  pvFlotaLista();
+}
+function pvFiltro(v) {
+  pv.filtro = v;
+  if (pv.tab !== "flota") { pvIr("flota"); return; }
+  pvFlotaPintar();
+}
+function pvFlotaLista() {
+  const lista = pvFlotaFiltrados();
+  const el = $("#pv-lista");
+  if (!el) return;
+  if (!lista.length) { el.innerHTML = `<div class="rv-vacio"><i class="ti ti-mood-empty"></i><b>Ningún coche con ese filtro</b><span>Probá con otro o borrá la búsqueda.</span></div>`; return; }
+  el.innerHTML = lista.map((c, i) => pvFila(c, i)).join("");
+}
+function pvFila(c, i) {
+  const pr = c.proximo;
+  let medio;
+  if (c.estado === "sin_plan") medio = `<div class="pv-f-que muted">No tiene plan asignado</div><div class="pv-f-sub">Asignale uno para que el sistema le lleve la cuenta.</div>`;
+  else if (c.estado === "sin_km") medio = `<div class="pv-f-que muted">Falta el km del coche</div><div class="pv-f-sub">Se toma de las cargas de combustible y de las OT.</div>`;
+  else if (!pr) medio = `<div class="pv-f-que muted">Falta saber cuándo se hizo por última vez</div><div class="pv-f-sub">${c.sin_dato} tarea${c.sin_dato === 1 ? "" : "s"} sin dato.</div>`;
+  else medio = `
+    <div class="pv-f-que" title="${pvEsc(pr.tareas.join(", "))}">${pvEsc(pvNombreGrupo(pr))}${pr.tareas.length >= 3 ? `<span class="pv-f-n">${pr.tareas.length} tareas</span>` : ""}</div>
+    <div class="pv-f-barra">${pvBarra(pr.porcentaje, pr.estado)}</div>
+    <div class="pv-f-sub">${pvVence(pr, c.km_dia)}</div>`;
+  let der;
+  if (c.turno) der = pvTurnoChip(c.turno);
+  else if (c.estado === "sin_plan") der = pvPuede() ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();pvCambiarPlan(${c.vehiculo_id})"><i class="ti ti-link"></i> Asignar plan</button>` : "";
+  else if (["sin_dato"].includes(c.estado)) der = pvPuede() ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();pvCargarUltimo(${c.vehiculo_id})"><i class="ti ti-pencil-plus"></i> Cargar</button>` : "";
+  else if (pr && pvPuede()) der = `<button class="btn ${c.estado === "vencido" ? "btn-primary" : "btn-ghost"} btn-sm" onclick="event.stopPropagation();pvAgendar(${c.vehiculo_id})"><i class="ti ti-calendar-plus"></i> Agendar</button>`;
+  else der = "";
+  return `
+    <div class="pv-fila ${(PV_ESTADO[c.estado] || {}).c || ""}" style="animation-delay:${Math.min(i, 14) * 25}ms" tabindex="0"
+         onclick="pvAbrirCoche(${c.vehiculo_id}, true)" onkeydown="if(event.key==='Enter')pvAbrirCoche(${c.vehiculo_id}, true)">
+      <div class="pv-num"><small>Coche</small><b>${pvEsc(c.n_interno || "—")}</b></div>
+      <div class="pv-f-info">
+        <div class="pv-f-pat">${pvEsc(c.patente)} <span>${pvEsc(c.marca)} ${pvEsc(c.modelo)}</span></div>
+        <div class="pv-f-plan">${c.plan_nombre ? `<i class="ti ti-clipboard-list"></i> ${pvEsc(c.plan_nombre)}` : "—"}</div>
+        <div class="pv-f-km"><i class="ti ti-gauge"></i> ${c.km_actual ? pvKm(c.km_actual) + " km" : "sin km"}${c.km_actual ? ` · ≈ ${pvKm(c.km_dia)} km/día` : ""}</div>
+      </div>
+      <div class="pv-f-medio">${medio}</div>
+      <div class="pv-f-der">${pvPill(c.estado)}${der}</div>
+    </div>`;
+}
+async function pvSiguienteSinDato(despuesDe) {
+  if (!pv.flota) pv.flota = await api("/api/prev/flota");
+  const sd = pv.flota.coches.filter(c => c.estado === "sin_dato" && c.plan_id);
+  let i = 0;
+  if (despuesDe) { const j = sd.findIndex(c => c.vehiculo_id === despuesDe); i = j >= 0 ? j + 1 : 0; }
+  if (!sd.length) { toast("No quedan coches sin datos", "success"); return; }
+  if (i >= sd.length) { toast(`Llegaste al último. Quedan ${sd.length} sin datos (los que saltaste).`); return; }
+  pvCargarUltimo(sd[i].vehiculo_id, true);
+}
+
+// ─── LA FICHA DE UN COCHE ───
+// La usa el botón "Preventivo" (coche elegido arriba) y la lista de la flota.
+async function renderMantenimiento() {
+  pv.desdeHub = false;
+  pvAbrirCoche(cocheActual.id, false);
+}
+async function pvAbrirCoche(vid, desdeHub) {
+  if (desdeHub !== undefined) pv.desdeHub = !!desdeHub;
+  status("Preventivo del coche: qué le toca y cuándo");
+  if (!$("#pv-ficha")) {
+    content.innerHTML = `<div class="section pv-raiz pv-ficha" id="pv-ficha">${pvCargando()}</div>`;
+    content.scrollTop = 0;
+  }
+  const [f, vs] = await Promise.all([api(`/api/prev/coche/${vid}`), pvVehiculos()]);
+  if (!$("#pv-ficha")) return;
+  if (!f || !f.vehiculo_id) { $("#pv-ficha").innerHTML = pvError("No se encontró el coche"); return; }
+  pv.coche = f;
+  // Queda elegido arriba, así Costos, KPIs, etc. ya abren este coche
+  const v = (vs || []).find(x => x.id === vid);
+  if (v && (!cocheActual || cocheActual.id !== vid)) setCoche(v);
+  pvFichaPintar();
+}
+function pvRecargarCoche() { if (pv.coche) pvAbrirCoche(pv.coche.vehiculo_id); }
+
+function pvFichaPintar() {
+  const f = pv.coche;
+  const puede = pvPuede();
+  const cu = f.cumplimiento || {};
+  const fuenteKm = { manual: "fijado a mano", lecturas: "según las cargas y las OT", meta: "según la meta mensual", flota: "lo que anda la flota (sin lecturas del coche)" }[f.km_dia_fuente] || "";
+  const pr = f.proximo;
+  const verif = f.km_verif ? `<i class="ti ti-circle-check"></i> Verificado en la OT #${f.km_verif.ot} · ${otFechaHora(f.km_verif.fecha)}` : `<i class="ti ti-info-circle"></i> Sale de las cargas de combustible y de las OT`;
+  const volver = pv.desdeHub || puedeVerSeccion("planes")
+    ? `<button class="rv-volver pv-volver" onclick="pvVolverFlota()"><i class="ti ti-arrow-left"></i> Toda la flota</button>` : "";
+  $("#pv-ficha").innerHTML = `
+    <div class="pv-ficha-top">
+      ${volver}
+      <div class="pv-ficha-acc">
+        <button class="btn btn-ghost" onclick="window.open('/api/vehiculos/${f.vehiculo_id}/plan_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir plan</button>
+        ${puede && f.plan_id ? `<button class="btn btn-primary" onclick="pvRegistrar(${f.vehiculo_id})"><i class="ti ti-checks"></i> Registrar trabajo</button>` : ""}
+      </div>
+    </div>
+    <div class="pv-hero pv-hero-coche">
+      <div class="pv-hc-coche">
+        <span class="pv-et">Coche</span>
+        <b>${pvEsc(f.n_interno || "—")}</b>
+        <span class="pv-hc-pat">${pvEsc(f.patente)} · ${pvEsc(f.marca)} ${pvEsc(f.modelo)}</span>
+        <span class="pv-hc-plan"><i class="ti ti-clipboard-list"></i> ${f.plan_nombre ? pvEsc(f.plan_nombre) : "Sin plan"}
+          ${puede ? `<button class="pv-link-claro" onclick="pvCambiarPlan(${f.vehiculo_id})">${f.plan_nombre ? "cambiar" : "asignar"}</button>` : ""}</span>
+      </div>
+      <div class="pv-hc-km">
+        <span class="pv-et">Odómetro</span>
+        <b>${f.km_actual ? pvKm(f.km_actual) : "—"}<small> km</small></b>
+        <span class="pv-hc-sub">${verif}</span>
+        <span class="pv-hc-dia"><i class="ti ti-road"></i> ≈ <strong>${pvKm(f.km_dia)} km por día</strong> · ${fuenteKm}
+          ${puede ? `<button class="pv-link-claro" onclick="pvKmDia()"><i class="ti ti-pencil"></i></button>` : ""}</span>
+      </div>
+      <div class="pv-hc-cu">
+        <span class="pv-et">Cumplimiento</span>
+        ${pvAnillo(cu.pct)}
+        <span class="pv-hc-sub">${cu.evaluados ? `${cu.a_tiempo} de ${cu.evaluados} veces a tiempo en el año${cu.tarde ? ` · tarde en promedio ${pvKm(cu.atraso_prom)} km` : ""}` : "Todavía no hay dos registros seguidos para comparar"}</span>
+        ${f.n_tareas ? `<span class="pv-hc-sub"><strong>${f.al_dia}</strong> de ${f.n_tareas} tareas al día${f.vencidas ? ` · <strong class="tx-venc-claro">${f.vencidas} vencida${f.vencidas === 1 ? "" : "s"}</strong>` : ""}</span>` : ""}
+      </div>
+    </div>
+    ${!f.plan_id ? pvSinPlan(f) : `
+      ${f.sin_dato ? `
+        <div class="pv-aviso">
+          <i class="ti ti-help-hexagon"></i>
+          <div><b>Faltan datos de ${f.sin_dato} tarea${f.sin_dato === 1 ? "" : "s"}</b>
+            <span>Para saber cuándo le toca, cargá cuándo se hicieron por última vez. Si no se sabe, se empieza a contar desde hoy.</span></div>
+          ${puede ? `<button class="btn btn-primary" onclick="pvCargarUltimo(${f.vehiculo_id})"><i class="ti ti-pencil-plus"></i> Cargar último hecho</button>` : ""}
+        </div>` : ""}
+      ${pr ? pvProximo(f) : ""}
+      ${pvRuta(f)}
+      <div class="pv-sec-tit"><h3>Tareas del plan</h3><span>${f.n_tareas} tarea${f.n_tareas === 1 ? "" : "s"} · el "cada cuánto" se puede cambiar para este coche solo</span></div>
+      <div class="pv-tareas">${pvTareasAgrupadas(f)}</div>
+      ${pvHistorial(f)}
+      ${f.turnos && f.turnos.length ? pvTurnosCoche(f) : ""}
+    `}`;
+}
+function pvVolverFlota() {
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.sec === "planes"));
+  pv.tab = "flota";
+  renderPlanes();
+}
+function pvAnillo(pct) {
+  if (pct == null) return `<div class="pv-anillo vacio"><b>—</b></div>`;
+  const r = 30, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, pct));
+  return `<div class="pv-anillo"><svg viewBox="0 0 76 76" aria-hidden="true"><circle cx="38" cy="38" r="${r}" class="pv-an-fondo"/>
+    <circle cx="38" cy="38" r="${r}" class="pv-an-val" stroke-dasharray="${(c * v / 100).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 38 38)"/></svg>
+    <b>${pct}<small>%</small></b></div>`;
+}
+function pvSinPlan(f) {
+  return `<div class="pv-vacio-plan">
+    <span class="rv-vacio-ic"><i class="ti ti-clipboard-off"></i></span>
+    <b>Este coche no tiene plan preventivo</b>
+    <span>Elegí el plan de su motor (o uno parecido y después ajustás el "cada cuánto").</span>
+    ${pvPuede() ? `<button class="btn btn-primary" onclick="pvCambiarPlan(${f.vehiculo_id})"><i class="ti ti-link"></i> Asignar plan</button>` : ""}
+  </div>`;
+}
+function pvProximo(f) {
+  const pr = f.proximo, puede = pvPuede();
+  const t = f.turno;
+  let der;
+  if (t) {
+    der = `<div class="pv-px-turno">
+      ${pvTurnoChip(t, false, true)}
+      <span>${t.estado === "en_taller" ? "Está en el taller" : `Turno: ${pvFL(t.fecha)}${t.hora ? " · " + t.hora : ""} (${pvCuando(t.fecha)})`}</span>
+      ${puede ? `<div class="pv-px-btns">
+        ${t.ot_id ? `<button class="btn btn-ghost btn-sm" onclick="abrirOT(${t.ot_id})"><i class="ti ti-clipboard-check"></i> Ver OT #${t.ot_id}</button>`
+          : `<button class="btn btn-primary btn-sm" onclick="pvTurnoOT(${t.id})"><i class="ti ti-door-enter"></i> Llegó: abrir OT</button>
+             <button class="btn btn-ghost btn-sm" onclick="pvMover(${t.id}, '${t.fecha}')"><i class="ti ti-calendar-repeat"></i> Mover</button>`}
+      </div>` : ""}
+    </div>`;
+  } else if (puede) {
+    der = `<div class="pv-px-turno">
+      <span class="pv-px-sug"><i class="ti ti-sparkles"></i> Conviene que entre el <b>${pvFL(f.fecha_sugerida)}</b></span>
+      <div class="pv-px-btns"><button class="btn btn-primary" onclick="pvAgendar(${f.vehiculo_id}, '${f.fecha_sugerida}')"><i class="ti ti-calendar-plus"></i> Agendar turno</button></div>
+    </div>`;
+  } else der = "";
+  return `
+    <div class="pv-proximo ${(PV_ESTADO[pr.estado] || {}).c || ""}">
+      <div class="pv-px-izq">
+        <span class="pv-px-et">${pr.km_restantes < 0 ? "Le tocaba" : "Le toca"}</span>
+        <h3>${pvEsc(pvNombreGrupo(pr))}</h3>
+        <div class="pv-px-vence">${pvVence(pr, f.km_dia)}</div>
+        <div class="pv-px-chips">${pr.tareas.map(x => `<span>${pvEsc(x)}</span>`).join("")}</div>
+      </div>
+      ${der}
+    </div>`;
+}
+
+// La ruta del coche: dónde está hoy y qué le toca más adelante, en km
+function pvRuta(f) {
+  const km = f.km_actual;
+  const ts = f.tareas.filter(t => t.proximo_km != null).sort((a, b) => a.proximo_km - b.proximo_km);
+  if (!km || !ts.length) return "";
+  const junta = Math.max(900, (f.km_dia || 250) * 3);
+  const grupos = [];
+  ts.forEach(t => {
+    const g = grupos[grupos.length - 1];
+    if (g && t.proximo_km - g.km0 <= junta) { g.tareas.push(t); g.km = Math.max(g.km, t.proximo_km); }
+    else grupos.push({ km0: t.proximo_km, km: t.proximo_km, tareas: [t] });
+  });
+  const adelante = grupos.filter(g => g.km0 >= km);
+  const atras = grupos.filter(g => g.km0 < km);
+  const ini = Math.max(km - 16000, Math.min(km - 3000, ...atras.map(g => g.km0 - 1500)));
+  const finObj = adelante.length ? adelante[Math.min(3, adelante.length - 1)].km0 + 4000 : km + 15000;
+  const fin = Math.max(km + 12000, Math.min(km + 70000, finObj));
+  const pos = x => Math.max(0, Math.min(100, (x - ini) / (fin - ini) * 100));
+  const fuera = grupos.filter(g => g.km0 > fin);
+  const vis = grupos.filter(g => g.km0 <= fin);
+  let ultimoArriba = -100, ultimoAbajo = -100;
+  const marcas = vis.map(g => {
+    const p = pos(g.km0);
+    const peor = g.tareas.reduce((a, t) => (t.km_restantes < a.km_restantes ? t : a), g.tareas[0]);
+    const est = peor.estado;
+    const nom = g.tareas.length >= 3 ? `Service ${pvKm(g.tareas[0].intervalo_km)}` : g.tareas.map(t => t.tarea).join(" + ");
+    let lado = "arriba";
+    if (p - ultimoArriba < 17) lado = p - ultimoAbajo < 17 ? "arriba" : "abajo";
+    if (lado === "arriba") ultimoArriba = p; else ultimoAbajo = p;
+    const cuando = peor.km_restantes < 0 ? `pasado ${pvKm(peor.km_restantes)} km` : (peor.fecha_estimada ? `≈ ${pvFA(peor.fecha_estimada)}` : "");
+    return `<div class="pv-ru-m ${(PV_ESTADO[est] || {}).c || ""} ${lado} ${p > 74 ? "der" : p < 16 ? "izq" : ""}" style="left:${p}%"
+               title="${pvEsc(g.tareas.map(t => t.tarea).join(", "))}">
+      <i class="pv-ru-dot"></i>
+      <span class="pv-ru-lbl"><b>${pvEsc(nom)}</b><small>${pvKm(g.km0)} km${cuando ? " · " + cuando : ""}</small></span>
+    </div>`;
+  }).join("");
+  const pHoy = pos(km);
+  return `
+    <div class="pv-sec-tit"><h3>La ruta del coche</h3><span>Lo que le toca en los próximos ${pvKm(fin - km)} km (≈ ${Math.round((fin - km) / Math.max(1, f.km_dia || 250))} días)</span></div>
+    <div class="pv-ruta">
+      <div class="pv-ru-pista">
+        <i class="pv-ru-hecho" style="width:${pHoy}%"></i>
+        ${marcas}
+        <div class="pv-ru-hoy" style="left:${pHoy}%"><span class="pv-ru-bus"><i class="ti ti-bus"></i></span><small>Hoy · ${pvKm(km)} km</small></div>
+      </div>
+      ${fuera.length ? `<div class="pv-ru-mas">y ${fuera.reduce((a, g) => a + g.tareas.length, 0)} tarea${fuera.reduce((a, g) => a + g.tareas.length, 0) === 1 ? "" : "s"} más adelante <i class="ti ti-arrow-right"></i></div>` : ""}
+    </div>`;
+}
+
+// Lo que se hace junto (mismo "cada cuánto") va junto, como un service
+function pvTareasAgrupadas(f) {
+  const grupos = {};
+  f.tareas.forEach(t => (grupos[t.intervalo_km] = grupos[t.intervalo_km] || []).push(t));
+  const orden = { vencido: 0, pronto: 1, ok: 2, sin_km: 3, sin_dato: 4 };
+  const peor = ts => ts.reduce((a, t) => (orden[t.estado] ?? 5) < (orden[a.estado] ?? 5) ? t : a, ts[0]);
+  const claves = Object.keys(grupos).map(Number).sort((a, b) => {
+    const pa = peor(grupos[a]), pb = peor(grupos[b]);
+    return ((orden[pa.estado] ?? 5) - (orden[pb.estado] ?? 5)) || ((pa.km_restantes ?? 1e9) - (pb.km_restantes ?? 1e9)) || a - b;
+  });
+  return claves.map(k => {
+    const ts = grupos[k], p = peor(ts);
+    const n = ts.filter(t => t.estado === p.estado).length;
+    return `<div class="pv-tg">
+      <div class="pv-tg-cab ${(PV_ESTADO[p.estado] || {}).c || ""}">
+        <b>Cada ${pvKm(k)} km</b><span>${ts.length} tarea${ts.length === 1 ? "" : "s"}</span>
+        ${pvPill(p.estado, "mini")}${n < ts.length ? `<span class="pv-tg-mix">${n} de ${ts.length}</span>` : ""}
+        ${pvPuede() && ts.length > 1 ? `<button class="pv-link" onclick="pvRegistrar(${f.vehiculo_id}, [${ts.map(t => t.tarea_id).join(",")}])">registrar todo el grupo</button>` : ""}
+      </div>
+      ${ts.map(t => pvTareaFila(t, f)).join("")}
+    </div>`;
+  }).join("");
+}
+function pvTareaFila(t, f) {
+  const puede = pvPuede();
+  const ult = t.ultimo_km != null
+    ? `<b>${pvKm(t.ultimo_km)} km</b><small>${pvFC(t.ultima_fecha)}${t.ultimo_origen === "ot" && t.ultimo_ot ? ` · <a href="javascript:void 0" onclick="abrirOT(${t.ultimo_ot})">OT #${t.ultimo_ot}</a>` : t.ultimo_origen === "inicial" ? " · desde acá se cuenta" : ""}</small>`
+    : `<span class="muted">Sin dato</span>${puede ? `<button class="pv-link" onclick="pvCargarUltimo(${f.vehiculo_id})">cargar</button>` : ""}`;
+  const faltan = t.km_restantes == null ? `<span class="muted">—</span>`
+    : t.km_restantes < 0 ? `<b class="tx-venc">Pasado ${pvKm(t.km_restantes)} km</b><small>${t.fecha_estimada ? "venció ≈ " + pvFA(t.fecha_estimada) : ""}</small>`
+    : `<b>${pvKm(t.km_restantes)} km</b><small>${t.fecha_estimada ? `≈ ${pvFA(t.fecha_estimada)} · ${pvCuando(t.fecha_estimada)}` : ""}</small>`;
+  const marcas = [
+    t.en_ot ? `<button class="pv-marca ot" onclick="abrirOT(${t.en_ot})"><i class="ti ti-clipboard-check"></i> En la OT #${t.en_ot}</button>` : "",
+    t.en_turno && !t.en_ot ? `<span class="pv-marca turno"><i class="ti ti-calendar-event"></i> En el turno</span>` : "",
+  ].join("");
+  return `
+    <div class="pv-tarea ${(PV_ESTADO[t.estado] || {}).c || ""}" id="pv-t-${t.tarea_id}">
+      <div class="pv-t-nom"><b>${pvEsc(t.tarea)}</b><small>${pvEsc(t.categoria || "")}${t.veces ? `${t.categoria ? " · " : ""}hecha ${t.veces} ${t.veces === 1 ? "vez" : "veces"}` : ""}${t.tarde ? ` · <span class="tx-tarde">${t.tarde} tarde</span>` : ""}</small>${marcas ? `<div class="pv-t-marcas">${marcas}</div>` : ""}</div>
+      <div class="pv-t-cada" id="pv-cada-${t.tarea_id}">${pvCadaHtml(t)}</div>
+      <div class="pv-t-ult"><span class="pv-t-et">Última vez</span>${ult}</div>
+      <div class="pv-t-falta"><span class="pv-t-et">${t.km_restantes != null && t.km_restantes < 0 ? "Vencida" : "Próxima"}${t.proximo_km != null ? ` a los ${pvKm(t.proximo_km)}` : ""}</span>${faltan}${t.km_restantes != null ? pvBarra(t.porcentaje, t.estado) : ""}</div>
+      <div class="pv-t-est">${pvPill(t.estado)}</div>
+      <div class="pv-t-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="pvRegistrar(${f.vehiculo_id}, [${t.tarea_id}])" title="Registrar que se hizo"><i class="ti ti-check"></i><span> Hecho</span></button>` : ""}</div>
+    </div>`;
+}
+function pvCadaHtml(t) {
+  return `<span class="pv-t-et">Cada</span><b>${pvKm(t.intervalo_km)} km</b>
+    ${t.propio ? `<small class="pv-propio" title="El plan dice cada ${pvKm(t.intervalo_plan)} km">propio · plan ${pvKm(t.intervalo_plan)}</small>` : ""}
+    ${pvPuede() ? `<button class="pv-lapiz" onclick="pvCadaEditar(${t.tarea_id})" title="Cambiar cada cuánto para este coche" aria-label="Cambiar cada cuánto"><i class="ti ti-pencil"></i></button>` : ""}`;
+}
+function pvCadaEditar(tid) {
+  const t = pv.coche.tareas.find(x => x.tarea_id === tid);
+  const el = $(`#pv-cada-${tid}`);
+  if (!t || !el) return;
+  el.innerHTML = `<span class="pv-t-et">Cada (este coche)</span>
+    <div class="pv-cada-ed"><input id="pv-cada-in-${tid}" inputmode="numeric" value="${fmtNum(t.intervalo_km)}"
+      onkeydown="if(event.key==='Enter')pvCadaGuardar(${tid}); if(event.key==='Escape')pvCadaCancelar(${tid})"><span>km</span>
+      <button class="pv-ok" onclick="pvCadaGuardar(${tid})" aria-label="Guardar"><i class="ti ti-check"></i></button></div>
+    <small>${t.propio ? `<button class="pv-link" onclick="pvCadaGuardar(${tid}, 0)">volver al del plan (${pvKm(t.intervalo_plan)})</button>` : `el plan dice ${pvKm(t.intervalo_plan)} km`}</small>`;
+  const i = $(`#pv-cada-in-${tid}`); i.focus(); i.select();
+}
+function pvCadaCancelar(tid) { const t = pv.coche.tareas.find(x => x.tarea_id === tid); $(`#pv-cada-${tid}`).innerHTML = pvCadaHtml(t); }
+async function pvCadaGuardar(tid, valor) {
+  const km = valor === 0 ? 0 : parseInt(String($(`#pv-cada-in-${tid}`).value || "").replace(/\D/g, ""), 10);
+  if (valor !== 0 && (!km || km < 100)) { toast("Poné cada cuántos km", "error"); return; }
+  const r = await pvPost(`/api/prev/coche/${pv.coche.vehiculo_id}/intervalo`, { tarea_id: tid, intervalo_km: km });
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  toast(km ? `Este coche: cada ${fmtNum(km)} km` : "Vuelve al del plan", "success");
+  await pvRecargarCoche();
+  document.getElementById(`pv-t-${tid}`)?.classList.add("recien");
+}
+
+function pvHistorial(f) {
+  const h = f.historial || [];
+  if (!h.length) return `<div class="pv-sec-tit"><h3>Lo que se hizo</h3><span>Todavía no hay nada registrado</span></div>`;
+  const puede = pvPuede();
+  const origen = r => r.origen === "ot" ? `<a href="javascript:void 0" class="pv-orig ot" onclick="abrirOT(${r.ot_id})"><i class="ti ti-clipboard-check"></i> OT #${r.ot_id}</a>`
+    : r.origen === "inicial" ? `<span class="pv-orig ini"><i class="ti ti-flag"></i> Inicio de la cuenta</span>`
+    : `<span class="pv-orig man"><i class="ti ti-pencil"></i> A mano${r.registrado_por ? " · " + pvEsc(r.registrado_por) : ""}</span>`;
+  const filas = h.slice(0, pv.histTodo ? 200 : 12);
+  return `
+    <div class="pv-sec-tit"><h3>Lo que se hizo</h3><span>${h.length} registro${h.length === 1 ? "" : "s"}${h.length > 12 ? ` · <button class="pv-link" onclick="pv.histTodo=!pv.histTodo;pvFichaPintar()">${pv.histTodo ? "ver menos" : "ver todos"}</button>` : ""}</span></div>
+    <div class="pv-hist">
+      ${filas.map(r => `
+        <div class="pv-h">
+          <span class="pv-h-f">${pvFC(r.fecha)}</span>
+          <span class="pv-h-t"><b>${pvEsc(r.tarea || "Tarea borrada")}</b><small>${pvKm(r.km)} km${r.hecho_a ? ` · a los ${pvKm(r.hecho_a)} del anterior` : ""}</small></span>
+          <span class="pv-h-a">${r.a_tiempo === true ? `<span class="pv-at ok"><i class="ti ti-circle-check"></i> A tiempo</span>` : r.a_tiempo === false ? `<span class="pv-at tarde"><i class="ti ti-clock-exclamation"></i> Tarde</span>` : ""}</span>
+          <span class="pv-h-o">${origen(r)}</span>
+          <span class="pv-h-x">${puede ? `<button class="icon-btn" onclick="pvBorrarRegistro(${r.id})" title="Borrar este registro" aria-label="Borrar"><i class="ti ti-trash"></i></button>` : ""}</span>
+        </div>`).join("")}
+    </div>`;
+}
+async function pvBorrarRegistro(id) {
+  const r0 = (pv.coche.historial || []).find(x => x.id === id);
+  if (!confirm(`¿Borrar "${r0 ? r0.tarea : "este registro"}" del ${r0 ? pvFC(r0.fecha) : ""}?${r0 && r0.origen === "ot" ? "\n\nLa OT queda igual, pero ese trabajo ya no cuenta para el preventivo." : ""}`)) return;
+  const r = await api(`/api/prev/registros/${id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo borrar", "error"); return; }
+  toast("Registro borrado");
+  pvRecargarCoche();
+}
+function pvTurnosCoche(f) {
+  return `
+    <div class="pv-sec-tit"><h3>Turnos del taller</h3><span>Los últimos ${f.turnos.length}</span></div>
+    <div class="pv-hist">
+      ${f.turnos.map(t => `
+        <div class="pv-h">
+          <span class="pv-h-f">${pvFC(t.fecha)}</span>
+          <span class="pv-h-t"><b>${pvFL(t.fecha)}${t.hora ? " · " + t.hora : ""}</b><small>${t.tareas_ids.length} tarea${t.tareas_ids.length === 1 ? "" : "s"}${t.notas ? " · " + pvEsc(t.notas) : ""}${t.motivo ? " · " + pvEsc(t.motivo) : ""}</small></span>
+          <span class="pv-h-a">${pvTurnoChip(t, true)}</span>
+          <span class="pv-h-o">${t.ot_id ? `<a href="javascript:void 0" class="pv-orig ot" onclick="abrirOT(${t.ot_id})"><i class="ti ti-clipboard-check"></i> OT #${t.ot_id}</a>` : ""}</span>
+          <span class="pv-h-x"></span>
+        </div>`).join("")}
+    </div>`;
+}
+
+// ─── Registrar que se hizo ───
+function pvRegistrar(vid, ids) {
+  const f = pv.coche;
+  const pre = new Set(ids && ids.length ? ids : (f.proximo ? f.proximo.ids : []));
+  const tareas = f.tareas.slice().sort((a, b) => (pre.has(b.tarea_id) - pre.has(a.tarea_id)) || a.intervalo_km - b.intervalo_km);
+  const o = rvModal({
+    titulo: "Registrar trabajo hecho", icono: "checks", ancho: 620,
+    sub: `Coche <b>${pvEsc(f.n_interno)}</b> · ${pvEsc(f.patente)}. Desde ese km se cuenta la próxima vez.`,
+    cuerpo: `
+      <div class="rv-campos">
+        <label class="rv-f" style="flex:1"><span>Km del tablero</span><input id="pv-r-km" inputmode="numeric" value="${fmtNum(f.km_actual)}"></label>
+        <label class="rv-f" style="flex:1"><span>Fecha</span><input id="pv-r-f" type="date" value="${pvHoy()}" max="${pvHoy()}"></label>
+        <label class="rv-f" style="flex:1"><span>Costo (opcional)</span><input id="pv-r-c" inputmode="numeric" placeholder="0"></label>
+      </div>
+      <label class="rv-f" style="margin-top:10px"><span>Observaciones</span><input id="pv-r-o" placeholder="Taller, marca del aceite…"></label>
+      <div class="pv-check-tit"><span>¿Qué se hizo?</span><button class="pv-link" onclick="pvMarcarTodas(this)">marcar todas</button></div>
+      <div class="pv-checks">${tareas.map(t => pvCheckTarea(t, pre.has(t.tarea_id))).join("")}</div>
+      <p class="pv-nota"><i class="ti ti-info-circle"></i> Lo que se hace en una OT se carga solo al completar el ítem: no hace falta registrarlo acá.</p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvRegistrarGuardar(this, ${vid})"><i class="ti ti-check"></i> Registrar</button>`,
+  });
+  pvNumInput(o.querySelector("#pv-r-km"));
+  pvNumInput(o.querySelector("#pv-r-c"));
+}
+function pvCheckTarea(t, on, extra = "") {
+  return `<label class="pv-check ${(PV_ESTADO[t.estado] || {}).c || ""}">
+    <input type="checkbox" value="${t.tarea_id ?? t.id}" ${on ? "checked" : ""}>
+    <span class="pv-ck-box"><i class="ti ti-check"></i></span>
+    <span class="pv-ck-nom"><b>${pvEsc(t.tarea)}</b><small>cada ${pvKm(t.intervalo_km)} km${t.km_restantes != null ? (t.km_restantes < 0 ? ` · <span class="tx-venc">pasada ${pvKm(t.km_restantes)} km</span>` : ` · faltan ${pvKm(t.km_restantes)} km`) : ""}${extra}</small></span>
+    ${t.estado ? pvPill(t.estado, "mini") : ""}
+  </label>`;
+}
+function pvMarcarTodas(btn) {
+  const cajas = btn.closest(".rv-modal").querySelectorAll(".pv-checks input[type=checkbox]");
+  const todas = [...cajas].every(c => c.checked);
+  cajas.forEach(c => c.checked = !todas);
+  btn.textContent = todas ? "marcar todas" : "desmarcar todas";
+}
+function pvNumInput(el) {
+  if (!el) return;
+  el.addEventListener("blur", () => { const n = parseInt(String(el.value).replace(/\D/g, ""), 10); el.value = n ? fmtNum(n) : ""; });
+}
+const pvNum = v => parseInt(String(v || "").replace(/\D/g, ""), 10) || 0;
+async function pvRegistrarGuardar(btn, vid) {
+  const m = btn.closest(".rv-modal");
+  const km = pvNum(m.querySelector("#pv-r-km").value);
+  const fecha = m.querySelector("#pv-r-f").value;
+  const ids = [...m.querySelectorAll(".pv-checks input:checked")].map(c => Number(c.value));
+  if (!km) { toast("Poné el km del tablero", "error"); return; }
+  if (!ids.length) { toast("Marcá qué se hizo", "error"); return; }
+  if (pv.coche && km > pv.coche.km_actual + 5000 && !confirm(`El coche tiene ${fmtNum(pv.coche.km_actual)} km y ponés ${fmtNum(km)}. ¿Seguro?`)) return;
+  btn.disabled = true;
+  const r = await pvPost(`/api/prev/coche/${vid}/registrar`, {
+    registros: ids.map(id => ({ tarea_id: id, km, fecha })), costo: pvNum(m.querySelector("#pv-r-c").value),
+    observaciones: m.querySelector("#pv-r-o").value,
+  });
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo registrar", "error"); return; }
+  m.closest(".modal-overlay").remove();
+  toast(`${r.registradas} tarea${r.registradas === 1 ? "" : "s"} registrada${r.registradas === 1 ? "" : "s"}`, "success");
+  pvRecargarCoche();
+}
+
+// ─── Cargar cuándo se hizo por última vez (coches sin datos) ───
+async function pvCargarUltimo(vid, encadenar) {
+  const f = (pv.coche && pv.coche.vehiculo_id === vid) ? pv.coche : await api(`/api/prev/coche/${vid}`);
+  if (!f || !f.tareas) return;
+  const sin = f.tareas.filter(t => t.km_restantes == null);
+  if (!sin.length) { toast("Este coche ya tiene todo cargado", "success"); return; }
+  const grupos = {};
+  sin.forEach(t => (grupos[t.intervalo_km] = grupos[t.intervalo_km] || []).push(t));
+  const claves = Object.keys(grupos).map(Number).sort((a, b) => a - b);
+  const o = rvModal({
+    titulo: `Coche ${pvEsc(f.n_interno)}: ¿cuándo se hizo?`, icono: "pencil-plus", ancho: 680, clase: "pv-m-ultimo",
+    sub: `${pvEsc(f.patente)} · ${pvEsc(f.plan_nombre)} · hoy marca <b>${pvKm(f.km_actual)} km</b>. Lo que se hace junto va junto: poné el km del último service de cada grupo.`,
+    cuerpo: claves.map(k => `
+      <div class="pv-ul-g" data-k="${k}">
+        <div class="pv-ul-cab">
+          <div><b>Cada ${pvKm(k)} km</b><small>${grupos[k].length} tarea${grupos[k].length === 1 ? "" : "s"}: ${grupos[k].map(t => pvEsc(t.tarea)).join(", ")}</small></div>
+        </div>
+        <div class="rv-seg pv-ul-modo">
+          <button class="on" data-m="km" onclick="pvUlModo(this)"><i class="ti ti-gauge"></i> Se hizo a los…</button>
+          <button data-m="hoy" onclick="pvUlModo(this)"><i class="ti ti-flag"></i> No sé: contar desde hoy</button>
+        </div>
+        <div class="rv-campos pv-ul-km">
+          <label class="rv-f" style="flex:1.2"><span>Km del tablero cuando se hizo</span><input class="pv-ul-in" inputmode="numeric" placeholder="ej: ${fmtNum(Math.max(0, Math.round((f.km_actual - k * 0.4) / 1000) * 1000))}"></label>
+          <label class="rv-f" style="flex:1"><span>Fecha (aprox.)</span><input class="pv-ul-f" type="date" max="${pvHoy()}"></label>
+        </div>
+        <div class="pv-ul-hoy" hidden><i class="ti ti-info-circle"></i> Se toma como hecho hoy a los ${pvKm(f.km_actual)} km: la próxima vez le toca a los ${pvKm(f.km_actual + k)} km.</div>
+      </div>`).join(""),
+    pie: `${encadenar ? `<span class="rv-pie-info pv-ul-cuenta">${pvUlCuenta(vid)}</span>
+            <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove();pvSiguienteSinDato(${vid})">Saltar</button>` : ""}
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">${encadenar ? "Terminar" : "Cancelar"}</button>
+          <button class="btn btn-primary" onclick="pvUlGuardar(this, ${vid}, ${!!encadenar})"><i class="ti ti-check"></i> Guardar${encadenar ? " y seguir" : ""}</button>`,
+  });
+  o.querySelectorAll(".pv-ul-in").forEach(pvNumInput);
+  o._grupos = grupos;
+  o._f = f;
+  setTimeout(() => o.querySelector(".pv-ul-in")?.focus(), 60);
+}
+function pvUlCuenta(vid) {
+  if (!pv.flota) return "";
+  const sd = pv.flota.coches.filter(c => c.estado === "sin_dato" && c.plan_id);
+  const i = sd.findIndex(c => c.vehiculo_id === vid);
+  return i >= 0 ? `Coche ${i + 1} de ${sd.length} sin datos` : "";
+}
+function pvUlModo(btn) {
+  const g = btn.closest(".pv-ul-g");
+  g.querySelectorAll(".pv-ul-modo button").forEach(b => b.classList.toggle("on", b === btn));
+  g.querySelector(".pv-ul-km").hidden = btn.dataset.m !== "km";
+  g.querySelector(".pv-ul-hoy").hidden = btn.dataset.m !== "hoy";
+}
+async function pvUlGuardar(btn, vid, encadenar) {
+  const o = btn.closest(".modal-overlay"), f = o._f, grupos = o._grupos;
+  const hechos = [], desdeHoy = [];
+  let falta = false;
+  o.querySelectorAll(".pv-ul-g").forEach(g => {
+    const k = Number(g.dataset.k);
+    const modo = g.querySelector(".pv-ul-modo button.on").dataset.m;
+    if (modo === "hoy") { grupos[k].forEach(t => desdeHoy.push({ tarea_id: t.tarea_id, km: f.km_actual, fecha: pvHoy() })); return; }
+    const km = pvNum(g.querySelector(".pv-ul-in").value);
+    if (!km) { falta = true; g.classList.add("falta"); return; }
+    g.classList.remove("falta");
+    let fecha = g.querySelector(".pv-ul-f").value;
+    if (!fecha) {               // sin fecha: se estima con lo que anda por día
+      const dias = Math.max(0, Math.round((f.km_actual - km) / Math.max(1, f.km_dia || 250)));
+      fecha = trSumar(pvHoy(), -dias);
+    }
+    grupos[k].forEach(t => hechos.push({ tarea_id: t.tarea_id, km, fecha }));
+  });
+  if (falta) { toast("Poné el km o elegí «contar desde hoy»", "error"); return; }
+  if (hechos.some(h => h.km > f.km_actual + 1000)) { toast(`El km no puede ser mayor que el de hoy (${fmtNum(f.km_actual)})`, "error"); return; }
+  btn.disabled = true;
+  let ok = true;
+  if (hechos.length) ok = (await pvPost(`/api/prev/coche/${vid}/registrar`, { registros: hechos, origen: "manual", observaciones: "Último hecho (carga inicial)" })).ok && ok;
+  if (desdeHoy.length) ok = (await pvPost(`/api/prev/coche/${vid}/registrar`, { registros: desdeHoy, origen: "inicial" })).ok && ok;
+  btn.disabled = false;
+  if (!ok) { toast("No se pudo guardar todo", "error"); return; }
+  o.remove();
+  toast(`Coche ${f.n_interno}: listo`, "success");
+  if (encadenar) {
+    pv.flota = await api("/api/prev/flota");
+    if ($("#pv-lista")) pvFlotaPintar();
+    pvSiguienteSinDato(vid);
+    return;
+  }
+  if ($("#pv-ficha") && pv.coche && pv.coche.vehiculo_id === vid) pvRecargarCoche();
+  else if (pv.tab === "flota" && $("#pv-lista")) pvFlota();
+}
+
+// ─── Km por día y plan del coche ───
+function pvKmDia() {
+  const f = pv.coche;
+  rvModal({
+    titulo: "¿Cuánto anda por día?", icono: "road", ancho: 460,
+    sub: `Coche <b>${pvEsc(f.n_interno)}</b>. Con esto se calcula para qué día cae cada tarea.`,
+    cuerpo: `
+      <label class="rv-f"><span>Km por día</span><input id="pv-kd" inputmode="numeric" value="${f.km_dia_fuente === "manual" ? fmtNum(f.km_dia_manual) : ""}" placeholder="${pvKm(f.km_dia_estimado || f.km_dia)}" autofocus></label>
+      <p class="pv-nota"><i class="ti ti-info-circle"></i> ${f.km_dia_estimado ? `Según sus lecturas de odómetro anda ≈ <b>${pvKm(f.km_dia_estimado)} km por día</b>.` : "No tiene lecturas suficientes de odómetro: se usa lo que anda la flota."} Dejalo vacío para que lo calcule solo.</p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvKmDiaGuardar(this)"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function pvKmDiaGuardar(btn) {
+  const v = pvNum($("#pv-kd").value);
+  const r = await pvPost(`/api/prev/coche/${pv.coche.vehiculo_id}/km_dia`, { km_dia: v });
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast(v ? `${fmtNum(v)} km por día` : "Lo calcula solo", "success");
+  pvRecargarCoche();
+}
+async function pvCambiarPlan(vid) {
+  const [planes, f] = await Promise.all([api("/api/prev/planes"), (pv.coche && pv.coche.vehiculo_id === vid) ? pv.coche : api(`/api/prev/coche/${vid}`)]);
+  const o = rvModal({
+    titulo: f.plan_id ? "Cambiar el plan" : "Asignar un plan", icono: "clipboard-list", ancho: 560,
+    sub: `Coche <b>${pvEsc(f.n_interno)}</b> · ${pvEsc(f.patente)} · ${pvEsc(f.marca)} ${pvEsc(f.modelo)}`,
+    cuerpo: `
+      <label class="rv-buscar" style="max-width:none"><i class="ti ti-search"></i><input id="pv-cp-q" placeholder="Buscar plan" oninput="pvCpFiltrar()" autofocus></label>
+      <div class="pv-cp-lista">${planes.map(p => `
+        <button class="pv-cp ${p.id === f.plan_id ? "on" : ""}" data-id="${p.id}" data-n="${pvEsc((p.nombre || "").toLowerCase())}" onclick="pvCpElegir(this)">
+          <b>${pvEsc(p.nombre)}</b><small>${p.tareas.length} tareas · ${p.coches.length} coche${p.coches.length === 1 ? "" : "s"}</small>
+          ${p.id === f.plan_id ? `<span class="pv-cp-act">actual</span>` : ""}
+        </button>`).join("")}</div>
+      ${f.plan_id ? `<p class="pv-nota"><i class="ti ti-info-circle"></i> Lo que ya se hizo no se pierde: si el plan nuevo tiene una tarea con el mismo nombre, sigue contando desde ahí.</p>` : ""}`,
+    pie: `${f.plan_id ? `<button class="btn btn-ghost" style="margin-right:auto" onclick="pvCpGuardar(this, ${vid}, true)"><i class="ti ti-unlink"></i> Sacar el plan</button>` : ""}
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvCpGuardar(this, ${vid})"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+  o._sel = f.plan_id;
+}
+function pvCpFiltrar() {
+  const q = $("#pv-cp-q").value.trim().toLowerCase();
+  document.querySelectorAll(".pv-cp").forEach(b => b.hidden = q && !b.dataset.n.includes(q));
+}
+function pvCpElegir(b) {
+  b.closest(".pv-cp-lista").querySelectorAll(".pv-cp").forEach(x => x.classList.toggle("on", x === b));
+  b.closest(".modal-overlay")._sel = Number(b.dataset.id);
+}
+async function pvCpGuardar(btn, vid, sacar) {
+  const o = btn.closest(".modal-overlay");
+  if (sacar && !confirm("¿Sacarle el plan a este coche? Lo que ya se hizo queda guardado.")) return;
+  const pid = sacar ? null : o._sel;
+  if (!sacar && !pid) { toast("Elegí un plan", "error"); return; }
+  const r = await pvPost(`/api/prev/coche/${vid}/plan`, { plan_id: pid });
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  o.remove();
+  toast(sacar ? "Plan sacado" : "Plan asignado", "success");
+  pv.planes = null;
+  if ($("#pv-ficha") && pv.coche && pv.coche.vehiculo_id === vid) pvRecargarCoche();
+  else if (pv.tab === "planes" && $("#pv-planes")) pvPlanes();
+  else if ($("#pv-lista")) pvFlota();
+}
+
+// ─── AGENDA DEL TALLER ───
+function pvRangoMes(mes) {
+  const [a, m] = mes.split("-").map(Number);
+  const p = new Date(a, m - 1, 1), u = new Date(a, m, 0);
+  const ini = new Date(p); ini.setDate(1 - ((p.getDay() + 6) % 7));        // lunes de la primera semana
+  const fin = new Date(u); fin.setDate(u.getDate() + (7 - ((u.getDay() + 6) % 7) - 1));
+  return [trIso(ini), trIso(fin)];
+}
+async function pvAgenda() {
+  if (!pv.mes) pv.mes = pvHoy().slice(0, 7);
+  if (!pv.dia) pv.dia = pvHoy();
+  const [desde, hasta] = pvRangoMes(pv.mes);
+  const [ag, sug] = await Promise.all([api(`/api/prev/agenda?desde=${desde}&hasta=${hasta}`), api("/api/prev/para_agendar")]);
+  if (!$("#pv-cuerpo") || pv.tab !== "agenda") return;
+  if (!ag || !ag.dias) { $("#pv-cuerpo").innerHTML = pvError("No se pudo traer la agenda"); return; }
+  pv.agenda = ag; pv.sug = sug || [];
+  const acc = $("#pv-acc");
+  if (acc && pvPuede()) acc.innerHTML = `
+    <button class="btn btn-ghost" onclick="pvCupos()"><i class="ti ti-settings"></i> Cupos del taller</button>
+    <button class="btn btn-primary" onclick="pvAgendar()"><i class="ti ti-calendar-plus"></i> Agendar turno</button>`;
+  pvAgendaPintar();
+}
+function pvAgendaPintar() {
+  const ag = pv.agenda, hoy = ag.hoy;
+  const [a, m] = pv.mes.split("-").map(Number);
+  const porDia = Object.fromEntries(ag.dias.map(d => [d.fecha, d]));
+  const semana = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+  const delMes = ag.dias.filter(d => d.fecha.slice(0, 7) === pv.mes);
+  const turnosMes = delMes.reduce((n, d) => n + d.turnos.filter(t => t.estado !== "cancelado").length, 0);
+  const atrasados = ag.dias.reduce((n, d) => n + d.turnos.filter(t => t.atrasado).length, 0);
+  $("#pv-cuerpo").innerHTML = `
+    <div class="pv-ag">
+      <div class="pv-cal-card">
+        <div class="pv-cal-cab">
+          <button class="pv-flecha" onclick="pvMes(-1)" aria-label="Mes anterior"><i class="ti ti-chevron-left"></i></button>
+          <h3>${PV_MESES[m - 1]} <span>${a}</span></h3>
+          <button class="pv-flecha" onclick="pvMes(1)" aria-label="Mes siguiente"><i class="ti ti-chevron-right"></i></button>
+          <button class="sv-chip pv-hoy-btn" onclick="pv.mes=null;pv.dia=null;pvAgenda()">Hoy</button>
+          <span class="pv-cal-res">${turnosMes} turno${turnosMes === 1 ? "" : "s"} en el mes · ${ag.config.cupos_dia} lugar${ag.config.cupos_dia === 1 ? "" : "es"} por día</span>
+        </div>
+        ${atrasados ? `<div class="pv-aviso chico"><i class="ti ti-alert-triangle"></i><div><b>${atrasados} turno${atrasados === 1 ? "" : "s"} ya pasó y no se registró</b><span>Marcá si el coche vino (abrí la OT o cumplido) o si no vino.</span></div></div>` : ""}
+        <div class="pv-cal">
+          ${semana.map(s => `<div class="pv-cal-sem">${s}</div>`).join("")}
+          ${ag.dias.map(d => pvCelda(d, hoy, porDia)).join("")}
+        </div>
+        <div class="pv-cal-ley">
+          <span><i></i> Agendado</span><span><i class="t-en_taller"></i> En el taller</span><span><i class="t-cumplido"></i> Cumplido</span>
+          <span><i class="lleno"></i> Día lleno</span><span><i class="cerrado"></i> El taller no trabaja</span>
+        </div>
+      </div>
+      <div class="pv-ag-lado">
+        <div id="pv-dia">${pvDiaPanel(porDia[pv.dia] || null)}</div>
+        <div class="pv-sug-card">
+          <div class="pv-sug-cab">
+            <div><h3>Para agendar</h3><span>${pv.sug.length ? `${pv.sug.length} coche${pv.sug.length === 1 ? "" : "s"} vencido${pv.sug.length === 1 ? "" : "s"} o que vence${pv.sug.length === 1 ? "" : "n"} en ${ag.config.aviso_dias} días, sin turno` : "Todos los que vencen pronto ya tienen turno"}</span></div>
+            ${pv.sug.length > 1 && pvPuede() ? `<button class="btn btn-ghost btn-sm" onclick="pvAuto()"><i class="ti ti-wand"></i> Agendar todos</button>` : ""}
+          </div>
+          <div class="pv-sug-lista">${pv.sug.slice(0, 40).map(s => `
+            <div class="pv-sug ${(PV_ESTADO[s.estado] || {}).c || ""}">
+              <div class="pv-num chico"><b>${pvEsc(s.n_interno || "—")}</b></div>
+              <div class="pv-sug-info" onclick="pvAbrirCoche(${s.vehiculo_id}, true)">
+                <b>${pvEsc(pvNombreGrupo(s.proximo))}</b>
+                <small>${s.proximo.km_restantes < 0 ? `<span class="tx-venc">pasado ${pvKm(s.proximo.km_restantes)} km</span>` : `faltan ${pvKm(s.proximo.km_restantes)} km · ≈ ${pvF(s.proximo.fecha_estimada)}`}</small>
+              </div>
+              ${pvPuede() ? (s.fecha_sugerida
+                ? `<button class="pv-sug-btn" onclick="pvAgendarRapido(${s.vehiculo_id}, '${s.fecha_sugerida}', this)" title="Agendar el ${pvFL(s.fecha_sugerida)}"><i class="ti ti-calendar-plus"></i><span>${pvF(s.fecha_sugerida)}</span></button>`
+                : `<button class="pv-sug-btn" onclick="pvAgendar(${s.vehiculo_id})"><i class="ti ti-calendar-plus"></i><span>Elegir</span></button>`) : ""}
+            </div>`).join("") || `<div class="pv-sug-vacio"><i class="ti ti-circle-check"></i> Nada pendiente de agendar</div>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+function pvCelda(d, hoy, porDia) {
+  const fuera = d.fecha.slice(0, 7) !== pv.mes;
+  const act = d.turnos.filter(t => t.estado !== "cancelado");
+  const lleno = d.cupo > 0 && d.ocupados >= d.cupo;
+  const cerrado = d.cupo === 0;
+  const cls = [fuera ? "fuera" : "", d.fecha === hoy ? "hoy" : "", d.fecha < hoy ? "pasado" : "", cerrado ? "cerrado" : "",
+               lleno ? "lleno" : "", d.fecha === pv.dia ? "sel" : "", d.ocupados > d.cupo && d.cupo > 0 ? "pasado-cupo" : ""].join(" ");
+  const chips = act.slice(0, 3).map(t => `<span class="pv-c-chip t-${t.estado} ${t.atrasado ? "atr" : ""}">${pvEsc(t.n_interno || t.patente)}</span>`).join("");
+  return `<button class="pv-celda ${cls}" onclick="pvDia('${d.fecha}')" aria-label="${pvFL(d.fecha)}: ${d.ocupados} de ${d.cupo}">
+    <span class="pv-c-n">${pvD(d.fecha).getDate()}</span>
+    ${!cerrado ? `<span class="pv-c-cupo">${d.ocupados}/${d.cupo}</span>` : `<span class="pv-c-cupo">cerrado</span>`}
+    <span class="pv-c-chips">${chips}${act.length > 3 ? `<span class="pv-c-mas">+${act.length - 3}</span>` : ""}</span>
+    ${!cerrado ? `<span class="pv-c-barra"><i style="width:${Math.min(100, d.ocupados / Math.max(1, d.cupo) * 100)}%"></i></span>` : ""}
+  </button>`;
+}
+function pvMes(n) {
+  const [a, m] = pv.mes.split("-").map(Number);
+  const d = new Date(a, m - 1 + n, 1);
+  pv.mes = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  pvAgenda();
+}
+function pvDia(f) {
+  pv.dia = f;
+  const d = (pv.agenda.dias || []).find(x => x.fecha === f);
+  document.querySelectorAll(".pv-celda").forEach(c => c.classList.remove("sel"));
+  [...document.querySelectorAll(".pv-celda")].find(c => c.getAttribute("onclick").includes(f))?.classList.add("sel");
+  $("#pv-dia").innerHTML = pvDiaPanel(d);
+  if (window.innerWidth < 1100) $("#pv-dia").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function pvDiaPanel(d) {
+  if (!d) return `<div class="pv-dia-card vacio"><i class="ti ti-calendar"></i><span>Tocá un día para ver sus turnos</span></div>`;
+  const puede = pvPuede(), hoy = pv.agenda.hoy;
+  const act = d.turnos.filter(t => t.estado !== "cancelado");
+  const libres = d.cupo - d.ocupados;
+  return `
+    <div class="pv-dia-card">
+      <div class="pv-dia-cab">
+        <div>
+          <h3>${pvFL(d.fecha)}</h3>
+          <span>${d.cupo === 0 ? "El taller no trabaja" : `${d.ocupados} de ${d.cupo} lugares${libres > 0 ? ` · ${libres} libre${libres === 1 ? "" : "s"}` : libres === 0 ? " · lleno" : ` · ${-libres} de más`}`}${d.especial ? " · cupo especial" : ""}
+            ${puede ? `<button class="pv-link" onclick="pvCupoDia('${d.fecha}', ${d.cupo})">cambiar</button>` : ""}</span>
+        </div>
+        ${puede && d.fecha >= hoy ? `<button class="btn btn-primary btn-sm" onclick="pvAgendar(null, '${d.fecha}')"><i class="ti ti-plus"></i> Agendar</button>` : ""}
+      </div>
+      ${d.turnos.length ? d.turnos.map(t => pvTurnoCard(t)).join("") : `<div class="pv-dia-vacio">${d.cupo ? "Sin turnos ese día" : "Sin turnos"}</div>`}
+    </div>`;
+}
+function pvTurnoCard(t) {
+  const puede = pvPuede();
+  const x = PV_TURNO[t.estado] || PV_TURNO.agendado;
+  let btns = "";
+  if (puede) {
+    if (t.estado === "agendado") btns = `
+      <button class="btn btn-primary btn-sm" onclick="pvTurnoOT(${t.id})"><i class="ti ti-door-enter"></i> Llegó: abrir OT</button>
+      <div class="pv-menu">
+        <button class="btn btn-ghost btn-sm" onclick="pvMenu(this)" aria-label="Más"><i class="ti ti-dots"></i></button>
+        <div class="pv-menu-l">
+          <button onclick="pvCumplir(${t.id})"><i class="ti ti-circle-check"></i> Cumplido sin OT</button>
+          <button onclick="pvMover(${t.id}, '${t.fecha}')"><i class="ti ti-calendar-repeat"></i> Mover a otro día</button>
+          <button onclick="pvNoVino(${t.id})"><i class="ti ti-user-x"></i> No vino</button>
+          <button onclick="pvCancelarTurno(${t.id})" class="peligro"><i class="ti ti-calendar-x"></i> Cancelar turno</button>
+        </div>
+      </div>`;
+    else if (t.estado === "en_taller") btns = t.ot_id ? `<button class="btn btn-ghost btn-sm" onclick="abrirOT(${t.ot_id})"><i class="ti ti-clipboard-check"></i> Ver OT #${t.ot_id}</button>` : "";
+    else if (t.estado === "cumplido") btns = t.ot_id ? `<button class="btn btn-ghost btn-sm" onclick="abrirOT(${t.ot_id})"><i class="ti ti-clipboard-check"></i> OT #${t.ot_id}</button>` : "";
+    else btns = `<button class="btn btn-ghost btn-sm" onclick="pvMover(${t.id}, '${t.fecha}', true)"><i class="ti ti-calendar-repeat"></i> Reagendar</button>
+                 <button class="icon-btn" onclick="pvBorrarTurno(${t.id})" title="Borrar" aria-label="Borrar"><i class="ti ti-trash"></i></button>`;
+  }
+  return `
+    <div class="pv-tc t-${t.estado} ${t.atrasado ? "atrasado" : ""}">
+      <div class="pv-num chico" onclick="pvAbrirCoche(${t.vehiculo_id}, true)"><b>${pvEsc(t.n_interno || "—")}</b></div>
+      <div class="pv-tc-info">
+        <div class="pv-tc-l1"><b onclick="pvAbrirCoche(${t.vehiculo_id}, true)">${pvEsc(t.patente)}</b>${t.hora ? `<span class="pv-tc-hora"><i class="ti ti-clock"></i>${t.hora}</span>` : ""}${pvTurnoChip(t, true, true)}</div>
+        <small>${t.tareas_nombres.length ? pvEsc(t.tareas_nombres.length >= 3 ? `${t.tareas_nombres.length} tareas: ${t.tareas_nombres.slice(0, 3).join(", ")}…` : t.tareas_nombres.join(", ")) : "Lo que le toque"}${t.notas ? ` · ${pvEsc(t.notas)}` : ""}${t.motivo ? ` · ${pvEsc(t.motivo)}` : ""}</small>
+      </div>
+      <div class="pv-tc-btns">${btns}</div>
+    </div>`;
+}
+function pvMenu(btn) {
+  const m = btn.closest(".pv-menu");
+  const abierto = m.classList.contains("on");
+  document.querySelectorAll(".pv-menu.on").forEach(x => x.classList.remove("on"));
+  if (abierto) return;
+  m.classList.add("on");
+  // Cualquier clic lo cierra (el de una opción también, después de hacer lo suyo)
+  setTimeout(() => document.addEventListener("click", function cerrar() {
+    m.classList.remove("on");
+    document.removeEventListener("click", cerrar);
+  }), 0);
+}
+async function pvRefrescarDespuesDeTurno() {
+  if (pv.tab === "agenda" && $("#pv-dia")) await pvAgenda();
+  else if ($("#pv-ficha") && pv.coche) await pvRecargarCoche();
+  else if ($("#pv-lista")) await pvFlota();
+}
+
+// ─── Agendar ───
+async function pvAgendar(vid, fecha) {
+  const vs = await pvVehiculos();
+  const o = rvModal({
+    titulo: "Agendar turno de taller", icono: "calendar-plus", ancho: 640, clase: "pv-m-agendar",
+    sub: "Elegí el coche y el día. El sistema propone lo que le toca y el día que conviene.",
+    cuerpo: `
+      <div class="pv-ag-coche" id="pv-ag-coche">${vid ? pvCargando() : buscadorCoche("pv-ag-v", vs.filter(v => v.activo !== 0), { placeholder: "Escribí el N° o la patente" })}</div>
+      <div id="pv-ag-resto" ${vid ? "" : "hidden"}></div>`,
+    pie: `<span class="rv-pie-info" id="pv-ag-info"></span>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="pv-ag-ok" onclick="pvAgendarGuardar(this)" ${vid ? "" : "disabled"}><i class="ti ti-check"></i> Agendar</button>`,
+  });
+  o._fecha = fecha || null;
+  window["_cocheCB_pv-ag-v"] = id => { if (id) pvAgendarCoche(o, Number(id)); };
+  if (vid) pvAgendarCoche(o, vid);
+  else setTimeout(() => document.getElementById("pv-ag-v-txt")?.focus(), 80);
+}
+async function pvAgendarCoche(o, vid) {
+  const f = await api(`/api/prev/coche/${vid}`);
+  if (!f || !f.vehiculo_id) return;
+  o._f = f;
+  const fecha = o._fecha || f.fecha_sugerida || pvHoy();
+  const pre = new Set(f.proximo ? f.proximo.ids : []);
+  const tareas = f.tareas.slice().sort((a, b) => (pre.has(b.tarea_id) - pre.has(a.tarea_id)) || ((a.km_restantes ?? 1e9) - (b.km_restantes ?? 1e9)));
+  const caja = o.querySelector("#pv-ag-coche");
+  caja.innerHTML = `
+    <div class="pv-ag-sel">
+      <div class="pv-num chico"><b>${pvEsc(f.n_interno || "—")}</b></div>
+      <div><b>${pvEsc(f.patente)} · ${pvEsc(f.marca)} ${pvEsc(f.modelo)}</b><small>${f.plan_nombre ? pvEsc(f.plan_nombre) : "Sin plan"} · ${pvKm(f.km_actual)} km · ≈ ${pvKm(f.km_dia)} km/día</small></div>
+      ${pvPill(f.estado)}
+      ${o._vidFijo ? "" : `<button class="pv-link" onclick="pvAgendarOtro(this)">otro coche</button>`}
+    </div>
+    ${f.turno ? `<div class="pv-aviso chico"><i class="ti ti-calendar-event"></i><div><b>Ya tiene turno el ${pvFL(f.turno.fecha)}</b><span>Podés moverlo en vez de agendar otro.</span></div>
+      <button class="btn btn-ghost btn-sm" onclick="this.closest('.modal-overlay').remove();pvMover(${f.turno.id}, '${f.turno.fecha}')">Mover ese turno</button></div>` : ""}`;
+  const resto = o.querySelector("#pv-ag-resto");
+  resto.hidden = false;
+  resto.innerHTML = `
+    <div class="rv-campos">
+      <label class="rv-f" style="flex:1.3"><span>Día</span><input id="pv-ag-f" type="date" value="${fecha}" min="${pvHoy()}" onchange="pvAgendarDia(this)"></label>
+      <label class="rv-f" style="flex:.8"><span>Hora (opcional)</span><input id="pv-ag-h" type="time"></label>
+    </div>
+    <div class="pv-ag-dia" id="pv-ag-dia"></div>
+    ${f.fecha_sugerida ? `<p class="pv-nota"><i class="ti ti-sparkles"></i> ${!f.proximo ? "Sin datos para calcular cuándo le toca." : f.proximo.km_restantes < 0 ? "Está vencido: conviene que entre cuanto antes." : `Le toca ≈ ${pvFL(f.proximo.fecha_estimada)}.`} Primer día con lugar: <button class="pv-link" onclick="pvAgendarUsar('${f.fecha_sugerida}')">${pvFL(f.fecha_sugerida)}</button></p>` : ""}
+    ${f.tareas.length ? `
+      <div class="pv-check-tit"><span>¿Qué se le hace? <small>(lo que le toca ya viene marcado)</small></span><button class="pv-link" onclick="pvMarcarTodas(this)">marcar todas</button></div>
+      <div class="pv-checks">${tareas.map(t => pvCheckTarea(t, pre.has(t.tarea_id))).join("")}</div>` : `<p class="pv-nota"><i class="ti ti-info-circle"></i> El coche no tiene plan: el turno queda sin tareas.</p>`}
+    <label class="rv-f" style="margin-top:10px"><span>Notas</span><input id="pv-ag-n" placeholder="ej: viene después del servicio de la mañana"></label>`;
+  o.querySelector("#pv-ag-ok").disabled = false;
+  pvAgendarDia(o.querySelector("#pv-ag-f"));
+}
+function pvAgendarOtro(btn) {
+  const o = btn.closest(".modal-overlay");
+  pvVehiculos().then(vs => {
+    o.querySelector("#pv-ag-coche").innerHTML = buscadorCoche("pv-ag-v", vs.filter(v => v.activo !== 0), { placeholder: "Escribí el N° o la patente" });
+    o.querySelector("#pv-ag-resto").hidden = true;
+    o.querySelector("#pv-ag-ok").disabled = true;
+    setTimeout(() => document.getElementById("pv-ag-v-txt")?.focus(), 50);
+  });
+}
+function pvAgendarUsar(f) { const i = $("#pv-ag-f"); i.value = f; pvAgendarDia(i); }
+async function pvAgendarDia(inp) {
+  const f = inp.value, box = $("#pv-ag-dia");
+  if (!f || !box) return;
+  let d = pv.agenda && pv.agenda.dias.find(x => x.fecha === f);
+  if (!d) { const ag = await api(`/api/prev/agenda?desde=${f}&hasta=${f}`); d = ag && ag.dias && ag.dias[0]; }
+  if (!d) { box.innerHTML = ""; return; }
+  const libres = d.cupo - d.ocupados;
+  box.className = "pv-ag-dia " + (d.cupo === 0 ? "cerrado" : libres <= 0 ? "lleno" : "libre");
+  box.innerHTML = d.cupo === 0 ? `<i class="ti ti-door-off"></i> ${pvFL(f)}: el taller no trabaja`
+    : libres <= 0 ? `<i class="ti ti-alert-triangle"></i> ${pvFL(f)}: lleno (${d.ocupados} de ${d.cupo})`
+    : `<i class="ti ti-circle-check"></i> ${pvFL(f)}: ${libres} lugar${libres === 1 ? "" : "es"} libre${libres === 1 ? "" : "s"} de ${d.cupo}`;
+}
+async function pvAgendarGuardar(btn, forzar) {
+  const o = btn.closest(".modal-overlay"), f = o._f;
+  if (!f) { toast("Elegí el coche", "error"); return; }
+  const tareas = [...o.querySelectorAll(".pv-checks input:checked")].map(c => Number(c.value));
+  const body = { vehiculo_id: f.vehiculo_id, fecha: o.querySelector("#pv-ag-f").value, hora: o.querySelector("#pv-ag-h").value,
+                 notas: o.querySelector("#pv-ag-n").value, tareas, forzar: !!forzar };
+  if (!body.fecha) { toast("Elegí el día", "error"); return; }
+  btn.disabled = true;
+  const r = await pvPost("/api/prev/turnos", body);
+  btn.disabled = false;
+  if (!r.ok) {
+    const info = o.querySelector("#pv-ag-dia");
+    if (r.lleno) {
+      info.className = "pv-ag-dia lleno";
+      info.innerHTML = `<i class="ti ti-alert-triangle"></i><span>${pvEsc(r.msg)}</span>
+        ${r.alternativa ? `<button class="btn btn-ghost btn-sm" onclick="pvAgendarUsar('${r.alternativa}')">Usar el ${pvF(r.alternativa)}</button>` : ""}
+        <button class="btn btn-ghost btn-sm" onclick="pvAgendarGuardar(this.closest('.modal-overlay').querySelector('#pv-ag-ok'), true)">Agendar igual</button>`;
+      return;
+    }
+    if (r.duplicado) {
+      if (confirm(`${r.msg}\n\n¿Agendar otro turno igual?`)) return pvAgendarGuardar(btn, true);
+      return;
+    }
+    toast(r.msg || "No se pudo agendar", "error");
+    return;
+  }
+  o.remove();
+  toast(`Coche ${f.n_interno}: turno el ${pvF(r.turno.fecha)}`, "success");
+  pv.dia = r.turno.fecha;
+  pv.mes = r.turno.fecha.slice(0, 7);
+  pvRefrescarDespuesDeTurno();
+}
+async function pvAgendarRapido(vid, fecha, btn) {
+  btn.disabled = true;
+  const r = await pvPost("/api/prev/turnos", { vehiculo_id: vid, fecha });
+  btn.disabled = false;
+  if (!r.ok) { if (r.lleno || r.duplicado) pvAgendar(vid, r.alternativa || fecha); else toast(r.msg || "No se pudo agendar", "error"); return; }
+  toast(`Coche ${r.turno.n_interno}: turno el ${pvF(fecha)}`, "success");
+  pv.dia = fecha;
+  pvAgenda();
+}
+function pvAuto() {
+  const lista = pv.sug.filter(s => s.fecha_sugerida);
+  rvModal({
+    titulo: "Agendar todos de una vez", icono: "wand", ancho: 640,
+    sub: `El sistema reparte los ${lista.length} coches respetando los lugares de cada día: primero los vencidos, después los que vencen antes. Podés cambiar el día o sacar alguno.`,
+    cuerpo: `<div class="pv-auto">${lista.map((s, i) => `
+      <label class="pv-auto-f ${(PV_ESTADO[s.estado] || {}).c || ""}">
+        <input type="checkbox" checked data-v="${s.vehiculo_id}">
+        <span class="pv-ck-box"><i class="ti ti-check"></i></span>
+        <span class="pv-num chico"><b>${pvEsc(s.n_interno || "—")}</b></span>
+        <span class="pv-auto-info"><b>${pvEsc(pvNombreGrupo(s.proximo))}</b><small>${s.proximo.km_restantes < 0 ? `<span class="tx-venc">pasado ${pvKm(s.proximo.km_restantes)} km</span>` : `vence ≈ ${pvF(s.proximo.fecha_estimada)}`}</small></span>
+        <input type="date" class="pv-auto-d" value="${s.fecha_sugerida}" min="${pvHoy()}">
+      </label>`).join("")}</div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvAutoGuardar(this)"><i class="ti ti-calendar-plus"></i> Agendar los marcados</button>`,
+  });
+}
+async function pvAutoGuardar(btn) {
+  const o = btn.closest(".modal-overlay");
+  const turnos = [...o.querySelectorAll(".pv-auto-f")].filter(l => l.querySelector("input[type=checkbox]").checked)
+    .map(l => ({ vehiculo_id: Number(l.querySelector("input[type=checkbox]").dataset.v), fecha: l.querySelector(".pv-auto-d").value }));
+  if (!turnos.length) { toast("No marcaste ninguno", "error"); return; }
+  btn.disabled = true;
+  const r = await pvPost("/api/prev/agendar_lote", { turnos });
+  btn.disabled = false;
+  o.remove();
+  toast(`${r.agendados} turno${r.agendados === 1 ? "" : "s"} agendado${r.agendados === 1 ? "" : "s"}${r.saltados && r.saltados.length ? ` · ${r.saltados.length} no (día lleno o ya tenía)` : ""}`, r.agendados ? "success" : "error");
+  pvAgenda();
+}
+
+// ─── Lo que pasa con un turno ───
+async function pvTurnoOT(tid) {
+  const r = await pvPost(`/api/prev/turnos/${tid}/ot`, {});
+  if (!r.ok) { toast(r.msg || "No se pudo abrir la OT", "error"); return; }
+  toast(r.ya_estaba ? `La OT #${r.ot_id} ya estaba abierta` : `OT #${r.ot_id} abierta con lo del turno`, "success");
+  await pvRefrescarDespuesDeTurno();
+  abrirOT(r.ot_id);
+}
+function pvMover(tid, fecha, reagendar) {
+  rvModal({
+    titulo: reagendar ? "Reagendar el turno" : "Mover el turno", icono: "calendar-repeat", ancho: 460,
+    sub: `Estaba para el <b>${pvFL(fecha)}</b>.`,
+    cuerpo: `<label class="rv-f"><span>Nuevo día</span><input id="pv-mv-f" type="date" value="${fecha >= pvHoy() ? fecha : pvHoy()}" min="${pvHoy()}" onchange="pvAgendarDia(this)" autofocus></label>
+             <div class="pv-ag-dia" id="pv-ag-dia"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvMoverGuardar(this, ${tid}, ${!!reagendar})"><i class="ti ti-check"></i> Mover</button>`,
+  });
+  pvAgendarDia($("#pv-mv-f"));
+}
+async function pvMoverGuardar(btn, tid, reagendar, forzar) {
+  const f = $("#pv-mv-f").value;
+  const body = { fecha: f, forzar: !!forzar };
+  if (reagendar) { body.estado = "agendado"; body.motivo = ""; }
+  const r = await pvPost(`/api/prev/turnos/${tid}`, body, "PATCH");
+  if (!r.ok) {
+    if (r.lleno && confirm(`${r.msg}\n\n¿Moverlo igual?`)) return pvMoverGuardar(btn, tid, reagendar, true);
+    if (!r.lleno) toast(r.msg || "No se pudo mover", "error");
+    return;
+  }
+  btn.closest(".modal-overlay").remove();
+  toast(`Turno movido al ${pvF(f)}`, "success");
+  pv.dia = f; pv.mes = f.slice(0, 7);
+  pvRefrescarDespuesDeTurno();
+}
+async function pvCumplir(tid) {
+  const t = pv.agenda.dias.flatMap(d => d.turnos).find(x => x.id === tid);
+  const f = await api(`/api/prev/coche/${t.vehiculo_id}`);
+  const pre = new Set(t.tareas_ids);
+  const o = rvModal({
+    titulo: "Cumplido sin OT", icono: "circle-check", ancho: 600,
+    sub: `Coche <b>${pvEsc(t.n_interno)}</b>: se registra lo que se le hizo con el km del tablero.`,
+    cuerpo: `
+      <div class="rv-campos">
+        <label class="rv-f" style="flex:1"><span>Km del tablero</span><input id="pv-r-km" inputmode="numeric" value="${fmtNum(f.km_actual)}"></label>
+        <label class="rv-f" style="flex:1"><span>Fecha</span><input id="pv-r-f" type="date" value="${t.fecha <= pvHoy() ? t.fecha : pvHoy()}" max="${pvHoy()}"></label>
+      </div>
+      <div class="pv-check-tit"><span>¿Qué se hizo?</span><button class="pv-link" onclick="pvMarcarTodas(this)">marcar todas</button></div>
+      <div class="pv-checks">${f.tareas.map(x => pvCheckTarea(x, pre.has(x.tarea_id))).join("")}</div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvCumplirGuardar(this, ${tid})"><i class="ti ti-check"></i> Cumplido</button>`,
+  });
+  pvNumInput(o.querySelector("#pv-r-km"));
+}
+async function pvCumplirGuardar(btn, tid) {
+  const m = btn.closest(".rv-modal");
+  const km = pvNum(m.querySelector("#pv-r-km").value);
+  const tareas = [...m.querySelectorAll(".pv-checks input:checked")].map(c => Number(c.value));
+  if (!km) { toast("Poné el km del tablero", "error"); return; }
+  if (!tareas.length) { toast("Marcá qué se hizo", "error"); return; }
+  const r = await pvPost(`/api/prev/turnos/${tid}/cumplir`, { km, fecha: m.querySelector("#pv-r-f").value, tareas });
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  m.closest(".modal-overlay").remove();
+  toast("Turno cumplido y registrado en el preventivo", "success");
+  pvRefrescarDespuesDeTurno();
+}
+function pvNoVino(tid) {
+  rvModal({
+    titulo: "El coche no vino", icono: "user-x", ancho: 460,
+    sub: "Queda anotado para el cumplimiento. Después lo podés reagendar.",
+    cuerpo: `<label class="rv-f"><span>¿Por qué? (opcional)</span><input id="pv-nv-m" placeholder="ej: salió de viaje, faltó chofer" autofocus></label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvNoVinoGuardar(this, ${tid})"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function pvNoVinoGuardar(btn, tid) {
+  const r = await pvPost(`/api/prev/turnos/${tid}`, { estado: "ausente", motivo: $("#pv-nv-m").value }, "PATCH");
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Anotado: no vino");
+  pvRefrescarDespuesDeTurno();
+}
+async function pvCancelarTurno(tid) {
+  if (!confirm("¿Cancelar este turno?")) return;
+  const r = await pvPost(`/api/prev/turnos/${tid}`, { estado: "cancelado" }, "PATCH");
+  if (!r.ok) { toast(r.msg || "No se pudo cancelar", "error"); return; }
+  toast("Turno cancelado");
+  pvRefrescarDespuesDeTurno();
+}
+async function pvBorrarTurno(tid) {
+  if (!confirm("¿Borrar este turno de la agenda?")) return;
+  await api(`/api/prev/turnos/${tid}`, { method: "DELETE" });
+  toast("Turno borrado");
+  pvRefrescarDespuesDeTurno();
+}
+function pvCupos() {
+  const c = pv.agenda.config;
+  const dias = [[1, "Lun"], [2, "Mar"], [3, "Mié"], [4, "Jue"], [5, "Vie"], [6, "Sáb"], [7, "Dom"]];
+  rvModal({
+    titulo: "Cupos del taller", icono: "settings", ancho: 520,
+    sub: "Cuántos coches entran por día al preventivo y qué días trabaja el taller.",
+    cuerpo: `
+      <div class="rv-campos">
+        <label class="rv-f" style="flex:1"><span>Coches por día</span><input id="pv-cf-c" type="number" min="0" max="40" value="${c.cupos_dia}"></label>
+        <label class="rv-f" style="flex:1"><span>Avisar con (días)</span><input id="pv-cf-a" type="number" min="0" max="60" value="${c.aviso_dias}"></label>
+        <label class="rv-f" style="flex:1"><span>Tolerancia "a tiempo"</span><input id="pv-cf-t" type="number" min="0" max="50" value="${c.tolerancia_pct}"></label>
+      </div>
+      <div class="pv-check-tit"><span>Días que trabaja</span></div>
+      <div class="pv-dias">${dias.map(([n, t]) => `<button type="button" class="${c.dias_taller.includes(n) ? "on" : ""}" data-d="${n}" onclick="this.classList.toggle('on')">${t}</button>`).join("")}</div>
+      <p class="pv-nota"><i class="ti ti-info-circle"></i> "Avisar con" es cuántos días antes de vencer un coche pasa a "próximo". La tolerancia es cuánto se puede pasar del intervalo y seguir contando como a tiempo (10 % de 15.000 = 1.500 km). Un día puntual (feriado, inventario) se cambia desde el mismo día.</p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvCuposGuardar(this)"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function pvCuposGuardar(btn) {
+  const dias = [...document.querySelectorAll(".pv-dias button.on")].map(b => Number(b.dataset.d));
+  if (!dias.length) { toast("Elegí al menos un día", "error"); return; }
+  const r = await pvPost("/api/prev/config", { cupos_dia: $("#pv-cf-c").value, aviso_dias: $("#pv-cf-a").value, tolerancia_pct: $("#pv-cf-t").value, dias_taller: dias });
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Cupos guardados", "success");
+  pvAgenda();
+}
+function pvCupoDia(fecha, cupo) {
+  rvModal({
+    titulo: "Cupo de este día", icono: "calendar-cog", ancho: 440,
+    sub: `${pvFL(fecha)}. Para un feriado poné 0; vacío vuelve al cupo normal.`,
+    cuerpo: `<label class="rv-f"><span>Coches ese día</span><input id="pv-cd" type="number" min="0" max="40" value="${cupo}" autofocus></label>`,
+    pie: `<button class="btn btn-ghost" onclick="pvCupoDiaGuardar(this, '${fecha}', true)">Volver al normal</button>
+          <button class="btn btn-primary" onclick="pvCupoDiaGuardar(this, '${fecha}')"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function pvCupoDiaGuardar(btn, fecha, normal) {
+  const v = $("#pv-cd").value;
+  await pvPost("/api/prev/cupo_dia", { fecha, cupo: normal ? "" : v });
+  btn.closest(".modal-overlay").remove();
+  pvAgenda();
+}
+
+// ─── CUMPLIMIENTO ───
+async function pvCumplimiento() {
+  const d = await api("/api/prev/cumplimiento");
+  if (!$("#pv-cuerpo") || pv.tab !== "cumplimiento") return;
+  if (!d || !d.kpis) { $("#pv-cuerpo").innerHTML = pvError("No se pudo traer el cumplimiento"); return; }
+  pv.cu = d;
+  pvCuPintar();
+}
+function pvCuPintar() {
+  const d = pv.cu, k = d.kpis;
+  const max = Math.max(1, ...d.por_mes.map(m => m.a_tiempo + m.tarde));
+  const mesCorto = m => PV_MESES[Number(m.slice(5, 7)) - 1].slice(0, 3);
+  const tc = k.turnos || {};
+  const coches = pv.cuTodos ? d.coches : d.coches.slice(0, 15);
+  $("#pv-cuerpo").innerHTML = `
+    <div class="pv-hero pv-hero-cu">
+      <div class="pv-hero-num">
+        <span class="pv-et">Hecho a tiempo · último año</span>
+        <b>${k.pct_a_tiempo != null ? k.pct_a_tiempo : "—"}<small>${k.pct_a_tiempo != null ? " %" : ""}</small></b>
+        <span class="pv-hero-sub">${k.evaluados ? `<strong>${fmtNum(k.a_tiempo)}</strong> de ${fmtNum(k.evaluados)} veces que se hizo una tarea fue dentro de su intervalo (con ${d.config.tolerancia_pct} % de tolerancia).
+          ${k.atraso_prom ? `Cuando se hizo tarde, fue en promedio <strong>${pvKm(k.atraso_prom)} km</strong> pasado.` : ""}` : "Todavía no hay registros seguidos para comparar: se arma solo a medida que se cargan los trabajos."}</span>
+      </div>
+      <div class="pv-hero-der">
+        <span class="pv-et">Por mes · últimos ${d.por_mes.length}</span>
+        <div class="pv-meses">${d.por_mes.map((m, i) => {
+          const tot = m.a_tiempo + m.tarde;
+          return `<div class="pv-mes" title="${PV_MESES[Number(m.mes.slice(5, 7)) - 1]}: ${m.a_tiempo} a tiempo, ${m.tarde} tarde">
+            <span class="pv-mes-v">${tot ? Math.round(m.a_tiempo * 100 / tot) + " %" : ""}</span>
+            <div class="pv-mes-col" style="--d:${i * 60}ms">
+              ${m.tarde ? `<i class="tarde" style="height:${m.tarde / max * 100}%"></i>` : ""}
+              ${m.a_tiempo ? `<i class="ok" style="height:${m.a_tiempo / max * 100}%"></i>` : ""}
+            </div>
+            <span class="pv-mes-n">${mesCorto(m.mes)}</span>
+          </div>`; }).join("")}</div>
+        <div class="pv-leyenda chica"><span class="pv-ley-i ok"><i></i> A tiempo</span><span class="pv-ley-i tarde"><i></i> Tarde</span></div>
+      </div>
+    </div>
+    <div class="pv-kpis">
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-ok"><i class="ti ti-bus"></i></span><span class="pv-kpi-et">Coches al día</span>
+        <b>${k.pct_coches_al_dia != null ? k.pct_coches_al_dia + " %" : "—"}</b><span class="pv-kpi-sub">${k.coches_al_dia} de ${k.coches_con_dato} con datos</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-venc"><i class="ti ti-alert-octagon"></i></span><span class="pv-kpi-et">Tareas vencidas ahora</span>
+        <b>${fmtNum(k.tareas_vencidas)}</b><span class="pv-kpi-sub">en toda la flota</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-pronto"><i class="ti ti-clock-exclamation"></i></span><span class="pv-kpi-et">Atraso promedio</span>
+        <b>${k.atraso_prom ? pvKm(k.atraso_prom) + " km" : "—"}</b><span class="pv-kpi-sub">cuando se hace tarde</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-azul"><i class="ti ti-calendar-check"></i></span><span class="pv-kpi-et">Turnos cumplidos</span>
+        <b>${k.pct_turnos != null ? k.pct_turnos + " %" : "—"}</b><span class="pv-kpi-sub">${tc.cumplido || 0} cumplido${tc.cumplido === 1 ? "" : "s"} · ${tc.ausente || 0} no vino · ${tc.pendiente || 0} sin registrar (90 días)</span></div>
+    </div>
+    <div class="pv-cu-grid">
+      <div class="pv-card">
+        <div class="pv-card-cab"><h3>Coche por coche</h3><span>Primero los que necesitan atención</span></div>
+        <div class="pv-tabla" role="table">
+          <div class="pv-tr pv-th" role="row"><span>Coche</span><span>Estado</span><span>Tareas al día</span><span class="num">Vencidas</span><span class="num">A tiempo</span><span class="num">Atraso prom.</span></div>
+          ${coches.map(c => {
+            const cu = c.cumplimiento || {};
+            const pct = c.n_tareas ? Math.round(c.al_dia * 100 / c.n_tareas) : 0;
+            return `<div class="pv-tr" role="row" onclick="pvAbrirCoche(${c.vehiculo_id}, true)" tabindex="0">
+              <span class="pv-td-coche"><b>${pvEsc(c.n_interno || "—")}</b><small>${pvEsc(c.patente)} · ${pvEsc(c.plan_nombre || "")}</small></span>
+              <span>${pvPill(c.estado, "mini")}</span>
+              <span class="pv-td-bar">${pvBarra(pct, pct >= 100 ? "ok" : c.vencidas ? "vencido" : "pronto")}<small>${c.al_dia}/${c.n_tareas}</small></span>
+              <span class="num ${c.vencidas ? "tx-venc" : ""}">${c.vencidas || "—"}</span>
+              <span class="num">${cu.pct != null ? cu.pct + " %" : "—"}</span>
+              <span class="num">${cu.atraso_prom ? pvKm(cu.atraso_prom) + " km" : "—"}</span>
+            </div>`; }).join("")}
+        </div>
+        ${d.coches.length > 15 ? `<button class="pv-link pv-ver-todos" onclick="pv.cuTodos=!pv.cuTodos;pvCuPintar()">${pv.cuTodos ? "Ver menos" : `Ver los ${d.coches.length} coches`}</button>` : ""}
+      </div>
+      <div class="pv-cu-lado">
+        <div class="pv-card">
+          <div class="pv-card-cab"><h3>Por plan</h3><span>Coches al día y a tiempo</span></div>
+          ${d.planes.map(p => `
+            <div class="pv-plan-cu">
+              <div><b>${pvEsc(p.plan_nombre)}</b><small>${p.coches} coche${p.coches === 1 ? "" : "s"}${p.vencidos ? ` · <span class="tx-venc">${p.vencidos} vencido${p.vencidos === 1 ? "" : "s"}</span>` : ""}${p.sin_dato ? ` · ${p.sin_dato} sin datos` : ""}</small></div>
+              <span class="pv-plan-cu-v">${p.pct_a_tiempo != null ? p.pct_a_tiempo + " %" : "—"}<small>a tiempo</small></span>
+              ${pvBarra(p.coches ? p.al_dia * 100 / p.coches : 0, "ok")}
+            </div>`).join("")}
+        </div>
+        ${d.ultimos_tarde.length ? `
+          <div class="pv-card">
+            <div class="pv-card-cab"><h3>Lo último hecho tarde</h3></div>
+            ${d.ultimos_tarde.map(x => `
+              <div class="pv-tarde" onclick="pvAbrirCoche(${x.vehiculo_id}, true)">
+                <span class="pv-num chico"><b>${pvEsc(x.n_interno || "—")}</b></span>
+                <span><b>${pvEsc(x.tarea)}</b><small>${pvFC(x.fecha)} · a los ${pvKm(x.hecho_a)} km (cada ${pvKm(x.intervalo)})</small></span>
+                <span class="tx-tarde">+${pvKm(x.atraso)}</span>
+              </div>`).join("")}
+          </div>` : ""}
+      </div>
+    </div>`;
+}
+
+// ─── PLANES (la biblioteca) ───
+async function pvPlanes() {
+  const planes = await api("/api/prev/planes");
+  if (!$("#pv-cuerpo") || pv.tab !== "planes") return;
+  if (!Array.isArray(planes)) { $("#pv-cuerpo").innerHTML = pvError("No se pudieron traer los planes"); return; }
+  pv.planes = planes;
+  if (!pv.planSel || !planes.find(p => p.id === pv.planSel)) pv.planSel = (planes.find(p => p.coches.length) || planes[0] || {}).id || null;
+  const acc = $("#pv-acc");
+  if (acc && pvPuede()) acc.innerHTML = `<button class="btn btn-primary" onclick="pvNuevoPlan()"><i class="ti ti-plus"></i> Nuevo plan</button>`;
+  pvPlanesPintar();
+}
+function pvPlanesPintar() {
+  const q = pv.planQ.trim().toLowerCase();
+  const lista = pv.planes.filter(p => !q || (p.nombre || "").toLowerCase().includes(q));
+  $("#pv-cuerpo").innerHTML = `
+    <div class="pv-planes" id="pv-planes">
+      <div class="pv-pl-lista">
+        <label class="rv-buscar" style="max-width:none"><i class="ti ti-search"></i><input value="${pvEsc(pv.planQ)}" placeholder="Buscar plan" oninput="pv.planQ=this.value;pvPlanesPintar();this.focus();this.setSelectionRange(this.value.length,this.value.length)"></label>
+        ${lista.map(p => `
+          <button class="pv-pl ${p.id === pv.planSel ? "on" : ""}" onclick="pv.planSel=${p.id};pvPlanesPintar()">
+            <b>${pvEsc(p.nombre)}</b>
+            <small><span><i class="ti ti-list-check"></i> ${p.tareas.length} tarea${p.tareas.length === 1 ? "" : "s"}</span><span><i class="ti ti-bus"></i> ${p.coches.length} coche${p.coches.length === 1 ? "" : "s"}</span></small>
+          </button>`).join("") || `<div class="pv-sug-vacio">Ningún plan con ese nombre</div>`}
+      </div>
+      <div class="pv-pl-ed" id="pv-pl-ed">${pvPlanEditor(pv.planes.find(p => p.id === pv.planSel))}</div>
+    </div>`;
+}
+function pvPlanEditor(p) {
+  if (!p) return `<div class="pv-dia-card vacio"><i class="ti ti-clipboard-list"></i><span>Elegí un plan</span></div>`;
+  const puede = pvPuede();
+  const grupos = {};
+  p.tareas.forEach(t => (grupos[t.intervalo_km] = grupos[t.intervalo_km] || []).push(t));
+  const claves = Object.keys(grupos).map(Number).sort((a, b) => a - b);
+  const ro = puede ? "" : "readonly";
+  return `
+    <div class="pv-card pv-pl-card">
+      <div class="pv-pl-cab">
+        <div class="pv-pl-tit">
+          <input class="pv-pl-nom" value="${pvEsc(p.nombre)}" ${ro} onchange="pvPlanCampo(${p.id}, 'nombre', this.value)" aria-label="Nombre del plan">
+          <input class="pv-pl-desc" value="${pvEsc(p.descripcion || "")}" ${ro} placeholder="${puede ? "Descripción (motor, notas…)" : ""}" onchange="pvPlanCampo(${p.id}, 'descripcion', this.value)" aria-label="Descripción">
+        </div>
+        ${puede ? `<div class="pv-pl-btns">
+          <button class="btn btn-ghost btn-sm" onclick="pvDuplicarPlan(${p.id})"><i class="ti ti-copy"></i> Duplicar</button>
+          ${!p.coches.length ? `<button class="btn btn-ghost btn-sm" onclick="pvBorrarPlan(${p.id})"><i class="ti ti-trash"></i> Borrar</button>` : ""}
+        </div>` : ""}
+      </div>
+      <p class="pv-nota"><i class="ti ti-info-circle"></i> Cambiar "cada cuánto" acá cambia para todos los coches del plan (menos los que tienen uno propio). Para un coche solo, se cambia desde su ficha.</p>
+      ${claves.map(k => `
+        <div class="pv-pl-g">
+          <div class="pv-pl-gcab"><b>Cada ${pvKm(k)} km</b><span>${grupos[k].length} tarea${grupos[k].length === 1 ? "" : "s"}</span></div>
+          ${grupos[k].map(t => `
+            <div class="pv-pl-t" id="pv-plt-${t.id}">
+              <input class="pv-pl-tn" value="${pvEsc(t.tarea)}" ${ro} onchange="pvTareaCampo(${t.id}, 'tarea', this.value)" aria-label="Tarea">
+              <input class="pv-pl-tc" value="${pvEsc(t.categoria || "")}" ${ro} placeholder="Categoría" onchange="pvTareaCampo(${t.id}, 'categoria', this.value)" aria-label="Categoría">
+              <label class="pv-pl-tk"><input inputmode="numeric" value="${fmtNum(t.intervalo_km)}" ${ro} onchange="pvTareaCampo(${t.id}, 'intervalo_km', this.value)" aria-label="Cada cuántos km"><span>km</span></label>
+              <span class="pv-pl-ti">${t.registros ? `<span title="Veces registrada">${t.registros} reg.</span>` : ""}${t.coches_propios ? `<span title="Coches con su propio cada cuánto">${t.coches_propios} propio${t.coches_propios === 1 ? "" : "s"}</span>` : ""}</span>
+              ${puede ? `<button class="icon-btn" onclick="pvBorrarTarea(${t.id}, ${t.registros})" title="${t.registros ? "Tiene historia: no se puede borrar" : "Borrar tarea"}" aria-label="Borrar tarea" ${t.registros ? "disabled" : ""}><i class="ti ti-trash"></i></button>` : "<span></span>"}
+            </div>`).join("")}
+        </div>`).join("") || `<div class="pv-dia-vacio">Este plan no tiene tareas todavía</div>`}
+      ${puede ? `
+        <div class="pv-pl-nueva">
+          <input id="pv-nt-n" placeholder="Nueva tarea (ej: Cambio de correa)" onkeydown="if(event.key==='Enter')pvAgregarTarea(${p.id})">
+          <input id="pv-nt-c" placeholder="Categoría" onkeydown="if(event.key==='Enter')pvAgregarTarea(${p.id})">
+          <label class="pv-pl-tk"><input id="pv-nt-k" inputmode="numeric" placeholder="15.000" onkeydown="if(event.key==='Enter')pvAgregarTarea(${p.id})"><span>km</span></label>
+          <button class="btn btn-primary btn-sm" onclick="pvAgregarTarea(${p.id})"><i class="ti ti-plus"></i> Agregar</button>
+        </div>` : ""}
+      <div class="pv-pl-coches">
+        <div class="pv-pl-gcab"><b>Coches con este plan</b><span>${p.coches.length}</span>
+          ${puede ? `<button class="btn btn-ghost btn-sm" onclick="pvAsignarCoches(${p.id})"><i class="ti ti-bus"></i> Asignar coches</button>` : ""}</div>
+        <div class="pv-pl-chips">${p.coches.map(c => `<button class="pv-pl-chip ${c.activo ? "" : "inactivo"}" onclick="pvAbrirCoche(${c.id}, true)" title="${pvEsc(c.patente)} · ${pvEsc(c.marca)} ${pvEsc(c.modelo)}">${pvEsc(c.n_interno || c.patente)}</button>`).join("") || `<span class="muted">Ninguno</span>`}</div>
+      </div>
+    </div>`;
+}
+async function pvPlanCampo(pid, campo, valor) {
+  const r = await pvPost(`/api/prev/planes/${pid}`, { [campo]: valor }, "PATCH");
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); pvPlanes(); return; }
+  toast("Guardado", "success");
+  const p = pv.planes.find(x => x.id === pid); if (p) p[campo] = valor;
+}
+async function pvTareaCampo(tid, campo, valor) {
+  const el = document.getElementById(`pv-plt-${tid}`);
+  const r = await pvPost(`/api/prev/tareas/${tid}`, { [campo]: campo === "intervalo_km" ? pvNum(valor) : valor }, "PATCH");
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); pvPlanes(); return; }
+  toast(campo === "intervalo_km" ? `Ahora cada ${fmtNum(pvNum(valor))} km` : "Guardado", "success");
+  if (campo === "intervalo_km") pvPlanes();
+  else el?.classList.add("recien");
+}
+async function pvAgregarTarea(pid) {
+  const n = $("#pv-nt-n").value.trim(), k = pvNum($("#pv-nt-k").value);
+  if (!n || !k) { toast("Poné la tarea y cada cuántos km", "error"); return; }
+  const r = await pvPost(`/api/prev/planes/${pid}/tareas`, { tarea: n, intervalo_km: k, categoria: $("#pv-nt-c").value });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
+  toast("Tarea agregada", "success");
+  await pvPlanes();
+  $("#pv-nt-n")?.focus();
+}
+async function pvBorrarTarea(tid, regs) {
+  if (regs) { toast("Tiene registros hechos: no se puede borrar sin perder la historia", "error"); return; }
+  if (!confirm("¿Borrar esta tarea del plan?")) return;
+  const r = await api(`/api/prev/tareas/${tid}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo borrar", "error"); return; }
+  toast("Tarea borrada");
+  pvPlanes();
+}
+function pvNuevoPlan(copiar) {
+  const base = copiar ? pv.planes.find(p => p.id === copiar) : null;
+  rvModal({
+    titulo: base ? "Duplicar plan" : "Nuevo plan", icono: base ? "copy" : "clipboard-plus", ancho: 520,
+    sub: base ? `Se copian las ${base.tareas.length} tareas de <b>${pvEsc(base.nombre)}</b>. Después ajustás lo que cambie.` : "Un plan por motor o modelo. Después le agregás las tareas.",
+    cuerpo: `
+      <label class="rv-f"><span>Nombre</span><input id="pv-np-n" value="${base ? pvEsc(base.nombre + " (copia)") : ""}" placeholder="ej: Scania K400 / DC13" autofocus></label>
+      <label class="rv-f" style="margin-top:10px"><span>Descripción (opcional)</span><input id="pv-np-d" value="${base ? pvEsc(base.descripcion || "") : ""}"></label>
+      ${base ? "" : `<label class="rv-f" style="margin-top:10px"><span>Copiar las tareas de (opcional)</span><select id="pv-np-c"><option value="">Empezar vacío</option>${pv.planes.map(p => `<option value="${p.id}">${pvEsc(p.nombre)} (${p.tareas.length})</option>`).join("")}</select></label>`}`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvNuevoPlanGuardar(this, ${copiar || 0})"><i class="ti ti-check"></i> Crear</button>`,
+  });
+}
+const pvDuplicarPlan = pid => pvNuevoPlan(pid);
+async function pvNuevoPlanGuardar(btn, copiar) {
+  const nombre = $("#pv-np-n").value.trim();
+  if (!nombre) { toast("Poné un nombre", "error"); return; }
+  const r = await pvPost("/api/prev/planes", { nombre, descripcion: $("#pv-np-d").value, copiar_de: copiar || ($("#pv-np-c") ? $("#pv-np-c").value : "") || null });
+  if (!r.ok) { toast(r.msg || "No se pudo crear", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Plan creado", "success");
+  pv.planSel = r.id;
+  pvPlanes();
+}
+async function pvBorrarPlan(pid) {
+  const p = pv.planes.find(x => x.id === pid);
+  if (!confirm(`¿Borrar el plan "${p ? p.nombre : ""}"?`)) return;
+  const r = await api(`/api/prev/planes/${pid}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo borrar", "error"); return; }
+  toast("Plan borrado");
+  pv.planSel = null;
+  pvPlanes();
+}
+async function pvAsignarCoches(pid) {
+  const p = pv.planes.find(x => x.id === pid);
+  const vs = (await pvVehiculos()).filter(v => v.activo !== 0);
+  const planDe = {};
+  pv.planes.forEach(pl => pl.coches.forEach(c => planDe[c.id] = pl));
+  rvModal({
+    titulo: "Asignar coches al plan", icono: "bus", ancho: 620,
+    sub: `<b>${pvEsc(p.nombre)}</b>. Los que ya tienen otro plan se pasan a este.`,
+    cuerpo: `
+      <label class="rv-buscar" style="max-width:none"><i class="ti ti-search"></i><input id="pv-ac-q" placeholder="N°, patente, marca o modelo" oninput="pvAcFiltrar()" autofocus></label>
+      <div class="pv-ac-lista">${vs.map(v => {
+        const otro = planDe[v.id];
+        return `<label class="pv-ac" data-t="${pvEsc([v.n_interno, v.patente, v.marca, v.modelo].join(" ").toLowerCase())}">
+          <input type="checkbox" value="${v.id}" ${otro && otro.id === pid ? "checked disabled" : ""}>
+          <span class="pv-ck-box"><i class="ti ti-check"></i></span>
+          <span class="pv-num chico"><b>${pvEsc(v.n_interno || "—")}</b></span>
+          <span class="pv-ac-info"><b>${pvEsc(v.patente)} · ${pvEsc(v.marca || "")} ${pvEsc(v.modelo || "")}</b><small>${otro ? (otro.id === pid ? "ya tiene este plan" : "ahora: " + pvEsc(otro.nombre)) : "sin plan"}</small></span>
+        </label>`; }).join("")}</div>`,
+    pie: `<span class="rv-pie-info" id="pv-ac-n"></span>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvAsignarGuardar(this, ${pid})"><i class="ti ti-check"></i> Asignar</button>`,
+  });
+  document.querySelector(".pv-ac-lista").addEventListener("change", () => {
+    const n = document.querySelectorAll(".pv-ac-lista input:checked:not(:disabled)").length;
+    $("#pv-ac-n").textContent = n ? `${n} coche${n === 1 ? "" : "s"} para asignar` : "";
+  });
+}
+function pvAcFiltrar() {
+  const q = $("#pv-ac-q").value.trim().toLowerCase();
+  document.querySelectorAll(".pv-ac").forEach(l => l.hidden = q && !l.dataset.t.includes(q));
+}
+async function pvAsignarGuardar(btn, pid) {
+  const ids = [...document.querySelectorAll(".pv-ac-lista input:checked:not(:disabled)")].map(c => Number(c.value));
+  if (!ids.length) { toast("Marcá los coches", "error"); return; }
+  const r = await pvPost(`/api/prev/planes/${pid}/asignar`, { vehiculos: ids });
+  if (!r.ok) { toast(r.msg || "No se pudo asignar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast(`${r.asignados} coche${r.asignados === 1 ? "" : "s"} con este plan`, "success");
+  pvPlanes();
+}
+
+// ─── En la OT: qué ítem es del plan ───
+// Al completar un ítem conectado a una tarea del plan, se carga solo en el
+// preventivo con el km de la OT. Si no se dijo nada, el sistema reconoce los
+// trabajos comunes ("cambio de aceite y filtro" = Aceite de motor + Filtro de
+// aceite de motor).
+async function pvOtCargar(ot) {
+  if (!ot || window.USUARIO_ROL === "compras" || !document.getElementById("pv-ot-box")) return;
+  const d = await api(`/api/prev/ot/${ot.id}`);
+  if (!d || !d.items) return;
+  window._pvOt = { ot, d };
+  pvOtPintar();
+}
+function pvOtRefrescar() { if (window._pvOt && document.getElementById("pv-ot-box")) pvOtCargar(window._pvOt.ot); }
+function pvOtPintar() {
+  const { ot, d } = window._pvOt;
+  const box = document.getElementById("pv-ot-box");
+  if (!box) return;
+  const nom = Object.fromEntries(d.tareas.map(t => [t.id, t.tarea]));
+  const puede = pvPuede();
+  if (!d.plan) {
+    box.innerHTML = "";
+    d.items.forEach(it => { const c = document.getElementById(`pv-it-${it.item_id}`); if (c) c.innerHTML = ""; });
+    return;
+  }
+  const enOt = new Set(d.items.flatMap(it => it.vinculadas.length ? it.vinculadas : it.sugeridas));
+  const pendientes = d.tareas.filter(t => ["vencido", "pronto"].includes(t.estado) && !enOt.has(t.id));
+  box.innerHTML = `
+    <div class="pv-ot ${pendientes.length ? "con" : ""}">
+      <i class="ti ti-calendar-check"></i>
+      <div class="pv-ot-txt"><b>Plan ${pvEsc(d.plan.nombre)}</b>
+        <span>${d.turno ? `Entró por el turno del ${pvF(d.turno.fecha)}. ` : ""}${pendientes.length
+          ? `Le ${pendientes.length === 1 ? "toca" : "tocan"} ${pendientes.length} tarea${pendientes.length === 1 ? "" : "s"} que no ${pendientes.length === 1 ? "está" : "están"} en la OT: ${pendientes.slice(0, 4).map(t => pvEsc(t.tarea)).join(", ")}${pendientes.length > 4 ? "…" : ""}`
+          : "Lo que es del plan se carga solo en el preventivo al completarlo."}</span></div>
+      ${pendientes.length && puede && ot.estado !== "cerrada" ? `<button class="btn btn-ghost btn-sm" onclick="pvOtAgregar()"><i class="ti ti-plus"></i> Agregar a la OT</button>` : ""}
+    </div>`;
+  d.items.forEach(it => {
+    const c = document.getElementById(`pv-it-${it.item_id}`);
+    if (!c) return;
+    const editar = puede ? `onclick="pvOtElegir(${it.item_id})" role="button" tabindex="0"` : "";
+    // Si el ítem se llama igual que la tarea (vino del turno), no se repite el nombre
+    const desc = (c.dataset.desc || "").trim().toLowerCase();
+    const nombres = ids => ids.length === 1 && (nom[ids[0]] || "").trim().toLowerCase() === desc ? "" : ": " + ids.map(x => pvEsc(nom[x] || "")).join(" · ");
+    if (it.cargadas.length) c.innerHTML = `<span class="pv-oc ok" ${editar}><i class="ti ti-circle-check"></i>En el preventivo${nombres(it.cargadas)}</span>`;
+    else if (it.vinculadas.length) c.innerHTML = `<span class="pv-oc vinc" ${editar}><i class="ti ti-link"></i>Del plan${nombres(it.vinculadas)}<em>se carga al completarlo</em></span>`;
+    else if (it.sugeridas.length && it.tipo !== "correctivo") c.innerHTML = `<span class="pv-oc sug" ${editar}><i class="ti ti-sparkles"></i>Del plan: ${it.sugeridas.map(x => pvEsc(nom[x] || "")).join(" · ")}<em>detectado</em></span>`;
+    else if (it.no_es) c.innerHTML = puede ? `<span class="pv-oc no" ${editar}>No es del plan</span>` : "";
+    else c.innerHTML = puede && it.tipo !== "correctivo" ? `<span class="pv-oc mas" ${editar}><i class="ti ti-plus"></i>¿Es del plan?</span>` : "";
+  });
+}
+function pvOtElegir(itemId) {
+  const { d } = window._pvOt;
+  const it = d.items.find(x => x.item_id === itemId);
+  const marcadas = new Set(it.vinculadas.length ? it.vinculadas : it.sugeridas);
+  const tareas = d.tareas.map(t => ({ ...t, tarea_id: t.id }))
+    .sort((a, b) => (marcadas.has(b.id) - marcadas.has(a.id)) || ((a.km_restantes ?? 1e9) - (b.km_restantes ?? 1e9)));
+  const desc = document.querySelector(`#pv-it-${itemId}`)?.dataset.desc || "";
+  rvModal({
+    titulo: "¿Qué tareas del plan hace?", icono: "link", ancho: 600,
+    sub: `${desc ? `«${pvEsc(desc)}» · ` : ""}Al completarlo se carga en el preventivo con el km de la OT.`,
+    cuerpo: `<div class="pv-checks">${tareas.map(t => pvCheckTarea(t, marcadas.has(t.id))).join("")}</div>`,
+    pie: `<button class="btn btn-ghost" style="margin-right:auto" onclick="pvOtVincular(this, ${itemId}, true)">No es del plan</button>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="pvOtVincular(this, ${itemId})"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+}
+async function pvOtVincular(btn, itemId, ninguna) {
+  const m = btn.closest(".rv-modal");
+  const ids = ninguna ? [] : [...m.querySelectorAll(".pv-checks input:checked")].map(c => Number(c.value));
+  const r = await pvPost(`/api/prev/ot_item/${itemId}`, { tareas: ids });
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  m.closest(".modal-overlay").remove();
+  toast(ninguna ? "Marcado: no es del plan" : "Conectado al plan", "success");
+  pvOtRefrescar();
+}
+async function pvOtAgregar() {
+  const { ot, d } = window._pvOt;
+  const enOt = new Set(d.items.flatMap(it => it.vinculadas.length ? it.vinculadas : it.sugeridas));
+  const pend = d.tareas.filter(t => ["vencido", "pronto"].includes(t.estado) && !enOt.has(t.id));
+  const r = await pvPost(`/api/prev/ot/${ot.id}/agregar`, { tareas: pend.map(t => t.id) });
+  if (!r.ok) { toast(r.msg || "No se pudo agregar", "error"); return; }
+  toast(`${r.agregadas} tarea${r.agregadas === 1 ? "" : "s"} agregada${r.agregadas === 1 ? "" : "s"} a la OT`, "success");
+  document.getElementById("modal-ot-detalle")?.remove();
+  abrirOT(ot.id);
 }
