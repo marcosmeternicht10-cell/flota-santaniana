@@ -465,6 +465,9 @@ def _enriquecer(r):
     minimo = float(d.get("stock_minimo") or 0)
     costo = float(d.get("costo_unitario") or 0)
     d["valor_stock"] = round(stock * costo)
+    # Productos por envase (aceite en bidón de 20 L…): cuánto hay en total
+    contenido = float(d.get("contenido") or 0)
+    d["contenido_total"] = round(stock * contenido, 2) if contenido else 0
     # Estado de stock para semáforo en la UI
     if stock <= 0:
         d["estado_stock"] = "sin_stock"

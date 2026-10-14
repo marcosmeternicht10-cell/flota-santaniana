@@ -1981,7 +1981,10 @@ def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None):
         SELECT o.*, v.patente, v.marca, v.modelo, v.n_interno, v.horario_salida,
             (SELECT COUNT(*) FROM ot_items WHERE ot_id=o.id) AS total_items,
             (SELECT COUNT(*) FROM ot_items WHERE ot_id=o.id AND estado='completado') AS items_completados,
-            (SELECT SUM(costo) FROM ot_items WHERE ot_id=o.id) AS costo_total
+            -- lo de los ítems más lo que se sacó del depósito para esta OT
+            COALESCE((SELECT SUM(costo) FROM ot_items WHERE ot_id=o.id), 0)
+              + COALESCE((SELECT SUM(m.cantidad * m.costo_unitario) FROM repuestos_movimientos m
+                          WHERE m.ot_id=o.id AND m.tipo='salida'), 0) AS costo_total
         FROM ordenes_trabajo o
         JOIN vehiculos v ON v.id = o.vehiculo_id
         WHERE 1=1

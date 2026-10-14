@@ -137,6 +137,11 @@ def api_crear_repuesto():
     })
     if ok:
         multi.sincronizar(res)
+        try:
+            import ot_inventario
+            ot_inventario.guardar_contenido(res, d)
+        except Exception:
+            pass
         _auditar(f"Creó el repuesto '{codigo}'", f"{descripcion}", f"repuesto:{res}")
         return jsonify({"ok": True, "id": res})
     return jsonify({"ok": False, "msg": res}), 400
@@ -148,7 +153,14 @@ def api_actualizar_repuesto(rid):
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
     d = request.json or {}
     ok, msg = rdb.actualizar_repuesto(rid, **d)
+    if not ok and msg == "Sin campos para actualizar." and any(k in d for k in ("contenido", "contenido_unidad", "envase")):
+        ok, msg = True, "Repuesto actualizado."
     if ok:
+        try:
+            import ot_inventario
+            ot_inventario.guardar_contenido(rid, d)
+        except Exception:
+            pass
         multi.sincronizar(rid)
         _auditar(f"Modificó el repuesto (ID {rid})", referencia=f"repuesto:{rid}")
     return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)

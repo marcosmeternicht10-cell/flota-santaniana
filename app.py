@@ -80,6 +80,13 @@ from repuestos_routes import bp_repuestos, init_repuestos_module
 init_repuestos_module(app)
 app.register_blueprint(bp_repuestos)
 
+# ─── La OT conectada con el depósito ─────────────────────────────────────────
+# Desde la OT se saca del inventario lo que se usa (y se devuelve si sobra).
+# También los productos por envase (aceite en bidón, tambor…) con sus litros.
+from ot_inventario import bp_ot_inv, init_ot_inventario
+init_ot_inventario()
+app.register_blueprint(bp_ot_inv)
+
 # ─── Módulo de Carga de Historial Retroactivo ────────────────────────────────
 # El historial en papel de cada bus se tipea acá con fecha retroactiva.
 from historial_carga import bp_historial, init_historial_module
