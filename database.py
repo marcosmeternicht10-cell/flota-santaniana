@@ -904,9 +904,10 @@ def _tendencia(puntos):
     return m, b
 
 
-def lectura_confiable(lecturas, piso=0):
+def lectura_confiable(lecturas, piso=0, referencia=0):
     """De [(fecha, km)], la lectura más nueva en la que se puede confiar.
-    Devuelve (km, fecha) o None."""
+    referencia: el km que ya se sabe por otro lado (OT, corrección). Con pocas
+    lecturas sirve para descartar un dígito de más. Devuelve (km, fecha) o None."""
     pts = []
     for f, k in lecturas:
         d = _ordinal(f)
@@ -928,7 +929,10 @@ def lectura_confiable(lecturas, piso=0):
             for d, k, f in reversed(pts):
                 if abs(k - (m * d + b)) <= tol:
                     return k, f
-    # Pocas lecturas: la más nueva que no choca con las anteriores
+    # Pocas lecturas: la más nueva que no choca con las anteriores (las que
+    # se disparan contra lo que ya se sabía ni se miran)
+    if referencia:
+        pts = [x for x in pts if x[1] <= float(referencia) + 60000]
     for i in range(len(pts) - 1, -1, -1):
         d, k, f = pts[i]
         ok = True
@@ -992,15 +996,15 @@ def _lecturas_combustible(conn, vids=None, desde=None):
     return salida
 
 
-def _km_comb_de(lecturas, verif_ot, verif_fecha, km_verificado):
+def _km_comb_de(lecturas, verif_ot, verif_fecha, km_verificado, km_otros=0):
     """El km que aportan las cargas: si se verificó en una OT, solo las de ese
     día en adelante y no por debajo de lo verificado."""
     if int(verif_ot or 0) > 0:
         desde = str(verif_fecha or "")[:10]
         lecturas = [(f, k) for f, k in (lecturas or []) if str(f)[:10] >= desde]
-        res = lectura_confiable(lecturas, piso=km_verificado or 0)
+        res = lectura_confiable(lecturas, piso=km_verificado or 0, referencia=km_verificado or 0)
     else:
-        res = lectura_confiable(lecturas or [])
+        res = lectura_confiable(lecturas or [], referencia=km_otros or 0)
     return res[0] if res else 0
 
 
@@ -1034,7 +1038,8 @@ def km_actual_flota(conn=None, vids=None, solo_activos=False):
     lect = _lecturas_combustible(conn, vids)
     salida = {}
     for r in filas:
-        comb = _km_comb_de(lect.get(r["id"]), r["verif_ot"], r["verif_fecha"], r["km_manual"])
+        otros = max(float(r["km_servicios"] or 0), float(r["km_ots"] or 0), float(r["km_manual"] or 0))
+        comb = _km_comb_de(lect.get(r["id"]), r["verif_ot"], r["verif_fecha"], r["km_manual"], otros)
         salida[r["id"]] = _km_resuelto(r["km_servicios"], r["km_ots"], r["km_manual"],
                                        r["verif_ot"], r["km_ots_despues"], comb)
     if propia:
@@ -1078,6 +1083,12 @@ def verificar_km_en_ot(ot_id, km, usuario=""):
         conn.commit()
     finally:
         conn.close()
+    # Lo que esta OT cargó en el preventivo queda con el km verificado
+    try:
+        import plan_preventivo
+        plan_preventivo.al_verificar_km(ot_id, km)
+    except Exception:
+        pass
     return True, {"vehiculo_id": vid, "km_actual": km_actual_vehiculo(vid)}
 
 
@@ -1116,14 +1127,9 @@ def guardar_km_manual(vehiculo_id, km):
 # ── Mantenimientos realizados ────────────────────────────────────────────
 
 def registrar_mantenimiento(vehiculo_id, tarea_plan_id, fecha, km, costo=0, observaciones=""):
-    conn = get_connection()
-    conn.execute("""
-        INSERT INTO mantenimientos_realizados
-            (vehiculo_id, tarea_plan_id, fecha, km, costo, observaciones)
-        VALUES (?,?,?,?,?,?)
-    """, (vehiculo_id, tarea_plan_id, fecha, km, costo, observaciones))
-    conn.commit()
-    conn.close()
+    import plan_preventivo
+    plan_preventivo.registrar(vehiculo_id, [{"tarea_id": tarea_plan_id, "km": km, "fecha": fecha,
+                                             "costo": costo, "observaciones": observaciones}])
 
 
 def obtener_historial_mantenimiento(vehiculo_id, limite=None):
@@ -1152,107 +1158,14 @@ def eliminar_mantenimiento(mantenimiento_id):
 
 def estado_mantenimiento(vehiculo_id):
     """
-    Calcula el estado de cada tarea del plan para un vehículo:
-      - último km en que se hizo (o None si nunca se hizo)
-      - próximo km de vencimiento
-      - km restantes (puede ser negativo si está vencido)
-      - estado: 'ok' | 'pronto' | 'vencido' | 'nunca'
-
-    Devuelve lista de dicts ordenada: vencidos primero, después por km restantes.
+    El estado de cada tarea del plan para un vehículo (último hecho, próximo
+    km, km restantes, estado ok/pronto/vencido/nunca). Lo calcula el plan
+    preventivo (que además tiene en cuenta el "cada cuánto" propio del coche);
+    acá se mantienen las claves de siempre para lo que ya lo usaba.
+    None si el coche no tiene plan.
     """
-    conn = get_connection()
-    plan_row = conn.execute(
-        "SELECT plan_id FROM vehiculo_plan WHERE vehiculo_id=?",
-        (vehiculo_id,)
-    ).fetchone()
-    if not plan_row:
-        conn.close()
-        return None  # vehículo sin plan asignado
-
-    plan_id = plan_row["plan_id"]
-    km_actual = km_actual_vehiculo(vehiculo_id)
-    UMBRAL_PRONTO = 1000  # km
-
-    # Para cada tarea, encontrar el último mantenimiento hecho
-    tareas = conn.execute("""
-        SELECT t.id, t.tarea, t.intervalo_km, t.categoria,
-               MAX(m.km) as ultimo_km,
-               (SELECT m2.fecha FROM mantenimientos_realizados m2
-                WHERE m2.tarea_plan_id = t.id AND m2.vehiculo_id = ?
-                ORDER BY m2.km DESC, m2.fecha DESC LIMIT 1) as ultima_fecha
-        FROM tareas_plan t
-        LEFT JOIN mantenimientos_realizados m
-            ON m.tarea_plan_id = t.id AND m.vehiculo_id = ?
-        WHERE t.plan_id = ?
-        GROUP BY t.id
-        ORDER BY t.intervalo_km, t.tarea
-    """, (vehiculo_id, vehiculo_id, plan_id)).fetchall()
-    conn.close()
-
-    resultado = []
-    for t in tareas:
-        intervalo = t["intervalo_km"]
-        ultimo_km = t["ultimo_km"]
-        if ultimo_km is None:
-            # Nunca se hizo → vence al cumplir el intervalo desde 0 (km_inicial)
-            proximo_km = intervalo
-            restantes = proximo_km - km_actual
-            # % de uso (cuánto se usó el intervalo desde el inicio)
-            porcentaje = (km_actual / intervalo) * 100 if intervalo else 0
-            # Si nunca se hizo, el estado depende del porcentaje
-            if porcentaje >= 100:
-                estado = "vencido"
-            elif porcentaje >= 85:
-                estado = "pronto"
-            elif porcentaje < 50:
-                estado = "ok"
-            else:
-                estado = "ok"  # entre 50% y 85% sigue OK, no es urgente
-        else:
-            proximo_km = ultimo_km + intervalo
-            restantes = proximo_km - km_actual
-            # % de uso del intervalo actual
-            km_recorridos_desde_ultimo = km_actual - ultimo_km
-            porcentaje = (km_recorridos_desde_ultimo / intervalo) * 100 if intervalo else 0
-            if restantes < 0:
-                estado = "vencido"
-            elif restantes <= UMBRAL_PRONTO:
-                estado = "pronto"
-            else:
-                estado = "ok"
-
-        # Estado gradual (mismo esquema que neumáticos)
-        if porcentaje >= 100:
-            estado_grad = "vencido"
-        elif porcentaje >= 85:
-            estado_grad = "atencion"
-        elif porcentaje >= 70:
-            estado_grad = "regular"
-        elif porcentaje >= 50:
-            estado_grad = "bueno"
-        else:
-            estado_grad = "optimo"
-
-        resultado.append({
-            "tarea_id": t["id"],
-            "tarea": t["tarea"],
-            "categoria": t["categoria"],
-            "intervalo_km": intervalo,
-            "ultimo_km": ultimo_km,
-            "ultima_fecha": t["ultima_fecha"],
-            "proximo_km": proximo_km,
-            "km_restantes": restantes,
-            "estado": estado,
-            "estado_grad": estado_grad,
-            "porcentaje": round(porcentaje, 1),
-            "porcentaje_visual": min(100, max(0, round(porcentaje, 1))),
-            "km_actual": km_actual,
-        })
-
-    # Ordenar: vencidos primero, luego prontos, luego ok (por restantes asc)
-    orden = {"vencido": 0, "pronto": 1, "ok": 2}
-    resultado.sort(key=lambda x: (orden.get(x["estado"], 3), x["km_restantes"]))
-    return resultado
+    import plan_preventivo
+    return plan_preventivo.estado_legacy(vehiculo_id)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2234,8 +2147,22 @@ def actualizar_item_ot(item_id, **kwargs):
 
     conn.close()
 
+    # Si es una tarea del plan (un cambio de aceite, por ejemplo) y quedó
+    # completada, se carga sola en el preventivo; si se des-completa, se saca.
+    if "estado" in kwargs or "tareas_plan" in kwargs or "descripcion" in kwargs:
+        try:
+            import plan_preventivo
+            plan_preventivo.sincronizar_item(item_id)
+        except Exception:
+            pass
+
 
 def eliminar_item_ot(item_id):
+    try:
+        import plan_preventivo
+        plan_preventivo.al_borrar_items([int(item_id)])
+    except Exception:
+        pass
     conn = get_connection()
     # El correctivo que se generó solo al completar este ítem se va con él
     conn.execute("DELETE FROM correctivos WHERE observaciones LIKE ?", (f"%-item{int(item_id)}]%",))
@@ -2253,6 +2180,14 @@ def actualizar_ot(ot_id, **kwargs):
     conn.execute(f"UPDATE ordenes_trabajo SET {campos} WHERE id=?", valores)
     conn.commit()
     conn.close()
+    try:
+        import plan_preventivo
+        if kwargs.get("estado") == "cerrada":
+            plan_preventivo.al_cerrar_ot(ot_id)
+        elif kwargs.get("estado") in ("abierta", "en_proceso"):
+            plan_preventivo.al_reabrir_ot(ot_id)
+    except Exception:
+        pass
 
 
 def cerrar_ot(ot_id, fecha_cierre=None):
@@ -2266,6 +2201,12 @@ def cerrar_ot(ot_id, fecha_cierre=None):
     conn.execute("DELETE FROM ot_fotos WHERE ot_id=?", (ot_id,))
     conn.commit()
     conn.close()
+    # Si el coche había entrado por un turno del preventivo, queda cumplido
+    try:
+        import plan_preventivo
+        plan_preventivo.al_cerrar_ot(ot_id)
+    except Exception:
+        pass
 
 
 def eliminar_ot(ot_id):
@@ -2275,7 +2216,13 @@ def eliminar_ot(ot_id):
     que se generaron solos al completar sus ítems correctivos (si no, quedaban
     fallas sueltas de una OT que ya no existe y seguían contando en los
     reportes). Los movimientos de stock de repuestos no se tocan: lo que salió
-    del depósito salió, aunque se borre la OT."""
+    del depósito salió, aunque se borre la OT. Lo que la OT había cargado en el
+    preventivo se saca (y el turno, si lo tenía, vuelve a quedar agendado)."""
+    try:
+        import plan_preventivo
+        plan_preventivo.al_borrar_ot(ot_id)
+    except Exception:
+        pass
     conn = get_connection()
     conn.execute("DELETE FROM ot_fotos WHERE ot_id=?", (ot_id,))
     try:
@@ -2435,7 +2382,7 @@ def reporte_gerencial(desde, hasta):
     preventivos = conn.execute("""
         SELECT COUNT(*) AS cant, COALESCE(SUM(costo),0) AS costo
         FROM mantenimientos_realizados
-        WHERE fecha BETWEEN ? AND ?
+        WHERE fecha BETWEEN ? AND ? AND COALESCE(origen, 'manual') <> 'inicial'
     """, (desde, hasta)).fetchone()
 
     # Correctivos en el período
