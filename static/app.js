@@ -6461,6 +6461,7 @@ async function renderUsuarios() {
           <thead><tr>
             <th>Usuario</th><th>Nombre</th><th class="center">Rol</th><th>Acceso</th>
             <th class="center" title="Puede eliminar órdenes de trabajo en cualquier fase">Elimina OTs</th>
+            <th class="center" title="Puede corregir el kilometraje del coche desde la OT (Verificar km)">Corrige km</th>
             <th class="center">Estado</th><th>Último acceso</th><th class="td-action"></th>
           </tr></thead>
           <tbody>
@@ -6471,6 +6472,7 @@ async function renderUsuarios() {
                 <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span></td>
                 <td style="font-size:12px">${textoAcceso(u)}</td>
                 <td class="center">${celdaBorraOTs(u)}</td>
+                <td class="center">${celdaEditaKm(u)}</td>
                 <td class="center">${u.activo ? '<span class="badge success">Activo</span>' : '<span class="badge">Inactivo</span>'}</td>
                 <td style="font-size:12px;color:var(--muted)">${u.ultimo_acceso ? u.ultimo_acceso.replace('T',' ') : 'Nunca'}</td>
                 <td class="td-action" style="white-space:nowrap">
@@ -6495,6 +6497,32 @@ function celdaBorraOTs(u) {
   return `<label class="plus-toggle" title="Puede eliminar órdenes de trabajo">
     <input type="checkbox" ${u.borra_ots ? "checked" : ""} onchange="cambiarBorraOTs(${u.id}, this)">
     <span class="plus-switch"></span></label>`;
+}
+// Quién puede corregir el kilometraje (el "Verificar km" de la OT):
+// administración y taller siempre; a compras y auditoría se les habilita con
+// el interruptor. Rige al instante.
+function celdaEditaKm(u) {
+  if (u.rol === "admin" || u.rol === "taller") return '<span style="font-size:12px;color:var(--muted)">Siempre</span>';
+  if (!["compras", "auditor"].includes(u.rol)) return '<span style="color:var(--light)">—</span>';
+  return `<label class="plus-toggle" title="Puede corregir el kilometraje desde la OT">
+    <input type="checkbox" ${u.edita_km ? "checked" : ""} onchange="cambiarEditaKm(${u.id}, this)">
+    <span class="plus-switch"></span></label>`;
+}
+async function cambiarEditaKm(uid, el) {
+  const quiere = el.checked;
+  el.disabled = true;
+  const r = await api(`/api/usuarios/${uid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ edita_km: quiere ? 1 : 0 })
+  });
+  el.disabled = false;
+  if (r && r.ok) {
+    const u = (window._usuarios || []).find(x => x.id === uid);
+    if (u) u.edita_km = quiere ? 1 : 0;
+    toast(quiere ? `${u ? (u.nombre || u.usuario) : "El usuario"} ya puede corregir el km` : "Ya no puede corregir el km", "success");
+  } else {
+    el.checked = !quiere;
+  }
 }
 async function cambiarBorraOTs(uid, el) {
   const quiere = el.checked;
