@@ -56,6 +56,7 @@ GRUPOS_SECCIONES = [
     ]),
     ("Turismo", [
         ("turismo_agenda", "Agenda de servicios"),
+        ("turismo_rendiciones", "Rendiciones de viaje"),
         ("turismo", "Presupuestos"),
     ]),
 ]
@@ -70,7 +71,7 @@ SECCIONES_CORP = {"corp_resumen", "corp_historial", "corp_empresas", "corp_combu
 MODULOS_API = [
     (SECCIONES_CORP,
      ("/api/corp/", "/api/combustible/control", "/api/consumo/")),
-    ({"turismo_agenda", "turismo"},
+    ({"turismo_agenda", "turismo_rendiciones", "turismo"},
      ("/api/turismo",)),
     ({"trafico"},
      ("/api/trafico",)),

@@ -104,6 +104,13 @@ from turismo_agenda import bp_turismo, init_turismo_agenda
 init_turismo_agenda(app)
 app.register_blueprint(bp_turismo)
 
+# ─── Rendiciones de turismo ──────────────────────────────────────────────────
+# El anticipo que se le da al chofer contra los gastos del viaje (combustible,
+# peajes, hotel, DINATRAN...). Lo carga la oficina y lo aprueba administración.
+from turismo_rendiciones import bp_rendiciones, init_rendiciones
+init_rendiciones()
+app.register_blueprint(bp_rendiciones)
+
 # ─── Tráfico nacional ────────────────────────────────────────────────────────
 # Las salidas del día (lo que antes era el Excel del grupo de WhatsApp): se
 # arma acá, el sistema sabe dónde quedó cada coche y sale un PDF único.
