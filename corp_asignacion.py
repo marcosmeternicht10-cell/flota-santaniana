@@ -324,14 +324,6 @@ def _armar(fecha, dia, filas, act, rends):
                          "otros": otros, "tipos_variable": _tipos_variable(cliente),
                          "cuenta": _cuenta(tramos)})
 
-    avisos = _avisos(todos_slots)
-    marcados = {}
-    for a in avisos:
-        for sid in a["ids"]:
-            marcados.setdefault(sid, []).append(a["txt"])
-    for s in todos_slots:
-        s["avisos"] = marcados.get(s["id"], []) if s.get("id") else []
-
     control = _control(fecha, clientes, rends) if rends is not None else None
 
     tramos = [t for c in clientes for t in c["tramos"]]
@@ -345,13 +337,12 @@ def _armar(fecha, dia, filas, act, rends):
         "variables": sum(len(c["variables"]) for c in clientes),
         "choferes": len({s["chofer_usuario"] for s in con_chofer}),
         "coches": len({_coche_norm(s["coche"]) for s in todos_slots if s.get("coche")}),
-        "avisos": len(avisos),
     }
     borrador = bool(dia and (dia["modificado"] or not dia["version"]))
     return {
         "fecha": fecha, "hoy": _hoy(), "nombre_dia": _nombre_dia(fecha), "dia_semana": w,
         "existe": bool(dia), "dia": dia, "borrador": borrador if dia else True,
-        "clientes": clientes, "resumen": resumen, "avisos": avisos, "control": control,
+        "clientes": clientes, "resumen": resumen, "control": control,
     }
 
 
@@ -415,29 +406,6 @@ def _desc_slot(s):
     lado = "" if s["lado"] in ("completo", "variable") else f" ({s['lado']})"
     hora = info_tramo(s["tramo"])["hora"] if s["lado"] != "variable" else (s.get("hora") or "")
     return _con_cliente(s["cliente"], t) + (f" {hora}" if hora else "") + lado
-
-
-def _avisos(slots):
-    """Lo que no cuadra adentro del día: un chofer o un coche en dos tramos que
-    se pisan (la rendición después no lo dejaría cargar)."""
-    out = []
-    for campo, tipo in (("chofer_usuario", "chofer"), ("coche", "coche")):
-        grupos = {}
-        for s in slots:
-            if s.get("id") and s.get(campo) and s.get("rango"):
-                k = _coche_norm(s[campo]) if tipo == "coche" else s[campo]
-                grupos.setdefault(k, []).append(s)
-        for k, lista in grupos.items():
-            for i in range(len(lista)):
-                for j in range(i + 1, len(lista)):
-                    a, b = lista[i], lista[j]
-                    if a["cliente"] == b["cliente"] and a["tramo"] == b["tramo"]:
-                        continue              # entrante y saliente del mismo tramo
-                    if C._se_pisan(a["rango"], b["rango"]):
-                        quien = nombre_lindo(a["chofer_nombre"] or a["chofer_usuario"]) if tipo == "chofer" else f"El coche {a['coche']}"
-                        out.append({"tipo": tipo, "ids": [a["id"], b["id"]],
-                                    "txt": f"{quien} está en dos tramos que se pisan: {_desc_slot(a)} y {_desc_slot(b)}"})
-    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════
