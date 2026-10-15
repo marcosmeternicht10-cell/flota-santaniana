@@ -966,6 +966,252 @@ def pdf_informe(res):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# HOJAS POR TÉCNICO: cada uno con su hoja de la OT (sin costos)
+# ════════════════════════════════════════════════════════════════════════════
+# Como la planilla de papel del taller: fecha, OT, coche, km, chofer, el
+# detalle de lo que tiene que hacer ESE técnico, materiales, horas y firmas.
+# Una hoja por técnico: el pintor no recibe lo del gomero. Sin montos.
+
+def hojas_de_ot(ot):
+    """Agrupa los ítems de la OT por técnico. Devuelve la lista de hojas, en
+    orden de número (los escritos sin número al final), y los ítems que no
+    tienen a nadie."""
+    grupos, sin_nadie = {}, []
+    for it in ot.get("items") or []:
+        gente = it.get("personal") or []
+        otros = [t for t in re.split(r"\s*,\s*", it.get("tecnico_otro") or "") if t.strip()]
+        if not gente and not otros:
+            sin_nadie.append(it)
+            continue
+        for p in gente:
+            g = grupos.setdefault(f"p{p['id']}", {"clave": f"p{p['id']}", "numero": p["numero"],
+                                                   "nombre": p["nombre"], "puesto": p.get("puesto") or "",
+                                                   "items": []})
+            g["items"].append({**it, "con": [etiqueta(x) for x in gente if x["id"] != p["id"]] + otros})
+        for t in otros:
+            g = grupos.setdefault("o:" + _norm(t), {"clave": "o:" + _norm(t), "numero": None, "nombre": t.strip(),
+                                                    "puesto": "", "items": []})
+            g["items"].append({**it, "con": [etiqueta(x) for x in gente] + [o for o in otros if o != t]})
+    hojas = sorted(grupos.values(), key=lambda g: (g["numero"] is None, g["numero"] or 0, _norm(g["nombre"])))
+    return hojas, sin_nadie
+
+
+def pdf_hojas(ot, hojas):
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.colors import HexColor, white
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase import pdfmetrics
+    import os
+    import trafico_pdf
+
+    F = trafico_pdf._fuentes()
+    W, H = A4
+    M = 34
+    NAVY, AZUL, ROJO = HexColor("#1D344E"), HexColor("#1E5A96"), HexColor("#DC2641")
+    TINTA, GRIS, LINEA, SUAVE = HexColor("#16202C"), HexColor("#5B6B7F"), HexColor("#9AA6B4"), HexColor("#F4F6F9")
+    PUNTEO = HexColor("#C9D1DB")
+    try:
+        logo = ImageReader(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png"))
+    except Exception:
+        logo = None
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(f"OT {ot['id']} - hojas por técnico")
+    c.setAuthor("La Santaniana")
+
+    def ancho(t, f, s):
+        return pdfmetrics.stringWidth(t, F[f], s)
+
+    def texto(x, y, t, f, s, color=TINTA, align="l"):
+        c.setFillColor(color)
+        c.setFont(F[f], s)
+        if align == "r":
+            c.drawRightString(x, H - y, t)
+        elif align == "c":
+            c.drawCentredString(x, H - y, t)
+        else:
+            c.drawString(x, H - y, t)
+
+    def cortar(t, f, s, maxw):
+        t = str(t or "")
+        if ancho(t, f, s) <= maxw:
+            return t
+        while t and ancho(t + "…", f, s) > maxw:
+            t = t[:-1]
+        return t.rstrip() + "…"
+
+    def partir(t, f, s, maxw):
+        palabras, lineas, actual = str(t or "").split(), [], ""
+        for p in palabras:
+            prueba = (actual + " " + p).strip()
+            if actual and ancho(prueba, f, s) > maxw:
+                lineas.append(actual)
+                actual = p
+            else:
+                actual = prueba
+        if actual:
+            lineas.append(actual)
+        return lineas or [""]
+
+    def caja(x, y, w, h, etiqueta_txt, valor="", grande=False):
+        c.setStrokeColor(NAVY)
+        c.setLineWidth(1)
+        c.rect(x, H - y - h, w, h, stroke=1, fill=0)
+        texto(x + 8, y + h / 2 + 4, etiqueta_txt, "I7", 10.5, NAVY)
+        wl = ancho(etiqueta_txt, "I7", 10.5)
+        if valor:
+            v = cortar(valor, "D8", 15 if grande else 13, w - wl - 22)
+            texto(x + 14 + wl, y + h / 2 + 5, v, "D8", 15 if grande else 13, TINTA)
+
+    def renglones(x, y, w, n, alto):
+        c.setStrokeColor(PUNTEO)
+        c.setLineWidth(0.6)
+        for k in range(1, n + 1):
+            yy = y + k * alto
+            c.line(x + 8, H - yy, x + w - 8, H - yy)
+
+    fdm = lambda f: f"{str(f)[8:10]}/{str(f)[5:7]}/{str(f)[2:4]}" if f and len(str(f)) >= 10 else ""
+    km = ot.get("km")
+    km_txt = f"{int(km):,}".replace(",", ".") if km else ""
+    coche = str(ot.get("n_interno") or ot.get("patente") or "")
+    impresa = ahora_iso().replace("T", " ")[:16]
+    impresa = f"{impresa[8:10]}/{impresa[5:7]}/{impresa[0:4]} {impresa[11:16]}"
+
+    # Cada hoja puede necesitar más de una página si tiene muchos trabajos
+    POR_HOJA = 16
+    paginas = []
+    for g in hojas:
+        items = g["items"]
+        trozos = [items[i:i + POR_HOJA] for i in range(0, len(items), POR_HOJA)] or [[]]
+        for k, tz in enumerate(trozos):
+            paginas.append((g, tz, k, len(trozos)))
+
+    for n_pag, (g, items, k, total_k) in enumerate(paginas, 1):
+        quien = (f"N°{g['numero']} " if g["numero"] is not None else "") + g["nombre"]
+        # ── Encabezado ──
+        y = M
+        if logo:
+            c.drawImage(logo, M, H - y - 34, 46, 34, mask="auto", preserveAspectRatio=True)
+        texto(M + 56, y + 17, "ORDEN DE TRABAJO", "D9", 21, NAVY)
+        texto(M + 56, y + 32, "LA SANTANIANA S.A.  ·  HOJA DEL TÉCNICO", "I6", 8.5, GRIS)
+        # El número del técnico, grande, para repartir las hojas
+        wbox = 132
+        c.setFillColor(NAVY)
+        c.roundRect(W - M - wbox, H - y - 40, wbox, 40, 6, fill=1, stroke=0)
+        if g["numero"] is not None:
+            texto(W - M - wbox + 10, y + 15, "TÉCNICO", "I6", 7, HexColor("#8CBDEB"))
+            texto(W - M - wbox + 10, y + 33, f"N° {g['numero']}", "D9", 19, white)
+        else:
+            texto(W - M - wbox + 10, y + 15, "SIN NÚMERO", "I6", 7, HexColor("#8CBDEB"))
+            texto(W - M - wbox + 10, y + 32, cortar(g["nombre"].upper(), "D8", 12, wbox - 20), "D8", 12, white)
+        c.setFillColor(ROJO)
+        c.rect(M, H - y - 50, (W - 2 * M) * 0.4, 3, fill=1, stroke=0)
+        c.setFillColor(AZUL)
+        c.rect(M + (W - 2 * M) * 0.4 + 3, H - y - 50, (W - 2 * M) * 0.6 - 3, 3, fill=1, stroke=0)
+        y += 64
+
+        # ── Datos de la OT ──
+        aw = W - 2 * M
+        caja(M, y, aw * 0.55 - 6, 34, "Fecha:", fdm(ot.get("fecha_apertura")))
+        caja(M + aw * 0.55, y, aw * 0.45, 34, "OT Nro.:", str(ot["id"]), grande=True)
+        y += 44
+        caja(M, y, aw * 0.30 - 6, 34, "Coche:", coche, grande=True)
+        caja(M + aw * 0.30, y, aw * 0.30 - 6, 34, "Km:", km_txt)
+        caja(M + aw * 0.60, y, aw * 0.40, 34, "Chofer:", str(ot.get("conductor") or ""))
+        y += 46
+
+        # ── Detalle: lo que hace este técnico ──
+        alto = 25
+        filas = []
+        for it in items:
+            lineas = partir(it.get("descripcion") or "", "I5", 11.5, aw - 40)
+            extra = []
+            if it.get("con"):
+                extra.append("con " + ", ".join(it["con"]))
+            if it.get("estado") == "completado":
+                extra.append("ya completado")
+            filas.append((lineas, " · ".join(extra)))
+        usados = sum(len(l) for l, _ in filas)
+        mats = []
+        for it in g["items"]:
+            m = (it.get("material_pedido") or "").strip()
+            if m and m not in mats:
+                mats.append(m)
+        n_mat = max(len(mats) + 1, 3)
+        h_mat = 22 + n_mat * 22 + 6
+        if k == total_k - 1:
+            # Los renglones del detalle llenan la hoja (para anotar a mano)
+            resto = h_mat + 12 + 46 + 50 + 56
+            libre = H - y - resto - 50 - 28
+            n_lin = max(usados + 3, int(libre // alto))
+        else:
+            n_lin = usados
+        h_det = 22 + n_lin * alto + 6
+        c.setStrokeColor(NAVY)
+        c.setLineWidth(1)
+        c.rect(M, H - y - h_det, aw, h_det, stroke=1, fill=0)
+        c.setFillColor(SUAVE)
+        c.rect(M + 0.5, H - y - 22, 86, 21.5, stroke=0, fill=1)
+        texto(M + 8, y + 15, "Detalle:", "I7", 10.5, NAVY)
+        if total_k > 1:
+            texto(M + aw - 8, y + 15, f"parte {k + 1} de {total_k}", "I5", 8, GRIS, align="r")
+        renglones(M, y + 22, aw, n_lin, alto)
+        yy = y + 22
+        for lineas, extra in filas:
+            for i, ln in enumerate(lineas):
+                if i == 0:
+                    c.setFillColor(NAVY)
+                    c.circle(M + 15, H - (yy + alto - 9), 2.2, fill=1, stroke=0)
+                texto(M + 26, yy + alto - 6, ln, "I5", 11.5, TINTA)
+                if i == len(lineas) - 1 and extra:
+                    texto(M + aw - 10, yy + alto - 6, cortar(extra, "I5", 8, 200), "I5", 8, GRIS, align="r")
+                yy += alto
+        y += h_det + 10
+
+        if k == total_k - 1:
+            # ── Materiales (lo que se anotó en la OT para sus trabajos) ──
+            c.setStrokeColor(NAVY)
+            c.rect(M, H - y - h_mat, aw, h_mat, stroke=1, fill=0)
+            c.setFillColor(SUAVE)
+            c.rect(M + 0.5, H - y - 22, 100, 21.5, stroke=0, fill=1)
+            texto(M + 8, y + 15, "Materiales:", "I7", 10.5, NAVY)
+            renglones(M, y + 22, aw, n_mat, 22)
+            for i, m in enumerate(mats):
+                c.setFillColor(NAVY)
+                c.circle(M + 15, H - (y + 22 + i * 22 + 13), 2, fill=1, stroke=0)
+                texto(M + 26, y + 22 + i * 22 + 17, cortar(m, "I5", 11, aw - 40), "I5", 11, TINTA)
+            y += h_mat + 12
+
+            # ── Horas, técnico, firmas ──
+            tercio = (aw - 12) / 3
+            caja(M, y, tercio, 36, "Hora Inicio:")
+            caja(M + tercio + 6, y, tercio, 36, "Hora Entrega:")
+            caja(M + 2 * (tercio + 6), y, tercio, 36, "Total Horas:")
+            y += 46
+            caja(M, y, aw * 0.6 - 6, 40, "Técnico Asignado:", quien)
+            caja(M + aw * 0.6, y, aw * 0.4, 40, "Firmas:")
+            y += 50
+            caja(M, y, aw, 46, "Verificación Jefe Técnico:")
+            y += 56
+        else:
+            texto(W / 2, y + 10, "Sigue en la página siguiente", "I5", 9, GRIS, align="c")
+
+        # ── Pie ──
+        c.setStrokeColor(LINEA)
+        c.setLineWidth(0.5)
+        c.line(M, 30, W - M, 30)
+        texto(M, H - 18, f"OT #{ot['id']} · Coche {coche} · {quien}", "I5", 7.5, GRIS)
+        texto(W - M, H - 18, f"Hoja {n_pag} de {len(paginas)} · impresa el {impresa}", "I5", 7.5, GRIS, align="r")
+        c.showPage()
+
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # API
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1097,3 +1343,38 @@ def api_pdf_informe():
     buf = pdf_informe(resumen(desde, hasta, request.args.get("vehiculo_id") or None))
     return send_file(buf, mimetype="application/pdf", as_attachment=False,
                      download_name=f"trabajo-personal-{desde}-{hasta}.pdf")
+
+
+@bp_personal.route("/api/ots/<int:ot_id>/hojas", methods=["GET"])
+def api_hojas_info(ot_id):
+    """Qué hojas salen de esta OT (para elegir cuáles imprimir)."""
+    if not _puede_ver():
+        return _no()
+    import database as db
+    ot = db.obtener_ot(ot_id)
+    if not ot:
+        return jsonify({"ok": False, "msg": "La OT no existe"}), 404
+    hojas, sin = hojas_de_ot(ot)
+    return jsonify({"ok": True, "hojas": [{"clave": g["clave"], "numero": g["numero"], "nombre": g["nombre"],
+                                           "puesto": g["puesto"], "trabajos": len(g["items"])} for g in hojas],
+                    "sin_tecnico": [it.get("descripcion") for it in sin]})
+
+
+@bp_personal.route("/api/ots/<int:ot_id>/hojas.pdf", methods=["GET"])
+def api_hojas_pdf(ot_id):
+    """Una hoja por técnico con sus trabajos de la OT (sin costos)."""
+    if not _puede_ver():
+        return _no()
+    import database as db
+    ot = db.obtener_ot(ot_id)
+    if not ot:
+        return jsonify({"ok": False, "msg": "La OT no existe"}), 404
+    hojas, _ = hojas_de_ot(ot)
+    pedidas = [q for q in (request.args.get("quienes") or "").split("|") if q]
+    if pedidas:
+        hojas = [g for g in hojas if g["clave"] in pedidas]
+    if not hojas:
+        return jsonify({"ok": False, "msg": "Ningún trabajo de esta OT tiene técnico asignado"}), 400
+    buf = pdf_hojas(ot, hojas)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"OT_{ot_id}_hojas_tecnicos.pdf")
