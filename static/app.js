@@ -17333,12 +17333,9 @@ function caCuerpo() {
       <span class="tr-num"><b>${r.choferes}</b><span>choferes</span></span>
       <span class="tr-num"><b>${r.coches}</b><span>coches</span></span>
       ${r.no_corre ? `<span class="tr-num"><b>${r.no_corre}</b><span>no corre${r.no_corre === 1 ? "" : "n"}</span></span>` : ""}
-      ${d.avisos.length ? `<button class="tr-num aviso" onclick="document.getElementById('ca-avisos')?.scrollIntoView({behavior:'smooth',block:'center'})"><b>${d.avisos.length}</b><span>se pisan</span></button>` : ""}
     </div>
     ${!hayAlgo && caPuede() ? caVacio() : ""}
     ${ctl && hayAlgo ? caControl(ctl) : ""}
-    ${d.avisos.length ? `<div class="ca-avisos" id="ca-avisos"><div class="ca-avisos-cab"><i class="ti ti-alert-triangle"></i><b>No cuadra</b><span>Un chofer o un coche en dos tramos a la misma hora: después la rendición no lo deja cargar.</span></div>
-      <ul>${d.avisos.map(a => `<li>${caEsc(a.txt)}</li>`).join("")}</ul></div>` : ""}
     <div class="ca-barra">
       <div class="pt-seg" role="tablist" aria-label="Qué mostrar">
         <button class="${ca.filtro === "todo" ? "on" : ""}" onclick="caFiltrar('todo')">Todo</button>
@@ -17379,7 +17376,7 @@ function caControl(c) {
   return `
     <div class="ca-control">
       <div class="ca-ct-cab">
-        <span class="ca-ct-ic"><i class="ti ti-arrows-diff"></i></span>
+        <span class="ca-ct-ic"><i class="ti ti-list-check"></i></span>
         <div><b>Asignado contra rendido</b>
           <span>${c.rendiciones} rendicion${c.rendiciones === 1 ? "" : "es"} de este día · ${c.diferencias ? `<strong>${c.diferencias} diferencia${c.diferencias === 1 ? "" : "s"}</strong>` : "todo coincide"}${c.hoy ? " · el día todavía no terminó" : ""}</span></div>
       </div>
@@ -17450,7 +17447,6 @@ function caSlot(t, s) {
   const puede = caPuede();
   const lado = s.lado === "completo" ? "" : `<span class="ca-lado ${s.lado}">${s.lado === "entrante" ? "ENT" : "SAL"}</span>`;
   const ctl = s.control ? CA_CONTROL[s.control.estado] : null;
-  const aviso = (s.avisos || []).length ? `<span class="ca-aviso" title="${caEsc(s.avisos.join("\n"))}"><i class="ti ti-alert-triangle"></i></span>` : "";
   return `
     <div class="ca-slot">
       ${lado}
@@ -17464,7 +17460,6 @@ function caSlot(t, s) {
           onchange="caGuardarCoche(this, '${s.lado}')">`
       : `<span class="ca-chofer-ro ${s.chofer_usuario ? "" : "vacio"}">${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Sin chofer"}</span>
          <span class="ca-coche-ro ${s.coche ? "" : "vacio"}">${s.coche ? caEsc(s.coche) : "—"}</span>`}
-      ${aviso}
       ${ctl ? `<span class="ca-ctl ${ctl.c}" title="${caEsc(s.control.txt)}"><i class="ti ti-${ctl.i}"></i><span>${caEsc(s.control.corto || s.control.txt)}</span></span>` : ""}
     </div>`;
 }
@@ -17484,7 +17479,6 @@ function caFilaNoCorre(t) {
 function caVariable(c, s) {
   const puede = caPuede();
   const ctl = s.control ? CA_CONTROL[s.control.estado] : null;
-  const aviso = (s.avisos || []).length ? `<span class="ca-aviso" title="${caEsc(s.avisos.join("\n"))}"><i class="ti ti-alert-triangle"></i></span>` : "";
   const k = `var|${s.id}`;
   const tipos = c.tipos_variable || ["VARIABLE"];
   const listo = s.chofer_usuario && s.coche;
@@ -17508,8 +17502,7 @@ function caVariable(c, s) {
             onchange="caGuardarVariable(${s.id}, {coche: this.value})">`
         : `<span class="ca-chofer-ro ${s.chofer_usuario ? "" : "vacio"}">${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Sin chofer"}</span>
            <span class="ca-coche-ro ${s.coche ? "" : "vacio"}">${s.coche ? caEsc(s.coche) : "—"}</span>`}
-        ${aviso}
-        ${ctl ? `<span class="ca-ctl ${ctl.c}" title="${caEsc(s.control.txt)}"><i class="ti ti-${ctl.i}"></i><span>${caEsc(s.control.corto || s.control.txt)}</span></span>` : ""}
+          ${ctl ? `<span class="ca-ctl ${ctl.c}" title="${caEsc(s.control.txt)}"><i class="ti ti-${ctl.i}"></i><span>${caEsc(s.control.corto || s.control.txt)}</span></span>` : ""}
       </div></div>
       <div class="ca-acc">${puede ? `<button class="icon-btn" title="Quitar el variable" onclick="caBorrarVariable(${s.id})"><i class="ti ti-trash"></i></button>` : ""}</div>
     </div>`;
@@ -17640,11 +17633,10 @@ function caPicker(btn, o) {
     const w = caNorm(q.value).trim().split(/\s+/).filter(Boolean);
     const arr = ca.listas.choferes.filter(c => !w.length || w.every(x => caNorm(c.nombre).includes(x))).map(c => {
       const tiene = (ocup[c.usuario] || []).filter(x => x.k !== o.k);
-      const pisa = tiene.some(x => caPisan(x.rango, o.rango));
-      return { ...c, tiene, pisa };
+      return { ...c, tiene };
     });
-    // Primero los libres, después los que ya tienen algo, al final los que se pisan
-    arr.sort((a, b) => ((b.usuario === o.actual) - (a.usuario === o.actual)) || (a.pisa - b.pisa)
+    // El asignado arriba, después los libres y después los que ya tienen algo
+    arr.sort((a, b) => ((b.usuario === o.actual) - (a.usuario === o.actual))
                        || (a.tiene.length - b.tiene.length) || a.nombre.localeCompare(b.nombre, "es"));
     return arr;
   };
@@ -17654,11 +17646,11 @@ function caPicker(btn, o) {
     sel = Math.min(sel, Math.max(0, res.length - 1));
     lista.innerHTML = (o.actual ? `<button class="ca-pick-op quitar" data-u=""><i class="ti ti-user-minus"></i><span><b>Sacar el chofer</b><small>Queda sin asignar</small></span></button>` : "")
       + res.map((c, i) => `
-        <button class="ca-pick-op ${i === sel ? "on" : ""} ${c.usuario === o.actual ? "actual" : ""} ${c.pisa ? "pisa" : ""}" data-u="${caEsc(c.usuario)}" role="option">
+        <button class="ca-pick-op ${i === sel ? "on" : ""} ${c.usuario === o.actual ? "actual" : ""}" data-u="${caEsc(c.usuario)}" role="option">
           <span class="ca-pick-av">${caEsc(caNombre(c.nombre).split(" ").map(x => x[0]).slice(0, 2).join(""))}</span>
           <span><b>${caEsc(caNombre(c.nombre))}</b>
             <small>${c.tiene.length ? caEsc(c.tiene.map(x => x.cliente + " " + x.txt).join(" · ")) : "Libre este día"}</small></span>
-          ${c.pisa ? `<em class="ca-pick-tag mal">se pisa</em>` : c.usuario === o.actual ? `<em class="ca-pick-tag">asignado</em>` : !c.tiene.length ? `<em class="ca-pick-tag ok">libre</em>` : ""}
+          ${c.usuario === o.actual ? `<em class="ca-pick-tag">asignado</em>` : !c.tiene.length ? `<em class="ca-pick-tag ok">libre</em>` : ""}
         </button>`).join("")
       + (!res.length ? `<div class="ca-pick-nada">Ningún chofer con ese nombre</div>` : "");
     lista.querySelectorAll(".ca-pick-op").forEach(b => b.onclick = () => { p.remove(); o.elegir(b.dataset.u); });
@@ -17786,7 +17778,6 @@ async function caVaciar() {
 async function caPublicar(btn) {
   const r0 = ca.d.resumen, falta = r0.sin_asignar + r0.incompletos;
   if (falta && !confirm(`Quedan ${falta} tramo${falta === 1 ? "" : "s"} sin completar (chofer o coche).\n\n¿Publicar igual? Salen marcados como A CONFIRMAR.`)) return;
-  if (ca.d.avisos.length && !confirm(`Hay ${ca.d.avisos.length} choque${ca.d.avisos.length === 1 ? "" : "s"} de horario (un chofer o un coche en dos tramos a la vez).\n\n¿Publicar igual?`)) return;
   btn.disabled = true;
   const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/publicar`);
   btn.disabled = false;
