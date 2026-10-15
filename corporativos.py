@@ -1344,6 +1344,19 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
             continue
         reportado.setdefault((r["fecha_servicio"], r["tramo"]), []).append(r)
 
+    # Lo que en la Asignación del día se marcó "no corre" (un feriado de la
+    # planta, por ejemplo) no se espera: no cuenta como faltante.
+    no_corre = set()
+    try:
+        c2 = get_connection()
+        for r in c2.execute("""SELECT d.fecha, a.tramo FROM corp_asig a JOIN corp_asig_dias d ON d.id = a.dia_id
+                               WHERE a.lado='no_corre' AND a.cliente=? AND d.fecha>=? AND d.fecha<=?""",
+                            (cliente, desde_real, hasta)).fetchall():
+            no_corre.add((r["fecha"], r["tramo"]))
+        c2.close()
+    except Exception:
+        no_corre = set()
+
     # ── Qué tramos operan de verdad, y qué días ──
     # Se mira en qué días de la semana apareció cada tramo: si nunca apareció
     # un fin de semana, se asume que solo corre de lunes a viernes.
@@ -1391,6 +1404,8 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
             if not corre(tramo, dia):
                 continue
             regs = reportado.get((dia, tramo), [])
+            if not regs and (dia, tramo) in no_corre:
+                continue
             estados = {x["estado"] for x in regs}
             p["esperados"] += 1; tot["esperados"] += 1
             if "completado" in estados or ("entrante" in estados and "saliente" in estados):

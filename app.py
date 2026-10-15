@@ -116,6 +116,13 @@ from corporativos import bp_corp, init_corporativos_module
 init_corporativos_module(app)
 app.register_blueprint(bp_corp)
 
+# ─── Corporativos: asignación del día ────────────────────────────────────────
+# Quién cubre cada tramo y con qué coche (como el tráfico), con versiones,
+# PDF/imagen para el grupo y el control de asignado contra rendido.
+from corp_asignacion import bp_corp_asig, init_corp_asignacion
+init_corp_asignacion()
+app.register_blueprint(bp_corp_asig)
+
 # ─── Limpieza de datos de prueba ─────────────────────────────────────────────
 # Borrado selectivo por grupos, con vista previa. Nunca toca la flota, las
 # cuentas de usuario ni las rendiciones de corporativos.

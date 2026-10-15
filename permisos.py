@@ -49,6 +49,7 @@ GRUPOS_SECCIONES = [
         ("oee", "OEE de flota"),
     ]),
     ("Corporativos", [
+        ("corp_asignacion", "Asignación del día"),
         ("corp_resumen", "Resumen de rendiciones"),
         ("corp_historial", "Histórico de pagos"),
         ("corp_empresas", "Control por empresa"),
@@ -65,7 +66,7 @@ GRUPOS_SECCIONES = [
 SECCIONES_VALIDAS = {clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs}
 ORDEN = [clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs]
 
-SECCIONES_CORP = {"corp_resumen", "corp_historial", "corp_empresas", "corp_combustible", "corp_cargas"}
+SECCIONES_CORP = {"corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas", "corp_combustible", "corp_cargas"}
 
 # Rutas de la API que pertenecen a cada módulo sensible. Si el usuario no
 # tiene ninguna sección del módulo, el servidor le niega esas rutas.

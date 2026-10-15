@@ -352,7 +352,7 @@ class Hoja:
         self.texto(x, 31, "LA SANTANIANA", "I6", 7.2, CELESTE, cs=2.4)
         titulo, s = self.ajustar(info.get("titulo") or "HORARIOS NACIONALES", "D9", 25, 262, 16)
         self.texto(x, 57, titulo, "D9", s, white, cs=0.3)
-        self.texto(x, 71, "Salidas del día, coches y tripulantes", "I4", 7.6, CELESTE, alpha=0.85)
+        self.texto(x, 71, info.get("subtitulo") or "Salidas del día, coches y tripulantes", "I4", 7.6, CELESTE, alpha=0.85)
 
         # Fecha en tablillas: día de la semana arriba, "14 SEP" en fichas
         dia_nombre = DIAS[d.weekday()]
@@ -375,11 +375,14 @@ class Hoja:
             x += gg - tg
 
         # Números del día
-        r = info["dia"].get("resumen") or {}
-        stats = [(r.get("salidas", 0), "SALIDAS", white), (r.get("coches", 0), "COCHES", white),
-                 (r.get("tripulantes", 0), "TRIPULANTES", white)]
-        if r.get("a_confirmar"):
-            stats.append((r["a_confirmar"], "A CONFIRMAR", AMBAR_V))
+        if info.get("stats"):                     # otra hoja (corporativos) trae los suyos
+            stats = info["stats"]
+        else:
+            r = info["dia"].get("resumen") or {}
+            stats = [(r.get("salidas", 0), "SALIDAS", white), (r.get("coches", 0), "COCHES", white),
+                     (r.get("tripulantes", 0), "TRIPULANTES", white)]
+            if r.get("a_confirmar"):
+                stats.append((r["a_confirmar"], "A CONFIRMAR", AMBAR_V))
         x, y = M, 104
         for i, (n, etq, color) in enumerate(stats):
             if i:
