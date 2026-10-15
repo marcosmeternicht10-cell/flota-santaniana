@@ -1127,6 +1127,276 @@ def importar_excel(contenido, fecha_forzada=None):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# IMPORTAR LA PLANILLA INTERNACIONAL (varios días en una hoja)
+# ════════════════════════════════════════════════════════════════════════════
+# Como la arman hoy: cada día con su título ("viernes, 2 de octubre de 2026"),
+# a la izquierda las idas (de acá a Retiro, Liniers, San Justo, La Plata) y a
+# la derecha los regresos. Cada salida ocupa dos renglones: hora, destino y
+# coche combinados y un tripulante por renglón. La hora puede traer la salida
+# de antes ("00:20 CDE / 9:35 VCA"). El renglón amarillo de abajo de cada lado
+# es la nota del día ("SIN RESERVA", "26300 LASTRE A ASU").
+
+MESES = {"ENERO": 1, "FEBRERO": 2, "MARZO": 3, "ABRIL": 4, "MAYO": 5, "JUNIO": 6, "JULIO": 7,
+         "AGOSTO": 8, "SEPTIEMBRE": 9, "SETIEMBRE": 9, "OCTUBRE": 10, "NOVIEMBRE": 11, "DICIEMBRE": 12}
+_RE_FECHA_LARGA = re.compile(r"(\d{1,2})\s+DE\s+([A-Z]+)(?:\s+(?:DE|DEL)\s+(\d{4}))?")
+_RE_FECHA_CORTA = re.compile(r"\b(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})\b")
+_RE_HORA_LUGAR = re.compile(r"(\d{1,2})[:.](\d{2})(?:\s*(?:HS|H)\b)?\s*([A-Z][A-Z ]{1,20})?")
+
+
+def _fecha_de_texto(v, anio_def=None):
+    """Una fecha escrita como título de día: 'viernes, 2 de octubre de 2026',
+    '02/10/2026' o una fecha de verdad de Excel."""
+    if isinstance(v, datetime):
+        return v.date().isoformat()
+    if isinstance(v, date):
+        return v.isoformat()
+    t = _sin_tildes(limpiar(v))
+    if not t or len(t) > 60:
+        return None
+    m = _RE_FECHA_LARGA.search(t)
+    if m and m.group(2) in MESES:
+        anio = int(m.group(3)) if m.group(3) else anio_def
+        if anio:
+            try:
+                return date(anio, MESES[m.group(2)], int(m.group(1))).isoformat()
+            except ValueError:
+                return None
+    m = _RE_FECHA_CORTA.search(t)
+    if m and not re.search(r"\d{1,2}:\d{2}", t):
+        d, mo, a = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        a = a + 2000 if a < 100 else a
+        try:
+            return date(a, mo, d).isoformat()
+        except ValueError:
+            return None
+    return None
+
+
+def _hora_y_antes(v):
+    """'00:20 CDE\\n9:35 VCA' → ('09:35', '00:20 CDE'); '12:30' → ('12:30', '').
+    Si la celda trae varias horas, la última es la de la salida y las de antes
+    van a la nota (sale antes de otro lado)."""
+    if isinstance(v, (dtime, datetime)) or isinstance(v, (int, float)):
+        return normalizar_hora(v), ""
+    t = _sin_tildes(limpiar(v))
+    if not t:
+        return "", ""
+    pares = []
+    for m in _RE_HORA_LUGAR.finditer(t):
+        h = normalizar_hora(f"{m.group(1)}:{m.group(2)}")
+        if h:
+            pares.append((h, (m.group(3) or "").strip()))
+    if not pares:
+        return "", ""
+    hora = pares[-1][0]
+    antes = " ".join(f"{h} {l}".strip() for h, l in pares[:-1])
+    return hora, antes
+
+
+def leer_excel_internacional(contenido):
+    """Devuelve [{fecha, salidas: [...], nota_ida, nota_regreso}] con todos los
+    días que encuentre en la primera hoja."""
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(contenido), data_only=True)
+    ws = wb.worksheets[0]
+    max_r, max_c = ws.max_row, ws.max_column
+
+    # Celdas combinadas: el valor está arriba a la izquierda; las demás quedan "tapadas"
+    tapada, alto = set(), {}
+    for rg in ws.merged_cells.ranges:
+        alto[(rg.min_row, rg.min_col)] = (rg.max_row, rg.max_col)
+        for r in range(rg.min_row, rg.max_row + 1):
+            for c in range(rg.min_col, rg.max_col + 1):
+                if (r, c) != (rg.min_row, rg.min_col):
+                    tapada.add((r, c))
+
+    def val(r, c):
+        if (r, c) in tapada or r < 1 or c < 1 or r > max_r or c > max_c:
+            return None
+        return ws.cell(r, c).value
+
+    def txt(r, c):
+        v = val(r, c)
+        if v is None:
+            return ""
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        return " ".join(str(v).split())
+
+    def es_hora(v):
+        if isinstance(v, (dtime,)):
+            return True
+        if isinstance(v, datetime):
+            return v.year < 1901 or (v.hour or v.minute)       # una hora pura de Excel
+        if isinstance(v, (int, float)):
+            return 0 <= float(v) < 1 and float(v) > 0
+        return bool(re.match(r"^\s*\d{1,2}[:.]\d{2}", str(v or "")))
+
+    # 1. Los títulos de los días
+    anio_def = None
+    titulos = []
+    for r in range(1, max_r + 1):
+        f = None
+        for c in range(1, max_c + 1):
+            v = val(r, c)
+            if v is None or (es_hora(v) and not isinstance(v, datetime)):
+                continue
+            if isinstance(v, datetime) and v.year < 1901:
+                continue
+            f = _fecha_de_texto(v, anio_def)
+            if f:
+                break
+        if f:
+            anio_def = int(f[:4])
+            titulos.append((r, f))
+    if not titulos:
+        raise ValueError("No encontré los días en la planilla (los títulos tipo «viernes, 2 de octubre de 2026»).")
+
+    # 2. Las columnas de hora: las que tienen horas en varios renglones
+    cuenta = {}
+    filas_titulo = {r for r, _ in titulos}
+    for r in range(titulos[0][0] + 1, max_r + 1):
+        if r in filas_titulo:
+            continue
+        for c in range(1, max_c + 1):
+            v = val(r, c)
+            if v is not None and es_hora(v):
+                cuenta[c] = cuenta.get(c, 0) + 1
+    cols_hora = sorted(c for c, n in cuenta.items() if n >= 2)
+    # dos columnas de hora pegadas son la misma (ej. una columna auxiliar)
+    limpias = []
+    for c in cols_hora:
+        if limpias and c - limpias[-1] <= 2:
+            if cuenta[c] > cuenta[limpias[-1]]:
+                limpias[-1] = c
+            continue
+        limpias.append(c)
+    cols_hora = limpias[:2]
+    if not cols_hora:
+        raise ValueError("No encontré las columnas de las horas.")
+
+    # 3. Para cada lado: destino, coche y tripulantes (lo que sigue a la hora)
+    def armar_grupo(h, hasta):
+        cols = list(range(h + 1, hasta))
+        def puntaje(c, prueba):
+            n = 0
+            for r in range(titulos[0][0] + 1, max_r + 1):
+                t = txt(r, c)
+                if t and prueba(t):
+                    n += 1
+            return n
+        es_coche = lambda t: bool(re.match(r"^(\d{3,6}|A\s*CONF\.?)$", _sin_tildes(t.upper())))
+        coche = max(cols, key=lambda c: puntaje(c, es_coche), default=None)
+        if coche is None or puntaje(coche, es_coche) == 0:
+            raise ValueError("No encontré la columna de los coches.")
+        antes = [c for c in cols if c < coche]
+        despues = [c for c in cols if c > coche]
+        hay_texto = lambda t: bool(re.search(r"[A-Za-z]", t))
+        destino = max(antes, key=lambda c: puntaje(c, hay_texto), default=None)
+        trip = max(despues, key=lambda c: puntaje(c, hay_texto), default=None)
+        return {"hora": h, "destino": destino, "coche": coche, "trip": trip, "ultima": hasta - 1}
+
+    grupos = []
+    for i, h in enumerate(cols_hora):
+        hasta = cols_hora[i + 1] if i + 1 < len(cols_hora) else max_c + 1
+        grupos.append(armar_grupo(h, hasta))
+
+    # 4. Cada día, cada lado
+    dias = []
+    for k, (r0, fecha) in enumerate(titulos):
+        r_fin = titulos[k + 1][0] - 1 if k + 1 < len(titulos) else max_r
+        dia = {"fecha": fecha, "salidas": [], "nota_ida": "", "nota_regreso": ""}
+        for gi, g in enumerate(grupos):
+            lado = "ida" if gi == 0 else "regreso"
+            r = r0 + 1
+            while r <= r_fin:
+                vh = val(r, g["hora"])
+                if vh is not None and es_hora(vh):
+                    hora, antes = _hora_y_antes(vh)
+                    # cuántos renglones ocupa la salida: lo combinado de la hora
+                    # o, si no está combinada, hasta la próxima hora (máximo 2)
+                    fin = alto.get((r, g["hora"]), (r, 0))[0]
+                    if fin == r and r + 1 <= r_fin and val(r + 1, g["hora"]) is None and (r + 1, g["hora"]) not in tapada \
+                            and txt(r + 1, g["trip"]) and not txt(r + 1, g["destino"]):
+                        fin = r + 1
+                    trips = [limpiar(txt(rr, g["trip"])) for rr in range(r, fin + 1)] if g["trip"] else []
+                    trips = [t for t in trips if t]
+                    coche = txt(r, g["coche"])
+                    coche = limpiar(coche).rstrip(".") if not coche.isdigit() else coche
+                    dia["salidas"].append({
+                        "lado": lado, "hora": hora, "destino": limpiar(txt(r, g["destino"])) if g["destino"] else "",
+                        "coche": coche, "trip1": trips[0] if trips else "", "trip2": trips[1] if len(trips) > 1 else "",
+                        "nota": antes})
+                    r = fin + 1
+                    continue
+                # Renglón sin hora: si tiene texto en la parte de la hora/destino es la nota del día
+                textos = []
+                for c in range(g["hora"], (g["trip"] or g["coche"]) + 1):
+                    t = txt(r, c)
+                    if t and t not in textos:
+                        textos.append(t)
+                if textos and not txt(r, g["trip"] or 0) or (textos and (r, g["hora"]) in alto
+                                                              and alto[(r, g["hora"])][1] >= (g["trip"] or g["coche"])):
+                    nota = limpiar(" ".join(textos))
+                    if nota and not _fecha_de_texto(nota):
+                        dia[f"nota_{lado}"] = (dia[f"nota_{lado}"] + " · " + nota).strip(" ·") if dia[f"nota_{lado}"] else nota
+                r += 1
+        if dia["salidas"]:
+            dias.append(dia)
+    if not dias:
+        raise ValueError("Encontré los días pero ninguna salida.")
+    return dias
+
+
+def importar_excel_internacional(contenido, probar=False):
+    """Carga cada día de la planilla en su fecha (internacional). Si el día ya
+    tenía tráfico, se reemplaza. Con probar=True solo dice qué haría."""
+    dias = leer_excel_internacional(contenido)
+    conn = get_connection()
+    try:
+        resumen = []
+        # el nombre del corredor: el que ya usan en el internacional (si hay)
+        r = conn.execute("""SELECT b.nombre FROM trafico_bloques b JOIN trafico_dias d ON d.id = b.dia_id
+                            WHERE COALESCE(d.tipo,'nacional')='internacional' ORDER BY d.fecha DESC, b.orden LIMIT 1""").fetchone()
+        nombre_def = r["nombre"] if r else "BUENOS AIRES"
+        for d in dias:
+            ya = _dia_por_fecha(conn, d["fecha"], "internacional")
+            n_ya = 0
+            nombre = nombre_def
+            if ya:
+                n_ya = conn.execute("SELECT COUNT(*) AS n FROM trafico_salidas WHERE dia_id=?", (ya["id"],)).fetchone()["n"]
+                b = conn.execute("SELECT nombre FROM trafico_bloques WHERE dia_id=? ORDER BY orden, id LIMIT 1",
+                                 (ya["id"],)).fetchone()
+                if b:
+                    nombre = b["nombre"]
+            resumen.append({"fecha": d["fecha"], "salidas": len(d["salidas"]), "ya_tenia": n_ya,
+                            "publicado": bool(ya and ya["version"]),
+                            "ida": sum(1 for s in d["salidas"] if s["lado"] == "ida"),
+                            "regreso": sum(1 for s in d["salidas"] if s["lado"] == "regreso"),
+                            "coches": sorted({s["coche"] for s in d["salidas"] if s["coche"].isdigit()})})
+            if probar:
+                continue
+            dia_id = crear_dia(d["fecha"], conn, "internacional")
+            _bloquear_dia(conn, dia_id)
+            vaciar_dia(conn, dia_id)
+            cur = conn.execute("""INSERT INTO trafico_bloques (dia_id, orden, nombre, nota_ida, nota_regreso)
+                                  VALUES (?,?,?,?,?)""", (dia_id, 1, nombre, d["nota_ida"], d["nota_regreso"]))
+            bid = cur.lastrowid or conn.execute("SELECT MAX(id) AS m FROM trafico_bloques WHERE dia_id=?",
+                                                (dia_id,)).fetchone()["m"]
+            for s in d["salidas"]:
+                conn.execute("""INSERT INTO trafico_salidas (dia_id, bloque_id, lado, hora, destino, coche, trip1, trip2, nota)
+                                VALUES (?,?,?,?,?,?,?,?,?)""",
+                             (dia_id, bid, s["lado"], s["hora"], s["destino"], s["coche"], s["trip1"], s["trip2"], s["nota"]))
+                _registrar_tripulantes(conn, [s["trip1"], s["trip2"]])
+            _marcar_modificado(conn, dia_id)
+        if not probar:
+            conn.commit()
+        return resumen
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # PUBLICAR: versiones y cambios
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -1564,6 +1834,22 @@ def api_importar():
     f = request.files.get("archivo")
     if not f:
         return jsonify({"ok": False, "msg": "Elegí el archivo de Excel."}), 400
+    if _tipo() == "internacional":
+        # La planilla internacional trae varios días: cada uno va a su fecha
+        probar = request.form.get("probar") == "1"
+        try:
+            dias = importar_excel_internacional(f.read(), probar=probar)
+        except ValueError as e:
+            return jsonify({"ok": False, "msg": str(e)}), 400
+        except Exception as e:
+            return jsonify({"ok": False, "msg": f"No se pudo leer la planilla ({str(e)[:80]})."}), 400
+        if probar:
+            return jsonify({"ok": True, "probar": True, "dias": dias})
+        n = sum(d["salidas"] for d in dias)
+        _auditar(f"Importó el tráfico internacional desde Excel ({len(dias)} día{'s' if len(dias) != 1 else ''}, {n} salidas)",
+                 ", ".join(d["fecha"] for d in dias))
+        fecha_ver = _fecha_ok(request.form.get("ver")) or dias[0]["fecha"]
+        return _respuesta_dia(fecha_ver, "internacional", importadas=n, dias_importados=dias)
     try:
         fecha, n, fecha_excel = importar_excel(f.read(), _fecha_ok(request.form.get("fecha")))
     except ValueError as e:
