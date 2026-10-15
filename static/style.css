@@ -6318,3 +6318,18 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
   .ca-suelta { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .ca-ctl + .ca-aviso, .ca-aviso { order: 3; }
 }
+
+/* ── Hojas por técnico (desde la OT) ── */
+.oth-lista { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.oth-op { display: grid; grid-template-columns: 20px 40px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: border-color .2s, background .2s; }
+.oth-op:hover { border-color: var(--border-strong); }
+.oth-op:has(input:checked) { border-color: var(--azul-oscuro); background: var(--surface2); }
+.oth-op input { width: 18px; height: 18px; accent-color: var(--azul-oscuro); }
+.oth-num { height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--azul-oscuro); color: #fff; font: 700 17px var(--display); }
+.oth-num.sin { background: var(--surface3); color: var(--muted); font-size: 15px; }
+.oth-quien { min-width: 0; display: flex; flex-direction: column; }
+.oth-quien b { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oth-quien small { font-size: 11.5px; color: var(--muted); }
+.oth-cant { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.oth-aviso { display: flex; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #FFF6E0; color: #6B4700; font-size: 12.5px; line-height: 1.5; }
+.oth-aviso .ti { flex-shrink: 0; font-size: 16px; color: #B26A00; margin-top: 1px; }
