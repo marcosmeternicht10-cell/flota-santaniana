@@ -2054,6 +2054,15 @@ def obtener_ot(ot_id):
     conn.close()
     ot = dict(ot)
     ot["items"] = [dict(i) for i in items]
+    # Quién hizo cada ítem (por número del personal de taller)
+    try:
+        import personal_taller
+        gente = personal_taller.asignaciones([i["id"] for i in ot["items"]])
+        for i in ot["items"]:
+            i["personal"] = gente.get(i["id"], [])
+    except Exception:
+        for i in ot["items"]:
+            i.setdefault("personal", [])
     return ot
 
 
@@ -2174,6 +2183,11 @@ def eliminar_item_ot(item_id):
         plan_preventivo.al_borrar_items([int(item_id)])
     except Exception:
         pass
+    try:
+        import personal_taller
+        personal_taller.al_borrar_items([int(item_id)])
+    except Exception:
+        pass
     conn = get_connection()
     # El correctivo que se generó solo al completar este ítem se va con él
     conn.execute("DELETE FROM correctivos WHERE observaciones LIKE ?", (f"%-item{int(item_id)}]%",))
@@ -2232,6 +2246,11 @@ def eliminar_ot(ot_id):
     try:
         import plan_preventivo
         plan_preventivo.al_borrar_ot(ot_id)
+    except Exception:
+        pass
+    try:
+        import personal_taller
+        personal_taller.al_borrar_ot(ot_id)
     except Exception:
         pass
     conn = get_connection()
@@ -2480,6 +2499,13 @@ def reporte_gerencial(desde, hasta):
     tecnicos = [{"nombre": t["tecnico"], "total": t["total"],
                  "preventivos": t["preventivos"], "correctivos": t["correctivos"],
                  "costo": t["costo"]} for t in tecnicos_raw]
+    # Con los números del personal: cada persona por separado (si un trabajo
+    # lo hicieron dos, cuenta para los dos y el costo se reparte)
+    try:
+        import personal_taller
+        tecnicos = personal_taller.tecnicos_para_gerencial(desde, hasta)
+    except Exception:
+        pass
 
     # 3. Desglose de costos por vehículo y tipo (solo los que tienen gasto)
     desglose = conn2.execute("""

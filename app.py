@@ -102,6 +102,13 @@ from plan_preventivo import bp_prev, init_plan_preventivo
 init_plan_preventivo()
 app.register_blueprint(bp_prev)
 
+# ─── Personal de taller ──────────────────────────────────────────────────────
+# Cada uno con su número; en la OT se pone el número de quién hizo cada ítem y
+# de ahí sale quién trabaja más, en qué coches y lo que quedó sin número.
+from personal_taller import bp_personal, init_personal_taller
+init_personal_taller()
+app.register_blueprint(bp_personal)
+
 # ─── Módulo de Servicios Corporativos ────────────────────────────────────────
 # Choferes de corporativos cargan rendiciones desde el celular; admin las
 # resume. init crea la tabla; el seed de choferes se corre desde /api/corp/seed.
@@ -321,6 +328,7 @@ def proteger_rutas():
             p == "/api/logout" or p == "/api/me" or p == "/api/me/permisos" or
             p.startswith("/api/ots") or          # ver y CREAR OTs (compras carga las órdenes)
             p.startswith("/api/ot_items") or     # asignar el técnico y anotar el material
+            p.startswith("/api/personal") or     # el personal de taller (números para la OT)
             p.startswith("/api/vehiculos") or    # lista de coches para el formulario de OT
             p.startswith("/api/repuestos") or    # inventario del depósito (reponer stock)
             p.startswith("/api/historial_carga") or  # carga de historial retroactivo
@@ -1429,7 +1437,20 @@ def api_actualizar_item(item_id):
     if "costo" in d:
         try: d["costo"] = float(d["costo"] or 0)
         except: d["costo"] = 0
-    actualizar_item_ot(item_id, **d)
+    # El técnico ahora va por número (personal de taller). Si llega como texto
+    # (una pantalla vieja en caché), los números se vinculan y el resto queda
+    # escrito tal cual.
+    if "tecnico" in d:
+        texto = d.pop("tecnico")
+        d.pop("tecnico_otro", None)
+        try:
+            import personal_taller
+            personal_taller.asignar_texto(item_id, texto, session.get("nombre") or session.get("usuario") or "")
+        except Exception:
+            d["tecnico"] = texto
+    d.pop("tecnico_otro", None)
+    if d:
+        actualizar_item_ot(item_id, **d)
     return jsonify({"ok": True})
 
 

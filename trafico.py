@@ -1329,17 +1329,20 @@ def leer_excel_internacional(contenido):
                         "nota": antes})
                     r = fin + 1
                     continue
-                # Renglón sin hora: si tiene texto en la parte de la hora/destino es la nota del día
+                # Renglón sin hora: si tiene texto en la parte de la hora, el destino
+                # o el coche (el renglón amarillo, combinado), es la nota del día
+                ult = g["trip"] or g["coche"]
                 textos = []
-                for c in range(g["hora"], (g["trip"] or g["coche"]) + 1):
+                for c in range(g["hora"], ult + 1):
+                    if c == g["trip"] and not ((r, g["hora"]) in alto and alto[(r, g["hora"])][1] >= ult):
+                        continue                          # un tripulante suelto no es nota
                     t = txt(r, c)
                     if t and t not in textos:
                         textos.append(t)
-                if textos and not txt(r, g["trip"] or 0) or (textos and (r, g["hora"]) in alto
-                                                              and alto[(r, g["hora"])][1] >= (g["trip"] or g["coche"])):
-                    nota = limpiar(" ".join(textos))
-                    if nota and not _fecha_de_texto(nota):
-                        dia[f"nota_{lado}"] = (dia[f"nota_{lado}"] + " · " + nota).strip(" ·") if dia[f"nota_{lado}"] else nota
+                nota = limpiar(" ".join(textos))
+                if nota and not _fecha_de_texto(nota):
+                    viejo = dia[f"nota_{lado}"]
+                    dia[f"nota_{lado}"] = f"{viejo} · {nota}" if viejo else nota
                 r += 1
         if dia["salidas"]:
             dias.append(dia)

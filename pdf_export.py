@@ -539,7 +539,7 @@ def generar_reporte_gerencial_pdf(reporte, ruta_salida):
                         (it["descripcion"] or "")[:60],
                         it["tipo"].title(),
                         f"{est_lbl} {it['estado'][:10]}",
-                        (it.get("tecnico") or "—")[:20],
+                        _tecnico_corto(it.get("tecnico")),
                         gs(it.get("costo", 0))
                     ])
                 items_data.append(["", "", "", "", "TOTAL", gs(sum(i.get("costo",0) for i in ot["items"]))])
@@ -669,6 +669,17 @@ LABEL_ESTADO_ITEM = {
 LABEL_ESTADO_OT = {
     "abierta": "Abierta", "en_proceso": "En proceso", "cerrada": "Cerrada",
 }
+
+
+def _tecnico_corto(t, largo=20):
+    """Para la columna angosta del técnico: si son varios con número y no
+    entra, quedan solo los números (N°20 · N°21)."""
+    t = (t or "").strip() or "—"
+    if len(t) <= largo:
+        return t
+    import re
+    nums = re.findall(r"N°\d+", t)
+    return " · ".join(nums)[:largo] if len(nums) > 1 else t[:largo]
 
 
 def _logo_path():

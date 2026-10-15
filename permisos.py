@@ -37,6 +37,7 @@ GRUPOS_SECCIONES = [
         ("planes", "Plan preventivo (flota, agenda y planes)"),
         ("inventario_neu", "Inventario neumáticos"),
         ("historial_carga", "Historial por coche"),
+        ("personal", "Personal de taller"),
     ]),
     ("Compras", [
         ("compras", "Compras / Depósito"),
