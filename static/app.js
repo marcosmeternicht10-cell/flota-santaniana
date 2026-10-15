@@ -6025,6 +6025,7 @@ async function abrirOT(otId) {
         <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
           ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${ot.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
           <button class="btn btn-ghost" onclick="window.open('/api/ots/${ot.id}/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir PDF</button>
+          <button class="btn btn-ghost" onclick="otHojas(${ot.id}, this)" title="Una hoja para cada técnico con sus trabajos, sin costos"><i class="ti ti-file-stack"></i> Hojas por técnico</button>
           ${!ot.estado_compras ?
             `<button class="btn btn-primary" onclick="enviarACompras(${ot.id})"><i class="ti ti-shopping-cart"></i> Enviar a Compras</button>` :
             `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}" style="align-self:center"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>`
@@ -16714,10 +16715,14 @@ async function ptGuardar(iid, aviso) {
   const st = window._ptItems[iid];
   if (!st) return false;
   const seq = ++st.seq;
-  const r = await api(`/api/ot_items/${iid}/personal`, {
+  const prom = api(`/api/ot_items/${iid}/personal`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids: st.ids, otro: st.otros.join(", ") }),
   });
+  pt.pend = pt.pend || new Set();
+  pt.pend.add(prom);
+  prom.finally(() => pt.pend.delete(prom));
+  const r = await prom;
   if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar el técnico", "error"); return false; }
   if (seq !== st.seq) return true;    // ya hay un cambio más nuevo en camino
   st.gente = r.item.personal || [];
@@ -17836,4 +17841,46 @@ async function caVersiones() {
       </div>`; }).join("")}</div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
   });
+}
+
+// ─── Hojas por técnico: cada uno con su hoja de la OT (sin costos) ───
+async function otHojas(otId, btn) {
+  // Si quedó un técnico escrito sin guardar, se guarda antes
+  guardarPendientesOT();
+  await new Promise(r => setTimeout(r, 220));
+  if (pt.pend && pt.pend.size) await Promise.all([...pt.pend]).catch(() => {});
+  const d = await api(`/api/ots/${otId}/hojas`);
+  if (!d || !d.ok) { toast((d && d.msg) || "No se pudo armar las hojas", "error"); return; }
+  if (!d.hojas.length) {
+    toast("Primero poné el número del técnico en cada trabajo (columna Técnico)", "error");
+    return;
+  }
+  const o = rvModal({
+    titulo: "Hojas por técnico", icono: "file-stack", ancho: 520, clase: "ot-hojas",
+    sub: `OT #${otId} · una hoja para cada uno con sus trabajos, sin costos`,
+    cuerpo: `
+      <div class="oth-lista">${d.hojas.map(h => `
+        <label class="oth-op">
+          <input type="checkbox" value="${trEsc(h.clave)}" checked>
+          <span class="oth-num ${h.numero == null ? "sin" : ""}">${h.numero != null ? h.numero : "<i class='ti ti-pencil'></i>"}</span>
+          <span class="oth-quien"><b>${trEsc(h.nombre)}</b><small>${h.numero == null ? "Escrito sin número" : trEsc(h.puesto || "")}</small></span>
+          <span class="oth-cant">${h.trabajos} trabajo${h.trabajos === 1 ? "" : "s"}</span>
+        </label>`).join("")}</div>
+      ${d.sin_tecnico.length ? `<div class="oth-aviso"><i class="ti ti-info-circle"></i><span>${d.sin_tecnico.length === 1 ? "Un trabajo no tiene" : `${d.sin_tecnico.length} trabajos no tienen`} técnico y no sale en ninguna hoja: ${d.sin_tecnico.map(trEsc).join(", ")}.</span></div>` : ""}`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="oth-ok"><i class="ti ti-printer"></i> <span>Imprimir ${d.hojas.length} hoja${d.hojas.length === 1 ? "" : "s"}</span></button>`,
+  });
+  const ok = o.querySelector("#oth-ok");
+  const contar = () => {
+    const n = o.querySelectorAll(".oth-op input:checked").length;
+    ok.disabled = !n;
+    ok.querySelector("span").textContent = n ? `Imprimir ${n} hoja${n === 1 ? "" : "s"}` : "Elegí al menos uno";
+  };
+  o.querySelectorAll(".oth-op input").forEach(i => i.addEventListener("change", contar));
+  ok.onclick = () => {
+    const sel = [...o.querySelectorAll(".oth-op input:checked")].map(i => i.value);
+    const todas = sel.length === d.hojas.length;
+    window.open(`/api/ots/${otId}/hojas.pdf${todas ? "" : "?quienes=" + encodeURIComponent(sel.join("|"))}`, "_blank");
+    o.remove();
+  };
 }
