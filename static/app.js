@@ -211,6 +211,7 @@ function irA(sec) {
     limpieza: renderLimpieza,
     historial_carga: renderHistorialCarga,
     trafico: renderTrafico,
+    personal: renderPersonal,
   };
   map[sec]();
 }
@@ -4333,7 +4334,7 @@ function svContar() {
 setCoche(null);
 if (window.USUARIO_ROL === "compras") {
   // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
-  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga"];
+  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesCompras.includes(b.dataset.sec)) b.style.display = "none";
   });
@@ -5997,12 +5998,7 @@ async function abrirOT(otId) {
                         <option value="completado" ${it.estado==='completado'?'selected':''}>Completado</option>
                       </select>
                     </td>
-                    <td>
-                      <input type="text" value="${it.tecnico || ''}" placeholder="Nombre del técnico"
-                        onblur="actualizarItem(${it.id},'tecnico',this.value,this)"
-                        onkeydown="if(event.key==='Enter'){this.blur();}"
-                        style="width:130px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
-                    </td>
+                    <td class="pt-td">${ptCelda(it)}</td>
                     <td>
                       <input type="text" value="${it.material_pedido || ''}" placeholder="ej: WD40, repuesto X"
                         onblur="actualizarItem(${it.id},'material_pedido',this.value,this)"
@@ -6045,6 +6041,7 @@ async function abrirOT(otId) {
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOTDetalle(); });
   otDepCargar(ot);
   pvOtCargar(ot);
+  ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
 }
 
 // Si alguien escribe el técnico y cierra el modal de una, el onblur no llega
@@ -6138,6 +6135,12 @@ function cerrarModalOTDetalle() {
   guardarPendientesOT();
   const m = document.getElementById("modal-ot-detalle");
   if (m) m.remove();
+  ptCerrarPop();
+  // Abierta desde Personal de taller: se queda ahí (y se actualiza)
+  if (document.querySelector('.nav-item[data-sec="personal"].active') && $("#pt-cuerpo")) {
+    if (pt.tab === "trabajo" && $("#pt-datos")) setTimeout(ptTraer, 250);
+    return;
+  }
   renderOts();
 }
 
@@ -16520,4 +16523,641 @@ async function pvOtAgregar() {
   toast(`${r.agregadas} tarea${r.agregadas === 1 ? "" : "s"} agregada${r.agregadas === 1 ? "" : "s"} a la OT`, "success");
   document.getElementById("modal-ot-detalle")?.remove();
   abrirOT(ot.id);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  PERSONAL DE TALLER
+// ════════════════════════════════════════════════════════════════════════
+// Cada uno con su número (el de la lista del taller). En la OT, en cada
+// ítem, se pone el número de quién hizo el trabajo —uno o varios— y de ahí
+// sale quién trabaja más, en qué coches y lo que quedó sin número.
+const pt = {
+  lista: null, cargando: null, tab: "trabajo", p: "30", vid: "", puesto: "",
+  res: null, bajas: false, vehiculos: null, seq: 0,
+};
+const PT_PERIODOS = [["7", "7 días"], ["30", "30 días"], ["90", "90 días"], ["anio", "Este año"], ["todo", "Todo"]];
+const PT_PERIODO_TXT = { "7": "últimos 7 días", "30": "últimos 30 días", "90": "últimos 90 días", anio: "este año", todo: "desde siempre" };
+const PT_TIPO = { preventivo: "Preventivo", correctivo: "Correctivo", neumaticos: "Neumáticos", control: "Control", otro: "Otro" };
+const ptEsc = s => trEsc(s);
+const ptPuede = () => ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+function ptNorm(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim(); }
+function ptFC(f) { if (!f) return ""; const [a, m, d] = String(f).slice(0, 10).split("-"); return `${d}/${m}${a !== String(new Date().getFullYear()) ? "/" + a.slice(2) : ""}`; }
+function ptPartir(t) { return String(t || "").split(/\s*,\s*/).map(x => x.trim()).filter(Boolean); }
+
+async function ptCargarLista(forzar) {
+  if (pt.lista && !forzar) return pt.lista;
+  if (pt.cargando) return pt.cargando;
+  pt.cargando = api("/api/personal").then(r => {
+    pt.lista = Array.isArray(r) ? r : (pt.lista || []);
+    pt.cargando = null;
+    return pt.lista;
+  }).catch(() => { pt.cargando = null; return pt.lista || []; });
+  return pt.cargando;
+}
+
+// ─── En la OT: el técnico de cada ítem, por número ───
+window._ptItems = window._ptItems || {};
+function ptEstadoDe(it) {
+  const gente = Array.isArray(it.personal) ? it.personal : [];
+  // Si el servidor todavía no tiene la columna nueva, lo escrito es el técnico de siempre
+  const otro = it.tecnico_otro !== undefined ? it.tecnico_otro : (gente.length ? "" : it.tecnico);
+  return { gente, ids: gente.map(p => p.id), otros: ptPartir(otro), seq: 0 };
+}
+function ptCelda(it) {
+  window._ptItems[it.id] = ptEstadoDe(it);
+  const puede = ptPuede();
+  return `<div class="pt-pick ${puede ? "" : "solo-ver"}" id="pt-${it.id}" onmousedown="if(event.target===this){event.preventDefault();this.querySelector('input')?.focus()}">
+      <span class="pt-chips">${ptChips(it.id)}</span>
+      ${puede ? `<input class="pt-in" type="text" autocomplete="off" enterkeyhint="done" aria-label="Técnico: número o nombre"
+        placeholder="${window._ptItems[it.id].gente.length || window._ptItems[it.id].otros.length ? "+ otro" : "N° o nombre"}"
+        oninput="ptSugerir(this, ${it.id})" onfocus="ptSugerir(this, ${it.id})"
+        onkeydown="ptTecla(event, this, ${it.id})" onblur="ptSalir(this, ${it.id})">` : ""}
+    </div>`;
+}
+function ptChips(iid) {
+  const st = window._ptItems[iid];
+  if (!st) return "";
+  const x = ptPuede();
+  const gente = st.gente.map(p => `
+    <span class="pt-chip ${p.activo === 0 ? "baja" : ""}" title="N°${p.numero} ${ptEsc(p.nombre)}${p.puesto ? " · " + ptEsc(p.puesto) : ""}">
+      <b>${p.numero}</b><span>${ptEsc(p.nombre)}</span>
+      ${x ? `<button type="button" onmousedown="event.preventDefault()" onclick="ptQuitar(${iid}, ${p.id})" aria-label="Sacar a N°${p.numero}"><i class="ti ti-x"></i></button>` : ""}
+    </span>`).join("");
+  const otros = st.otros.map((t, k) => `
+    <span class="pt-chip otro" title="Escrito a mano, sin número">
+      <i class="ti ti-pencil"></i><span>${ptEsc(t)}</span>
+      ${x ? `<button type="button" onmousedown="event.preventDefault()" onclick="ptQuitarOtro(${iid}, ${k})" aria-label="Sacar"><i class="ti ti-x"></i></button>` : ""}
+    </span>`).join("");
+  return gente + otros || (x ? "" : `<span class="pt-nadie">—</span>`);
+}
+function ptPintarChips(iid) {
+  const box = document.querySelector(`#pt-${iid} .pt-chips`);
+  if (box) box.innerHTML = ptChips(iid);
+  const inp = document.querySelector(`#pt-${iid} .pt-in`);
+  const st = window._ptItems[iid];
+  if (inp && st) inp.placeholder = st.gente.length || st.otros.length ? "+ otro" : "N° o nombre";
+}
+function ptCoinciden(q, st) {
+  const libres = (pt.lista || []).filter(p => p.activo && !st.ids.includes(p.id));
+  q = String(q || "").trim();
+  if (!q) return libres;
+  const n = q.replace(/^n[°º.]?\s*/i, "").replace(/^#/, "");
+  if (/^\d+$/.test(n)) {
+    return libres.filter(p => String(p.numero).startsWith(n))
+      .sort((a, b) => (String(b.numero) === n) - (String(a.numero) === n) || a.numero - b.numero);
+  }
+  const pal = ptNorm(q).split(" ");
+  return libres.filter(p => { const t = ptNorm(p.nombre + " " + (p.puesto || "")); return pal.every(w => t.includes(w)); });
+}
+function ptPop() {
+  let pop = document.getElementById("pt-pop");
+  if (!pop) {
+    pop = document.createElement("div");
+    pop.id = "pt-pop";
+    pop.className = "pt-pop";
+    pop.setAttribute("role", "listbox");
+    document.body.appendChild(pop);
+  }
+  return pop;
+}
+function ptCerrarPop() { const p = document.getElementById("pt-pop"); if (p) { p.hidden = true; p.dataset.item = ""; } }
+async function ptSugerir(inp, iid) {
+  const st = window._ptItems[iid];
+  if (!st) return;
+  if (!pt.lista) await ptCargarLista();
+  if (document.activeElement !== inp) return;
+  const q = inp.value.trim();
+  const res = ptCoinciden(q, st);
+  const n = q.replace(/^n[°º.]?\s*/i, "").replace(/^#/, "");
+  const esNum = /^\d+$/.test(n);
+  const pop = ptPop();
+  pop.dataset.item = iid;
+  pop._res = res;
+  pop._libre = q && !esNum ? q : "";
+  pop._sel = 0;
+  pop.innerHTML = (res.length ? `<div class="pt-pop-cab">${q ? `${res.length} coincide${res.length === 1 ? "" : "n"}` : "Escribí el número o el nombre"}</div>` : "")
+    + res.map((p, k) => `
+      <div class="pt-op ${k === 0 ? "on" : ""}" role="option" data-k="${k}" onmousedown="event.preventDefault()" onclick="ptElegir(${iid}, ${p.id})">
+        <b>${p.numero}</b><span><span class="pt-op-n">${ptEsc(p.nombre)}</span><small>${ptEsc(p.puesto || "")}</small></span>
+      </div>`).join("")
+    + (!res.length && esNum ? `<div class="pt-pop-vacio"><i class="ti ti-user-question"></i> No hay nadie con el N°${ptEsc(n)}</div>` : "")
+    + (pop._libre ? `<div class="pt-op libre ${res.length ? "" : "on"}" role="option" data-k="${res.length}" onmousedown="event.preventDefault()" onclick="ptAnotarLibre(${iid})">
+        <i class="ti ti-pencil"></i><span><span class="pt-op-n">Anotar «${ptEsc(q)}» sin número</span><small>Un taller de afuera o alguien que no está en la lista</small></span>
+      </div>` : "");
+  if (!res.length && pop._libre) pop._sel = 0;
+  pop.hidden = !pop.innerHTML;
+  ptUbicarPop(inp, pop);
+}
+function ptUbicarPop(inp, pop) {
+  const r = inp.getBoundingClientRect();
+  const ancho = Math.min(window.innerWidth - 16, Math.max(300, r.width));
+  const izq = Math.max(8, Math.min(r.left, window.innerWidth - ancho - 8));
+  pop.style.width = ancho + "px";
+  pop.style.left = izq + "px";
+  const abajo = window.innerHeight - r.bottom;
+  const alto = Math.min(300, pop.scrollHeight || 300);
+  if (abajo < alto + 12 && r.top > abajo) {
+    pop.style.top = "";
+    pop.style.bottom = (window.innerHeight - r.top + 4) + "px";
+  } else {
+    pop.style.bottom = "";
+    pop.style.top = (r.bottom + 4) + "px";
+  }
+}
+function ptTecla(e, inp, iid) {
+  const pop = document.getElementById("pt-pop");
+  const ops = pop && !pop.hidden && pop.dataset.item == iid ? [...pop.querySelectorAll(".pt-op")] : [];
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!ops.length) return;
+    e.preventDefault();
+    pop._sel = (pop._sel + (e.key === "ArrowDown" ? 1 : -1) + ops.length) % ops.length;
+    ops.forEach((o, k) => o.classList.toggle("on", k === pop._sel));
+    ops[pop._sel].scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (!inp.value.trim()) { inp.blur(); return; }
+    const o = ops[pop?._sel ?? 0];
+    if (o) o.click();
+  } else if (e.key === "Escape") {
+    if (pop && !pop.hidden) { e.preventDefault(); e.stopPropagation(); ptCerrarPop(); }
+  } else if (e.key === "Backspace" && !inp.value) {
+    // Borrar sin texto saca al último (como en los correos)
+    const st = window._ptItems[iid];
+    if (st && st.otros.length) { e.preventDefault(); ptQuitarOtro(iid, st.otros.length - 1); }
+    else if (st && st.gente.length) { e.preventDefault(); ptQuitar(iid, st.gente[st.gente.length - 1].id); }
+  } else if (e.key === "Tab") {
+    ptCerrarPop();
+  }
+}
+function ptSalir(inp, iid) {
+  setTimeout(() => {
+    if (document.activeElement === inp) return;
+    const pop = document.getElementById("pt-pop");
+    if (pop && pop.dataset.item == iid) ptCerrarPop();
+    const q = inp.value.trim();
+    if (!q) return;
+    // Se fue sin elegir: si se entiende a quién se refiere, se guarda igual
+    const st = window._ptItems[iid];
+    const res = ptCoinciden(q, st);
+    const n = q.replace(/^n[°º.]?\s*/i, "").replace(/^#/, "");
+    if (/^\d+$/.test(n)) {
+      const p = res.find(x => String(x.numero) === n);
+      if (p) ptElegir(iid, p.id);
+      else { toast(`No hay nadie con el N°${n}`, "error"); inp.classList.add("mal"); }
+    } else if (res.length === 1) ptElegir(iid, res[0].id);
+    else if (!res.length) ptAnotarLibre(iid, q);
+    else { toast(`«${q}» coincide con ${res.length}: elegí de la lista`, "error"); inp.classList.add("mal"); }
+  }, 160);
+}
+async function ptGuardar(iid, aviso) {
+  const st = window._ptItems[iid];
+  if (!st) return false;
+  const seq = ++st.seq;
+  const r = await api(`/api/ot_items/${iid}/personal`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: st.ids, otro: st.otros.join(", ") }),
+  });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar el técnico", "error"); return false; }
+  if (seq !== st.seq) return true;    // ya hay un cambio más nuevo en camino
+  st.gente = r.item.personal || [];
+  st.ids = st.gente.map(p => p.id);
+  st.otros = ptPartir(r.item.tecnico_otro);
+  ptPintarChips(iid);
+  const box = document.getElementById(`pt-${iid}`);
+  if (box) { box.classList.remove("ok"); void box.offsetWidth; box.classList.add("ok"); }
+  if (aviso) toast(aviso, "success");
+  return true;
+}
+function ptElegir(iid, pid) {
+  const st = window._ptItems[iid];
+  const p = (pt.lista || []).find(x => x.id === pid);
+  if (!st || !p) return;
+  if (!st.ids.includes(pid)) {
+    st.ids.push(pid);
+    st.gente.push({ id: p.id, numero: p.numero, nombre: p.nombre, puesto: p.puesto, activo: p.activo });
+    st.gente.sort((a, b) => a.numero - b.numero);
+  }
+  const inp = document.querySelector(`#pt-${iid} .pt-in`);
+  if (inp) { inp.value = ""; inp.classList.remove("mal"); }
+  ptPintarChips(iid);
+  ptCerrarPop();
+  ptGuardar(iid, `Técnico: N°${p.numero} ${p.nombre}`);
+}
+function ptAnotarLibre(iid, texto) {
+  const st = window._ptItems[iid];
+  const inp = document.querySelector(`#pt-${iid} .pt-in`);
+  const t = String(texto ?? inp?.value ?? "").trim().replace(/,/g, " ");
+  if (!st || !t) return;
+  if (!st.otros.some(x => ptNorm(x) === ptNorm(t))) st.otros.push(t);
+  if (inp) { inp.value = ""; inp.classList.remove("mal"); }
+  ptPintarChips(iid);
+  ptCerrarPop();
+  ptGuardar(iid, `Anotado sin número: ${t}`);
+}
+function ptQuitar(iid, pid) {
+  const st = window._ptItems[iid];
+  if (!st) return;
+  st.ids = st.ids.filter(x => x !== pid);
+  st.gente = st.gente.filter(x => x.id !== pid);
+  ptPintarChips(iid);
+  ptGuardar(iid, "Técnico sacado del ítem");
+}
+function ptQuitarOtro(iid, k) {
+  const st = window._ptItems[iid];
+  if (!st) return;
+  st.otros.splice(k, 1);
+  ptPintarChips(iid);
+  ptGuardar(iid, "Sacado del ítem");
+}
+// La lista flotante sigue al campo si se mueve la pantalla
+document.addEventListener("scroll", () => {
+  const pop = document.getElementById("pt-pop");
+  if (!pop || pop.hidden) return;
+  const inp = document.querySelector(`#pt-${pop.dataset.item} .pt-in`);
+  if (inp && document.activeElement === inp) ptUbicarPop(inp, pop); else ptCerrarPop();
+}, true);
+window.addEventListener("resize", () => ptCerrarPop());
+
+// ─── La pantalla: Trabajo / Personal y números ───
+async function renderPersonal() {
+  status("Personal de taller: cada uno con su número y lo que hizo en las OT");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-users"></i> Personal de taller</h1>
+      <p>Cada uno con su número. En la OT se pone el número de quién hizo cada trabajo, y acá se ve quién hizo qué.</p>
+      <div class="page-actions" id="pt-acc"></div>
+    </div>
+    <div class="section pv-raiz pt-raiz">
+      <div class="pv-tabs" role="tablist">
+        ${[["trabajo", "chart-bar", "Trabajo"], ["lista", "id-badge-2", "Personal y números"]]
+          .map(([k, i, t]) => `<button role="tab" class="pv-tab ${pt.tab === k ? "on" : ""}" data-t="${k}" onclick="ptIr('${k}')"><i class="ti ti-${i}"></i><span>${t}</span></button>`).join("")}
+      </div>
+      <div id="pt-cuerpo">${pvCargando()}</div>
+    </div>`;
+  ptIr(pt.tab);
+}
+function ptIr(tab) {
+  pt.tab = tab;
+  document.querySelectorAll(".pt-raiz .pv-tab").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+  const acc = $("#pt-acc");
+  if (acc) acc.innerHTML = tab === "lista"
+    ? `<button class="btn btn-ghost" onclick="window.open('/api/personal/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir la lista</button>
+       ${ptPuede() ? `<button class="btn btn-primary" onclick="ptEditar()"><i class="ti ti-user-plus"></i> Agregar persona</button>` : ""}`
+    : `<button class="btn btn-ghost" onclick="ptInformePdf()"><i class="ti ti-file-type-pdf"></i> Informe PDF</button>`;
+  const c = $("#pt-cuerpo");
+  if (c) c.innerHTML = pvCargando();
+  (tab === "lista" ? ptLista : ptTrabajo)();
+}
+function ptQuery() {
+  return `p=${encodeURIComponent(pt.p)}${pt.vid ? `&vehiculo_id=${pt.vid}` : ""}`;
+}
+function ptInformePdf() { window.open(`/api/personal/informe.pdf?${ptQuery()}`, "_blank"); }
+
+// ─── TRABAJO ───
+async function ptTrabajo() {
+  if (!pt.vehiculos) pt.vehiculos = await api("/api/vehiculos").catch(() => []) || [];
+  const c = $("#pt-cuerpo");
+  if (!c || pt.tab !== "trabajo") return;
+  c.innerHTML = `
+    <div class="pt-filtros">
+      <div class="pt-seg" role="tablist" aria-label="Período">
+        ${PT_PERIODOS.map(([k, t]) => `<button role="tab" class="${pt.p === k ? "on" : ""}" data-p="${k}" onclick="ptPeriodo('${k}')">${t}</button>`).join("")}
+      </div>
+      <div class="pt-f-coche">${buscadorCoche("pt-coche", pt.vehiculos || [], { seleccionado: pt.vid, placeholder: "Todos los coches · N° o patente" })}</div>
+      <select class="rv-sel pt-f-puesto" id="pt-puesto" onchange="pt.puesto=this.value;ptPintar()" aria-label="Puesto"><option value="">Todos los puestos</option></select>
+    </div>
+    <div id="pt-datos">${pvCargando()}</div>`;
+  window["_cocheCB_pt-coche"] = v => { pt.vid = v ? String(v) : ""; ptTraer(); };
+  ptTraer();
+}
+function ptPeriodo(k) {
+  pt.p = k;
+  document.querySelectorAll(".pt-seg button").forEach(b => b.classList.toggle("on", b.dataset.p === k));
+  ptTraer();
+}
+async function ptTraer() {
+  const seq = ++pt.seq;
+  const box = $("#pt-datos");
+  if (box && pt.res) box.classList.add("cargando");
+  const d = await api(`/api/personal/resumen?${ptQuery()}`);
+  if (seq !== pt.seq || !$("#pt-datos")) return;
+  $("#pt-datos").classList.remove("cargando");
+  if (!d || !d.ranking) { $("#pt-datos").innerHTML = pvError("No se pudo traer el trabajo del personal"); return; }
+  pt.res = d;
+  if (!pt.lista) ptCargarLista();
+  const puestos = [...new Set(d.ranking.map(r => r.puesto).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+  if (pt.puesto && !puestos.includes(pt.puesto)) pt.puesto = "";
+  const sel = $("#pt-puesto");
+  if (sel) sel.innerHTML = `<option value="">Todos los puestos</option>` +
+    puestos.map(p => `<option ${p === pt.puesto ? "selected" : ""}>${ptEsc(p)}</option>`).join("");
+  ptPintar();
+}
+function ptBarra(v, max) { return `<span class="pt-bar"><i style="width:${max ? Math.max(v ? 3 : 0, v / max * 100) : 0}%"></i></span>`; }
+function ptPintar() {
+  const d = pt.res;
+  const box = $("#pt-datos");
+  if (!d || !box) return;
+  const t = d.totales;
+  const rk = d.ranking.filter(r => !pt.puesto || r.puesto === pt.puesto);
+  const con = rk.filter(r => r.trabajos), sin = rk.filter(r => !r.trabajos);
+  const max = Math.max(1, ...rk.map(r => r.trabajos));
+  const top = d.ranking.find(r => r.trabajos);
+  const per = PT_PERIODO_TXT[pt.p] || "";
+  const alcance = d.coche ? `Coche ${ptEsc(d.coche)} · ${per}` : per;
+  const pct = t.terminados ? Math.round(t.con_numero * 100 / t.terminados) : null;
+  const puede = ptPuede();
+  const fila = r => `
+    <div class="pt-fila ${r.trabajos ? "" : "cero"} ${r.activo ? "" : "baja"}" role="row" tabindex="0"
+         onclick="ptFicha(${r.id})" onkeydown="if(event.key==='Enter')ptFicha(${r.id})">
+      <span class="pt-num">${r.numero}</span>
+      <span class="pt-quien"><b>${ptEsc(r.nombre)}${r.activo ? "" : ` <em class="pt-baja-tag">de baja</em>`}</b><small>${ptEsc(r.puesto || "—")}</small></span>
+      <span class="pt-t">${ptBarra(r.trabajos, max)}<b>${r.trabajos}</b></span>
+      <span class="pt-c num">${r.coches || "—"}</span>
+      <span class="pt-e num">${r.en_curso ? `<span class="pt-curso">${r.en_curso}</span>` : "—"}</span>
+      <span class="pt-u num">${r.ultimo ? ptFC(r.ultimo) : "—"}</span>
+    </div>`;
+  box.innerHTML = `
+    <div class="pv-hero pt-hero">
+      <div class="pv-hero-num">
+        <span class="pv-et">Trabajos hechos · ${alcance}</span>
+        <b>${fmtNum(t.trabajos)}</b>
+        <span class="pv-hero-sub">${t.trabajos
+          ? `Por <strong>${t.personas}</strong> de ${t.activos} personas, en <strong>${t.coches}</strong> coche${t.coches === 1 ? "" : "s"}. Cuenta cada ítem terminado de una OT con el número de quién lo hizo.`
+          : `Todavía no hay trabajos con número en este período. En la OT, en <strong>Técnico</strong>, escribí el número (por ejemplo 20) y queda registrado.`}</span>
+      </div>
+      <div class="pv-hero-der">
+        <span class="pv-et">Lo terminado en las OT</span>
+        <div class="pt-cob"><b>${pct != null ? pct : "—"}<small>${pct != null ? " %" : ""}</small></b><span>${t.terminados
+          ? `de ${fmtNum(t.terminados)} trabajo${t.terminados === 1 ? "" : "s"} terminado${t.terminados === 1 ? "" : "s"} tiene el número de quién lo hizo`
+          : "No se terminó ningún trabajo en este período"}</span></div>
+        ${t.terminados ? `<div class="pv-stack">
+          ${t.con_numero ? `<i class="pt-s-ok" style="flex:${t.con_numero}"></i>` : ""}
+          ${t.a_mano ? `<i class="pt-s-mano" style="flex:${t.a_mano}"></i>` : ""}
+          ${t.sin_numero ? `<i class="pt-s-sin" style="flex:${t.sin_numero}"></i>` : ""}
+        </div>
+        <div class="pv-leyenda">
+          <span class="pv-ley pt-l-ok"><i class="ti ti-circle-check"></i><b>${fmtNum(t.con_numero)}</b> con número</span>
+          ${t.a_mano ? `<span class="pv-ley pt-l-mano"><i class="ti ti-pencil"></i><b>${fmtNum(t.a_mano)}</b> escrito${t.a_mano === 1 ? "" : "s"} a mano</span>` : ""}
+          ${t.sin_numero ? `<button class="pv-ley pt-l-sin" onclick="document.getElementById('pt-sin')?.scrollIntoView({behavior:'smooth',block:'start'})"><i class="ti ti-user-question"></i><b>${fmtNum(t.sin_numero)}</b> sin nadie</button>` : ""}
+        </div>` : ""}
+        ${t.en_curso ? `<span class="pv-hero-turnos"><i class="ti ti-tool"></i> Ahora: ${t.en_curso} trabajo${t.en_curso === 1 ? "" : "s"} asignado${t.en_curso === 1 ? "" : "s"} en OT abiertas</span>` : ""}
+      </div>
+    </div>
+    <div class="pv-kpis">
+      <div class="pv-kpi ${top ? "pt-kpi-click" : ""}" ${top ? `onclick="ptFicha(${top.id})" role="button" tabindex="0"` : ""}>
+        <span class="pv-kpi-ic pe-azul"><i class="ti ti-trophy"></i></span><span class="pv-kpi-et">Más trabajos</span>
+        <b>${top ? `N°${top.numero}` : "—"}</b><span class="pv-kpi-sub">${top ? `${ptEsc(top.nombre)} · ${top.trabajos} trabajo${top.trabajos === 1 ? "" : "s"}` : "nadie todavía"}</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-sd"><i class="ti ti-user-off"></i></span><span class="pv-kpi-et">Sin trabajos registrados</span>
+        <b>${t.sin_trabajos}</b><span class="pv-kpi-sub">de ${t.activos} en la lista · ${per}</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-ok"><i class="ti ti-${d.coche ? "users" : "bus"}"></i></span><span class="pv-kpi-et">${d.coche ? "Trabajaron en este coche" : "Coches atendidos"}</span>
+        <b>${d.coche ? t.personas : t.coches}</b>
+        <span class="pv-kpi-sub">${d.coche ? `persona${t.personas === 1 ? "" : "s"} con trabajos en el ${ptEsc(d.coche)}` : "con al menos un trabajo con número"}</span></div>
+      <div class="pv-kpi ${t.sin_numero ? "pt-kpi-click" : ""}" ${t.sin_numero ? `onclick="document.getElementById('pt-sin')?.scrollIntoView({behavior:'smooth',block:'start'})" role="button" tabindex="0"` : ""}>
+        <span class="pv-kpi-ic ${t.sin_numero ? "pe-pronto" : "pe-ok"}"><i class="ti ti-${t.sin_numero ? "user-question" : "checks"}"></i></span><span class="pv-kpi-et">Terminados sin nadie</span>
+        <b>${t.sin_numero}</b><span class="pv-kpi-sub">${t.sin_numero ? "falta poner quién lo hizo" : "todo lo terminado tiene a alguien"}</span></div>
+    </div>
+    <div class="pv-cu-grid pt-grid">
+      <div class="pv-card">
+        <div class="pv-card-cab"><h3>Quién hizo más</h3><span>${pt.puesto ? ptEsc(pt.puesto) + " · " : ""}Tocá a alguien para ver sus trabajos</span></div>
+        <div class="pt-tabla" role="table">
+          <div class="pt-fila pt-th" role="row"><span>N°</span><span>Nombre</span><span>Trabajos</span><span class="num">Coches</span><span class="num">En curso</span><span class="num">Último</span></div>
+          ${con.map(fila).join("") || `<div class="pt-vacio-r"><i class="ti ti-clipboard-off"></i> Nadie tiene trabajos con número ${per}${d.coche ? " en este coche" : ""}.</div>`}
+          ${sin.length ? `<div class="pt-sep" role="row"><i class="ti ti-user-off"></i> Sin trabajos registrados ${per} <span>${sin.length}</span></div>${sin.map(fila).join("")}` : ""}
+        </div>
+      </div>
+      <div class="pv-cu-lado">
+        <div class="pv-card" id="pt-sin">
+          <div class="pv-card-cab"><h3>Terminados sin nadie</h3><span>${t.sin_numero ? `${t.sin_numero} · poné el número y listo` : "Nada para completar"}</span></div>
+          ${d.sin_numero.length ? `<div class="pt-sn-lista">${d.sin_numero.map(s => `
+            <div class="pt-sn" id="pt-sn-${s.id}">
+              <span class="pt-sn-coche">${ptEsc(s.coche || "—")}</span>
+              <span class="pt-sn-info"><b>${ptEsc(s.descripcion)}</b><small>${ptFC(s.fecha)} · <button class="pv-link" onclick="abrirOT(${s.ot_id})">OT #${s.ot_id}</button> · ${PT_TIPO[s.tipo] || ptEsc(s.tipo || "")}</small></span>
+              ${puede ? `<input class="pt-sn-in" inputmode="numeric" placeholder="N°" aria-label="Número de quién lo hizo"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();ptAsignarSin(this, ${s.id})}" onchange="ptAsignarSin(this, ${s.id})">` : ""}
+            </div>`).join("")}</div>
+            ${t.sin_numero > d.sin_numero.length ? `<p class="pt-nota">Se muestran los ${d.sin_numero.length} más recientes.</p>` : ""}`
+          : `<div class="pv-sug-vacio"><i class="ti ti-circle-check"></i> Todo lo terminado tiene a alguien</div>`}
+        </div>
+        ${d.escritos.length ? `
+        <div class="pv-card">
+          <div class="pv-card-cab"><h3>Escrito a mano</h3><span>Nombres sin número en las OT</span></div>
+          <p class="pt-nota arriba">Si es alguien de la lista, elegí quién es y todos esos trabajos pasan a su número. Si es un taller de afuera, dejalo así.</p>
+          ${d.escritos.map((e, k) => `
+            <div class="pt-esc">
+              <span class="pt-esc-t"><b>«${ptEsc(e.texto)}»</b><small>${e.n} trabajo${e.n === 1 ? "" : "s"}</small></span>
+              ${puede ? `<select class="rv-sel" id="pt-esc-${k}" aria-label="Quién es">
+                  <option value="">¿Quién es?</option>
+                  ${(pt.lista || []).filter(p => p.activo).map(p => `<option value="${p.id}" ${p.id === e.sugerido ? "selected" : ""}>N°${p.numero} ${ptEsc(p.nombre)}</option>`).join("")}
+                </select>
+                <button class="btn btn-ghost" onclick="ptPasarEscrito(this, ${k})"><i class="ti ti-arrow-right"></i> Pasar</button>` : ""}
+            </div>`).join("")}
+        </div>` : ""}
+      </div>
+    </div>`;
+  // Si la lista del personal llegó después, se completan los selects
+  if (d.escritos.length && !pt.lista) ptCargarLista().then(() => { if (pt.res === d) ptPintar(); });
+}
+async function ptAsignarSin(inp, iid) {
+  const v = inp.value.trim().replace(/^n[°º.]?\s*/i, "").replace(/^#/, "");
+  if (!v || inp.dataset.enviando) return;
+  if (!pt.lista) await ptCargarLista();
+  const p = (pt.lista || []).find(x => String(x.numero) === v && x.activo);
+  if (!p) { toast(`No hay nadie con el N°${v}`, "error"); inp.classList.add("mal"); return; }
+  inp.dataset.enviando = "1";
+  const r = await api(`/api/ot_items/${iid}/personal`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids: [p.id] }) });
+  delete inp.dataset.enviando;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  const fila = document.getElementById(`pt-sn-${iid}`);
+  if (fila) {
+    fila.classList.add("hecho");
+    fila.querySelector(".pt-sn-in")?.replaceWith(Object.assign(document.createElement("span"), { className: "pt-sn-ok", innerHTML: `<i class="ti ti-check"></i> N°${p.numero}` }));
+  }
+  toast(`Listo: N°${p.numero} ${p.nombre}`, "success");
+  clearTimeout(pt._refresco);
+  pt._refresco = setTimeout(() => { if (pt.tab === "trabajo" && !document.querySelector(".pt-sn-in:focus")) ptTraer(); }, 2500);
+  // Al siguiente
+  const sig = fila?.nextElementSibling?.querySelector(".pt-sn-in");
+  if (sig) sig.focus();
+}
+async function ptPasarEscrito(btn, k) {
+  const e = pt.res.escritos[k];
+  const sel = document.getElementById(`pt-esc-${k}`);
+  const pid = Number(sel?.value);
+  if (!pid) { toast("Elegí quién es", "error"); sel?.focus(); return; }
+  const p = (pt.lista || []).find(x => x.id === pid);
+  if (!confirm(`¿Pasar ${e.n} trabajo${e.n === 1 ? "" : "s"} escrito${e.n === 1 ? "" : "s"} «${e.texto}» a N°${p.numero} ${p.nombre}?`)) return;
+  btn.disabled = true;
+  const r = await pvPost("/api/personal/escritos", { texto: e.texto, personal_id: pid });
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo", "error"); return; }
+  toast(`${r.n} trabajo${r.n === 1 ? "" : "s"} pasado${r.n === 1 ? "" : "s"} a N°${p.numero}`, "success");
+  ptTraer();
+}
+
+// ─── La ficha de una persona ───
+async function ptFicha(pid, periodo) {
+  const pAntes = pt.p, vAntes = pt.vid;
+  if (periodo) { pt.p = periodo; pt.vid = ""; }
+  const q = ptQuery(), per = PT_PERIODO_TXT[pt.p] || "", coche = periodo ? "" : (pt.res?.coche || "");
+  pt.p = pAntes; pt.vid = vAntes;
+  const o = rvModal({
+    titulo: "…", icono: "user", ancho: 760, clase: "pt-ficha",
+    cuerpo: pvCargando(),
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
+  const f = await api(`/api/personal/${pid}/trabajos?${q}`);
+  if (!document.body.contains(o)) return;
+  if (!f || !f.persona) { o.querySelector(".rv-modal-cuerpo").innerHTML = pvError("No se pudo traer la ficha"); return; }
+  const p = f.persona;
+  o.querySelector(".rv-modal-ic").outerHTML = `<span class="rv-modal-ic pt-ficha-num">${p.numero}</span>`;
+  o.querySelector(".rv-modal-tit").innerHTML = `<h2>${ptEsc(p.nombre)}</h2><p>${[p.puesto, p.edad_actual ? p.edad_actual + " años" : "", p.activo ? "" : "de baja"].filter(Boolean).map(ptEsc).join(" · ") || "Sin puesto"}</p>`;
+  const maxC = Math.max(1, ...f.coches.map(c => c.n));
+  const trabajo = t => `
+    <div class="pt-tr">
+      <span class="pt-tr-f">${ptFC(t.fecha)}</span>
+      <span class="pt-tr-coche">${ptEsc(t.coche || "—")}</span>
+      <span class="pt-tr-d"><b>${ptEsc(t.descripcion)}</b><small>${PT_TIPO[t.tipo] || ptEsc(t.tipo || "")}${t.con.length ? ` · con ${t.con.map(c => `N°${c.numero} ${ptEsc(c.nombre.split(" ")[0])}`).join(", ")}` : ""}</small></span>
+      <button class="pv-link" onclick="this.closest('.modal-overlay').remove();abrirOT(${t.ot_id})">OT #${t.ot_id}</button>
+    </div>`;
+  o.querySelector(".rv-modal-cuerpo").innerHTML = `
+    <div class="pt-f-stats">
+      <div><b>${f.trabajos.length}</b><span>trabajo${f.trabajos.length === 1 ? "" : "s"} · ${per}${coche ? ` · coche ${ptEsc(coche)}` : ""}</span></div>
+      <div><b>${f.ots}</b><span>OT</span></div>
+      <div><b>${f.coches.length}</b><span>coche${f.coches.length === 1 ? "" : "s"}</span></div>
+      <div><b>${f.en_curso.length}</b><span>en curso ahora</span></div>
+    </div>
+    <p class="pt-nota">Desde siempre: ${f.historico} trabajo${f.historico === 1 ? "" : "s"} terminado${f.historico === 1 ? "" : "s"}${Object.keys(f.tipos).length ? ` · en este período: ${Object.entries(f.tipos).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${(PT_TIPO[k] || k).toLowerCase()}`).join(", ")}` : ""}.</p>
+    ${f.coches.length ? `
+      <h4 class="pt-f-h">Coches donde más trabajó</h4>
+      <div class="pt-f-coches">${f.coches.slice(0, 8).map(c => `<span class="pt-fc"><b>${ptEsc(c.coche)}</b>${ptBarra(c.n, maxC)}<small>${c.n}</small></span>`).join("")}</div>` : ""}
+    ${f.en_curso.length ? `<h4 class="pt-f-h">En curso <span>(OT abiertas)</span></h4><div class="pt-trs">${f.en_curso.map(trabajo).join("")}</div>` : ""}
+    <h4 class="pt-f-h">Trabajos terminados <span>${per}</span></h4>
+    ${f.trabajos.length ? `<div class="pt-trs">${f.trabajos.map(trabajo).join("")}</div>`
+      : `<div class="rv-vacio chico"><i class="ti ti-clipboard-off"></i><b>Sin trabajos ${per}</b><span>Puede que no haya trabajado en OT o que no se haya puesto su número.</span></div>`}`;
+  if (ptPuede()) {
+    o.querySelector(".rv-modal-pie").insertAdjacentHTML("afterbegin",
+      `<button class="btn btn-ghost" style="margin-right:auto" onclick="this.closest('.modal-overlay').remove();ptEditar(${p.id})"><i class="ti ti-pencil"></i> Sus datos</button>`);
+  }
+}
+
+// ─── PERSONAL Y NÚMEROS ───
+async function ptLista() {
+  await ptCargarLista(true);
+  const c = $("#pt-cuerpo");
+  if (!c || pt.tab !== "lista") return;
+  const todos = pt.lista || [];
+  const activos = todos.filter(p => p.activo), bajas = todos.filter(p => !p.activo);
+  const ver = pt.bajas ? todos : activos;
+  const libres = [];
+  const maxN = Math.max(0, ...todos.map(p => p.numero));
+  for (let n = 1; n < maxN; n++) if (!todos.some(p => p.numero === n)) libres.push(n);
+  const puede = ptPuede();
+  c.innerHTML = `
+    <div class="pt-aviso"><i class="ti ti-info-circle"></i><span>El número es fijo y es el que se anota en la OT. Si alguien se va, se lo da de baja: su número no se vuelve a usar y lo que hizo sigue siendo suyo.
+      ${libres.length ? `<br>Número${libres.length === 1 ? "" : "s"} libre${libres.length === 1 ? "" : "s"}: ${libres.join(", ")}.` : ""}</span></div>
+    <div class="pv-card pt-lista-card">
+      <div class="pv-card-cab"><h3>Personal de taller</h3><span>${activos.length} persona${activos.length === 1 ? "" : "s"}${bajas.length ? ` · ${bajas.length} de baja` : ""}</span>
+        ${bajas.length ? `<button class="pv-link pt-ver-bajas" onclick="pt.bajas=!pt.bajas;ptLista()">${pt.bajas ? "Ocultar los de baja" : "Ver los de baja"}</button>` : ""}</div>
+      <div class="pt-ltabla" role="table">
+        <div class="pt-lf pt-th" role="row"><span>N°</span><span>Nombre y apellido</span><span>Puesto</span><span class="num">Edad</span><span>CI</span><span>Teléfono</span><span class="num">Trabajos</span><span></span></div>
+        ${ver.map(p => `
+          <div class="pt-lf ${p.activo ? "" : "baja"}" role="row" ${puede ? `onclick="ptEditar(${p.id})" tabindex="0" onkeydown="if(event.key==='Enter')ptEditar(${p.id})"` : ""}>
+            <span class="pt-num">${p.numero}</span>
+            <span class="pt-l-nom"><b>${ptEsc(p.nombre)}</b>${p.activo ? "" : `<em class="pt-baja-tag">de baja</em>`}</span>
+            <span class="pt-l-pue">${ptEsc(p.puesto || "—")}</span>
+            <span class="pt-l-edad num">${p.edad_actual != null ? `${p.edad_actual}<span class="pt-anos"> años</span>` : "—"}</span>
+            <span class="pt-l-ci">${p.ci ? ptEsc(p.ci) : `<i class="pt-falta">—</i>`}</span>
+            <span class="pt-l-tel">${p.telefono ? ptEsc(p.telefono) : `<i class="pt-falta">—</i>`}</span>
+            <span class="pt-l-trab num">${p.trabajos ? `<button class="pv-link" title="Trabajos terminados, desde siempre" onclick="event.stopPropagation();ptFicha(${p.id}, 'todo')">${p.trabajos}</button>` : "—"}</span>
+            <span class="pt-l-acc">${puede ? `<i class="ti ti-pencil"></i>` : ""}</span>
+          </div>`).join("") || `<div class="pt-vacio-r">Todavía no hay nadie cargado.</div>`}
+      </div>
+    </div>`;
+}
+
+function ptEditar(pid) {
+  const p = pid ? (pt.lista || []).find(x => x.id === pid) : null;
+  if (pid && !p) return;
+  const todos = pt.lista || [];
+  const sig = Math.max(0, ...todos.map(x => x.numero)) + 1;
+  const puestos = [...new Set(todos.map(x => x.puesto).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+  const v = (k, def = "") => ptEsc(p ? (p[k] ?? def) : def);
+  const o = rvModal({
+    titulo: p ? `N°${p.numero} · ${ptEsc(p.nombre)}` : "Agregar persona", icono: p ? "user-edit" : "user-plus", ancho: 560, clase: "pt-m-edit",
+    sub: p ? (p.asignados ? `${p.trabajos} trabajo${p.trabajos === 1 ? "" : "s"} terminado${p.trabajos === 1 ? "" : "s"}${p.asignados > p.trabajos ? ` y ${p.asignados - p.trabajos} en curso` : ""} en las OT` : "Sin trabajos en las OT todavía") : "Le toca el número que sigue; si en el taller ya tiene otro, cambialo.",
+    cuerpo: `
+      <div class="rv-n-grid pt-form">
+        <label class="rv-f pt-c-num"><span>N°</span><input id="pt-e-num" inputmode="numeric" value="${p ? p.numero : sig}" autocomplete="off"></label>
+        <label class="rv-f pt-g-nom"><span>Nombre y apellido</span><input id="pt-e-nom" value="${v("nombre")}" placeholder="Como figura en la planilla" autocomplete="off" ${p ? "" : "autofocus"}></label>
+        <label class="rv-f pt-c-pue"><span>Puesto</span><input id="pt-e-pue" list="pt-puestos" value="${v("puesto")}" placeholder="Mecánica general, Electricista…" autocomplete="off">
+          <datalist id="pt-puestos">${puestos.map(x => `<option value="${ptEsc(x)}">`).join("")}</datalist></label>
+        <label class="rv-f pt-c-edad"><span>Edad</span><input id="pt-e-edad" inputmode="numeric" value="${p && p.edad != null ? p.edad : ""}" placeholder="—"></label>
+        <label class="rv-f pt-c-nac"><span>Nacimiento <i class="pt-opc">opcional</i></span><input id="pt-e-nac" type="date" value="${v("nacimiento")}"></label>
+        <label class="rv-f pt-c-ci"><span>CI <i class="pt-opc">opcional</i></span><input id="pt-e-ci" value="${v("ci")}" inputmode="numeric" autocomplete="off"></label>
+        <label class="rv-f pt-c-tel"><span>Teléfono <i class="pt-opc">opcional</i></span><input id="pt-e-tel" value="${v("telefono")}" inputmode="tel" autocomplete="off"></label>
+      </div>
+      <p class="pt-nota">Con la fecha de nacimiento, la edad se actualiza sola.</p>
+      ${p && !p.activo ? `<div class="pt-aviso baja"><i class="ti ti-user-off"></i><span>Está de baja: no aparece para elegir en la OT. Su número no se usa para nadie más.</span></div>` : ""}`,
+    pie: `
+      ${p ? (p.asignados
+        ? `<button class="btn btn-ghost pt-btn-baja" style="margin-right:auto" onclick="ptBaja(this, ${p.id}, ${p.activo ? 0 : 1})"><i class="ti ti-${p.activo ? "user-off" : "user-check"}"></i> ${p.activo ? "Dar de baja" : "Volver a dar de alta"}</button>`
+        : `<button class="btn btn-ghost pt-btn-baja" style="margin-right:auto" onclick="ptBorrar(this, ${p.id})"><i class="ti ti-trash"></i> Borrar</button>`) : ""}
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" onclick="ptGuardarPersona(this, ${p ? p.id : 0})"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+  o.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => {
+    if (e.key === "Enter" && i.type !== "date") { e.preventDefault(); o.querySelector(".btn-primary").click(); }
+  }));
+  const nac = o.querySelector("#pt-e-nac"), edad = o.querySelector("#pt-e-edad");
+  const sinc = () => {
+    if (nac.value) {
+      const n = new Date(nac.value + "T00:00"), h = new Date();
+      let e = h.getFullYear() - n.getFullYear();
+      if (h.getMonth() < n.getMonth() || (h.getMonth() === n.getMonth() && h.getDate() < n.getDate())) e--;
+      edad.value = e >= 0 && e < 120 ? e : "";
+      edad.readOnly = true;
+    } else edad.readOnly = false;
+  };
+  nac.addEventListener("change", sinc);
+  sinc();
+}
+async function ptGuardarPersona(btn, pid) {
+  const m = btn.closest(".rv-modal");
+  const val = id => m.querySelector(id).value.trim();
+  const d = { numero: val("#pt-e-num"), nombre: val("#pt-e-nom"), puesto: val("#pt-e-pue"),
+              edad: val("#pt-e-edad"), nacimiento: val("#pt-e-nac"), ci: val("#pt-e-ci"), telefono: val("#pt-e-tel") };
+  if (!d.nombre) { toast("Falta el nombre", "error"); m.querySelector("#pt-e-nom").focus(); return; }
+  btn.disabled = true;
+  const r = await pvPost(pid ? `/api/personal/${pid}` : "/api/personal", d, pid ? "PATCH" : "POST");
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo guardar", "error"); return; }
+  m.closest(".modal-overlay").remove();
+  toast(pid ? "Datos guardados" : `Agregado: N°${r.persona.numero} ${r.persona.nombre}`, "success");
+  await ptCargarLista(true);
+  if (pt.tab === "lista" && $("#pt-cuerpo")) ptLista();
+  else if (pt.tab === "trabajo" && $("#pt-datos")) ptTraer();
+}
+async function ptBaja(btn, pid, activo) {
+  const p = (pt.lista || []).find(x => x.id === pid);
+  if (!activo && !confirm(`¿Dar de baja a N°${p.numero} ${p.nombre}?\n\nNo va a aparecer para elegir en la OT. Lo que hizo sigue siendo suyo y el N°${p.numero} no se usa para nadie más.`)) return;
+  btn.disabled = true;
+  const r = await pvPost(`/api/personal/${pid}`, { activo }, "PATCH");
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast(activo ? "Dado de alta otra vez" : `N°${p.numero} dado de baja`, "success");
+  await ptCargarLista(true);
+  if (pt.tab === "lista") ptLista(); else ptTraer();
+}
+async function ptBorrar(btn, pid) {
+  const p = (pt.lista || []).find(x => x.id === pid);
+  if (!confirm(`¿Borrar a N°${p.numero} ${p.nombre}? No tiene trabajos en las OT.`)) return;
+  btn.disabled = true;
+  const r = await pvPost(`/api/personal/${pid}`, {}, "DELETE");
+  btn.disabled = false;
+  if (!r.ok) { toast(r.msg || "No se pudo borrar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast("Borrado", "success");
+  await ptCargarLista(true);
+  if (pt.tab === "lista") ptLista(); else ptTraer();
 }
