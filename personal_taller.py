@@ -60,6 +60,17 @@ LISTA_INICIAL = [
     (22, "Alfredo Riveros", "Mecánica general", None),
 ]
 
+# Los que se suman después de la lista inicial. Cada tanda entra una sola vez
+# al arrancar el sistema (si después se borra a alguien, no vuelve a aparecer;
+# si ya lo habían cargado a mano con el mismo nombre, no se duplica).
+AGREGADOS = [
+    ("2026-10-15", [
+        (23, "Asterio Torres", "Mecánica general", None),
+        (24, "Rodrigo Flecha", "Mecánica general", None),
+        (25, "Joel Morel", "Mecánica general", None),
+    ]),
+]
+
 CAMPOS = ("numero", "nombre", "puesto", "edad", "nacimiento", "ci", "telefono", "activo")
 
 
@@ -122,6 +133,9 @@ def init_personal_taller():
             asignado_el TEXT DEFAULT '',
             asignado_por TEXT DEFAULT '',
             UNIQUE (item_id, personal_id))""",
+        """CREATE TABLE IF NOT EXISTS taller_personal_cargas (
+            tanda TEXT PRIMARY KEY,
+            aplicada_el TEXT DEFAULT '')""",
         "CREATE INDEX IF NOT EXISTS ix_itpers_item ON ot_item_personal (item_id)",
         "CREATE INDEX IF NOT EXISTS ix_itpers_pers ON ot_item_personal (personal_id)",
     ):
@@ -151,7 +165,37 @@ def init_personal_taller():
             conn.commit()
         except Exception:
             _rollback(conn)
+    try:
+        hechas = {r["tanda"] for r in conn.execute("SELECT tanda FROM taller_personal_cargas").fetchall()}
+        for tanda, gente in AGREGADOS:
+            if tanda in hechas:
+                continue
+            _sumar(conn, gente)
+            conn.execute("INSERT INTO taller_personal_cargas (tanda, aplicada_el) VALUES (?,?) ON CONFLICT (tanda) DO NOTHING",
+                         (tanda, ahora_iso()))
+            conn.commit()
+    except Exception:
+        _rollback(conn)
     conn.close()
+
+
+def _sumar(conn, gente):
+    """Agrega gente a la lista: si ya está (mismo nombre) no la repite; si su
+    número ya lo tiene otra persona, le toca el siguiente libre."""
+    ahora = ahora_iso()
+    filas = conn.execute("SELECT numero, nombre FROM taller_personal").fetchall()
+    nombres = {_norm(r["nombre"]) for r in filas}
+    usados = {r["numero"] for r in filas}
+    for numero, nombre, puesto, edad in gente:
+        if _norm(nombre) in nombres:
+            continue
+        if numero in usados:
+            numero = max(usados | {0}) + 1
+        conn.execute("""INSERT INTO taller_personal (numero, nombre, puesto, edad, activo, creado_el, actualizado_el)
+                        VALUES (?,?,?,?,1,?,?) ON CONFLICT (numero) DO NOTHING""",
+                     (numero, nombre, puesto, edad, ahora, ahora))
+        usados.add(numero)
+        nombres.add(_norm(nombre))
 
 
 def _migrar_texto_viejo(conn):
@@ -812,6 +856,8 @@ def pdf_lista(personas):
     story.append(Spacer(1, 5 * mm))
 
     activos = [p for p in personas if p["activo"]]
+    # Más gente, renglones más bajos: la idea es que entre en una hoja
+    pad = 4 if len(activos) <= 21 else 2.5 if len(activos) <= 27 else 1.5
     data = [["N°", "Nombre y apellido", "Puesto"]]
     for p in activos:
         data.append([Paragraph(str(p["numero"]), num), Paragraph(p["nombre"], nom), Paragraph(p["puesto"] or "—", pue)])
@@ -823,7 +869,7 @@ def pdf_lista(personas):
         ("FONTSIZE", (0, 0), (-1, 0), 9),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 1), (-1, -1), 4), ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
+        ("TOPPADDING", (0, 1), (-1, -1), pad), ("BOTTOMPADDING", (0, 1), (-1, -1), pad),
         ("LINEBELOW", (0, 1), (-1, -1), 0.4, colors.HexColor("#D9E2EE")),
         ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#EAF2FB")),
     ]
