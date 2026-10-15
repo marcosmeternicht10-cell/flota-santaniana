@@ -69,6 +69,9 @@ AGREGADOS = [
         (24, "Rodrigo Flecha", "Mecánica general", None),
         (25, "Joel Morel", "Mecánica general", None),
     ]),
+    ("2026-10-15b", [
+        (26, "Victor Ramirez", "Electricista", None),
+    ]),
 ]
 
 CAMPOS = ("numero", "nombre", "puesto", "edad", "nacimiento", "ci", "telefono", "activo")
