@@ -212,6 +212,7 @@ function irA(sec) {
     historial_carga: renderHistorialCarga,
     trafico: renderTrafico,
     personal: renderPersonal,
+    corp_asignacion: renderCorpAsignacion,
   };
   map[sec]();
 }
@@ -4347,7 +4348,7 @@ if (window.USUARIO_ROL === "compras") {
 } else if (window.USUARIO_ROL === "auditor") {
   // El auditor controla: todo lo de rendiciones corporativas más lo suyo de
   // siempre (combustible e historial). Solo consulta, no modifica nada.
-  const seccionesAuditor = ["combustible",
+  const seccionesAuditor = ["combustible", "corp_asignacion",
                             "corp_resumen", "corp_historial", "corp_empresas",
                             "corp_combustible", "corp_cargas", "turismo_rendiciones"];
   document.querySelectorAll(".nav-item").forEach(b => {
@@ -17160,4 +17161,688 @@ async function ptBorrar(btn, pid) {
   toast("Borrado", "success");
   await ptCargarLista(true);
   if (pt.tab === "lista") ptLista(); else ptTraer();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  CORPORATIVOS · ASIGNACIÓN DEL DÍA
+// ════════════════════════════════════════════════════════════════════════
+// Como el tráfico, pero para los tramos de los clientes: quién lo hace y con
+// qué coche. Los tramos del día salen del historial de rendiciones; se puede
+// copiar de otro día, dividir un tramo (entrante y saliente), marcar que no
+// corre y agregar variables. Se publica con versión (PDF e imagen para el
+// grupo) y, pasado el día, se compara con lo que rindió cada chofer.
+const ca = { fecha: null, d: null, dias: [], listas: null, filtro: "todo", q: "", foco: null, archivos: {}, seq: 0 };
+const CA_CONTROL = {
+  ok:          { t: "Rendido",          i: "circle-check",    c: "ok" },
+  otro_coche:  { t: "Otro coche",       i: "bus",             c: "ojo" },
+  parcial:     { t: "A medias",         i: "circle-half-2",   c: "ojo" },
+  otro_chofer: { t: "Lo rindió otro",   i: "user-exclamation", c: "mal" },
+  sin_rendir:  { t: "Sin rendir",       i: "circle-x",        c: "mal" },
+  suspendido:  { t: "Suspendido",       i: "player-pause",    c: "gris" },
+  pendiente:   { t: "Falta rendir",     i: "clock",           c: "gris" },
+};
+const caPuede = () => ["admin", "taller"].includes(window.USUARIO_ROL);
+const caEsc = s => trEsc(s);
+function caNombre(n) {
+  // "ACOSTA, ARMANDO" → "Armando Acosta"
+  const s = String(n || "").trim();
+  if (!s) return "";
+  const t = x => x.toLowerCase().replace(/(^|[\s-])\S/g, m => m.toUpperCase());
+  if (s.includes(",")) { const [ap, no] = s.split(",", 2); return `${t(no.trim())} ${t(ap.trim())}`; }
+  return t(s);
+}
+function caNorm(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
+function caClave(cliente, tramo, lado) { return `${cliente}|${tramo}|${lado}`; }
+function caPisan(a, b) {
+  if (!a || !b) return false;
+  for (const d of [0, 24, -24]) if (a[0] < b[1] + d && b[0] + d < a[1]) return true;
+  return false;
+}
+function caH(h) { if (h == null) return ""; h = ((h % 24) + 24) % 24; const hh = Math.floor(h), mm = Math.round((h - hh) * 60); return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`; }
+
+async function renderCorpAsignacion() {
+  status("Corporativos: quién cubre cada tramo y con qué coche");
+  if (!ca.fecha) ca.fecha = trHoy();
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-calendar-user"></i> Asignación del día</h1>
+      <p>Quién cubre cada tramo de corporativos y con qué coche. Se publica como el tráfico y, pasado el día, se compara con lo que rindió cada chofer.</p>
+    </div>
+    <div class="section ca-raiz">
+      <div id="ca-tablero"></div>
+      <div id="ca-cuerpo">${pvCargando()}</div>
+      <datalist id="ca-coches"></datalist>
+    </div>`;
+  if (!ca.listas) ca.listas = await api("/api/corp/asig/listas").catch(() => null) || { choferes: [], coches: [] };
+  const dl = $("#ca-coches");
+  if (dl) dl.innerHTML = (ca.listas.coches || []).map(c => `<option value="${caEsc(c.n)}">${caEsc([c.marca, c.modelo].filter(Boolean).join(" "))}</option>`).join("");
+  caCargar(ca.fecha);
+}
+
+async function caCargar(fecha, mantenerScroll) {
+  ca.fecha = fecha;
+  const seq = ++ca.seq;
+  const [d, dias] = await Promise.all([
+    api(`/api/corp/asig/dia/${fecha}`),
+    api(`/api/corp/asig/dias?desde=${trSumar(fecha, -3)}&hasta=${trSumar(fecha, 3)}`),
+  ]);
+  if (seq !== ca.seq || !$("#ca-cuerpo")) return;
+  if (!d || !d.clientes) { $("#ca-cuerpo").innerHTML = pvError("No se pudo traer la asignación"); return; }
+  ca.d = d;
+  ca.dias = Array.isArray(dias) ? dias : [];
+  caPintar(mantenerScroll);
+}
+function caIr(n) { caCargar(trSumar(ca.fecha, n)); }
+
+function caHayAlgo() {
+  const d = ca.d;
+  return d && d.clientes.some(c => c.variables.length || c.tramos.some(t => t.modo !== "vacio"));
+}
+
+function caPintar(mantenerScroll) {
+  const y = content.scrollTop;
+  $("#ca-tablero").innerHTML = caTablero();
+  $("#ca-cuerpo").innerHTML = caCuerpo();
+  if (mantenerScroll) content.scrollTop = y;
+  if (ca.foco) {
+    const el = document.querySelector(`[data-k="${CSS.escape(ca.foco.k)}"][data-campo="${ca.foco.campo}"]`);
+    ca.foco = null;
+    if (el) { el.focus(); if (el.select) el.select(); }
+  }
+}
+
+// ─── El tablero: fecha, estado, acciones y la tira de días ───
+function caTablero() {
+  const d = ca.d, f = ca.fecha, dia = d.dia || {};
+  const fe = trFecha(f);
+  const fichas = s => [...s].map((ch, i) => `<span class="tr-ficha" style="--k:${i}"><b>${ch}</b></span>`).join("");
+  const hayAlgo = caHayAlgo();
+  let chip, sub = "";
+  if (!d.existe || !hayAlgo && !dia.version) {
+    chip = `<span class="tr-estado-chip vacio"><i class="ti ti-circle-dashed"></i> Sin armar</span>`;
+  } else if (!dia.version) {
+    chip = `<span class="tr-estado-chip borrador"><i class="ti ti-pencil"></i> Borrador</span>`;
+    sub = "Todavía no se publicó";
+  } else if (dia.modificado) {
+    chip = `<span class="tr-estado-chip cambios"><i class="ti ti-pencil"></i> Versión ${dia.version} · cambios sin publicar</span>`;
+    sub = trPublicada(dia);
+  } else {
+    chip = `<span class="tr-estado-chip publicado"><i class="ti ti-circle-check"></i> Versión ${dia.version} publicada</span>`;
+    sub = trPublicada(dia);
+  }
+  const pendiente = d.existe && hayAlgo && (!dia.version || dia.modificado);
+  const dias = [];
+  for (let i = -3; i <= 3; i++) {
+    const g = trSumar(f, i);
+    const x = ca.dias.find(z => z.fecha === g) || {};
+    let estado = "vacio", txt = "";
+    if (x.existe) {
+      if (!x.version) { estado = "borrador"; txt = "borrador"; }
+      else { estado = x.modificado ? "cambios" : "publicado"; txt = `v${x.version}${x.modificado ? "*" : ""}`; }
+      if (x.diferencias) { estado += " dif"; txt = `${x.diferencias} dif.`; }
+    }
+    dias.push(`<button class="tr-dia ${estado} ${g === f ? "on" : ""}" onclick="caCargar('${g}')" title="${trLargo(g)}">
+      <span>${g === trHoy() ? "HOY" : g === trSumar(trHoy(), 1) ? "MAÑANA" : trCorto(g).split(" ")[0]}</span>
+      <b>${trFecha(g).getDate()}</b><i>${txt}</i></button>`);
+  }
+  const puede = caPuede();
+  return `
+    <div class="tr-tablero ca-tablero">
+      <div class="tr-tab-fecha">
+        <button class="tr-flecha" onclick="caIr(-1)" aria-label="Día anterior"><i class="ti ti-chevron-left"></i></button>
+        <button class="tr-fecha-centro" onclick="caElegirFecha()" title="Elegir otra fecha">
+          <span class="tr-dia-nombre">${TR_DIAS[fe.getDay()]}</span>
+          <span class="tr-fichas">${fichas(String(fe.getDate()).padStart(2, "0"))}<i></i>${fichas(TR_MESES[fe.getMonth()])}</span>
+        </button>
+        <input type="date" id="ca-fecha-in" class="ca-fecha-in" value="${f}" onchange="if(this.value)caCargar(this.value)" tabindex="-1" aria-hidden="true">
+        <button class="tr-flecha" onclick="caIr(1)" aria-label="Día siguiente"><i class="ti ti-chevron-right"></i></button>
+      </div>
+      <div class="tr-tab-estado">${chip}${sub ? `<small>${sub}</small>` : ""}</div>
+      <div class="tr-tab-acciones">
+        ${dia.version ? `<button class="tr-tab-btn" onclick="caVersiones()" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
+        ${hayAlgo ? `<button class="tr-tab-btn" onclick="caVerPdf(${pendiente ? "null" : dia.version})" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
+          <button class="tr-tab-btn" onclick="caDescargar(${pendiente ? "null" : dia.version}, this)" title="Descargar la hoja como imagen"><i class="ti ti-photo-down"></i><span>Imagen</span></button>` : ""}
+        ${puede ? `<button class="tr-tab-btn" onclick="caMas(this)" title="Copiar de otro día, vaciar"><i class="ti ti-dots"></i></button>` : ""}
+        ${puede && pendiente ? `<button class="tr-publicar" onclick="caPublicar(this)"><i class="ti ti-send"></i> Publicar versión ${(dia.version || 0) + 1}</button>`
+          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onpointerenter="caTraer(${dia.version})" onclick="caCompartir(${dia.version}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
+      </div>
+      <div class="tr-tab-dias">${dias.join("")}</div>
+    </div>`;
+}
+function caElegirFecha() {
+  const i = $("#ca-fecha-in");
+  if (!i) return;
+  try { i.showPicker(); } catch (e) { i.focus(); i.click(); }
+}
+
+// ─── El cuerpo ───
+function caCuerpo() {
+  const d = ca.d, r = d.resumen, ctl = d.control;
+  const hayAlgo = caHayAlgo();
+  const falta = r.sin_asignar + r.incompletos;
+  const difs = ctl ? ctl.diferencias : 0;
+  if (ca.filtro === "dif" && !difs) ca.filtro = "todo";
+  if (ca.filtro === "falta" && !falta) ca.filtro = "todo";
+  const opera = d.clientes.filter(c => c.opera || c.tramos.length || c.variables.length);
+  const quietos = d.clientes.filter(c => !c.opera && !c.tramos.length && !c.variables.length);
+  return `
+    <div class="tr-resumen ca-resumen">
+      <span class="tr-num"><b>${r.tramos + r.variables}</b><span>tramo${r.tramos + r.variables === 1 ? "" : "s"}</span></span>
+      <span class="tr-num"><b>${r.listos}</b><span>listo${r.listos === 1 ? "" : "s"}</span></span>
+      ${falta ? `<button class="tr-num falta" onclick="caFiltrar('falta')"><b>${falta}</b><span>a completar</span></button>` : r.tramos ? `<span class="tr-num ca-ok"><i class="ti ti-circle-check"></i><span>todo asignado</span></span>` : ""}
+      <span class="tr-num"><b>${r.choferes}</b><span>choferes</span></span>
+      <span class="tr-num"><b>${r.coches}</b><span>coches</span></span>
+      ${r.no_corre ? `<span class="tr-num"><b>${r.no_corre}</b><span>no corre${r.no_corre === 1 ? "" : "n"}</span></span>` : ""}
+      ${d.avisos.length ? `<button class="tr-num aviso" onclick="document.getElementById('ca-avisos')?.scrollIntoView({behavior:'smooth',block:'center'})"><b>${d.avisos.length}</b><span>se pisan</span></button>` : ""}
+    </div>
+    ${!hayAlgo && caPuede() ? caVacio() : ""}
+    ${ctl && hayAlgo ? caControl(ctl) : ""}
+    ${d.avisos.length ? `<div class="ca-avisos" id="ca-avisos"><div class="ca-avisos-cab"><i class="ti ti-alert-triangle"></i><b>No cuadra</b><span>Un chofer o un coche en dos tramos a la misma hora: después la rendición no lo deja cargar.</span></div>
+      <ul>${d.avisos.map(a => `<li>${caEsc(a.txt)}</li>`).join("")}</ul></div>` : ""}
+    <div class="ca-barra">
+      <div class="pt-seg" role="tablist" aria-label="Qué mostrar">
+        <button class="${ca.filtro === "todo" ? "on" : ""}" onclick="caFiltrar('todo')">Todo</button>
+        ${falta ? `<button class="${ca.filtro === "falta" ? "on" : ""}" onclick="caFiltrar('falta')">A completar <span class="rv-cuenta">${falta}</span></button>` : ""}
+        ${difs ? `<button class="${ca.filtro === "dif" ? "on" : ""}" onclick="caFiltrar('dif')">Diferencias <span class="rv-cuenta">${difs}</span></button>` : ""}
+      </div>
+      <label class="rv-buscar ca-buscar"><i class="ti ti-search"></i>
+        <input type="search" id="ca-q" placeholder="Buscar chofer, coche o tramo" value="${caEsc(ca.q)}" oninput="ca.q=this.value;caAplicarBusqueda()" autocomplete="off"></label>
+    </div>
+    <div class="ca-clientes">${opera.map(caCliente).join("")}</div>
+    ${quietos.length ? `<div class="ca-quietos">${quietos.map(c => `
+      <div class="ca-quieto"><i class="ti ti-moon"></i><span><b>${caEsc(c.cliente)}</b> no trabaja este día</span>
+        ${caPuede() && c.otros.length ? `<button class="pv-link" onclick="caOtros('${caEsc(c.cliente)}', this)">Agregar un tramo igual</button>` : ""}</div>`).join("")}</div>` : ""}
+    <div id="ca-q-vacio" class="rv-vacio chico" hidden><i class="ti ti-search-off"></i><b>Nada coincide</b><span>Probá con otro nombre o número de coche.</span></div>`;
+}
+
+function caVacio() {
+  const f = ca.fecha, ayer = trSumar(f, -1), semana = trSumar(f, -7);
+  return `
+    <div class="ca-vacio">
+      <div class="ca-vacio-ic"><i class="ti ti-calendar-plus"></i></div>
+      <div class="ca-vacio-t"><b>Este día todavía no tiene asignación</b>
+        <span>Abajo están los tramos que corren el ${caEsc(trLargo(f).toLowerCase())}. Para no empezar de cero, traé la de otro día y cambiá lo que haga falta.</span></div>
+      <div class="ca-vacio-btns">
+        <button class="btn btn-primary" onclick="caCopiar('${ayer}')"><i class="ti ti-copy"></i> Copiar de ayer (${caEsc(trCorto(ayer).toLowerCase())})</button>
+        <button class="btn btn-ghost" onclick="caCopiar('${semana}')"><i class="ti ti-calendar-repeat"></i> Del ${caEsc(trCorto(semana).toLowerCase())}</button>
+        <button class="btn btn-ghost" onclick="caCopiarOtro()"><i class="ti ti-calendar-search"></i> Otro día…</button>
+      </div>
+    </div>`;
+}
+
+function caControl(c) {
+  const n = c.cuenta;
+  const chips = [["ok", n.ok], ["otro_coche", n.otro_coche], ["parcial", n.parcial], ["otro_chofer", n.otro_chofer],
+                 ["suspendido", n.suspendido], ["sin_rendir", n.sin_rendir], ["pendiente", n.pendiente]]
+    .filter(([, v]) => v).map(([k, v]) => { const x = CA_CONTROL[k]; return `<span class="ca-ct-chip ${x.c}"><i class="ti ti-${x.i}"></i><b>${v}</b> ${x.t.toLowerCase()}</span>`; }).join("");
+  const sueltas = c.no_asignadas || [];
+  return `
+    <div class="ca-control">
+      <div class="ca-ct-cab">
+        <span class="ca-ct-ic"><i class="ti ti-arrows-diff"></i></span>
+        <div><b>Asignado contra rendido</b>
+          <span>${c.rendiciones} rendicion${c.rendiciones === 1 ? "" : "es"} de este día · ${c.diferencias ? `<strong>${c.diferencias} diferencia${c.diferencias === 1 ? "" : "s"}</strong>` : "todo coincide"}${c.hoy ? " · el día todavía no terminó" : ""}</span></div>
+      </div>
+      <div class="ca-ct-chips">${chips}${n.corrio ? `<span class="ca-ct-chip mal"><i class="ti ti-alert-circle"></i><b>${n.corrio}</b> corrió y estaba como «no corre»</span>` : ""}</div>
+      ${sueltas.length ? `
+        <div class="ca-sueltas">
+          <div class="ca-sueltas-t"><i class="ti ti-user-question"></i> Rindieron sin estar asignados <span class="rv-cuenta">${sueltas.length}</span></div>
+          ${sueltas.map(s => `<div class="ca-suelta">
+            <b>${caEsc(caNombre(s.chofer))}</b>
+            <span>${caEsc(s.cliente)} · ${caEsc(s.tramo_corto)}${s.estado !== "completado" ? ` (${caEsc(s.estado)})` : ""}${s.coche ? ` · coche ${caEsc(s.coche)}` : ""}</span>
+            ${s.en_lugar ? `<small>${caEsc(s.en_lugar)}</small>` : ""}
+          </div>`).join("")}
+        </div>` : ""}
+    </div>`;
+}
+
+function caCliente(c) {
+  const vis = c.tramos.filter(t => t.estado !== "no_corre");
+  const nc = c.tramos.filter(t => t.estado === "no_corre");
+  const listos = vis.filter(t => t.estado === "listo").length;
+  const puede = caPuede();
+  return `
+    <section class="ca-cli" data-cli="${caEsc(c.cliente)}">
+      <div class="ca-cli-cab">
+        <h3>${caEsc(c.cliente)}</h3>
+        <span class="ca-cli-cuenta ${listos === vis.length && vis.length ? "ok" : ""}">${listos} de ${vis.length} listo${vis.length === 1 ? "" : "s"}${c.variables.length ? ` · ${c.variables.length} variable${c.variables.length === 1 ? "" : "s"}` : ""}</span>
+        ${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNuevaVariable('${caEsc(c.cliente)}')"><i class="ti ti-plus"></i> Variable</button>` : ""}
+      </div>
+      <div class="ca-filas">
+        ${vis.map(t => caFila(t)).join("")}
+        ${c.variables.map(s => caVariable(c, s)).join("")}
+        ${nc.map(t => caFilaNoCorre(t)).join("")}
+      </div>
+      ${c.otros.length && puede ? `<button class="pv-link ca-otros-btn" onclick="caOtros('${caEsc(c.cliente)}', this)"><i class="ti ti-plus"></i> Otros tramos de ${caEsc(c.cliente)} que no suelen correr este día (${c.otros.length})</button>` : ""}
+    </section>`;
+}
+
+function caTexto(t, extra = "") {
+  // Texto para la búsqueda: tramo, choferes y coches
+  return caNorm([t.cliente, t.corto, t.tramo, ...(t.slots || []).flatMap(s => [s.chofer_nombre, caNombre(s.chofer_nombre), s.coche]), extra].join(" "));
+}
+function caClaseControl(t) {
+  const est = (t.slots || []).map(s => s.control?.estado).filter(Boolean);
+  if (t.control) est.push(t.control.estado);
+  return est.some(e => ["otro_coche", "parcial", "otro_chofer", "sin_rendir", "corrio"].includes(e)) ? "dif" : "";
+}
+
+function caFila(t) {
+  const horas = t.hora ? `<b>${t.hora}</b>${t.hora_fin ? `<small>a ${t.hora_fin}</small>` : ""}` : `<b class="sin">--:--</b>`;
+  const clases = ["ca-fila", `e-${t.estado}`, t.modo === "dividido" ? "dividido" : "", caClaseControl(t)].join(" ");
+  const puede = caPuede();
+  return `
+    <div class="${clases}" data-busca="${caEsc(caTexto(t))}" data-estado="${t.estado}" data-cli="${caEsc(t.cliente)}" data-tramo="${caEsc(t.tramo)}" data-modo="${t.modo}">
+      <div class="ca-hora">${horas}</div>
+      <div class="ca-tramo">
+        <b title="${caEsc(t.tramo)}">${caEsc(t.corto)}</b>
+        ${!t.esperado ? `<span class="ca-tag">no suele correr este día</span>` : ""}
+      </div>
+      <div class="ca-slots">${t.slots.map(s => caSlot(t, s)).join("")}</div>
+      <div class="ca-acc">
+        ${puede ? `<button class="icon-btn" title="Dividir, no corre" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
+      </div>
+    </div>`;
+}
+
+function caSlot(t, s) {
+  const k = caClave(t.cliente, t.tramo, s.lado);
+  const puede = caPuede();
+  const lado = s.lado === "completo" ? "" : `<span class="ca-lado ${s.lado}">${s.lado === "entrante" ? "ENT" : "SAL"}</span>`;
+  const ctl = s.control ? CA_CONTROL[s.control.estado] : null;
+  const aviso = (s.avisos || []).length ? `<span class="ca-aviso" title="${caEsc(s.avisos.join("\n"))}"><i class="ti ti-alert-triangle"></i></span>` : "";
+  return `
+    <div class="ca-slot">
+      ${lado}
+      ${puede ? `
+        <button class="ca-chofer ${s.chofer_usuario ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="chofer"
+          onclick="caElegirChofer(this, '${s.lado}')">
+          <i class="ti ti-${s.chofer_usuario ? "user" : "user-plus"}"></i><span>${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Elegir chofer"}</span></button>
+        <input class="ca-coche ${s.coche ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="coche" value="${caEsc(s.coche)}" placeholder="Coche"
+          list="ca-coches" inputmode="numeric" autocomplete="off" aria-label="Coche"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}"
+          onchange="caGuardarCoche(this, '${s.lado}')">`
+      : `<span class="ca-chofer-ro ${s.chofer_usuario ? "" : "vacio"}">${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Sin chofer"}</span>
+         <span class="ca-coche-ro ${s.coche ? "" : "vacio"}">${s.coche ? caEsc(s.coche) : "—"}</span>`}
+      ${aviso}
+      ${ctl ? `<span class="ca-ctl ${ctl.c}" title="${caEsc(s.control.txt)}"><i class="ti ti-${ctl.i}"></i><span>${caEsc(s.control.corto || s.control.txt)}</span></span>` : ""}
+    </div>`;
+}
+
+function caFilaNoCorre(t) {
+  const puede = caPuede();
+  return `
+    <div class="ca-fila e-no_corre ${caClaseControl(t)}" data-busca="${caEsc(caTexto(t, "no corre"))}" data-estado="no_corre" data-cli="${caEsc(t.cliente)}" data-tramo="${caEsc(t.tramo)}">
+      <div class="ca-hora">${t.hora ? `<b>${t.hora}</b>` : `<b class="sin">--:--</b>`}</div>
+      <div class="ca-tramo"><b title="${caEsc(t.tramo)}">${caEsc(t.corto)}</b></div>
+      <div class="ca-slots"><div class="ca-nocorre"><i class="ti ti-player-pause"></i> No corre este día${t.nota ? ` · ${caEsc(t.nota)}` : ""}
+        ${t.control ? `<span class="ca-ctl mal" title="${caEsc(t.control.txt)}"><i class="ti ti-alert-circle"></i><span>${caEsc(t.control.txt)}</span></span>` : ""}</div></div>
+      <div class="ca-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNoCorreBtn(this, false)">Vuelve a correr</button>` : ""}</div>
+    </div>`;
+}
+
+function caVariable(c, s) {
+  const puede = caPuede();
+  const ctl = s.control ? CA_CONTROL[s.control.estado] : null;
+  const aviso = (s.avisos || []).length ? `<span class="ca-aviso" title="${caEsc(s.avisos.join("\n"))}"><i class="ti ti-alert-triangle"></i></span>` : "";
+  const k = `var|${s.id}`;
+  const tipos = c.tipos_variable || ["VARIABLE"];
+  const listo = s.chofer_usuario && s.coche;
+  return `
+    <div class="ca-fila variable ${listo ? "e-listo" : "e-incompleto"} ${caClaseControl({ slots: [s] })}" data-busca="${caEsc(caNorm(["variable", s.detalle, s.chofer_nombre, caNombre(s.chofer_nombre), s.coche, s.tramo].join(" ")))}" data-estado="${listo ? "listo" : "incompleto"}">
+      <div class="ca-hora">${puede ? `<input class="ca-var-hora" value="${caEsc(s.hora)}" placeholder="--:--" inputmode="numeric" aria-label="Hora"
+          onchange="this.value=trHora(this.value);caGuardarVariable(${s.id}, {hora: this.value})" onkeydown="if(event.key==='Enter')this.blur()">` : `<b class="${s.hora ? "" : "sin"}">${caEsc(s.hora || "--:--")}</b>`}</div>
+      <div class="ca-tramo">
+        <span class="ca-var-tag">VARIABLE</span>
+        ${puede ? `<input class="ca-var-det" value="${caEsc(s.detalle)}" placeholder="Qué servicio (ej. apoyo planta)" aria-label="Detalle"
+            onchange="caGuardarVariable(${s.id}, {detalle: this.value})" onkeydown="if(event.key==='Enter')this.blur()">` : `<b>${caEsc(s.detalle || s.tramo_corto)}</b>`}
+        ${puede && tipos.length > 1 ? `<select class="ca-var-tipo" onchange="caGuardarVariable(${s.id}, {tramo: this.value})" aria-label="Tipo de variable">
+            ${tipos.map(x => `<option ${x === s.tramo ? "selected" : ""}>${caEsc(x)}</option>`).join("")}</select>` : ""}
+      </div>
+      <div class="ca-slots"><div class="ca-slot">
+        ${puede ? `
+          <button class="ca-chofer ${s.chofer_usuario ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="chofer" onclick="caElegirChoferVar(this, ${s.id})">
+            <i class="ti ti-${s.chofer_usuario ? "user" : "user-plus"}"></i><span>${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Elegir chofer"}</span></button>
+          <input class="ca-coche ${s.coche ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="coche" value="${caEsc(s.coche)}" placeholder="Coche" list="ca-coches" inputmode="numeric"
+            autocomplete="off" aria-label="Coche" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}"
+            onchange="caGuardarVariable(${s.id}, {coche: this.value})">`
+        : `<span class="ca-chofer-ro ${s.chofer_usuario ? "" : "vacio"}">${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Sin chofer"}</span>
+           <span class="ca-coche-ro ${s.coche ? "" : "vacio"}">${s.coche ? caEsc(s.coche) : "—"}</span>`}
+        ${aviso}
+        ${ctl ? `<span class="ca-ctl ${ctl.c}" title="${caEsc(s.control.txt)}"><i class="ti ti-${ctl.i}"></i><span>${caEsc(s.control.corto || s.control.txt)}</span></span>` : ""}
+      </div></div>
+      <div class="ca-acc">${puede ? `<button class="icon-btn" title="Quitar el variable" onclick="caBorrarVariable(${s.id})"><i class="ti ti-trash"></i></button>` : ""}</div>
+    </div>`;
+}
+
+function caFiltrar(f) {
+  ca.filtro = f;
+  document.querySelectorAll(".ca-barra .pt-seg button").forEach(b => b.classList.toggle("on", b.getAttribute("onclick").includes(`'${f}'`)));
+  caAplicarBusqueda();
+}
+function caAplicarBusqueda() {
+  const q = caNorm(ca.q).trim().split(/\s+/).filter(Boolean);
+  let visibles = 0;
+  document.querySelectorAll(".ca-cli").forEach(sec => {
+    let n = 0;
+    sec.querySelectorAll(".ca-fila").forEach(f => {
+      const okQ = !q.length || q.every(w => (f.dataset.busca || "").includes(w));
+      const okF = ca.filtro === "todo" || (ca.filtro === "falta" && ["vacio", "incompleto"].includes(f.dataset.estado))
+                  || (ca.filtro === "dif" && f.classList.contains("dif"));
+      f.hidden = !(okQ && okF);
+      if (!f.hidden) n++;
+    });
+    sec.hidden = !n && (q.length || ca.filtro !== "todo");
+    visibles += n;
+  });
+  const v = $("#ca-q-vacio");
+  if (v) v.hidden = visibles > 0 || (!q.length && ca.filtro === "todo");
+}
+
+// ─── Guardar ───
+async function caPost(url, body, metodo = "POST") {
+  const r = await api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  return r || {};
+}
+async function caAplicar(r, msg) {
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); caCargar(ca.fecha, true); return false; }
+  ca.d = r.dia;
+  const x = ca.dias.find(z => z.fecha === ca.fecha);
+  if (x) { x.existe = true; x.modificado = true; }
+  else ca.dias.push({ fecha: ca.fecha, existe: true, version: 0, modificado: true });
+  caPintar(true);
+  caAplicarBusqueda();
+  if (msg) toast(msg, "success");
+  return true;
+}
+async function caGuardarSlot(cliente, tramo, lado, campos, msg) {
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/slot`, { cliente, tramo, lado, ...campos });
+  return caAplicar(r, msg);
+}
+function caFilaDe(el) { const f = el.closest(".ca-fila"); return { cliente: f.dataset.cli, tramo: f.dataset.tramo, modo: f.dataset.modo }; }
+function caGuardarCoche(inp, lado) {
+  const { cliente, tramo } = caFilaDe(inp);
+  const v = inp.value.trim().toUpperCase();
+  inp.value = v;
+  // Después de guardar, el foco pasa al siguiente casillero de coche
+  const todos = [...document.querySelectorAll(".ca-coche")];
+  const sig = todos[todos.indexOf(inp) + 1];
+  if (sig && document.activeElement === sig) ca.foco = { k: sig.dataset.k, campo: "coche" };
+  caGuardarSlot(cliente, tramo, lado, { coche: v }, v ? `Coche ${v}` : "Se sacó el coche");
+}
+
+// ─── Elegir chofer: lista con lo que ya tiene cada uno ese día ───
+function caOcupaciones() {
+  const out = {};
+  for (const c of ca.d.clientes) {
+    for (const t of c.tramos) for (const s of t.slots) {
+      if (!s.chofer_usuario) continue;
+      (out[s.chofer_usuario] = out[s.chofer_usuario] || []).push({ k: caClave(t.cliente, t.tramo, s.lado), txt: `${t.corto}${s.lado !== "completo" ? ` (${s.lado})` : ""} ${t.hora || ""}`.trim(), cliente: t.cliente, rango: s.rango });
+    }
+    for (const s of c.variables) {
+      if (!s.chofer_usuario) continue;
+      (out[s.chofer_usuario] = out[s.chofer_usuario] || []).push({ k: `var|${s.id}`, txt: `Variable ${s.hora || ""}`.trim(), cliente: c.cliente, rango: s.rango });
+    }
+  }
+  return out;
+}
+function caRangoDe(cliente, tramo, lado) {
+  const c = ca.d.clientes.find(x => x.cliente === cliente);
+  const t = c && c.tramos.find(x => x.tramo === tramo);
+  if (!t) return null;
+  const s = t.slots.find(x => x.lado === lado) || t.slots[0];
+  if (s && s.rango) return s.rango;
+  // Sin asignar todavía: se calcula como lo hace el servidor
+  if (t.ini == null) return null;
+  let ini = t.ini, fin = t.fin != null ? t.fin : t.ini + 0.5;
+  if (fin <= ini) fin += 24;
+  if (t.jornada && lado === "entrante") return [ini - 1, ini + 0.5];
+  if (t.jornada && lado === "saliente") return [fin - 0.5, fin + 1];
+  return [ini, fin];
+}
+function caElegirChofer(btn, lado) {
+  const { cliente, tramo } = caFilaDe(btn);
+  const k = caClave(cliente, tramo, lado);
+  const c = ca.d.clientes.find(x => x.cliente === cliente);
+  const t = c && c.tramos.find(x => x.tramo === tramo);
+  const s = t && t.slots.find(x => x.lado === lado);
+  caPicker(btn, {
+    actual: s && s.chofer_usuario, k, rango: caRangoDe(cliente, tramo, lado),
+    titulo: `${cliente} · ${t ? t.corto : tramo}${lado !== "completo" ? ` (${lado})` : ""}`,
+    elegir: u => {
+      const ch = ca.listas.choferes.find(x => x.usuario === u);
+      ca.foco = { k, campo: "coche" };
+      caGuardarSlot(cliente, tramo, lado, { chofer_usuario: u }, u ? `Va ${caNombre(ch?.nombre)}` : "Se sacó el chofer");
+    },
+  });
+}
+function caElegirChoferVar(btn, id) {
+  let s = null;
+  ca.d.clientes.forEach(c => c.variables.forEach(v => { if (v.id === id) s = v; }));
+  caPicker(btn, {
+    actual: s && s.chofer_usuario, k: `var|${id}`, rango: s && s.rango, titulo: "Variable",
+    elegir: u => { ca.foco = { k: `var|${id}`, campo: "coche" }; caGuardarVariable(id, { chofer_usuario: u }); },
+  });
+}
+
+function caPicker(btn, o) {
+  document.querySelectorAll(".ca-pick").forEach(x => x.remove());
+  const ocup = caOcupaciones();
+  const p = document.createElement("div");
+  p.className = "ca-pick";
+  p.innerHTML = `
+    <div class="ca-pick-cab"><b>${caEsc(o.titulo)}</b><button class="icon-btn" aria-label="Cerrar" onclick="this.closest('.ca-pick').remove()"><i class="ti ti-x"></i></button></div>
+    <label class="rv-buscar ca-pick-q"><i class="ti ti-search"></i><input type="search" placeholder="Buscar chofer" autocomplete="off"></label>
+    <div class="ca-pick-lista" role="listbox"></div>`;
+  document.body.appendChild(p);
+  const lista = p.querySelector(".ca-pick-lista"), q = p.querySelector("input");
+  const items = () => {
+    const w = caNorm(q.value).trim().split(/\s+/).filter(Boolean);
+    const arr = ca.listas.choferes.filter(c => !w.length || w.every(x => caNorm(c.nombre).includes(x))).map(c => {
+      const tiene = (ocup[c.usuario] || []).filter(x => x.k !== o.k);
+      const pisa = tiene.some(x => caPisan(x.rango, o.rango));
+      return { ...c, tiene, pisa };
+    });
+    // Primero los libres, después los que ya tienen algo, al final los que se pisan
+    arr.sort((a, b) => ((b.usuario === o.actual) - (a.usuario === o.actual)) || (a.pisa - b.pisa)
+                       || (a.tiene.length - b.tiene.length) || a.nombre.localeCompare(b.nombre, "es"));
+    return arr;
+  };
+  let sel = 0, res = [];
+  const pintar = () => {
+    res = items();
+    sel = Math.min(sel, Math.max(0, res.length - 1));
+    lista.innerHTML = (o.actual ? `<button class="ca-pick-op quitar" data-u=""><i class="ti ti-user-minus"></i><span><b>Sacar el chofer</b><small>Queda sin asignar</small></span></button>` : "")
+      + res.map((c, i) => `
+        <button class="ca-pick-op ${i === sel ? "on" : ""} ${c.usuario === o.actual ? "actual" : ""} ${c.pisa ? "pisa" : ""}" data-u="${caEsc(c.usuario)}" role="option">
+          <span class="ca-pick-av">${caEsc(caNombre(c.nombre).split(" ").map(x => x[0]).slice(0, 2).join(""))}</span>
+          <span><b>${caEsc(caNombre(c.nombre))}</b>
+            <small>${c.tiene.length ? caEsc(c.tiene.map(x => x.cliente + " " + x.txt).join(" · ")) : "Libre este día"}</small></span>
+          ${c.pisa ? `<em class="ca-pick-tag mal">se pisa</em>` : c.usuario === o.actual ? `<em class="ca-pick-tag">asignado</em>` : !c.tiene.length ? `<em class="ca-pick-tag ok">libre</em>` : ""}
+        </button>`).join("")
+      + (!res.length ? `<div class="ca-pick-nada">Ningún chofer con ese nombre</div>` : "");
+    lista.querySelectorAll(".ca-pick-op").forEach(b => b.onclick = () => { p.remove(); o.elegir(b.dataset.u); });
+  };
+  pintar();
+  q.addEventListener("input", () => { sel = 0; pintar(); });
+  q.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      sel = Math.max(0, Math.min(res.length - 1, sel + (e.key === "ArrowDown" ? 1 : -1)));
+      pintar();
+      lista.querySelector(".ca-pick-op.on")?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (res[sel]) { p.remove(); o.elegir(res[sel].usuario); }
+    } else if (e.key === "Escape") { p.remove(); btn.focus(); }
+  });
+  // Ubicación: al lado del botón; en el celular, abajo de todo
+  if (window.innerWidth <= 640) p.classList.add("abajo");
+  else {
+    const r = btn.getBoundingClientRect();
+    const alto = Math.min(440, window.innerHeight - 24);
+    p.style.width = "340px";
+    p.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 348)) + "px";
+    p.style.top = (r.bottom + 6 + alto > window.innerHeight ? Math.max(12, r.top - alto - 6) : r.bottom + 6) + "px";
+    p.style.maxHeight = alto + "px";
+  }
+  setTimeout(() => q.focus(), 30);
+  setTimeout(() => document.addEventListener("mousedown", function fuera(e) {
+    if (!p.contains(e.target)) { p.remove(); document.removeEventListener("mousedown", fuera); }
+  }), 0);
+}
+
+// ─── Acciones de un tramo ───
+function caMasTramo(btn) {
+  const { cliente, tramo, modo } = caFilaDe(btn);
+  const items = [];
+  if (modo === "dividido") items.push({ icono: "arrows-join", html: "<b>Unir</b><span>Un solo chofer hace entrante y saliente</span>", fn: () => caDividir(cliente, tramo, true) });
+  else items.push({ icono: "arrows-split", html: "<b>Dividir</b><span>El entrante lo hace uno y el saliente otro</span>", fn: () => caDividir(cliente, tramo, false) });
+  items.push({ icono: "player-pause", html: "<b>No corre este día</b><span>No cuenta como faltante</span>", fn: () => caNoCorre(cliente, tramo, true) });
+  trMenu(btn, items);
+}
+async function caDividir(cliente, tramo, unir) {
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/dividir`, { cliente, tramo, unir });
+  caAplicar(r, unir ? "Tramo unido" : "Tramo dividido: entrante y saliente");
+}
+function caNoCorreBtn(btn, marcar) { const { cliente, tramo } = caFilaDe(btn); caNoCorre(cliente, tramo, marcar); }
+async function caNoCorre(cliente, tramo, marcar) {
+  let nota = "";
+  if (marcar) {
+    nota = prompt("¿Por qué no corre? (opcional, ej. feriado en la planta)", "");
+    if (nota === null) return;
+  }
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/no_corre`, { cliente, tramo, no_corre: marcar, nota });
+  caAplicar(r, marcar ? "Marcado: no corre" : "Vuelve a correr");
+}
+function caOtros(cliente, btn) {
+  const c = ca.d.clientes.find(x => x.cliente === cliente);
+  if (!c) return;
+  trMenu(btn, c.otros.map(o => ({ icono: "plus", html: `<b>${caEsc(o.corto)} ${o.hora ? caEsc(o.hora) : ""}</b><span>${caEsc(o.tramo)}</span>`,
+    fn: async () => caAplicar(await caPost(`/api/corp/asig/dia/${ca.fecha}/tramo`, { cliente, tramo: o.tramo }), "Tramo agregado") })));
+}
+
+// ─── Variables ───
+async function caNuevaVariable(cliente) {
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/variable`, { cliente });
+  if (await caAplicar(r, "Variable agregado: completá hora, chofer y coche")) {
+    const el = document.querySelector(`[data-k="var|${r.nuevo}"][data-campo="chofer"]`)?.closest(".ca-fila")?.querySelector(".ca-var-hora");
+    if (el) { el.focus(); el.closest(".ca-fila").classList.add("recien"); }
+  }
+}
+async function caGuardarVariable(id, campos) {
+  if ("coche" in campos) campos.coche = String(campos.coche || "").trim().toUpperCase();
+  const r = await caPost(`/api/corp/asig/fila/${id}`, campos, "PATCH");
+  caAplicar(r);
+}
+async function caBorrarVariable(id) {
+  if (!confirm("¿Quitar este variable?")) return;
+  const r = await caPost(`/api/corp/asig/fila/${id}`, {}, "DELETE");
+  caAplicar(r, "Variable quitado");
+}
+
+// ─── Copiar, vaciar, publicar ───
+function caMas(btn) {
+  const f = ca.fecha, ayer = trSumar(f, -1), semana = trSumar(f, -7);
+  trMenu(btn, [
+    { icono: "copy", html: `<b>Copiar de ayer</b><span>${caEsc(trLargo(ayer))}: choferes y coches tal cual</span>`, fn: () => caCopiar(ayer) },
+    { icono: "calendar-repeat", html: `<b>Copiar del ${caEsc(trCorto(semana).toLowerCase())}</b><span>El mismo día de la semana pasada</span>`, fn: () => caCopiar(semana) },
+    { icono: "calendar-search", html: "<b>Copiar de otro día…</b><span>Elegí la fecha</span>", fn: caCopiarOtro },
+    { icono: "trash", html: "<b>Vaciar el día</b><span>Saca todas las asignaciones</span>", peligro: true, fn: caVaciar },
+  ]);
+}
+function caCopiarOtro() {
+  const o = rvModal({
+    titulo: "Copiar de otro día", icono: "calendar-search", ancho: 420,
+    cuerpo: `<label class="rv-f"><span>Día de donde copiar</span><input type="date" id="ca-cp-f" value="${trSumar(ca.fecha, -1)}" max="${trSumar(ca.fecha, 60)}"></label>
+             <label class="ca-cp-var"><input type="checkbox" id="ca-cp-v"> Traer también los variables</label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="ca-cp-ok"><i class="ti ti-copy"></i> Copiar</button>`,
+  });
+  o.querySelector("#ca-cp-ok").onclick = () => {
+    const f = o.querySelector("#ca-cp-f").value, v = o.querySelector("#ca-cp-v").checked;
+    if (!f) return;
+    o.remove();
+    caCopiar(f, false, v);
+  };
+}
+async function caCopiar(desde, reemplazar = false, variables = false) {
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/copiar`, { desde, reemplazar, variables });
+  if (r && r.confirmar) {
+    if (!confirm(`Este día ya tiene ${r.ya_tiene} asignaciones. ¿Reemplazarlas por las del ${trLargo(desde)}?`)) return;
+    return caCopiar(desde, true, variables);
+  }
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo copiar", "error"); return; }
+  const c = r.copia || {};
+  await caAplicar(r, `Copiado del ${trCorto(desde).toLowerCase()}: ${c.copiadas} asignaciones${c.salteadas ? ` · ${c.salteadas} no corren este día` : ""}`);
+  caCargar(ca.fecha, true);
+}
+async function caVaciar() {
+  if (!confirm(`¿Sacar todas las asignaciones del ${trLargo(ca.fecha)}?`)) return;
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}`, {}, "DELETE");
+  await caAplicar(r, "Día vaciado");
+  caCargar(ca.fecha, true);
+}
+async function caPublicar(btn) {
+  const r0 = ca.d.resumen, falta = r0.sin_asignar + r0.incompletos;
+  if (falta && !confirm(`Quedan ${falta} tramo${falta === 1 ? "" : "s"} sin completar (chofer o coche).\n\n¿Publicar igual? Salen marcados como A CONFIRMAR.`)) return;
+  if (ca.d.avisos.length && !confirm(`Hay ${ca.d.avisos.length} choque${ca.d.avisos.length === 1 ? "" : "s"} de horario (un chofer o un coche en dos tramos a la vez).\n\n¿Publicar igual?`)) return;
+  btn.disabled = true;
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/publicar`);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo publicar", "error"); return; }
+  const p = r.publicado || {};
+  await caAplicar(r, p.sin_cambios ? "No había cambios para publicar" : `Versión ${p.version} publicada${p.cambios && p.cambios.length ? ` · ${p.cambios.length} cambio${p.cambios.length === 1 ? "" : "s"}` : ""}`);
+  caCargar(ca.fecha, true);
+}
+
+// ─── PDF, imagen, compartir, versiones ───
+function caVerPdf(v) { window.open(`/api/corp/asig/dia/${ca.fecha}/pdf${v ? `?v=${v}` : ""}`, "_blank"); }
+async function caTraer(v, tipo = "imagen") {
+  const clave = `${ca.fecha}|${tipo}|${v || "borrador"}`;
+  if (v && ca.archivos[clave]) return ca.archivos[clave];
+  const x = await fetch(`/api/corp/asig/dia/${ca.fecha}/${tipo}${v ? `?v=${v}` : ""}`).catch(() => null);
+  if (!x || !x.ok) return null;
+  const b = await x.blob();
+  if (v) ca.archivos[clave] = b;
+  return b;
+}
+function caArchivo(v, ext) { return `corporativos-${ca.fecha}${v ? `-v${v}` : "-borrador"}.${ext}`; }
+async function caDescargar(v, btn) {
+  const blob = await trConEspera(btn, () => caTraer(v));
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = caArchivo(v, "png");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+async function caCompartir(v, btn) {
+  const blob = await trConEspera(btn, () => caTraer(v));
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const archivo = new File([blob], caArchivo(v, "png"), { type: "image/png" });
+  const nombre = `Corporativos ${trLargo(ca.fecha)}`;
+  if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    try { await navigator.share({ files: [archivo], title: nombre, text: `${nombre} · versión ${v}` }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  caDescargar(v);
+  toast("Se descargó la imagen: adjuntala en el grupo de WhatsApp", "success");
+}
+async function caVersiones() {
+  const vs = await api(`/api/corp/asig/dia/${ca.fecha}/versiones`);
+  if (!Array.isArray(vs)) return;
+  rvModal({
+    titulo: "Versiones publicadas", icono: "history", ancho: 560, sub: trLargo(ca.fecha),
+    cuerpo: `<div class="ca-vers">${vs.map(v => {
+      const p = String(v.publicado_el || "");
+      return `<div class="ca-ver">
+        <span class="ca-ver-n">v${v.version}</span>
+        <span class="ca-ver-i"><b>${p.slice(8, 10)}/${p.slice(5, 7)} a las ${p.slice(11, 16)}${v.publicado_por ? ` · ${caEsc(v.publicado_por.split(" ")[0])}` : ""}</b>
+          <small>${v.cambios.length ? v.cambios.map(c => caEsc(c.txt)).join("<br>") : v.version === 1 ? "Primera versión" : "Sin cambios"}</small></span>
+        <span class="ca-ver-b"><button class="btn btn-ghost btn-sm" onclick="caVerPdf(${v.version})"><i class="ti ti-file-type-pdf"></i> PDF</button>
+          <button class="btn btn-ghost btn-sm" onclick="caDescargar(${v.version}, this)"><i class="ti ti-photo-down"></i></button></span>
+      </div>`; }).join("")}</div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
 }
