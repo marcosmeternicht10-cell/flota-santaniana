@@ -2500,11 +2500,17 @@ function trInicioVacio() {
   }
   if (trInt()) {
     opciones.push(`
-      <button class="tr-op ${ant ? "" : "principal"}" onclick="trAgregarBloque('BUENOS AIRES')">
+      <button class="tr-op ${ant ? "" : "principal"}" onclick="trImportar()">
+        <i class="ti ti-file-spreadsheet"></i>
+        <b>Importar la planilla</b>
+        <span>La del grupo, con uno o varios días (viernes, sábado…): cada día se carga en su fecha, con coches y tripulantes.</span>
+        ${ant ? "" : "<em>Para no empezar de cero</em>"}
+      </button>`);
+    opciones.push(`
+      <button class="tr-op" onclick="trAgregarBloque('BUENOS AIRES')">
         <i class="ti ti-world"></i>
         <b>Empezar con BUENOS AIRES</b>
         <span>Las idas (de acá a Retiro, Liniers, San Justo, La Plata) a la izquierda y los regresos a la derecha.</span>
-        ${ant ? "" : "<em>Para empezar</em>"}
       </button>`);
   } else {
     opciones.push(`
@@ -2524,7 +2530,7 @@ function trInicioVacio() {
     <div class="tr-vacio">
       <div class="tr-vacio-cab">
         <h2>¿Cómo armamos el ${trInt() ? "internacional del " : ""}${trLargo(tr.fecha)}?</h2>
-        <p>${ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: se arma a mano, una vez, y después se parte del anterior." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+        <p>${ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
       </div>
       <div class="tr-ops">${opciones.join("")}</div>
       <form class="tr-nuevo-corr tr-vacio-nuevo" onsubmit="event.preventDefault(); trAgregarBloque(this)">
@@ -3334,7 +3340,8 @@ async function trVersiones(btn) {
 function trMas(btn) {
   const ant = tr.d.dia_anterior;
   trMenu(btn, [
-    ...(trInt() ? [] : [{ icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar }]),
+    trInt() ? { icono: "file-spreadsheet", html: "<b>Importar la planilla</b><span>Uno o varios días: cada uno va a su fecha</span>", fn: trImportar }
+            : { icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar },
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
@@ -3359,6 +3366,7 @@ function trMenu(btn, items) {
 
 function trImportar() {
   if (tr.ocupado.has("importar")) { toast("Ya se está importando la planilla"); return; }
+  if (trInt()) return trImportarInt();
   const i = document.createElement("input");
   i.type = "file";
   i.accept = ".xlsx,.xlsm";
@@ -3382,6 +3390,68 @@ function trImportar() {
     toast(msg, "success");
     const listas = await api(`/api/trafico/listas?${trT()}`);
     if (listas && !listas.error) { tr.listas = listas; trDatalists(); }
+  }, "Ya se está importando la planilla");
+  i.click();
+}
+
+// Internacional: la planilla trae varios días. Primero se lee y se muestra qué
+// días va a cargar (y cuáles ya tenían algo); recién con el OK se carga.
+function trImportarInt() {
+  const i = document.createElement("input");
+  i.type = "file";
+  i.accept = ".xlsx,.xlsm";
+  i.onchange = () => trUnaVez("importar", async () => {
+    const f = i.files[0];
+    if (!f) return;
+    const fd = new FormData();
+    fd.append("archivo", f);
+    fd.append("tipo", "internacional");
+    fd.append("probar", "1");
+    const listo = trEspera("Leyendo la planilla…");
+    let r;
+    try { r = await api("/api/trafico/importar", { method: "POST", body: fd }); }
+    finally { listo(); }
+    if (!r || !r.ok) { toast(r?.msg || "No se pudo leer la planilla", "error"); return; }
+    const dias = r.dias || [];
+    const total = dias.reduce((a, d) => a + d.salidas, 0);
+    const pisa = dias.filter(d => d.ya_tenia);
+    rvModal({
+      titulo: "Importar la planilla internacional", icono: "file-spreadsheet", ancho: 560, clase: "tr-imp-int",
+      sub: `Encontré <b>${dias.length} día${dias.length === 1 ? "" : "s"}</b> con <b>${total} salidas</b>. Cada día se carga en su fecha, con coches, tripulantes y la nota de abajo.`,
+      cuerpo: `
+        <div class="tr-imp-dias">${dias.map(d => `
+          <div class="tr-imp-dia ${d.ya_tenia ? "pisa" : ""}">
+            <span class="tr-imp-cal"><b>${trFecha(d.fecha).getDate()}</b><small>${TR_DIAS[trFecha(d.fecha).getDay()].slice(0, 3)}</small></span>
+            <span class="tr-imp-info"><b>${trLargo(d.fecha)}</b>
+              <small>${d.ida} ida${d.ida === 1 ? "" : "s"} · ${d.regreso} regreso${d.regreso === 1 ? "" : "s"} · ${d.coches.length} coche${d.coches.length === 1 ? "" : "s"}</small></span>
+            ${d.ya_tenia ? `<span class="tr-imp-tag"><i class="ti ti-replace"></i> ya tenía ${d.ya_tenia}: se reemplaza${d.publicado ? " (estaba publicado)" : ""}</span>`
+                         : `<span class="tr-imp-tag nuevo"><i class="ti ti-circle-plus"></i> nuevo</span>`}
+          </div>`).join("")}
+        </div>
+        ${pisa.length ? `<p class="tr-imp-aviso"><i class="ti ti-alert-triangle"></i> ${pisa.length === 1 ? "Un día ya tenía" : `${pisa.length} días ya tenían`} tráfico cargado: lo de la planilla lo reemplaza.</p>` : ""}`,
+      pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+            <button class="btn btn-primary" id="tr-imp-ok"><i class="ti ti-check"></i> Cargar ${dias.length === 1 ? "el día" : `los ${dias.length} días`}</button>`,
+    });
+    document.getElementById("tr-imp-ok").onclick = async ev => {
+      const b = ev.currentTarget;
+      b.disabled = true;
+      const fd2 = new FormData();
+      fd2.append("archivo", f);
+      fd2.append("tipo", "internacional");
+      const ver = dias.some(d => d.fecha === tr.fecha) ? tr.fecha : dias[0].fecha;
+      fd2.append("ver", ver);
+      const listo2 = trEspera("Cargando los días…");
+      let r2;
+      try { r2 = await api("/api/trafico/importar", { method: "POST", body: fd2 }); }
+      finally { listo2(); b.disabled = false; }
+      if (!r2 || !r2.ok) { toast(r2?.msg || "No se pudo cargar la planilla", "error"); return; }
+      b.closest(".modal-overlay").remove();
+      toast(`Listo: ${dias.length} día${dias.length === 1 ? "" : "s"} y ${r2.importadas} salidas cargadas`, "success");
+      const listas = await api(`/api/trafico/listas?${trT()}`);
+      if (listas && !listas.error) { tr.listas = listas; trDatalists(); }
+      await trCargar(ver);
+      trRefrescarDias();
+    };
   }, "Ya se está importando la planilla");
   i.click();
 }
