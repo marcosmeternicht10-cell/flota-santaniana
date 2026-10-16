@@ -2743,7 +2743,8 @@ function trClasesFila(s, cambiada) {
 
 function trAvisos(s) {
   return (s.avisos || []).filter(a => a.nivel === "error" || a.nivel === "aviso")
-    .map(a => `<span class="tr-av ${a.nivel}"><i class="ti ti-${a.nivel === "error" ? "alert-octagon" : "alert-triangle"}"></i>${trEsc(a.txt)}</span>`).join("");
+    .map(a => `<span class="tr-av ${a.nivel}"><i class="ti ti-${a.nivel === "error" ? "alert-octagon" : "alert-triangle"}"></i>${trEsc(a.txt)}</span>`).join("")
+    + (s.rotacion ? `<span class="tr-av rot ${s.rotacion.difiere ? "difiere" : ""}" title="Rotación de los coches (Tráfico → ⋯ → Rotaciones)"><i class="ti ti-${s.lado === "ida" ? "arrow-back-up" : "repeat"}"></i>${trEsc(s.rotacion.txt)}</span>` : "");
 }
 
 function trDoc(s) {
@@ -3058,7 +3059,9 @@ function trPintarSug() {
     ? (tr.listas?.coches || []).filter(c => c.coche.startsWith(q) && !ya.has(c.coche)).slice(0, 5) : [];
   s.items = [...cands.map(c => ({ ...c, tipo: "cand" })), ...otros.map(c => ({ ...c, tipo: "flota" }))];
   if (s.sel >= s.items.length) s.sel = s.items.length - 1;
-  const etiqueta = c => c.rango === 0 ? `<em class="alla">Está en ${trEsc(c.lugar)}</em>`
+  const etiqueta = c => c.rotacion ? `<em class="rot"><i class="ti ti-repeat"></i> ${trEsc(c.rotacion)}</em>`
+    : c.reservado ? `<em class="tarde">En ${trEsc(c.lugar)} · por rotación ${trEsc(c.reservado)}</em>`
+    : c.rango === 0 ? `<em class="alla">Está en ${trEsc(c.lugar)}</em>`
     : c.rango === 1 ? `<em class="cerca">En ${trEsc(c.lugar)}, mismo corredor</em>`
     : `<em class="tarde">En ${trEsc(c.lugar)} · sale más tarde (${trEsc((c.ya_hoy || []).join(", "))})</em>`;
   const filas = s.items.map((c, k) => c.tipo === "cand" ? `
@@ -3346,8 +3349,90 @@ function trMas(btn) {
             : { icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar },
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
+    ...(!trInt() ? [{ icono: "repeat", html: "<b>Rotaciones de los coches</b><span>Con qué regreso vuelve el coche de cada ida</span>", fn: trRotaciones }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
   ]);
+}
+
+// ─── Rotaciones: el coche de cada ida vuelve en un regreso fijo ───
+// (el de las 09:00 a Concepción vuelve mañana 09:00, etc.). Con esto,
+// "Completar" pone en cada regreso el coche que corresponde.
+async function trRotaciones() {
+  const d = await api("/api/trafico/rotaciones");
+  if (!d || !d.reglas) { toast("No se pudieron traer las rotaciones", "error"); return; }
+  const o = rvModal({
+    titulo: "Rotaciones de los coches", icono: "repeat", ancho: 760, clase: "tr-rot-m",
+    sub: "Con qué regreso vuelve el coche de cada ida. Al completar los regresos va ese coche con su tripulación.",
+    cuerpo: `<div id="tr-rot-cuerpo"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
+  o._rot = d;
+  trRotPintar(o);
+}
+function trRotPintar(o) {
+  const d = o._rot, puede = d.puede_editar;
+  const grupos = {};
+  d.corredores.forEach(c => { grupos[c] = []; });
+  d.reglas.forEach(r => { (grupos[r.corredor] = grupos[r.corredor] || []).push(r); });
+  const dias = n => [["0", "el mismo día"], ["1", "al día siguiente"], ["2", "a los 2 días"], ["3", "a los 3 días"]]
+    .map(([v, t]) => `<option value="${v}" ${String(n) === v ? "selected" : ""}>${t}</option>`).join("");
+  const fila = r => puede ? `
+    <div class="tr-rot-f" data-id="${r.id}">
+      <label><span>Sale</span><input class="tr-rot-h" data-c="ida_hora" value="${trEsc(r.ida_hora)}" inputmode="numeric" maxlength="5"></label>
+      <i class="ti ti-arrow-right tr-rot-fl"></i>
+      <label><span>Vuelve</span><select data-c="vuelta_dias">${dias(r.vuelta_dias)}</select></label>
+      <label><span>a las</span><input class="tr-rot-h" data-c="vuelta_hora" value="${trEsc(r.vuelta_hora)}" inputmode="numeric" maxlength="5"></label>
+      <label><span>desde <i>(opcional)</i></span><input class="tr-rot-l" data-c="vuelta_desde" value="${trEsc(r.vuelta_desde)}" placeholder="LOT, ATQ…" maxlength="20"></label>
+      <label class="tr-rot-a"><span>va a <i>(opcional)</i></span><input class="tr-rot-l" data-c="ida_a" value="${trEsc(r.ida_a)}" placeholder="—" maxlength="20"></label>
+      <button class="icon-btn" title="Quitar" onclick="trRotQuitar(this, ${r.id})"><i class="ti ti-trash"></i></button>
+      ${r.nota ? `<small class="tr-rot-nota">${trEsc(r.nota)}</small>` : ""}
+    </div>` : `
+    <div class="tr-rot-f ro"><b>${trEsc(r.ida_hora)}</b>${r.ida_a ? `<span class="tr-rot-a-ro">a ${trEsc(r.ida_a)}</span>` : ""}<i class="ti ti-arrow-right tr-rot-fl"></i>
+      <span>vuelve ${["el mismo día", "al día siguiente", "a los 2 días", "a los 3 días"][r.vuelta_dias || 0]} a las <b>${trEsc(r.vuelta_hora)}</b>${r.vuelta_desde ? ` desde ${trEsc(r.vuelta_desde)}` : ""}</span></div>`;
+  o.querySelector("#tr-rot-cuerpo").innerHTML = Object.entries(grupos).map(([c, rs]) => `
+    <div class="tr-rot-g">
+      <div class="tr-rot-cab"><b>${trEsc(c)}</b><span>${rs.length ? `${rs.length} ida${rs.length === 1 ? "" : "s"} con vuelta fija` : "Sin rotación: va el coche que está allá"}</span>
+        ${puede ? `<button class="btn btn-ghost btn-sm" data-corredor="${trEsc(c)}" onclick="trRotAgregar(this, this.dataset.corredor)"><i class="ti ti-plus"></i> Agregar</button>` : ""}</div>
+      ${rs.sort((a, b) => a.ida_hora.localeCompare(b.ida_hora)).map(fila).join("")}
+    </div>`).join("");
+  o.querySelectorAll(".tr-rot-f[data-id] [data-c]").forEach(el => el.addEventListener("change", () => trRotGuardar(o, el)));
+}
+async function trRotGuardar(o, el) {
+  const f = el.closest(".tr-rot-f");
+  if (el.classList.contains("tr-rot-h")) el.value = trHora(el.value);
+  const r = await api(`/api/trafico/rotaciones/${f.dataset.id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [el.dataset.c]: el.value }),
+  });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); el.classList.add("mal"); return; }
+  el.classList.remove("mal");
+  o._rot.reglas = r.reglas;
+  toast("Rotación guardada", "success");
+  if (tr.fecha) trCargar(tr.fecha);
+}
+async function trRotAgregar(btn, corredor) {
+  const o = btn.closest(".modal-overlay");
+  const ida = prompt(`${corredor}: ¿a qué hora sale la ida? (ej. 09:00)`, "");
+  if (!ida) return;
+  const vuelta = prompt("¿A qué hora vuelve? (ej. 21:00)", "");
+  if (!vuelta) return;
+  const r = await api("/api/trafico/rotaciones", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ corredor, ida_hora: trHora(ida), vuelta_hora: trHora(vuelta), vuelta_dias: trHora(vuelta) > trHora(ida) ? 0 : 1 }),
+  });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+  o._rot.reglas = r.reglas;
+  trRotPintar(o);
+  toast("Rotación agregada: revisá si vuelve el mismo día o al siguiente", "success");
+  if (tr.fecha) trCargar(tr.fecha);
+}
+async function trRotQuitar(btn, id) {
+  if (!confirm("¿Quitar esta rotación? Ese regreso va a volver a completarse con el coche que esté allá.")) return;
+  const o = btn.closest(".modal-overlay");
+  const r = await api(`/api/trafico/rotaciones/${id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo quitar", "error"); return; }
+  o._rot.reglas = r.reglas;
+  trRotPintar(o);
+  if (tr.fecha) trCargar(tr.fecha);
 }
 
 function trMenu(btn, items) {
@@ -5745,7 +5830,7 @@ async function abrirNuevaOT() {
           <div class="field"><label>KM</label><input id="ot-km" placeholder="765387" style="width:110px"></div>
         </div>
         <div class="form-row" style="margin-top:14px">
-          <div class="field" style="flex:1"><label>Conductor</label><input id="ot-cond" placeholder="Marco Aguiar"></div>
+          <div class="field" style="flex:1"><label>Conductor</label><input id="ot-cond" list="ot-l-cond-nueva" autocomplete="off" placeholder="Marco Aguiar"><datalist id="ot-l-cond-nueva"></datalist></div>
           <div class="field" style="flex:1"><label>Procedencia</label><input id="ot-proc" placeholder="Loreto"></div>
         </div>
         <div class="form-row" style="margin-top:14px">
@@ -5774,6 +5859,7 @@ Control general"></textarea>
   `;
   document.body.appendChild(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOT(); });
+  otChoferesDatalist("ot-l-cond-nueva");
 }
 
 function cerrarModalOT() {
@@ -5934,7 +6020,7 @@ async function abrirOT(otId) {
   const COLOR_COMPRAS = { en_espera: "warning", presupuestado: "cat", en_camino: "warning", entregado: "success" };
 
   overlay.innerHTML = `
-    <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:880px;width:100%;max-height:92vh;overflow:auto">
+    <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:1120px;width:100%;max-height:92vh;overflow:auto">
       <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg, var(--info-bg) 0%, var(--surface) 100%)">
         <div>
           <h3 style="font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px">
@@ -5942,7 +6028,7 @@ async function abrirOT(otId) {
             ${ot.n_interno ? `<span style="font-weight:500;color:var(--muted)">Coche ${ot.n_interno}</span>` : ""}
           </h3>
           <p style="font-size:12.5px;color:var(--muted);margin-top:3px">
-            ${ot.fecha_apertura} · ${ot.conductor || 'Sin conductor'} · ${ot.procedencia || 'Sin procedencia'} · ${ot.km ? fmtNum(ot.km) + ' km' : 'Sin km'}
+            ${ot.fecha_apertura} · <span id="ot-chofer-box">${otChoferHtml(ot)}</span> · ${ot.procedencia || 'Sin procedencia'} · ${ot.km ? fmtNum(ot.km) + ' km' : 'Sin km'}
           </p>
         </div>
         <button class="icon-btn" onclick="cerrarModalOTDetalle()"><i class="ti ti-x"></i></button>
@@ -5977,7 +6063,7 @@ async function abrirOT(otId) {
 
         ${ot.items.length === 0 ? `<div class="empty"><i class="ti ti-list"></i>Sin items en esta OT</div>` : `
           <div class="table-wrap">
-            <table>
+            <table class="ot-items">
               <thead><tr>
                 <th class="center">#</th><th>Descripción</th><th class="center">Tipo</th>
                 <th class="center">Estado</th><th>Técnico</th><th>Material necesario</th><th class="td-action"></th>
@@ -6000,11 +6086,11 @@ async function abrirOT(otId) {
                       </select>
                     </td>
                     <td class="pt-td">${ptCelda(it)}</td>
-                    <td>
+                    <td class="ot-mat">
                       <input type="text" value="${it.material_pedido || ''}" placeholder="ej: WD40, repuesto X"
                         onblur="actualizarItem(${it.id},'material_pedido',this.value,this)"
                         onkeydown="if(event.key==='Enter'){this.blur();}"
-                        style="width:160px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+                        style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
                     </td>
                     <td class="td-action">
                       <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
@@ -6063,6 +6149,59 @@ function otFechaHora(t) {
   const [f, h] = String(t).replace("T", " ").split(" ");
   return `${f.slice(8, 10)}/${f.slice(5, 7)}${h ? " " + h.slice(0, 5) : ""}`;
 }
+// ─── Chofer de la OT: lo corrigen los mismos que corrigen el km ───
+function otChoferHtml(ot) {
+  window._otChofer = ot;
+  const n = trEsc(ot.conductor || "");
+  if (!ot.puede_corregir_chofer) return n || "Sin conductor";
+  return `<button type="button" class="ot-chofer ${n ? "" : "vacio"}" onclick="otChoferEditar()" title="Corregir el nombre del chofer">
+    <span>${n || "Sin chofer"}</span><i class="ti ti-pencil"></i></button>`;
+}
+async function otChoferesLista() {
+  if (!window._choferesOT) window._choferesOT = (await api("/api/ots/conductores")) || [];
+  return window._choferesOT;
+}
+// La lista de nombres ya usados, para elegir al escribir (no cargar el mismo
+// chofer con otra letra)
+async function otChoferesDatalist(id) {
+  const dl = document.getElementById(id);
+  if (!dl) return;
+  const lista = await otChoferesLista();
+  dl.innerHTML = lista.map(n => `<option value="${trEsc(n)}">`).join("");
+}
+function otChoferEditar() {
+  const ot = window._otChofer; if (!ot) return;
+  $("#ot-chofer-box").innerHTML = `<span class="ot-chofer-ed">
+      <input id="ot-chofer-in" list="ot-l-choferes" value="${trEsc(ot.conductor || "")}" placeholder="Nombre del chofer"
+             maxlength="80" autocomplete="off" aria-label="Chofer"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();otChoferGuardar()} if(event.key==='Escape'){event.stopPropagation();otChoferCancelar()}">
+      <datalist id="ot-l-choferes"></datalist>
+      <button type="button" class="icon-btn ot-chofer-ok" onclick="otChoferGuardar()" title="Guardar"><i class="ti ti-check"></i></button>
+      <button type="button" class="icon-btn" onclick="otChoferCancelar()" title="Cancelar"><i class="ti ti-x"></i></button>
+    </span>`;
+  const i = $("#ot-chofer-in"); i.focus(); i.select();
+  otChoferesDatalist("ot-l-choferes");
+}
+function otChoferCancelar() {
+  const b = $("#ot-chofer-box");
+  if (b && window._otChofer) b.innerHTML = otChoferHtml(window._otChofer);
+}
+async function otChoferGuardar() {
+  const ot = window._otChofer, i = $("#ot-chofer-in");
+  if (!ot || !i || i.disabled) return;
+  const nombre = i.value.replace(/\s+/g, " ").trim();
+  if (nombre === (ot.conductor || "").trim()) { otChoferCancelar(); return; }
+  i.disabled = true;
+  const r = await api(`/api/ots/${ot.id}/conductor`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conductor: nombre }),
+  });
+  if (!r || !r.ok) { i.disabled = false; toast((r && (r.msg || r.error)) || "No se pudo guardar el chofer", "error"); return; }
+  ot.conductor = r.conductor;
+  if (r.conductor && window._choferesOT && !window._choferesOT.includes(r.conductor)) window._choferesOT.unshift(r.conductor);
+  otChoferCancelar();
+  toast(r.conductor ? `Chofer corregido: ${r.conductor}` : "Se quitó el chofer de la OT", "success");
+}
+
 function otKmCaja(ot) {
   window._otKm = ot;
   const v = ot.km_verif;
@@ -6536,7 +6675,7 @@ async function renderUsuarios() {
           <thead><tr>
             <th>Usuario</th><th>Nombre</th><th class="center">Rol</th><th>Acceso</th>
             <th class="center" title="Puede eliminar órdenes de trabajo en cualquier fase">Elimina OTs</th>
-            <th class="center" title="Puede corregir el kilometraje del coche desde la OT (Verificar km)">Corrige km</th>
+            <th class="center" title="Puede corregir el kilometraje del coche y el nombre del chofer desde la OT">Corrige km y chofer</th>
             <th class="center">Estado</th><th>Último acceso</th><th class="td-action"></th>
           </tr></thead>
           <tbody>
@@ -6579,7 +6718,7 @@ function celdaBorraOTs(u) {
 function celdaEditaKm(u) {
   if (u.rol === "admin" || u.rol === "taller") return '<span style="font-size:12px;color:var(--muted)">Siempre</span>';
   if (!["compras", "auditor"].includes(u.rol)) return '<span style="color:var(--light)">—</span>';
-  return `<label class="plus-toggle" title="Puede corregir el kilometraje desde la OT">
+  return `<label class="plus-toggle" title="Puede corregir el kilometraje y el chofer desde la OT">
     <input type="checkbox" ${u.edita_km ? "checked" : ""} onchange="cambiarEditaKm(${u.id}, this)">
     <span class="plus-switch"></span></label>`;
 }
@@ -6594,7 +6733,7 @@ async function cambiarEditaKm(uid, el) {
   if (r && r.ok) {
     const u = (window._usuarios || []).find(x => x.id === uid);
     if (u) u.edita_km = quiere ? 1 : 0;
-    toast(quiere ? `${u ? (u.nombre || u.usuario) : "El usuario"} ya puede corregir el km` : "Ya no puede corregir el km", "success");
+    toast(quiere ? `${u ? (u.nombre || u.usuario) : "El usuario"} ya puede corregir el km y el chofer` : "Ya no puede corregir el km ni el chofer", "success");
   } else {
     el.checked = !quiere;
   }

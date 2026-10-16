@@ -6333,3 +6333,65 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .oth-cant { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .oth-aviso { display: flex; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #FFF6E0; color: #6B4700; font-size: 12.5px; line-height: 1.5; }
 .oth-aviso .ti { flex-shrink: 0; font-size: 16px; color: #B26A00; margin-top: 1px; }
+
+/* ── Tráfico: rotaciones ── */
+.tr-av.rot { background: var(--info-bg); color: var(--brand-blue); border-color: transparent; }
+.tr-av.rot.difiere { background: var(--warning-bg); color: #8A5A00; }
+.tr-sug-txt em.rot { color: var(--brand-blue); font-weight: 600; }
+.tr-rot-m .rv-modal-cuerpo { max-height: 70vh; }
+.tr-rot-g { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.tr-rot-g:first-child { margin-top: 4px; border-top: 0; }
+.tr-rot-cab { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.tr-rot-cab b { font: 700 15px var(--display); letter-spacing: .06em; color: var(--azul-oscuro); }
+.tr-rot-cab span { font-size: 12px; color: var(--muted); }
+.tr-rot-cab .btn { margin-left: auto; }
+.tr-rot-f { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; padding: 6px 0; }
+.tr-rot-f label { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.tr-rot-f label span { width: 0; white-space: nowrap; font: 600 10.5px "Inter", sans-serif; color: var(--muted); }
+.tr-rot-f label span i { font-style: normal; font-weight: 500; color: var(--light); }
+.tr-rot-f input, .tr-rot-f select { height: 34px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; font: 500 13px "Inter", sans-serif; }
+.tr-rot-f .tr-rot-h { width: 64px; text-align: center; font: 700 15px var(--display); color: var(--azul-oscuro); }
+.tr-rot-f .tr-rot-l { width: 96px; text-transform: uppercase; }
+.tr-rot-f input:focus, .tr-rot-f select:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.tr-rot-f input.mal { border-color: var(--danger); }
+.tr-rot-fl { align-self: center; margin-top: 14px; color: var(--light); font-size: 16px; }
+.tr-rot-f .icon-btn { margin-left: auto; align-self: center; margin-top: 14px; }
+.tr-rot-nota { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+.tr-rot-f.ro { align-items: center; font-size: 13px; }
+.tr-rot-f.ro b { min-width: 44px; font: 700 15px var(--display); color: var(--azul-oscuro); }
+.tr-rot-f.ro .tr-rot-a-ro { margin-left: -4px; font-size: 12px; color: var(--muted); }
+.tr-rot-f.ro span b { min-width: 0; }
+/* En la compu, los rótulos solo arriba de la primera fila de cada corredor */
+@media (min-width: 641px) {
+  .tr-rot-f[data-id] + .tr-rot-f[data-id] label span { display: none; }
+  .tr-rot-f[data-id] + .tr-rot-f[data-id] { padding-top: 0; }
+  .tr-rot-f[data-id] + .tr-rot-f[data-id] .tr-rot-fl,
+  .tr-rot-f[data-id] + .tr-rot-f[data-id] .icon-btn { margin-top: 0; }
+}
+.tr-rot-f.ro .tr-rot-fl { margin-top: 0; }
+@media (max-width: 640px) {
+  .tr-rot-f .tr-rot-l { width: 84px; }
+  .tr-rot-a { display: none !important; }
+}
+
+/* ── OT: la tabla de ítems no aprieta la descripción ── */
+.ot-items th, .ot-items td { padding-left: 10px; padding-right: 10px; }
+.ot-items .pv-it-desc { min-width: 230px; }
+.ot-items .pt-td { min-width: 150px; width: 200px; }
+.ot-items td.ot-mat { width: 170px; }
+.ot-items td.ot-mat input { width: 100%; min-width: 120px; height: 32px; border-radius: 8px !important; }
+@media (max-width: 640px) { .ot-items .pv-it-desc { min-width: 170px; } }
+
+/* ── OT: corregir el chofer desde el encabezado ── */
+.ot-chofer { display: inline-flex; align-items: center; gap: 4px; margin: -2px -4px; padding: 2px 4px; border: 0; border-radius: 6px; background: none; font: inherit; color: var(--text); cursor: pointer; transition: background .15s; }
+.ot-chofer > span { border-bottom: 1px dashed var(--border-strong); }
+.ot-chofer > .ti { font-size: 13px; color: var(--brand-blue); opacity: .7; }
+.ot-chofer:hover { background: rgba(30,90,150,.08); }
+.ot-chofer:hover > .ti { opacity: 1; }
+.ot-chofer.vacio > span { color: var(--muted); font-style: italic; }
+.ot-chofer-ed { display: inline-flex; align-items: center; gap: 2px; vertical-align: middle; }
+.ot-chofer-ed input { width: 220px; max-width: 52vw; height: 28px; padding: 0 8px; border: 1px solid var(--brand-blue); border-radius: 7px; background: #fff; font: 600 12.5px "Inter", sans-serif; color: var(--text); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.ot-chofer-ed input:focus { outline: none; }
+.ot-chofer-ed input:disabled { opacity: .6; }
+.ot-chofer-ed .icon-btn { width: 28px; height: 28px; }
+.ot-chofer-ed .ot-chofer-ok { color: var(--success, #15803D); }
