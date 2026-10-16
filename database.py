@@ -2215,6 +2215,37 @@ def actualizar_ot(ot_id, **kwargs):
         pass
 
 
+def nombres_de_choferes():
+    """Nombres de chofer ya usados: los de las OTs y los tripulantes del
+    tráfico. Sin repetir el mismo nombre escrito con otras mayúsculas o
+    tildes; primero los más usados en las OTs."""
+    import unicodedata
+    def clave(t):
+        t = unicodedata.normalize("NFD", str(t or "")).encode("ascii", "ignore").decode()
+        return " ".join(t.upper().split())
+    vistos, salida = set(), []
+    conn = get_connection()
+    try:
+        filas = conn.execute("""SELECT conductor AS n, COUNT(*) AS c FROM ordenes_trabajo
+                                WHERE COALESCE(conductor,'') <> '' GROUP BY conductor
+                                ORDER BY COUNT(*) DESC""").fetchall()
+        try:
+            filas += conn.execute("SELECT nombre AS n, 0 AS c FROM trafico_tripulantes ORDER BY nombre").fetchall()
+        except Exception:
+            pass
+    except Exception:
+        filas = []
+    conn.close()
+    for r in filas:
+        n = " ".join(str(r["n"] or "").split())
+        k = clave(n)
+        if len(k) < 3 or k in vistos:
+            continue
+        vistos.add(k)
+        salida.append(n)
+    return salida[:1500]
+
+
 def cerrar_ot(ot_id, fecha_cierre=None):
     """Marca una OT como cerrada y BORRA sus fotos (ya no se necesitan)."""
     from datetime import date

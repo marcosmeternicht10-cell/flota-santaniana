@@ -308,7 +308,7 @@ def proteger_rutas():
     if session.get("rol") == "auditor" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
         permitidos_auditor = (p == "/api/logout" or p.startswith("/api/combustible")
                               # salvo que se le haya habilitado corregir el km
-                              or (re.fullmatch(r"/api/ots/\d+/km", p) is not None and _puede_editar_km_sesion()))
+                              or (re.fullmatch(r"/api/ots/\d+/(km|conductor)", p) is not None and _puede_editar_km_sesion()))
         if not permitidos_auditor:
             return jsonify({"error": "El rol auditor no puede modificar datos"}), 403
 
@@ -1198,7 +1198,36 @@ def api_ot(ot_id):
     ot["km_coche"] = km_actual_vehiculo(ot["vehiculo_id"])
     ot["km_verif"] = km_verificacion(ot["vehiculo_id"])
     ot["puede_verificar_km"] = _puede_editar_km_sesion()
+    ot["puede_corregir_chofer"] = ot["puede_verificar_km"]
     return jsonify(ot)
+
+
+@app.route("/api/ots/<int:ot_id>/conductor", methods=["POST"])
+def api_corregir_conductor_ot(ot_id):
+    """Corrige el nombre del chofer de la OT (si se cargó mal). Lo pueden hacer
+    los mismos que corrigen el km: administración, taller y quien tenga
+    habilitado "Corrige km y chofer" en el panel de Usuarios."""
+    if not _puede_editar_km_sesion():
+        return jsonify({"ok": False, "msg": "No tenés permiso para corregir el chofer"}), 403
+    nombre = re.sub(r"\s+", " ", str((request.json or {}).get("conductor") or "")).strip()[:80]
+    ot = obtener_ot(ot_id)
+    if not ot:
+        return jsonify({"ok": False, "msg": "La OT no existe."}), 404
+    antes = (ot.get("conductor") or "").strip()
+    if nombre == antes:
+        return jsonify({"ok": True, "conductor": nombre})
+    actualizar_ot(ot_id, conductor=nombre)
+    auditar(f"Corrigió el chofer de la OT #{ot_id}", "Órdenes de Trabajo",
+            f"Coche {ot.get('n_interno') or ot.get('patente')}: {antes or '(sin chofer)'} → {nombre or '(sin chofer)'}")
+    return jsonify({"ok": True, "conductor": nombre})
+
+
+@app.route("/api/ots/conductores", methods=["GET"])
+def api_conductores_ot():
+    """Los nombres de choferes ya usados (en OTs y en el tráfico), para
+    elegirlos al escribir y no cargar el mismo chofer con otra letra."""
+    from database import nombres_de_choferes
+    return jsonify(nombres_de_choferes())
 
 
 @app.route("/api/ots/<int:ot_id>/km", methods=["POST"])
@@ -1394,7 +1423,10 @@ def api_chofer_mis_reportes():
 @app.route("/api/ots/<int:ot_id>", methods=["PATCH"])
 def api_actualizar_ot(ot_id):
     d = request.json or {}
-    actualizar_ot(ot_id, **d)
+    # Solo estos campos: el chofer y el km tienen su propia ruta, con permiso
+    campos = {k: v for k, v in d.items() if k in ("estado", "fecha_cierre", "observaciones", "procedencia")}
+    if campos:
+        actualizar_ot(ot_id, **campos)
     return jsonify({"ok": True})
 
 
