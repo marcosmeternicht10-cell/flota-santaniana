@@ -213,6 +213,7 @@ function irA(sec) {
     trafico: renderTrafico,
     personal: renderPersonal,
     corp_asignacion: renderCorpAsignacion,
+    comb_rendicion: renderRendCombustible,
   };
   map[sec]();
 }
@@ -4435,13 +4436,13 @@ if (window.USUARIO_ROL === "compras") {
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible", "corp_asignacion",
                             "corp_resumen", "corp_historial", "corp_empresas",
-                            "corp_combustible", "corp_cargas", "turismo_rendiciones"];
+                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo") s.style.display = "none";
+    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="corp_resumen"]')?.classList.add("active");
   renderCorpResumen();
@@ -18022,4 +18023,567 @@ async function otHojas(otId, btn) {
     window.open(`/api/ots/${otId}/hojas.pdf${todas ? "" : "?quienes=" + encodeURIComponent(sel.join("|"))}`, "_blank");
     o.remove();
   };
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// RENDICIÓN DE COMBUSTIBLE (por sobre)
+// ════════════════════════════════════════════════════════════════════════════
+// Como el sistema que usaba la oficina de Concepción: cada coche tiene un
+// sobre abierto con los comprobantes de la cuenta de la estación. Se abre con
+// el km del tablero, se cargan los comprobantes y se cierra con el km final.
+// Cada comprobante suma como carga del coche (consumo y control).
+const rc = { estado: "pendientes", q: "", periodo: "todo", datos: null, listas: null, coches: null, sobre: null, editComp: null };
+const RC_ESTADOS = {
+  abierto: { txt: "Abierto", ic: "mail-opened" },
+  cerrado: { txt: "Cerrado", ic: "mail" },
+  rendido: { txt: "Rendido", ic: "mail-check" },
+};
+const rcEsc = s => trEsc(s);
+const rcN = (v, dec = 0) => (v === null || v === undefined || v === "") ? "—" : rvDec(v, dec);
+const rcDM = f => f && f.length >= 10 ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(2, 4)}` : "";
+
+async function renderRendCombustible() {
+  status("Rendición de combustible: un sobre por coche con los comprobantes de la cuenta");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-mail-opened"></i> Rendición de combustible</h1>
+      <p>Un sobre por coche: se abre con el km del tablero, se cargan los comprobantes y se cierra con el km final</p>
+      <div class="page-actions" id="rc-acciones"></div>
+    </div>
+    <div class="section rc-raiz">
+      <div class="rc-barra">
+        <div class="rc-estados" role="tablist" aria-label="Qué sobres ver" id="rc-estados"></div>
+        <div class="rc-barra-2">
+          <label class="rc-buscar"><i class="ti ti-search"></i>
+            <input id="rc-q" type="search" value="${rcEsc(rc.q)}" placeholder="N° de sobre, coche, chofer o cuenta" autocomplete="off" oninput="rcBuscar(this.value)">
+          </label>
+          <div class="rc-periodos" role="group" aria-label="Abiertos en">
+            ${[["todo", "Todo"], ["30", "30 días"], ["90", "3 meses"], ["anio", "Este año"]].map(([k, t]) =>
+              `<button class="${rc.periodo === k ? "on" : ""}" data-p="${k}" onclick="rcPeriodo('${k}')">${t}</button>`).join("")}
+          </div>
+        </div>
+      </div>
+      <div id="rc-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  if (!rc.listas) api("/api/comb_rend/listas").then(l => { if (l && l.tipos) rc.listas = l; });
+  rcTraer();
+}
+
+function rcRango() {
+  const hoy = trHoy();
+  if (rc.periodo === "30") return { desde: trSumar(hoy, -30) };
+  if (rc.periodo === "90") return { desde: trSumar(hoy, -90) };
+  if (rc.periodo === "anio") return { desde: hoy.slice(0, 4) + "-01-01" };
+  return {};
+}
+function rcQS() {
+  const p = new URLSearchParams({ estado: rc.estado === "todos" ? "" : rc.estado, q: rc.q, ...rcRango() });
+  return p.toString();
+}
+let _rcT = null;
+function rcBuscar(v) { rc.q = v.trim(); clearTimeout(_rcT); _rcT = setTimeout(rcTraer, 280); }
+function rcPeriodo(p) {
+  rc.periodo = p;
+  document.querySelectorAll(".rc-periodos button").forEach(b => b.classList.toggle("on", b.dataset.p === p));
+  rcTraer();
+}
+function rcEstado(e) { rc.estado = e; rcTraer(); }
+
+async function rcTraer() {
+  const d = await api(`/api/comb_rend?${rcQS()}`);
+  const cuerpo = $("#rc-cuerpo");
+  if (!cuerpo) return;
+  if (!d || !d.sobres) {
+    cuerpo.innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer los sobres</b><span>Probá de nuevo en un rato.</span></div>`;
+    return;
+  }
+  rc.datos = d;
+  const acc = $("#rc-acciones");
+  if (acc) acc.innerHTML = `
+    <button class="btn btn-ghost" onclick="window.open('/api/comb_rend/pdf?${rcQS()}','_blank')"><i class="ti ti-printer"></i> PDF</button>
+    ${d.puede_cargar ? `<button class="btn btn-primary" onclick="rcNuevo()"><i class="ti ti-plus"></i> Nuevo sobre</button>` : ""}`;
+  rcPintarEstados();
+  rcPintar();
+}
+
+function rcPintarEstados() {
+  const c = rc.datos.cuenta;
+  const tot = c.abierto + c.cerrado + c.rendido;
+  const b = (k, txt, n, ic, extra = "") => `
+    <button role="tab" class="rc-est ${k} ${rc.estado === k ? "on" : ""}" aria-selected="${rc.estado === k}" onclick="rcEstado('${k}')">
+      <i class="ti ti-${ic}"></i><span>${txt}</span><b>${n}</b>${extra}</button>`;
+  $("#rc-estados").innerHTML =
+    b("pendientes", "Sin rendir", c.abierto + c.cerrado, "inbox") +
+    b("abierto", "Abiertos", c.abierto, "mail-opened") +
+    b("cerrado", "Cerrados", c.cerrado, "mail") +
+    b("rendido", "Rendidos", c.rendido, "mail-check") +
+    b("todos", "Todos", tot, "list");
+}
+
+function rcPintar() {
+  const d = rc.datos, cuerpo = $("#rc-cuerpo");
+  const t = d.totales;
+  const hayAlguno = d.cuenta.abierto + d.cuenta.cerrado + d.cuenta.rendido > 0;
+  if (!hayAlguno) {
+    cuerpo.innerHTML = `
+      <div class="rv-vacio grande rc-vacio">
+        <span class="rv-vacio-ic"><i class="ti ti-mail-opened"></i></span>
+        <b>Todavía no hay sobres</b>
+        <span>Abrí un sobre por coche con el km del tablero. Después se le cargan los comprobantes de la cuenta (fecha, número, litros) y al final se cierra con el km final: ahí sale el consumo.</span>
+        ${d.puede_cargar ? `<div class="rv-vacio-btns"><button class="btn btn-primary" onclick="rcNuevo()"><i class="ti ti-plus"></i> Abrir el primer sobre</button></div>` : ""}
+      </div>`;
+    return;
+  }
+  const sinAb = d.sin_abierto || [];
+  cuerpo.innerHTML = `
+    <div class="rc-kpis">
+      <div><span>Sobres</span><b>${rcN(t.sobres)}</b></div>
+      <div><span>Litros</span><b>${rcN(t.litros, 2)}</b></div>
+      <div><span>Comprobantes</span><b>${rcN(t.comprobantes)}</b></div>
+      <div><span>Km medidos</span><b>${t.km ? rcN(t.km) : "—"}</b></div>
+      <div><span>L cada 100 km</span><b>${t.l100 ? rcN(t.l100, 2) : "—"}</b><small>de los sobres cerrados</small></div>
+    </div>
+    ${sinAb.length && d.puede_cargar ? `
+      <div class="rc-aviso">
+        <i class="ti ti-mail-plus"></i>
+        <div><b>${rvPl(sinAb.length, "coche quedó", "coches quedaron")} sin sobre abierto</b>
+          <span>Tocá uno para abrirle el siguiente con el km final del último.</span>
+          <div class="rc-aviso-coches">${sinAb.slice(0, 30).map(c => `<button onclick="rcNuevo(${c.id})">${rcEsc(c.coche)}</button>`).join("")}${sinAb.length > 30 ? `<em>y ${sinAb.length - 30} más</em>` : ""}</div>
+        </div>
+      </div>` : ""}
+    ${d.sobres.length ? `
+      <div class="rc-tabla" role="table">
+        <div class="rc-fila rc-cab" role="row">
+          <span>Sobre</span><span>Coche</span><span>Chofer</span><span>Apertura</span><span>Cierre</span>
+          <span class="n">Km inicial</span><span class="n">Km final</span><span class="n">Km</span><span class="n">Litros</span>
+          <span class="n">L/100 km</span><span class="c">Compr.</span><span class="c">Estado</span>
+        </div>
+        ${d.sobres.map((s, i) => rcFila(s, i)).join("")}
+      </div>
+      <div class="rc-leyenda"><span class="abierto"></span>Abierto<span class="cerrado"></span>Cerrado<span class="rendido"></span>Rendido</div>` :
+      `<div class="rv-vacio"><i class="ti ti-filter-off"></i><b>No hay sobres con este filtro</b><span>Probá con otro estado o borrá la búsqueda.</span></div>`}`;
+}
+
+function rcFila(s, i) {
+  const co = s.consumo || {};
+  const est = RC_ESTADOS[s.estado] || RC_ESTADOS.abierto;
+  return `
+    <div class="rc-fila ${s.estado}" role="row" tabindex="0" style="--i:${Math.min(i, 14)}" onclick="rcAbrir(${s.id})" onkeydown="if(event.key==='Enter')rcAbrir(${s.id})">
+      <span class="rc-num" data-l="Sobre">${s.numero}</span>
+      <span class="rc-coche" data-l="Coche"><b>${rcEsc(s.coche)}</b><small>${rcEsc(s.cuenta || "")}</small></span>
+      <span class="rc-chofer" data-l="Chofer">${rcEsc(s.chofer) || '<i class="rc-sin">sin chofer</i>'}</span>
+      <span data-l="Apertura">${rcDM(s.fecha_apertura)}</span>
+      <span data-l="Cierre">${rcDM(s.fecha_cierre) || '<i class="rc-sin">—</i>'}</span>
+      <span class="n" data-l="Km inicial">${s.km_inicial ? rcN(s.km_inicial) : "—"}</span>
+      <span class="n" data-l="Km final">${s.estado !== "abierto" && s.km_final ? rcN(s.km_final) : "—"}</span>
+      <span class="n" data-l="Km">${co.km ? rcN(co.km) : "—"}</span>
+      <span class="n rc-lt" data-l="Litros">${rcN(s.litros, 2)}${s.aditivos ? `<small>+${rcN(s.aditivos, 2)} adit.</small>` : ""}</span>
+      <span class="n" data-l="L/100 km">${co.l100 ? `<b>${rcN(co.l100, 2)}</b>${chipDesvio(co.comparacion)}` : "—"}</span>
+      <span class="c" data-l="Compr.">${s.comprobantes}</span>
+      <span class="c" data-l="Estado"><span class="rc-pill ${s.estado}"><i class="ti ti-${est.ic}"></i>${est.txt}</span></span>
+    </div>`;
+}
+
+async function rcCoches() {
+  if (!rc.coches) rc.coches = (await api("/api/vehiculos")) || [];
+  return rc.coches;
+}
+async function rcListas() {
+  if (!rc.listas) rc.listas = (await api("/api/comb_rend/listas")) || { choferes: [], cuentas: ["PY SHELL"], tipos: ["FACTURA"] };
+  return rc.listas;
+}
+const rcDatalist = (id, lista) => `<datalist id="${id}">${(lista || []).map(n => `<option value="${rcEsc(n)}">`).join("")}</datalist>`;
+
+// Preguntas del servidor (409): número repetido, otro sobre abierto, sobre vacío
+function rcConfirmar(msg, si = "Sí, seguir", icono = "help-circle") {
+  return new Promise(res => {
+    const o = rvModal({
+      titulo: "¿Seguimos?", icono, ancho: 460, clase: "rc-preg",
+      cuerpo: `<p class="rc-preg-txt">${rcEsc(msg)}</p>`,
+      pie: `<button class="btn btn-ghost" data-r="0">Cancelar</button><button class="btn btn-primary" data-r="1" autofocus>${si}</button>`,
+    });
+    o.querySelectorAll("[data-r]").forEach(b => b.addEventListener("click", () => { o.remove(); res(b.dataset.r === "1"); }));
+    const obs = new MutationObserver(() => { if (!document.body.contains(o)) { obs.disconnect(); res(false); } });
+    obs.observe(document.body, { childList: true });
+  });
+}
+
+// ─── Nuevo sobre ───
+async function rcNuevo(vid) {
+  const [coches, listas] = await Promise.all([rcCoches(), rcListas()]);
+  const sig = rc.datos?.siguiente_numero;
+  const o = rvModal({
+    titulo: "Nuevo sobre", icono: "mail-plus", ancho: 620, clase: "rc-m-nuevo",
+    sub: "El número lo propone el sistema; si el sobre de papel trae otro, cambialo.",
+    cuerpo: `
+      <div class="rc-form">
+        <label class="rc-f rc-f-num"><span>N° de sobre</span>
+          <input id="rcn-num" inputmode="numeric" value="${sig || ""}" placeholder="ej. 80373" maxlength="10"></label>
+        <label class="rc-f rc-f-fecha"><span>Apertura</span><input id="rcn-fecha" type="date" value="${trHoy()}" max="${trHoy()}"></label>
+        <div class="rc-f rc-f-coche"><span>Coche</span>${buscadorCoche("rcn-coche", coches, { seleccionado: vid || "", placeholder: "N° interno o patente" })}</div>
+        <div class="rc-sug" id="rcn-sug" hidden></div>
+        <label class="rc-f rc-f-km"><span>Km inicial</span><input id="rcn-km" inputmode="numeric" placeholder="del tablero"><small id="rcn-km-de"></small></label>
+        <label class="rc-f rc-f-chofer"><span>Chofer</span><input id="rcn-chofer" list="rcn-l-chof" placeholder="Apellido y nombre" maxlength="80" autocomplete="off">${rcDatalist("rcn-l-chof", listas.choferes)}</label>
+        <label class="rc-f rc-f-cuenta"><span>Cuenta</span><input id="rcn-cuenta" list="rcn-l-cta" value="${rcEsc(listas.cuentas[0] || "PY SHELL")}" maxlength="60" autocomplete="off">${rcDatalist("rcn-l-cta", listas.cuentas)}</label>
+        <label class="rc-f rc-f-obs"><span>Observaciones <i>(opcional)</i></span><input id="rcn-obs" maxlength="400"></label>
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="rcn-ok" onclick="rcCrear(this)"><i class="ti ti-mail-opened"></i> Abrir sobre</button>`,
+  });
+  window["_cocheCB_rcn-coche"] = id => rcSugerir(id);
+  if (vid) rcSugerir(vid);
+  setTimeout(() => (vid ? $("#rcn-km") : $("#rcn-coche-txt"))?.focus(), 60);
+  o.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest(".bcoche")) $("#rcn-ok").click(); }));
+}
+async function rcSugerir(vid) {
+  const box = $("#rcn-sug");
+  if (!vid) { if (box) box.hidden = true; return; }
+  const s = await api(`/api/comb_rend/sugerencia?vehiculo_id=${vid}`);
+  if (!s || s.km_inicial === undefined) return;
+  const km = $("#rcn-km"), ch = $("#rcn-chofer"), cu = $("#rcn-cuenta");
+  if (km) { km.value = s.km_inicial ? rvDec(s.km_inicial, 0) : ""; $("#rcn-km-de").textContent = s.km_de_donde ? `Es el ${s.km_de_donde}` : ""; }
+  if (ch && s.chofer) ch.value = s.chofer;
+  if (cu && s.cuenta) cu.value = s.cuenta;
+  if (box) {
+    box.hidden = !s.abierto;
+    if (s.abierto) box.innerHTML = `<i class="ti ti-alert-triangle"></i> Este coche ya tiene abierto el sobre <b>${s.abierto.numero}</b> (desde el ${rcDM(s.abierto.fecha_apertura)}). <button class="rc-link" onclick="this.closest('.modal-overlay').remove(); rcAbrir(${s.abierto.id})">Abrir ese</button>`;
+  }
+  km?.focus();
+}
+async function rcCrear(btn, forzar = false) {
+  const datos = {
+    numero: $("#rcn-num").value, vehiculo_id: $("#rcn-coche").value, fecha_apertura: $("#rcn-fecha").value,
+    km_inicial: $("#rcn-km").value, chofer: $("#rcn-chofer").value, cuenta: $("#rcn-cuenta").value,
+    observaciones: $("#rcn-obs").value, forzar,
+  };
+  if (!datos.vehiculo_id) { toast("Elegí el coche", "error"); $("#rcn-coche-txt").focus(); return; }
+  btn.disabled = true;
+  const r = await api("/api/comb_rend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos) });
+  btn.disabled = false;
+  if (r && r.pregunta) { if (await rcConfirmar(r.msg, "Abrir otro igual")) rcCrear(btn, true); return; }
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo abrir el sobre", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  toast(`Sobre ${r.sobre.numero} abierto para el ${r.sobre.coche}`, "success");
+  rc.listas = null;
+  rcTraer();
+  rcFicha(r.sobre, true);
+}
+
+// ─── Ficha del sobre ───
+async function rcAbrir(id) {
+  const s = await api(`/api/comb_rend/${id}`);
+  if (!s || !s.id) { toast((s && s.msg) || "No se pudo abrir el sobre", "error"); return; }
+  rcFicha(s);
+}
+async function rcFicha(s, enfocar = false) {
+  await rcListas();
+  rc.sobre = s;
+  rc.editComp = null;
+  document.querySelectorAll(".rc-m-ficha").forEach(m => m.closest(".modal-overlay").remove());
+  const o = rvModal({ titulo: "", icono: "mail-opened", ancho: 1060, clase: "rc-m-ficha", cuerpo: `<div id="rc-ficha"></div>`, pie: `<div id="rc-ficha-pie" class="rc-pie"></div>` });
+  o.addEventListener("keydown", e => { if (e.key === "Escape" && rc.editComp) { e.stopPropagation(); } }, true);
+  rcPintarFicha();
+  if (enfocar) setTimeout(() => $("#rcc-numero")?.focus(), 80);
+}
+const rcPuede = () => !!(rc.sobre && rc.sobre.puede_cargar);
+const rcAbierto = () => rc.sobre && rc.sobre.estado === "abierto";
+
+function rcPintarFicha() {
+  const s = rc.sobre, box = $("#rc-ficha");
+  if (!s || !box) return;
+  const est = RC_ESTADOS[s.estado];
+  const ed = rcPuede() && rcAbierto();
+  const co = s.consumo || {};
+  const modal = box.closest(".rv-modal");
+  modal.querySelector(".rv-modal-tit h2").innerHTML = `Sobre N° ${s.numero} <span class="rc-pill ${s.estado}"><i class="ti ti-${est.ic}"></i>${est.txt}</span>`;
+  modal.querySelector(".rv-modal-ic i").className = `ti ti-${est.ic}`;
+  const tp = modal.querySelector(".rv-modal-tit");
+  let p = tp.querySelector("p");
+  if (!p) { p = document.createElement("p"); tp.appendChild(p); }
+  p.textContent = [`Coche ${s.coche}`, s.patente && String(s.patente) !== s.coche ? s.patente : "", [s.marca, s.modelo].filter(Boolean).join(" ")].filter(Boolean).join(" · ");
+  const campo = (k, etq, val, extra = "") => ed
+    ? `<label class="rc-f"><span>${etq}</span><input data-c="${k}" value="${rcEsc(val ?? "")}" ${extra} onchange="rcGuardarDato(this)"></label>`
+    : `<div class="rc-f ro"><span>${etq}</span><b>${rcEsc(val || "—")}</b></div>`;
+  const kmFinal = rcAbierto()
+    ? (rcPuede() ? `<input id="rc-kmf" inputmode="numeric" value="${s.km_final ? rvDec(s.km_final, 0) : ""}" placeholder="al cerrar" onchange="rcGuardarDato(this)" data-c="km_final">` : `<b>—</b>`)
+    : `<b>${rcN(s.km_final)}</b>`;
+  const comp = co.comparacion;
+  box.innerHTML = `
+    <div class="rc-ficha">
+      <div class="rc-datos">
+        ${campo("chofer", "Chofer", s.chofer, `list="rc-l-chof" maxlength="80" autocomplete="off" placeholder="Apellido y nombre"`)}
+        ${campo("cuenta", "Cuenta", s.cuenta, `list="rc-l-cta" maxlength="60" autocomplete="off"`)}
+        ${campo("numero", "N° de sobre", s.numero, `inputmode="numeric" maxlength="10"`)}
+        ${ed ? `<label class="rc-f"><span>Apertura</span><input type="date" data-c="fecha_apertura" value="${s.fecha_apertura}" max="${trHoy()}" onchange="rcGuardarDato(this)"></label>`
+             : `<div class="rc-f ro"><span>Apertura</span><b>${rcDM(s.fecha_apertura)}</b></div>`}
+        ${rcDatalist("rc-l-chof", rc.listas.choferes)}${rcDatalist("rc-l-cta", rc.listas.cuentas)}
+      </div>
+      <div class="rc-consumo">
+        <div class="rc-cn"><span>Km inicial</span>${ed ? `<input inputmode="numeric" data-c="km_inicial" value="${s.km_inicial ? rvDec(s.km_inicial, 0) : ""}" onchange="rcGuardarDato(this)">` : `<b>${s.km_inicial ? rcN(s.km_inicial) : "—"}</b>`}</div>
+        <div class="rc-cn ${rcAbierto() ? "kmf" : ""}"><span>Km final</span>${kmFinal}</div>
+        <div class="rc-cn"><span>Km recorridos</span><b>${co.km ? rcN(co.km) : "—"}</b></div>
+        <div class="rc-cn grande"><span>Litros</span><b>${rcN(s.litros, 2)}</b><small>${rvPl(s.comprobantes, "comprobante")}</small></div>
+        <div class="rc-cn grande ${comp && !comp.sin_datos ? comp.estado : ""}"><span>L cada 100 km</span><b>${co.l100 ? rcN(co.l100, 2) : "—"}</b>
+          <small>${co.l100 ? (comp && !comp.sin_datos ? `esperado ${rcN(comp.esperado_litros_100km, 1)} · ${chipDesvio(comp)}` : chipDesvio(comp)) : (rcAbierto() ? "sale al cerrar" : "")}</small></div>
+        <div class="rc-cn"><span>Aditivos</span><b>${s.aditivos ? rcN(s.aditivos, 2) : "—"}</b>${co.aditivo_l100 ? `<small>${rcN(co.aditivo_l100, 2)} L/100km</small>` : ""}</div>
+      </div>
+      <div class="rc-comps">
+        <div class="rc-comps-cab"><b>Comprobantes</b>${ed ? `<span>Enter agrega · la fecha y el tipo quedan para el siguiente</span>` : ""}</div>
+        <div class="rc-ct" role="table">
+          <div class="rc-cf rc-cf-cab" role="row"><span>Fecha</span><span>Comprobante</span><span>Letra</span><span>Número</span><span class="n">Litros</span><span class="n">Aditivos</span><span>Nro. ref.</span><span></span></div>
+          ${ed ? rcFilaNueva() : ""}
+          ${(s.comprobantes_lista || []).slice().reverse().map(c => rc.editComp === c.id ? rcFilaEditar(c) : rcFilaComp(c, ed)).join("") ||
+            (ed ? "" : `<div class="rc-cf-vacio">Sin comprobantes</div>`)}
+          ${s.comprobantes ? `<div class="rc-cf rc-cf-tot" role="row"><span>Total</span><span>${rvPl(s.comprobantes, "comprobante")}</span><span></span><span></span><span class="n"><b>${rcN(s.litros, 2)}</b></span><span class="n">${s.aditivos ? rcN(s.aditivos, 2) : "—"}</span><span></span><span></span></div>` : ""}
+        </div>
+      </div>
+      <div class="rc-bajo">
+        <label class="rc-obs"><span>Observaciones</span>
+          <textarea data-c="observaciones" rows="2" maxlength="400" ${rcPuede() ? "" : "readonly"} onchange="rcGuardarDato(this)" placeholder="${rcPuede() ? "Algo para dejar anotado" : ""}">${rcEsc(s.observaciones || "")}</textarea></label>
+        <ol class="rc-eventos">
+          <li class="on"><i class="ti ti-mail-opened"></i><div><b>Apertura</b><span>${rcDM(s.fecha_apertura)} · ${rcEsc(s.abierto_por || "—")}</span></div></li>
+          <li class="${s.cerrado_por ? "on" : ""}"><i class="ti ti-mail"></i><div><b>Cierre</b><span>${s.cerrado_por ? `${rcDM(s.fecha_cierre)} · ${rcEsc(s.cerrado_por)}` : "pendiente"}</span></div></li>
+          <li class="${s.rendido_por ? "on" : ""}"><i class="ti ti-mail-check"></i><div><b>Rendido</b><span>${s.rendido_por ? `${rcDM(s.rendido_el)} · ${rcEsc(s.rendido_por)}` : "pendiente"}</span></div></li>
+        </ol>
+      </div>
+    </div>`;
+  rcPintarPie();
+  // Si el botón que se tocó desapareció al repintar, el foco vuelve a la
+  // ventana: así Escape la sigue cerrando
+  if (!modal.contains(document.activeElement)) modal.focus();
+  const fn = $("#rcc-numero");
+  if (fn) box.querySelectorAll(".rc-cf-nueva input").forEach(i => i.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); rcAgregarComp(); }
+  }));
+}
+
+function rcFilaNueva() {
+  const u = rc.ultimoComp || {};
+  return `
+    <div class="rc-cf rc-cf-nueva" role="row">
+      <input id="rcc-fecha" type="date" value="${u.fecha || trHoy()}" max="${trHoy()}" aria-label="Fecha">
+      <input id="rcc-tipo" list="rc-l-tipos" value="${rcEsc(u.tipo || rc.listas.ultimo_tipo || "FACTURA")}" maxlength="20" aria-label="Comprobante" autocomplete="off">
+      <input id="rcc-letra" value="${rcEsc(u.letra || "")}" maxlength="3" placeholder="Letra" aria-label="Letra" autocomplete="off">
+      <input id="rcc-numero" maxlength="30" placeholder="N° del comprobante" aria-label="Número" autocomplete="off">
+      <input id="rcc-litros" class="n" inputmode="decimal" placeholder="Litros" aria-label="Litros" autocomplete="off">
+      <input id="rcc-aditivos" class="n" inputmode="decimal" placeholder="Aditivo" aria-label="Aditivos" autocomplete="off">
+      <input id="rcc-ref" maxlength="30" placeholder="Nro. ref." aria-label="Nro. de referencia" autocomplete="off">
+      <button class="btn btn-primary rc-cf-add" onclick="rcAgregarComp()" title="Agregar (Enter)"><i class="ti ti-plus"></i><span>Agregar</span></button>
+      ${rcDatalist("rc-l-tipos", rc.listas.tipos)}
+    </div>`;
+}
+function rcFilaComp(c, ed) {
+  return `
+    <div class="rc-cf" role="row" data-id="${c.id}">
+      <span data-l="Fecha">${rcDM(c.fecha)}</span>
+      <span data-l="Comprobante">${rcEsc(c.tipo)}</span>
+      <span data-l="Letra">${rcEsc(c.letra)}</span>
+      <span data-l="Número" class="rc-cf-num">${rcEsc(c.numero) || '<i class="rc-sin">sin número</i>'}</span>
+      <span class="n rc-cf-lt" data-l="Litros">${c.litros ? rcN(c.litros, 2) : "—"}</span>
+      <span class="n" data-l="Aditivos">${c.aditivos ? rcN(c.aditivos, 2) : ""}</span>
+      <span data-l="Nro. ref.">${rcEsc(c.nro_ref)}${c.vinculada ? `<em class="rc-cel" title="Es la carga que ${rcEsc(c.carga_chofer || "el chofer")} hizo desde el celular: no se cuenta dos veces"><i class="ti ti-device-mobile"></i> del celular</em>` : ""}</span>
+      <span class="rc-cf-acc">${ed ? `<button class="icon-btn" title="Corregir" onclick="rcEditarComp(${c.id})"><i class="ti ti-pencil"></i></button>
+        <button class="icon-btn" title="Sacar" onclick="rcBorrarComp(${c.id})"><i class="ti ti-trash"></i></button>` : ""}</span>
+    </div>`;
+}
+function rcFilaEditar(c) {
+  return `
+    <div class="rc-cf rc-cf-edit" role="row" data-id="${c.id}">
+      <input data-k="fecha" type="date" value="${c.fecha}" max="${trHoy()}">
+      <input data-k="tipo" list="rc-l-tipos" value="${rcEsc(c.tipo)}" maxlength="20">
+      <input data-k="letra" value="${rcEsc(c.letra)}" maxlength="3">
+      <input data-k="numero" value="${rcEsc(c.numero)}" maxlength="30">
+      <input data-k="litros" class="n" inputmode="decimal" value="${c.litros ? rvDec(c.litros, 2) : ""}" placeholder="Litros">
+      <input data-k="aditivos" class="n" inputmode="decimal" value="${c.aditivos ? rvDec(c.aditivos, 2) : ""}" placeholder="Aditivo">
+      <input data-k="nro_ref" value="${rcEsc(c.nro_ref)}" maxlength="30" placeholder="Nro. ref.">
+      <span class="rc-cf-acc"><button class="icon-btn ok" title="Guardar (Enter)" onclick="rcGuardarComp(${c.id})"><i class="ti ti-check"></i></button>
+        <button class="icon-btn" title="Cancelar (Esc)" onclick="rcEditarComp(null)"><i class="ti ti-x"></i></button></span>
+    </div>`;
+}
+function rcEditarComp(id) {
+  rc.editComp = id;
+  rcPintarFicha();
+  const f = document.querySelector(`.rc-cf-edit[data-id="${id}"]`);
+  if (!f) return;
+  f.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); rcGuardarComp(id); }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); rcEditarComp(null); }
+  }));
+  f.querySelector('[data-k="litros"]').focus();
+}
+
+// Lo que responde el servidor al guardar un comprobante: si pregunta algo, se
+// resuelve y se vuelve a mandar
+async function rcEnviarComp(url, metodo, datos) {
+  for (let vuelta = 0; vuelta < 3; vuelta++) {
+    const r = await api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos) });
+    if (!r || !r.pregunta) return r;
+    if (r.pregunta === "misma_carga") {
+      const elegida = await rcMismaCarga(r);
+      if (elegida === null) return { ok: false, cancelado: true };
+      datos.vincular = elegida;            // id de la carga del celular, o 0 = es otra
+    } else {
+      if (!(await rcConfirmar(r.msg, "Cargarlo igual"))) return { ok: false, cancelado: true };
+      datos.forzar = true;
+    }
+  }
+  return { ok: false, msg: "No se pudo guardar" };
+}
+function rcMismaCarga(r) {
+  return new Promise(res => {
+    const c = r.candidatas[0];
+    const o = rvModal({
+      titulo: "¿Es la misma carga?", icono: "device-mobile", ancho: 520, clase: "rc-preg",
+      cuerpo: `<p class="rc-preg-txt">${rcEsc(r.msg)}</p>
+        <div class="rc-cand"><i class="ti ti-gas-station"></i><div><b>${rcN(c.litros, 2)} L · ${rcDM(c.fecha)}</b>
+          <span>${rcEsc(c.chofer || c.registrado_por || "")}${c.odometro ? ` · km ${rcN(c.odometro)}` : ""}</span></div></div>
+        <p class="rc-preg-nota">Si es la misma, el comprobante usa esa carga y los litros no se cuentan dos veces.</p>`,
+      pie: `<button class="btn btn-ghost" data-r="x">Cancelar</button>
+            <button class="btn btn-ghost" data-r="0">Es otra carga</button>
+            <button class="btn btn-primary" data-r="${c.id}" autofocus>Es la misma</button>`,
+    });
+    let listo = false;
+    o.querySelectorAll("[data-r]").forEach(b => b.addEventListener("click", () => {
+      listo = true; o.remove();
+      res(b.dataset.r === "x" ? null : Number(b.dataset.r));
+    }));
+    const obs = new MutationObserver(() => { if (!document.body.contains(o)) { obs.disconnect(); if (!listo) res(null); } });
+    obs.observe(document.body, { childList: true });
+  });
+}
+
+async function rcAgregarComp() {
+  const s = rc.sobre; if (!s) return;
+  const g = id => ($(id)?.value || "").trim();
+  const datos = { fecha: g("#rcc-fecha"), tipo: g("#rcc-tipo"), letra: g("#rcc-letra"), numero: g("#rcc-numero"),
+                  litros: g("#rcc-litros"), aditivos: g("#rcc-aditivos"), nro_ref: g("#rcc-ref") };
+  if (!datos.litros && !datos.aditivos) { toast("Poné los litros", "error"); $("#rcc-litros").focus(); return; }
+  const btn = document.querySelector(".rc-cf-add"); if (btn) btn.disabled = true;
+  const r = await rcEnviarComp(`/api/comb_rend/${s.id}/comprobantes`, "POST", datos);
+  if (btn) btn.disabled = false;
+  if (!r || !r.ok) { if (!r?.cancelado) toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+  rc.ultimoComp = { fecha: datos.fecha, tipo: datos.tipo, letra: datos.letra };
+  rc.sobre = { ...r.sobre, puede_cargar: s.puede_cargar, es_admin: s.es_admin };
+  rcPintarFicha();
+  const nueva = document.querySelector(".rc-cf[data-id]");
+  if (nueva) nueva.classList.add("recien");
+  $("#rcc-numero")?.focus();
+  rcTraerSilencioso();
+}
+async function rcGuardarComp(id) {
+  const f = document.querySelector(`.rc-cf-edit[data-id="${id}"]`); if (!f) return;
+  const datos = {};
+  f.querySelectorAll("[data-k]").forEach(i => { datos[i.dataset.k] = i.value.trim(); });
+  const r = await rcEnviarComp(`/api/comb_rend/comprobantes/${id}`, "PATCH", datos);
+  if (!r || !r.ok) { if (!r?.cancelado) toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  rc.editComp = null;
+  rc.sobre = { ...r.sobre, puede_cargar: rc.sobre.puede_cargar, es_admin: rc.sobre.es_admin };
+  rcPintarFicha();
+  toast("Comprobante corregido", "success");
+  rcTraerSilencioso();
+}
+async function rcBorrarComp(id) {
+  const c = (rc.sobre.comprobantes_lista || []).find(x => x.id === id);
+  if (!(await rcConfirmar(`¿Sacar el comprobante ${[c?.tipo, c?.numero].filter(Boolean).join(" ")} de ${rcN(c?.litros, 2)} L?${c?.vinculada ? " La carga del celular queda como estaba." : ""}`, "Sacar", "trash"))) return;
+  const r = await api(`/api/comb_rend/comprobantes/${id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo sacar", "error"); return; }
+  rc.sobre = { ...r.sobre, puede_cargar: rc.sobre.puede_cargar, es_admin: rc.sobre.es_admin };
+  rcPintarFicha();
+  rcTraerSilencioso();
+}
+
+async function rcGuardarDato(el) {
+  const s = rc.sobre; if (!s) return;
+  const k = el.dataset.c;
+  let v = el.value;
+  if (["km_inicial", "km_final"].includes(k)) v = v.replace(/\./g, "").replace(",", ".");
+  if (String(s[k] ?? "") === String(v)) return;
+  el.classList.remove("mal");
+  const r = await api(`/api/comb_rend/${s.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [k]: v }) });
+  if (!r || !r.ok) { el.classList.add("mal"); toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  const foco = document.activeElement && document.activeElement.id;
+  rc.sobre = { ...r.sobre, puede_cargar: s.puede_cargar, es_admin: s.es_admin };
+  if (k !== "observaciones" && k !== "km_final") rcPintarFicha();
+  else rcPintarPie();
+  if (foco) document.getElementById(foco)?.focus();
+  el.classList.add("ok"); setTimeout(() => el.classList.remove("ok"), 900);
+  if (["chofer", "cuenta"].includes(k)) rc.listas = null;
+  rcTraerSilencioso();
+}
+
+function rcPintarPie() {
+  const s = rc.sobre, pie = $("#rc-ficha-pie");
+  if (!s || !pie) return;
+  const p = rcPuede(), adm = !!s.es_admin;
+  const b = [];
+  if (p && (s.comprobantes === 0 || adm) && (s.estado !== "rendido" || adm))
+    b.push(`<button class="btn btn-ghost rc-borrar" onclick="rcBorrarSobre()"><i class="ti ti-trash"></i> Eliminar sobre</button>`);
+  b.push(`<span class="rc-pie-esp"></span>`);
+  b.push(`<button class="btn btn-ghost" onclick="window.open('/api/comb_rend/${s.id}/pdf','_blank')"><i class="ti ti-printer"></i> PDF</button>`);
+  if (s.estado === "abierto" && p) b.push(`<button class="btn btn-primary" onclick="rcCerrar(this)"><i class="ti ti-mail"></i> Cerrar sobre</button>`);
+  if (s.estado === "cerrado" && p) b.push(`<button class="btn btn-ghost" onclick="rcReabrir()"><i class="ti ti-arrow-back-up"></i> Reabrir</button>`);
+  if (s.estado === "cerrado" && adm) b.push(`<button class="btn btn-primary rc-rendir" onclick="rcRendir()"><i class="ti ti-mail-check"></i> Marcar rendido</button>`);
+  if (s.estado === "rendido" && adm) b.push(`<button class="btn btn-ghost" onclick="rcReabrir()"><i class="ti ti-arrow-back-up"></i> Volver a cerrado</button>`);
+  if (s.estado !== "abierto" && p && !s.siguiente) b.push(`<button class="btn btn-success" onclick="rcSiguiente()"><i class="ti ti-mail-plus"></i> Abrir el siguiente</button>`);
+  if (s.siguiente) b.push(`<button class="btn btn-ghost" onclick="rcAbrir(${s.siguiente.id})">Sobre ${s.siguiente.numero} <i class="ti ti-arrow-right"></i></button>`);
+  pie.innerHTML = b.join("");
+  const modal = pie.closest(".rv-modal");
+  if (modal && !modal.contains(document.activeElement)) modal.focus();
+}
+
+async function rcCerrar(btn, forzar = false) {
+  const s = rc.sobre;
+  const inp = $("#rc-kmf");
+  const km = (inp?.value || "").replace(/\./g, "").replace(",", ".");
+  if (!km) { toast("Poné el km final del tablero para cerrar", "error"); inp?.focus(); inp?.closest(".rc-cn")?.classList.add("pide"); return; }
+  btn.disabled = true;
+  const r = await api(`/api/comb_rend/${s.id}/cerrar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ km_final: km, forzar }) });
+  btn.disabled = false;
+  if (r && r.pregunta) { if (await rcConfirmar(r.msg, "Cerrarlo igual")) rcCerrar(btn, true); return; }
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo cerrar", "error"); inp?.focus(); return; }
+  rc.sobre = { ...r.sobre, puede_cargar: s.puede_cargar, es_admin: s.es_admin };
+  rcPintarFicha();
+  const co = r.sobre.consumo || {};
+  toast(`Sobre ${s.numero} cerrado${co.l100 ? `: ${rcN(co.km)} km, ${rcN(co.l100, 2)} L cada 100 km` : ""}`, "success");
+  rcTraerSilencioso();
+}
+async function rcReabrir() {
+  const s = rc.sobre;
+  const msg = s.estado === "rendido" ? `¿Volver el sobre ${s.numero} a cerrado?` : `¿Reabrir el sobre ${s.numero}? Se pueden volver a tocar los comprobantes; al cerrarlo de nuevo se pone otra vez el km final.`;
+  if (!(await rcConfirmar(msg, s.estado === "rendido" ? "Volver a cerrado" : "Reabrir", "arrow-back-up"))) return;
+  const r = await api(`/api/comb_rend/${s.id}/reabrir`, { method: "POST" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  rc.sobre = { ...r.sobre, puede_cargar: s.puede_cargar, es_admin: s.es_admin };
+  rcPintarFicha();
+  rcTraerSilencioso();
+}
+async function rcRendir() {
+  const s = rc.sobre;
+  const r = await api(`/api/comb_rend/${s.id}/rendir`, { method: "POST" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  rc.sobre = { ...r.sobre, puede_cargar: s.puede_cargar, es_admin: s.es_admin };
+  rcPintarFicha();
+  toast(`Sobre ${s.numero} rendido`, "success");
+  rcTraerSilencioso();
+}
+async function rcBorrarSobre() {
+  const s = rc.sobre;
+  const msg = s.comprobantes ? `¿Eliminar el sobre ${s.numero} con sus ${s.comprobantes} comprobantes? Se borran también sus cargas de combustible.` : `¿Eliminar el sobre ${s.numero}?`;
+  if (!(await rcConfirmar(msg, "Eliminar", "trash"))) return;
+  const r = await api(`/api/comb_rend/${s.id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo eliminar", "error"); return; }
+  document.querySelectorAll(".rc-m-ficha").forEach(m => m.closest(".modal-overlay").remove());
+  toast(`Sobre ${s.numero} eliminado`, "success");
+  rcTraer();
+}
+function rcSiguiente() {
+  const s = rc.sobre;
+  document.querySelectorAll(".rc-m-ficha").forEach(m => m.closest(".modal-overlay").remove());
+  rcNuevo(s.vehiculo_id);
+}
+async function rcTraerSilencioso() {
+  if (!$("#rc-cuerpo")) return;
+  const d = await api(`/api/comb_rend?${rcQS()}`);
+  if (d && d.sobres && $("#rc-cuerpo")) { rc.datos = d; rcPintarEstados(); rcPintar(); }
 }
