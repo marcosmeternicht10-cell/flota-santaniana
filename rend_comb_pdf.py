@@ -17,6 +17,13 @@ from reportlab.pdfbase import pdfmetrics
 
 import trafico_pdf
 
+LUGAR_TXT = {"BASE": "Base (taller)", "FUERA": "Fuera", "PUMA": "Puma (convenio)", "PY SHELL": "Shell"}
+LUGAR_CORTO = {"BASE": "Base", "FUERA": "Fuera", "PUMA": "Puma", "PY SHELL": "Shell"}
+
+
+def _lugar(v, corto=False):
+    return (LUGAR_CORTO if corto else LUGAR_TXT).get(v or "", v or "")
+
 NAVY, AZUL, ROJO = HexColor("#1D344E"), HexColor("#1E5A96"), HexColor("#DC2641")
 TINTA, GRIS, GRIS2 = HexColor("#16202C"), HexColor("#5B6B7F"), HexColor("#8796A8")
 LINEA, SUAVE, CEBRA = HexColor("#D5DCE5"), HexColor("#F4F6F9"), HexColor("#F7F9FB")
@@ -162,8 +169,8 @@ def pdf_sobre(s):
             L.texto(x + 8, y + h - 6, L.cortar(sub, "I4", 7, w - 16), "I4", 7, GRIS)
 
     def tabla_comprobantes(y, filas, desde_n, con_total):
-        cols = [("#", 22, "c"), ("FECHA", 56, "l"), ("COMPROBANTE", 84, "l"), ("LETRA", 34, "c"),
-                ("NÚMERO", 118, "l"), ("LITROS", 62, "r"), ("ADITIVOS", 58, "r"), ("NRO. REF.", 0, "l")]
+        cols = [("#", 20, "c"), ("FECHA", 52, "l"), ("DÓNDE", 72, "l"), ("COMPROBANTE", 72, "l"), ("LETRA", 32, "c"),
+                ("NÚMERO", 96, "l"), ("LITROS", 58, "r"), ("ADITIVOS", 54, "r"), ("NRO. REF.", 0, "l")]
         fijo = sum(w for _, w, _ in cols)
         cols[-1] = ("NRO. REF.", aw - fijo, "l")
         L.rect(M, y, aw, 20, fill=NAVY, r=3)
@@ -179,7 +186,7 @@ def pdf_sobre(s):
         for k, cc in enumerate(filas):
             if k % 2:
                 L.rect(M, y, aw, 18, fill=CEBRA)
-            vals = [str(desde_n + k), _dmy(cc.get("fecha")), cc.get("tipo") or "", cc.get("letra") or "",
+            vals = [str(desde_n + k), _dmy(cc.get("fecha")), _lugar(cc.get("lugar"), True), cc.get("tipo") or "", cc.get("letra") or "",
                     cc.get("numero") or "", _miles(cc.get("litros"), 2) if cc.get("litros") else "—",
                     _miles(cc.get("aditivos"), 2) if cc.get("aditivos") else "—",
                     (cc.get("nro_ref") or "") + ("  · carga del celular" if cc.get("vinculada") else "")]
@@ -199,16 +206,16 @@ def pdf_sobre(s):
             L.linea(M, y, M + aw, y, NAVY, 1)
             L.texto(M + 6, y + 14.5, f"TOTAL · {len(comps)} COMPROBANTE{'S' if len(comps) != 1 else ''}",
                     "I7", 7.6, NAVY)
-            xl = M + sum(w for _, w, _ in cols[:6])
+            xl = M + sum(w for _, w, _ in cols[:7])
             L.texto(xl - 6, y + 15.5, _miles(s.get("litros"), 2) + " L", "D9", 12, NAVY, align="r")
-            L.texto(xl + cols[6][1] - 6, y + 15.5, _miles(s.get("aditivos"), 2) if s.get("aditivos") else "—",
+            L.texto(xl + cols[7][1] - 6, y + 15.5, _miles(s.get("aditivos"), 2) if s.get("aditivos") else "—",
                     "D8", 11, NAVY, align="r")
             y += 22
         return y + 10
 
     for n_pag, filas in enumerate(trozos, 1):
         y = L.encabezado(W, M, "RENDICIÓN DE COMBUSTIBLE",
-                         f"LA SANTANIANA S.A.  ·  CUENTA {s.get('cuenta') or '—'}", "SOBRE", f"N° {s['numero']}", logo)
+                         f"LA SANTANIANA S.A.  ·  CARGA EN {_lugar(s.get('cuenta')).upper() or '—'}", "SOBRE", f"N° {s['numero']}", logo)
         if n_pag == 1:
             est = s.get("estado") or "abierto"
             # Estado
@@ -227,7 +234,7 @@ def pdf_sobre(s):
             caja(M, y, aw * 0.30 - 6, 40, "Coche", coche, grande=True,
                  sub=" ".join(x for x in (s.get("marca"), s.get("modelo")) if x))
             caja(M + aw * 0.30, y, aw * 0.45 - 6, 40, "Chofer", s.get("chofer") or "")
-            caja(M + aw * 0.75, y, aw * 0.25, 40, "Cuenta", s.get("cuenta") or "")
+            caja(M + aw * 0.75, y, aw * 0.25, 40, "Dónde carga", _lugar(s.get("cuenta")))
             y += 50
             # Consumo: números grandes
             celdas = [("KM INICIAL", _miles(s.get("km_inicial")) if s.get("km_inicial") else "—", ""),
@@ -336,7 +343,7 @@ def pdf_lista(d, filtro):
         partes.append(f"búsqueda «{filtro['q']}»")
     impresa = _ahora_txt()
 
-    cols = [("SOBRE", 42, "l"), ("COCHE", 44, "l"), ("CHOFER", 0, "l"), ("CUENTA", 58, "l"),
+    cols = [("SOBRE", 42, "l"), ("COCHE", 44, "l"), ("CHOFER", 0, "l"), ("DÓNDE", 58, "l"),
             ("APERTURA", 46, "c"), ("CIERRE", 46, "c"), ("KM INICIAL", 54, "r"), ("KM FINAL", 54, "r"),
             ("KM", 42, "r"), ("LITROS", 52, "r"), ("ADITIVOS", 44, "r"), ("L/100KM", 46, "r"),
             ("VS MOTOR", 46, "r"), ("COMPR.", 34, "c"), ("ESTADO", 50, "c")]
@@ -391,7 +398,7 @@ def pdf_lista(d, filtro):
             desvio = ""
             if comp.get("desvio_pct") is not None and not comp.get("sin_datos"):
                 desvio = ("+" if comp["desvio_pct"] > 0 else "") + _miles(comp["desvio_pct"], 1) + "%"
-            vals = [str(s["numero"]), s["coche"], s.get("chofer") or "—", s.get("cuenta") or "",
+            vals = [str(s["numero"]), s["coche"], s.get("chofer") or "—", _lugar(s.get("cuenta"), True),
                     _dmy(s.get("fecha_apertura")), _dmy(s.get("fecha_cierre")) or "—",
                     _miles(s.get("km_inicial")) if s.get("km_inicial") else "—",
                     _miles(s.get("km_final")) if est != "abierto" and s.get("km_final") else "—",

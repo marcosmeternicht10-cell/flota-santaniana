@@ -3,7 +3,7 @@ rendicion_combustible.py — Rendición de combustible por sobre (La Santaniana)
 
 Como el sistema que usaba la oficina de Concepción ("Rendición de Gastos"):
 cada coche tiene un SOBRE abierto donde van los comprobantes de las cargas
-que se hacen con la cuenta de la estación (por ejemplo PY SHELL). El sobre se
+del coche (en la base, afuera, o en Puma por el convenio). El sobre se
 abre con el km del tablero, se le van cargando los comprobantes y se cierra
 con el km final: ahí salen los km recorridos, los litros y el consumo.
 
@@ -38,7 +38,12 @@ PK = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMEN
 SECCION = "comb_rendicion"
 ESTADOS = ("abierto", "cerrado", "rendido")
 TIPOS = ["FACTURA", "TICKET", "VALE", "REMISIÓN"]
-CUENTA_INICIAL = "PY SHELL"
+# Dónde se carga (lo que el sistema viejo llamaba "Cuenta asociada a la
+# Unidad"). Lo pidió la oficina de Concepción: en la base (el tanque del
+# taller), afuera en cualquier estación, o en Puma por el convenio. Shell
+# queda por los sobres que ya se cargaron así. Se puede escribir otro.
+LUGARES = [("BASE", "Base (taller)"), ("FUERA", "Fuera"), ("PUMA", "Puma (convenio)"), ("PY SHELL", "Shell")]
+CUENTA_INICIAL = "BASE"
 MAX_ADITIVOS = 200          # litros de aditivo (AdBlue) en un comprobante
 MAX_KM_SOBRE = 60000        # más que esto entre apertura y cierre es un error de tipeo
 
@@ -96,6 +101,17 @@ def _txt(v, mayus=False, largo=120):
     return s.upper() if mayus else s
 
 
+def _lugar_carga(lugar):
+    """Cómo lo ve el resto del sistema de combustible: en el taller o en una
+    estación (y de qué emblema, si se sabe)."""
+    l = (lugar or "").upper().strip()
+    if l in ("BASE", "TALLER") or "BASE" in l.split():
+        return "taller", ""
+    if l in ("FUERA", "AFUERA", ""):
+        return "tercerizado", ""
+    return "tercerizado", _emblema(l)
+
+
 def _emblema(cuenta):
     """'PY SHELL' → 'SHELL': el emblema de la estación para el resto del sistema."""
     try:
@@ -134,7 +150,7 @@ def init_rendicion_combustible():
             numero INTEGER NOT NULL,
             vehiculo_id INTEGER NOT NULL,
             chofer TEXT DEFAULT '',
-            cuenta TEXT DEFAULT '',             -- la cuenta de la estación (PY SHELL)
+            cuenta TEXT DEFAULT '',             -- dónde carga: BASE, FUERA, PUMA, PY SHELL...
             estado TEXT DEFAULT 'abierto',      -- abierto | cerrado | rendido
             km_inicial REAL DEFAULT 0,
             km_final REAL DEFAULT 0,
@@ -165,6 +181,18 @@ def init_rendicion_combustible():
             registrado_por TEXT DEFAULT '',
             registrado_el TEXT DEFAULT ''
         )""")
+    # Cada comprobante dice dónde se cargó (por defecto, lo del sobre): un
+    # coche puede cargar en la base y afuera dentro del mismo sobre
+    try:
+        if USE_POSTGRES:
+            conn.execute("ALTER TABLE comb_comprobantes ADD COLUMN IF NOT EXISTS lugar TEXT DEFAULT ''")
+        else:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(comb_comprobantes)").fetchall()}
+            if "lugar" not in cols:
+                conn.execute("ALTER TABLE comb_comprobantes ADD COLUMN lugar TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        _rollback(conn)
     for sql in ("CREATE UNIQUE INDEX IF NOT EXISTS ux_comb_sobres_numero ON comb_sobres (numero)",
                 "CREATE INDEX IF NOT EXISTS ix_comb_sobres_veh ON comb_sobres (vehiculo_id)",
                 "CREATE INDEX IF NOT EXISTS ix_comb_sobres_estado ON comb_sobres (estado)",
@@ -349,6 +377,7 @@ def detalle(sid):
     finally:
         conn.close()
     for c in comps:
+        c["lugar"] = c.get("lugar") or s.get("cuenta") or ""
         c["litros"] = round(float(c.get("litros") or 0), 2)
         c["aditivos"] = round(float(c.get("aditivos") or 0), 2)
         c["vinculada"] = not c.get("carga_propia") and bool(c.get("carga_id"))
@@ -411,12 +440,13 @@ def listas():
         choferes = nombres_de_choferes()
     except Exception:
         choferes = []
-    if CUENTA_INICIAL not in cuentas:
-        cuentas.append(CUENTA_INICIAL)
+    fijos = [v for v, _ in LUGARES]
+    cuentas = fijos + [c for c in cuentas if c not in fijos]
     for t in TIPOS:
         if t not in tipos:
             tipos.append(t)
     return {"choferes": choferes, "cuentas": cuentas, "tipos": tipos,
+            "lugares": [{"valor": v, "texto": t} for v, t in LUGARES],
             "ultimo_tipo": ult["tipo"] if ult else TIPOS[0]}
 
 
@@ -552,15 +582,23 @@ def editar(sid, d, es_admin=False):
             return
         conn.execute(f"UPDATE comb_sobres SET {', '.join(k + '=?' for k in cambios)} WHERE id=?",
                      tuple(cambios.values()) + (sid,))
+        if "cuenta" in cambios:
+            # Los comprobantes que tenían el lugar del sobre (o ninguno) lo
+            # siguen; los que se marcaron distinto a mano quedan como están
+            lc, emb = _lugar_carga(cambios["cuenta"])
+            for cc in conn.execute("""SELECT id, carga_id, carga_propia FROM comb_comprobantes
+                                      WHERE sobre_id=? AND (COALESCE(lugar,'')='' OR lugar=?)""",
+                                   (sid, s["cuenta"] or "")).fetchall():
+                conn.execute("UPDATE comb_comprobantes SET lugar=? WHERE id=?", (cambios["cuenta"], cc["id"]))
+                if cc["carga_propia"] and cc["carga_id"]:
+                    conn.execute("UPDATE combustible SET estacion=?, lugar_carga=?, emblema=? WHERE id=?",
+                                 (cambios["cuenta"], lc, emb, cc["carga_id"]))
         # Las cargas que creó el sobre siguen al sobre
         propias = _cargas_propias(conn, sid)
         if propias:
             marcas = ",".join("?" * len(propias))
             if "chofer" in cambios:
                 conn.execute(f"UPDATE combustible SET chofer=? WHERE id IN ({marcas})", [cambios["chofer"]] + propias)
-            if "cuenta" in cambios:
-                conn.execute(f"UPDATE combustible SET estacion=?, emblema=? WHERE id IN ({marcas})",
-                             [cambios["cuenta"], _emblema(cambios["cuenta"])] + propias)
             if "vehiculo_id" in cambios:
                 conn.execute(f"UPDATE combustible SET vehiculo_id=? WHERE id IN ({marcas})",
                              [cambios["vehiculo_id"]] + propias)
@@ -665,6 +703,7 @@ def _datos_comprobante(d):
         "litros": litros,
         "aditivos": aditivos,
         "nro_ref": _txt(d.get("nro_ref"), True, 30),
+        "lugar": _txt(d.get("lugar"), True, 60),
     }
 
 
@@ -720,25 +759,27 @@ def agregar_comprobante(sid, d, quien, forzar=False, vincular=None):
         if s["estado"] != "abierto":
             raise ValueError("El sobre está cerrado: para agregar comprobantes hay que reabrirlo.")
         c = _datos_comprobante(d)
+        c["lugar"] = c["lugar"] or s["cuenta"] or CUENTA_INICIAL
         elegida = _controles(conn, s, c, forzar=forzar, vincular=vincular)
         carga_id, propia = None, 1
         if elegida:
             carga_id, propia = elegida["id"], 0
         elif c["litros"] > 0:
             precio = _precio()
+            lc, emb = _lugar_carga(c["lugar"])
             cur = conn.execute("""INSERT INTO combustible
                 (vehiculo_id, fecha, odometro, litros, precio_litro, costo_total, estacion, chofer, tanque_lleno,
                  observaciones, registrado_por, origen, cliente, cargado_el, lugar_carga, emblema)
-                VALUES (?,?,0,?,?,?,?,?,1,?,?,'rendicion','',?,'tercerizado',?)""",
+                VALUES (?,?,0,?,?,?,?,?,1,?,?,'rendicion','',?,?,?)""",
                 (s["vehiculo_id"], c["fecha"], c["litros"], precio, round(c["litros"] * precio, 2),
-                 s["cuenta"], s["chofer"], _obs_carga(s["numero"], c), quien, _ahora(), _emblema(s["cuenta"])))
+                 c["lugar"], s["chofer"], _obs_carga(s["numero"], c), quien, _ahora(), lc, emb))
             carga_id = cur.lastrowid or conn.execute(
                 "SELECT MAX(id) AS m FROM combustible WHERE vehiculo_id=?", (s["vehiculo_id"],)).fetchone()["m"]
         cur = conn.execute("""INSERT INTO comb_comprobantes (sobre_id, fecha, tipo, letra, numero, litros, aditivos,
-                                  nro_ref, carga_id, carga_propia, registrado_por, registrado_el)
-                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                  nro_ref, lugar, carga_id, carga_propia, registrado_por, registrado_el)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                            (sid, c["fecha"], c["tipo"], c["letra"], c["numero"], c["litros"], c["aditivos"],
-                            c["nro_ref"], carga_id, propia, quien, _ahora()))
+                            c["nro_ref"], c["lugar"], carga_id, propia, quien, _ahora()))
         cid = cur.lastrowid
         conn.commit()
         _recalcular(s["vehiculo_id"])
@@ -767,35 +808,37 @@ def editar_comprobante(cid, d, forzar=False):
             raise ValueError("El sobre está cerrado: para corregir comprobantes hay que reabrirlo.")
         s = _sobre(conn, cc["sid"])
         base = {k: cc[k] for k in ("fecha", "tipo", "letra", "numero", "litros", "aditivos", "nro_ref")}
+        base["lugar"] = cc.get("lugar") or s["cuenta"]
         base.update({k: v for k, v in d.items() if k in base})
         c = _datos_comprobante(base)
+        c["lugar"] = c["lugar"] or s["cuenta"] or CUENTA_INICIAL
+        lc, emb = _lugar_carga(c["lugar"])
         _controles(conn, s, c, comp_id=cid, forzar=forzar)
         carga_id, propia = cc["carga_id"], cc["carga_propia"]
         if propia:
             if c["litros"] > 0 and carga_id:
                 precio = _precio()
-                conn.execute("""UPDATE combustible SET fecha=?, litros=?, precio_litro=?, costo_total=?, observaciones=?
-                                WHERE id=?""",
+                conn.execute("""UPDATE combustible SET fecha=?, litros=?, precio_litro=?, costo_total=?, observaciones=?,
+                                    estacion=?, lugar_carga=?, emblema=? WHERE id=?""",
                              (c["fecha"], c["litros"], precio, round(c["litros"] * precio, 2),
-                              _obs_carga(cc["sobre_numero"], c), carga_id))
+                              _obs_carga(cc["sobre_numero"], c), c["lugar"], lc, emb, carga_id))
             elif c["litros"] > 0 and not carga_id:
                 precio = _precio()
                 cur = conn.execute("""INSERT INTO combustible
                     (vehiculo_id, fecha, odometro, litros, precio_litro, costo_total, estacion, chofer, tanque_lleno,
                      observaciones, registrado_por, origen, cliente, cargado_el, lugar_carga, emblema)
-                    VALUES (?,?,0,?,?,?,?,?,1,?,?,'rendicion','',?,'tercerizado',?)""",
+                    VALUES (?,?,0,?,?,?,?,?,1,?,?,'rendicion','',?,?,?)""",
                     (s["vehiculo_id"], c["fecha"], c["litros"], precio, round(c["litros"] * precio, 2),
-                     s["cuenta"], s["chofer"], _obs_carga(s["numero"], c), cc["registrado_por"], _ahora(),
-                     _emblema(s["cuenta"])))
+                     c["lugar"], s["chofer"], _obs_carga(s["numero"], c), cc["registrado_por"], _ahora(), lc, emb))
                 carga_id = cur.lastrowid
             elif c["litros"] <= 0 and carga_id:
                 # Quedó solo con aditivo: ya no es una carga de combustible
                 conn.execute("DELETE FROM combustible WHERE id=?", (carga_id,))
                 carga_id = None
         conn.execute("""UPDATE comb_comprobantes SET fecha=?, tipo=?, letra=?, numero=?, litros=?, aditivos=?,
-                            nro_ref=?, carga_id=? WHERE id=?""",
+                            nro_ref=?, lugar=?, carga_id=? WHERE id=?""",
                      (c["fecha"], c["tipo"], c["letra"], c["numero"], c["litros"], c["aditivos"], c["nro_ref"],
-                      carga_id, cid))
+                      c["lugar"], carga_id, cid))
         conn.commit()
         _recalcular(cc["vehiculo_id"])
         return cc, c
