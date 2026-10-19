@@ -17184,6 +17184,9 @@ async function ptFicha(pid, periodo) {
     o.querySelector(".rv-modal-pie").insertAdjacentHTML("afterbegin",
       `<button class="btn btn-ghost" style="margin-right:auto" onclick="this.closest('.modal-overlay').remove();ptEditar(${p.id})"><i class="ti ti-pencil"></i> Sus datos</button>`);
   }
+  // Lo mismo que se ve, en PDF para imprimir (mismo período y mismo coche)
+  o.querySelector(".rv-modal-pie").insertAdjacentHTML("beforeend",
+    `<button class="btn btn-primary" onclick="window.open('/api/personal/${p.id}/ficha.pdf?${q}','_blank')"><i class="ti ti-printer"></i> Imprimir</button>`);
 }
 
 // ─── PERSONAL Y NÚMEROS ───
