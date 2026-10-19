@@ -18056,7 +18056,7 @@ async function renderRendCombustible() {
         <div class="rc-estados" role="tablist" aria-label="Qué sobres ver" id="rc-estados"></div>
         <div class="rc-barra-2">
           <label class="rc-buscar"><i class="ti ti-search"></i>
-            <input id="rc-q" type="search" value="${rcEsc(rc.q)}" placeholder="N° de sobre, coche, chofer o cuenta" autocomplete="off" oninput="rcBuscar(this.value)">
+            <input id="rc-q" type="search" value="${rcEsc(rc.q)}" placeholder="N° de sobre, coche o chofer" autocomplete="off" oninput="rcBuscar(this.value)">
           </label>
           <div class="rc-periodos" role="group" aria-label="Abiertos en">
             ${[["todo", "Todo"], ["30", "30 días"], ["90", "3 meses"], ["anio", "Este año"]].map(([k, t]) =>
@@ -18171,7 +18171,7 @@ function rcFila(s, i) {
   return `
     <div class="rc-fila ${s.estado}" role="row" tabindex="0" style="--i:${Math.min(i, 14)}" onclick="rcAbrir(${s.id})" onkeydown="if(event.key==='Enter')rcAbrir(${s.id})">
       <span class="rc-num" data-l="Sobre">${s.numero}</span>
-      <span class="rc-coche" data-l="Coche"><b>${rcEsc(s.coche)}</b><small>${rcEsc(s.cuenta || "")}</small></span>
+      <span class="rc-coche" data-l="Coche"><b>${rcEsc(s.coche)}</b><small>${rcEsc(rcLugarTxt(s.cuenta))}</small></span>
       <span class="rc-chofer" data-l="Chofer">${rcEsc(s.chofer) || '<i class="rc-sin">sin chofer</i>'}</span>
       <span data-l="Apertura">${rcDM(s.fecha_apertura)}</span>
       <span data-l="Cierre">${rcDM(s.fecha_cierre) || '<i class="rc-sin">—</i>'}</span>
@@ -18194,6 +18194,45 @@ async function rcListas() {
   return rc.listas;
 }
 const rcDatalist = (id, lista) => `<datalist id="${id}">${(lista || []).map(n => `<option value="${rcEsc(n)}">`).join("")}</datalist>`;
+
+// Dónde se carga: en la base (taller), afuera, o en Puma por el convenio
+const RC_LUGAR_TXT = { BASE: "Base", FUERA: "Fuera", PUMA: "Puma", "PY SHELL": "Shell" };
+const rcLugarTxt = v => RC_LUGAR_TXT[v] || v || "";
+function rcLugarPicker(id, valor, onCambio = "", corto = false) {
+  const fijos = (rc.listas?.lugares || [{ valor: "BASE", texto: "Base (taller)" }, { valor: "FUERA", texto: "Fuera" }, { valor: "PUMA", texto: "Puma (convenio)" }]);
+  const esFijo = fijos.some(l => l.valor === valor);
+  const ic = { BASE: "building-warehouse", FUERA: "map-pin", PUMA: "gas-station", "PY SHELL": "gas-station" };
+  return `<div class="rc-lugares" id="${id}-box" data-on="${onCambio}">
+      <input type="hidden" id="${id}" value="${rcEsc(valor || "")}">
+      ${fijos.map(l => `<button type="button" class="rc-lugar ${l.valor === valor ? "on" : ""}" data-v="${rcEsc(l.valor)}" onclick="rcLugarElegir('${id}', this)"><i class="ti ti-${ic[l.valor] || "gas-station"}"></i>${rcEsc(corto ? rcLugarTxt(l.valor) : l.texto)}</button>`).join("")}
+      <button type="button" class="rc-lugar otra ${valor && !esFijo ? "on" : ""}" data-v="" onclick="rcLugarElegir('${id}', this)"><i class="ti ti-pencil"></i>Otra</button>
+      <input class="rc-lugar-otra" id="${id}-otra" maxlength="60" placeholder="¿Dónde?" value="${valor && !esFijo ? rcEsc(valor) : ""}" ${valor && !esFijo ? "" : "hidden"}
+             oninput="document.getElementById('${id}').value = this.value.trim().toUpperCase()" onchange="rcLugarAviso('${id}')">
+    </div>`;
+}
+function rcLugarElegir(id, btn) {
+  const box = document.getElementById(id + "-box");
+  box.querySelectorAll(".rc-lugar").forEach(b => b.classList.toggle("on", b === btn));
+  const otra = document.getElementById(id + "-otra");
+  if (btn.dataset.v) {
+    document.getElementById(id).value = btn.dataset.v;
+    otra.hidden = true;
+    rcLugarAviso(id);
+  } else {
+    otra.hidden = false;
+    otra.focus();
+  }
+}
+function rcLugarAviso(id) {
+  const box = document.getElementById(id + "-box");
+  if (box?.dataset.on === "ficha") rcGuardarDato(document.getElementById(id));
+}
+function rcLugarSelect(attr, valor) {
+  const fijos = (rc.listas?.lugares || []).map(l => l.valor);
+  const todos = fijos.concat((rc.listas?.cuentas || []).filter(c => !fijos.includes(c)));
+  if (valor && !todos.includes(valor)) todos.push(valor);
+  return `<select ${attr} aria-label="Dónde se cargó">${todos.map(v => `<option value="${rcEsc(v)}" ${v === valor ? "selected" : ""}>${rcEsc(rcLugarTxt(v))}</option>`).join("")}</select>`;
+}
 
 // Preguntas del servidor (409): número repetido, otro sobre abierto, sobre vacío
 function rcConfirmar(msg, si = "Sí, seguir", icono = "help-circle") {
@@ -18225,7 +18264,7 @@ async function rcNuevo(vid) {
         <div class="rc-sug" id="rcn-sug" hidden></div>
         <label class="rc-f rc-f-km"><span>Km inicial</span><input id="rcn-km" inputmode="numeric" placeholder="del tablero"><small id="rcn-km-de"></small></label>
         <label class="rc-f rc-f-chofer"><span>Chofer</span><input id="rcn-chofer" list="rcn-l-chof" placeholder="Apellido y nombre" maxlength="80" autocomplete="off">${rcDatalist("rcn-l-chof", listas.choferes)}</label>
-        <label class="rc-f rc-f-cuenta"><span>Cuenta</span><input id="rcn-cuenta" list="rcn-l-cta" value="${rcEsc(listas.cuentas[0] || "PY SHELL")}" maxlength="60" autocomplete="off">${rcDatalist("rcn-l-cta", listas.cuentas)}</label>
+        <div class="rc-f rc-f-cuenta"><span>¿Dónde carga?</span>${rcLugarPicker("rcn-cuenta", "BASE")}</div>
         <label class="rc-f rc-f-obs"><span>Observaciones <i>(opcional)</i></span><input id="rcn-obs" maxlength="400"></label>
       </div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
@@ -18244,7 +18283,12 @@ async function rcSugerir(vid) {
   const km = $("#rcn-km"), ch = $("#rcn-chofer"), cu = $("#rcn-cuenta");
   if (km) { km.value = s.km_inicial ? rvDec(s.km_inicial, 0) : ""; $("#rcn-km-de").textContent = s.km_de_donde ? `Es el ${s.km_de_donde}` : ""; }
   if (ch && s.chofer) ch.value = s.chofer;
-  if (cu && s.cuenta) cu.value = s.cuenta;
+  if (cu && s.cuenta) {
+    const b = [...document.querySelectorAll("#rcn-cuenta-box .rc-lugar")].find(x => x.dataset.v === s.cuenta)
+      || document.querySelector("#rcn-cuenta-box .rc-lugar.otra");
+    rcLugarElegir("rcn-cuenta", b);
+    if (!b.dataset.v) { $("#rcn-cuenta-otra").value = s.cuenta; cu.value = s.cuenta; }
+  }
   if (box) {
     box.hidden = !s.abierto;
     if (s.abierto) box.innerHTML = `<i class="ti ti-alert-triangle"></i> Este coche ya tiene abierto el sobre <b>${s.abierto.numero}</b> (desde el ${rcDM(s.abierto.fecha_apertura)}). <button class="rc-link" onclick="this.closest('.modal-overlay').remove(); rcAbrir(${s.abierto.id})">Abrir ese</button>`;
@@ -18313,7 +18357,8 @@ function rcPintarFicha() {
     <div class="rc-ficha">
       <div class="rc-datos">
         ${campo("chofer", "Chofer", s.chofer, `list="rc-l-chof" maxlength="80" autocomplete="off" placeholder="Apellido y nombre"`)}
-        ${campo("cuenta", "Cuenta", s.cuenta, `list="rc-l-cta" maxlength="60" autocomplete="off"`)}
+        ${ed ? `<div class="rc-f rc-f-lugar"><span>¿Dónde carga?</span>${rcLugarPicker("rc-cuenta", s.cuenta, "ficha", true).replace('type="hidden" id="rc-cuenta"', 'type="hidden" id="rc-cuenta" data-c="cuenta"')}</div>`
+             : `<div class="rc-f ro"><span>Dónde carga</span><b>${rcEsc(rcLugarTxt(s.cuenta)) || "—"}</b></div>`}
         ${campo("numero", "N° de sobre", s.numero, `inputmode="numeric" maxlength="10"`)}
         ${ed ? `<label class="rc-f"><span>Apertura</span><input type="date" data-c="fecha_apertura" value="${s.fecha_apertura}" max="${trHoy()}" onchange="rcGuardarDato(this)"></label>`
              : `<div class="rc-f ro"><span>Apertura</span><b>${rcDM(s.fecha_apertura)}</b></div>`}
@@ -18331,11 +18376,11 @@ function rcPintarFicha() {
       <div class="rc-comps">
         <div class="rc-comps-cab"><b>Comprobantes</b>${ed ? `<span>Enter agrega · la fecha y el tipo quedan para el siguiente</span>` : ""}</div>
         <div class="rc-ct" role="table">
-          <div class="rc-cf rc-cf-cab" role="row"><span>Fecha</span><span>Comprobante</span><span>Letra</span><span>Número</span><span class="n">Litros</span><span class="n">Aditivos</span><span>Nro. ref.</span><span></span></div>
+          <div class="rc-cf rc-cf-cab" role="row"><span>Fecha</span><span>Dónde</span><span>Comprobante</span><span>Letra</span><span>Número</span><span class="n">Litros</span><span class="n">Aditivos</span><span>Nro. ref.</span><span></span></div>
           ${ed ? rcFilaNueva() : ""}
           ${(s.comprobantes_lista || []).slice().reverse().map(c => rc.editComp === c.id ? rcFilaEditar(c) : rcFilaComp(c, ed)).join("") ||
             (ed ? "" : `<div class="rc-cf-vacio">Sin comprobantes</div>`)}
-          ${s.comprobantes ? `<div class="rc-cf rc-cf-tot" role="row"><span>Total</span><span>${rvPl(s.comprobantes, "comprobante")}</span><span></span><span></span><span class="n"><b>${rcN(s.litros, 2)}</b></span><span class="n">${s.aditivos ? rcN(s.aditivos, 2) : "—"}</span><span></span><span></span></div>` : ""}
+          ${s.comprobantes ? `<div class="rc-cf rc-cf-tot" role="row"><span>Total</span><span class="rc-tot-n">${rvPl(s.comprobantes, "comprobante")}</span><span></span><span class="n"><b>${rcN(s.litros, 2)}</b></span><span class="n">${s.aditivos ? rcN(s.aditivos, 2) : "—"}</span><span></span><span></span></div>` : ""}
         </div>
       </div>
       <div class="rc-bajo">
@@ -18353,7 +18398,7 @@ function rcPintarFicha() {
   // ventana: así Escape la sigue cerrando
   if (!modal.contains(document.activeElement)) modal.focus();
   const fn = $("#rcc-numero");
-  if (fn) box.querySelectorAll(".rc-cf-nueva input").forEach(i => i.addEventListener("keydown", e => {
+  if (fn) box.querySelectorAll(".rc-cf-nueva input, .rc-cf-nueva select").forEach(i => i.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); rcAgregarComp(); }
   }));
 }
@@ -18363,6 +18408,7 @@ function rcFilaNueva() {
   return `
     <div class="rc-cf rc-cf-nueva" role="row">
       <input id="rcc-fecha" type="date" value="${u.fecha || trHoy()}" max="${trHoy()}" aria-label="Fecha">
+      ${rcLugarSelect('id="rcc-lugar"', (u.sobre === rc.sobre.id && u.lugar) || rc.sobre.cuenta || "BASE")}
       <input id="rcc-tipo" list="rc-l-tipos" value="${rcEsc(u.tipo || rc.listas.ultimo_tipo || "FACTURA")}" maxlength="20" aria-label="Comprobante" autocomplete="off">
       <input id="rcc-letra" value="${rcEsc(u.letra || "")}" maxlength="3" placeholder="Letra" aria-label="Letra" autocomplete="off">
       <input id="rcc-numero" maxlength="30" placeholder="N° del comprobante" aria-label="Número" autocomplete="off">
@@ -18376,13 +18422,14 @@ function rcFilaNueva() {
 function rcFilaComp(c, ed) {
   return `
     <div class="rc-cf" role="row" data-id="${c.id}">
-      <span data-l="Fecha">${rcDM(c.fecha)}</span>
-      <span data-l="Comprobante">${rcEsc(c.tipo)}</span>
-      <span data-l="Letra">${rcEsc(c.letra)}</span>
-      <span data-l="Número" class="rc-cf-num">${rcEsc(c.numero) || '<i class="rc-sin">sin número</i>'}</span>
-      <span class="n rc-cf-lt" data-l="Litros">${c.litros ? rcN(c.litros, 2) : "—"}</span>
-      <span class="n" data-l="Aditivos">${c.aditivos ? rcN(c.aditivos, 2) : ""}</span>
-      <span data-l="Nro. ref.">${rcEsc(c.nro_ref)}${c.vinculada ? `<em class="rc-cel" title="Es la carga que ${rcEsc(c.carga_chofer || "el chofer")} hizo desde el celular: no se cuenta dos veces"><i class="ti ti-device-mobile"></i> del celular</em>` : ""}</span>
+      <span class="rc-c-fecha">${rcDM(c.fecha)}</span>
+      <span class="rc-c-lugar"><em class="rc-lug ${rcEsc(String(c.lugar || "").toLowerCase().replace(/\s+/g, "-"))}">${rcEsc(rcLugarTxt(c.lugar))}</em></span>
+      <span class="rc-c-tipo">${rcEsc(c.tipo)}</span>
+      <span class="rc-c-letra">${rcEsc(c.letra)}</span>
+      <span class="rc-cf-num">${rcEsc(c.numero) || '<i class="rc-sin">sin número</i>'}</span>
+      <span class="n rc-cf-lt">${c.litros ? rcN(c.litros, 2) : "—"}</span>
+      <span class="n rc-c-adit">${c.aditivos ? rcN(c.aditivos, 2) : ""}</span>
+      <span class="rc-c-ref">${rcEsc(c.nro_ref)}${c.vinculada ? `<em class="rc-cel" title="Es la carga que ${rcEsc(c.carga_chofer || "el chofer")} hizo desde el celular: no se cuenta dos veces"><i class="ti ti-device-mobile"></i> del celular</em>` : ""}</span>
       <span class="rc-cf-acc">${ed ? `<button class="icon-btn" title="Corregir" onclick="rcEditarComp(${c.id})"><i class="ti ti-pencil"></i></button>
         <button class="icon-btn" title="Sacar" onclick="rcBorrarComp(${c.id})"><i class="ti ti-trash"></i></button>` : ""}</span>
     </div>`;
@@ -18391,6 +18438,7 @@ function rcFilaEditar(c) {
   return `
     <div class="rc-cf rc-cf-edit" role="row" data-id="${c.id}">
       <input data-k="fecha" type="date" value="${c.fecha}" max="${trHoy()}">
+      ${rcLugarSelect('data-k="lugar"', c.lugar)}
       <input data-k="tipo" list="rc-l-tipos" value="${rcEsc(c.tipo)}" maxlength="20">
       <input data-k="letra" value="${rcEsc(c.letra)}" maxlength="3">
       <input data-k="numero" value="${rcEsc(c.numero)}" maxlength="30">
@@ -18406,7 +18454,7 @@ function rcEditarComp(id) {
   rcPintarFicha();
   const f = document.querySelector(`.rc-cf-edit[data-id="${id}"]`);
   if (!f) return;
-  f.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => {
+  f.querySelectorAll("input, select").forEach(i => i.addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); rcGuardarComp(id); }
     if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); rcEditarComp(null); }
   }));
@@ -18456,14 +18504,14 @@ function rcMismaCarga(r) {
 async function rcAgregarComp() {
   const s = rc.sobre; if (!s) return;
   const g = id => ($(id)?.value || "").trim();
-  const datos = { fecha: g("#rcc-fecha"), tipo: g("#rcc-tipo"), letra: g("#rcc-letra"), numero: g("#rcc-numero"),
+  const datos = { fecha: g("#rcc-fecha"), lugar: g("#rcc-lugar"), tipo: g("#rcc-tipo"), letra: g("#rcc-letra"), numero: g("#rcc-numero"),
                   litros: g("#rcc-litros"), aditivos: g("#rcc-aditivos"), nro_ref: g("#rcc-ref") };
   if (!datos.litros && !datos.aditivos) { toast("Poné los litros", "error"); $("#rcc-litros").focus(); return; }
   const btn = document.querySelector(".rc-cf-add"); if (btn) btn.disabled = true;
   const r = await rcEnviarComp(`/api/comb_rend/${s.id}/comprobantes`, "POST", datos);
   if (btn) btn.disabled = false;
   if (!r || !r.ok) { if (!r?.cancelado) toast((r && r.msg) || "No se pudo agregar", "error"); return; }
-  rc.ultimoComp = { fecha: datos.fecha, tipo: datos.tipo, letra: datos.letra };
+  rc.ultimoComp = { fecha: datos.fecha, tipo: datos.tipo, letra: datos.letra, lugar: datos.lugar, sobre: s.id };
   rc.sobre = { ...r.sobre, puede_cargar: s.puede_cargar, es_admin: s.es_admin };
   rcPintarFicha();
   const nueva = document.querySelector(".rc-cf[data-id]");
@@ -18508,7 +18556,7 @@ async function rcGuardarDato(el) {
   else rcPintarPie();
   if (foco) document.getElementById(foco)?.focus();
   el.classList.add("ok"); setTimeout(() => el.classList.remove("ok"), 900);
-  if (["chofer", "cuenta"].includes(k)) rc.listas = null;
+  if (["chofer", "cuenta"].includes(k)) api("/api/comb_rend/listas").then(l => { if (l && l.tipos) rc.listas = l; });
   rcTraerSilencioso();
 }
 

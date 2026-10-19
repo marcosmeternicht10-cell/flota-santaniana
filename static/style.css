@@ -6488,7 +6488,8 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .rc-f small { font-size: 11.5px; color: var(--muted); min-height: 14px; }
 .rc-f.ro b { font: 600 15px "Inter", sans-serif; color: var(--text); padding: 9px 0; }
 .rc-form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.rc-f-coche, .rc-f-obs, .rc-sug { grid-column: 1 / -1; }
+.rc-f-coche, .rc-f-obs, .rc-sug, .rc-f-cuenta { grid-column: 1 / -1; }
+.rc-cf-tot .rc-tot-n { grid-column: 2 / span 3; }
 .rc-f-num input { font: 700 20px var(--display); color: var(--azul-oscuro); letter-spacing: .02em; }
 .rc-f-km input { font: 700 18px var(--display); color: var(--azul-oscuro); }
 .rc-sug { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-radius: 10px; background: var(--warning-bg); border: 1px solid var(--warning-bd); font-size: 13px; color: #8A5A00; }
@@ -6505,7 +6506,7 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .rc-m-ficha .rv-modal-tit h2 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rc-m-ficha .rv-modal-cuerpo { max-height: calc(92vh - 160px); }
 .rc-ficha { display: flex; flex-direction: column; gap: 16px; }
-.rc-datos { display: grid; grid-template-columns: 1.6fr 1fr 130px 160px; gap: 12px; }
+.rc-datos { display: grid; grid-template-columns: minmax(200px, 1.2fr) minmax(300px, 1.6fr) 110px 150px; gap: 12px; }
 .rc-consumo { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-radius: 14px; background: linear-gradient(180deg, #F6F8FB, #EEF2F7); border: 1px solid var(--border); overflow: hidden; }
 .rc-cn { display: flex; flex-direction: column; justify-content: center; gap: 3px; padding: 12px 14px; border-left: 1px solid var(--border); min-width: 0; }
 .rc-cn:first-child { border-left: 0; }
@@ -6525,7 +6526,7 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .rc-comps-cab { display: flex; align-items: baseline; gap: 10px; padding: 11px 14px; background: var(--surface2); border-bottom: 1px solid var(--border); }
 .rc-comps-cab b { font: 700 15px var(--display); letter-spacing: .05em; text-transform: uppercase; color: var(--azul-oscuro); }
 .rc-comps-cab span { font-size: 11.5px; color: var(--muted); }
-.rc-cf { display: grid; grid-template-columns: 112px 112px 52px minmax(130px, 1.3fr) 88px 80px minmax(90px, 1fr) 96px; align-items: center; column-gap: 8px; padding: 0 12px; min-height: 42px; border-top: 1px solid var(--border); font-size: 13px; }
+.rc-cf { display: grid; grid-template-columns: 112px 92px 100px 46px minmax(120px, 1.3fr) 84px 74px minmax(76px, 1fr) 92px; align-items: center; column-gap: 8px; padding: 0 12px; min-height: 42px; border-top: 1px solid var(--border); font-size: 13px; }
 .rc-cf:first-child { border-top: 0; }
 .rc-cf .n { text-align: right; font-variant-numeric: tabular-nums; }
 .rc-cf-cab { min-height: 32px; font: 600 10.5px "Inter", sans-serif; letter-spacing: .05em; text-transform: uppercase; color: var(--light); border-top: 0; }
@@ -6543,7 +6544,23 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .rc-cf.recien { animation: rcRecien 1.4s ease; }
 @keyframes rcRecien { 0% { background: #DDF0E3; } 100% { background: transparent; } }
 .rc-cel { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 7px; border-radius: 6px; background: var(--info-bg); color: var(--brand-blue); font: 600 11px "Inter", sans-serif; font-style: normal; white-space: nowrap; }
-.rc-cf[data-id] > span:nth-child(6):empty::after { content: "—"; color: var(--light); }
+.rc-c-adit:empty::after { content: "—"; color: var(--light); }
+.rc-cf-nueva select, .rc-cf-edit select { height: 36px; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; font: 600 12.5px "Inter", sans-serif; color: var(--text); min-width: 0; width: 100%; }
+.rc-lug { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; font: 700 11.5px "Inter", sans-serif; font-style: normal; background: var(--surface2); color: var(--muted); white-space: nowrap; }
+.rc-lug.base { background: #E7EEF7; color: var(--azul-oscuro); }
+.rc-lug.fuera { background: var(--warning-bg); color: #8A5A00; }
+.rc-lug.puma { background: #FDECEF; color: #B4162F; }
+.rc-lug.py-shell { background: #FFF6D6; color: #8A6A00; }
+/* Dónde carga: botones */
+.rc-lugares { display: flex; flex-wrap: wrap; gap: 6px; }
+.rc-lugar { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: #fff; font: 600 13px "Inter", sans-serif; color: var(--muted); cursor: pointer; transition: background .15s, border-color .15s, color .15s, box-shadow .15s; }
+.rc-lugar .ti { font-size: 16px; }
+.rc-lugar:hover { border-color: var(--brand-blue); color: var(--azul-oscuro); }
+.rc-lugar.on { background: var(--azul-oscuro); border-color: var(--azul-oscuro); color: #fff; box-shadow: var(--shadow-sm); }
+.rc-lugar-otra { height: 40px; padding: 0 11px; border: 1px solid var(--border-strong); border-radius: 10px; font: 500 14px "Inter", sans-serif; text-transform: uppercase; min-width: 140px; flex: 1; }
+.rc-lugar-otra[hidden] { display: none; }
+.rc-lugar-otra:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.rc-f-lugar .rc-lugar { height: 36px; padding: 0 10px; font-size: 12.5px; }
 .rc-cf-nueva input::placeholder, .rc-cf-edit input::placeholder { font: 500 12.5px "Inter", sans-serif; color: var(--light); }
 .rc-cf-tot { background: var(--surface2); font-weight: 600; color: var(--muted); }
 .rc-cf-tot b { font: 700 18px var(--display); color: var(--azul-oscuro); }
@@ -6593,6 +6610,7 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
   .rc-fila > :last-child { grid-column: 3; grid-row: 1; justify-self: end; }
   .rc-coche { grid-column: 2; }
   .rc-datos { grid-template-columns: 1fr 1fr; }
+  .rc-datos > .rc-f-lugar { grid-column: 1 / -1; }
   .rc-consumo { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .rc-cn:nth-child(4) { border-left: 0; }
   .rc-cn:nth-child(n+4) { border-top: 1px solid var(--border); }
@@ -6600,24 +6618,27 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
   .rc-cf-cab { display: none; }
   /* Cada comprobante como una tarjetita: fecha y tipo arriba, el número, y
      los litros grandes a la derecha */
-  .rc-cf[data-id]:not(.rc-cf-edit) { grid-template-columns: auto auto 1fr auto; grid-template-areas: "fecha tipo letra lt" "num num num lt" "ref ref adit acc"; gap: 2px 10px; padding: 10px 12px; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(1) { grid-area: fecha; font-weight: 600; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(2) { grid-area: tipo; color: var(--muted); }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(3) { grid-area: letra; color: var(--muted); }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(4) { grid-area: num; white-space: normal; word-break: break-all; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(5) { grid-area: lt; align-self: center; font-size: 22px; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(5)::after { content: " L"; font: 600 12px "Inter", sans-serif; color: var(--muted); }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(6) { grid-area: adit; font-size: 12px; color: var(--muted); }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(6):not(:empty)::before { content: "Aditivo "; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(6):empty::after { content: none; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(7) { grid-area: ref; font-size: 12px; color: var(--muted); }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(7):not(:empty)::before { content: "Ref. "; }
-  .rc-cf[data-id]:not(.rc-cf-edit) > :nth-child(8) { grid-area: acc; }
+  .rc-cf[data-id]:not(.rc-cf-edit) { grid-template-columns: auto auto auto 1fr auto; grid-template-areas: "fecha lugar tipo letra lt" "num num num num lt" "ref ref adit adit acc"; gap: 3px 8px; padding: 10px 12px; align-items: center; }
+  .rc-cf .rc-c-fecha { grid-area: fecha; font-weight: 600; }
+  .rc-cf .rc-c-lugar { grid-area: lugar; }
+  .rc-cf .rc-c-tipo { grid-area: tipo; color: var(--muted); }
+  .rc-cf .rc-c-letra { grid-area: letra; color: var(--muted); }
+  .rc-cf .rc-cf-num { grid-area: num; white-space: normal; word-break: break-all; }
+  .rc-cf .rc-cf-lt { grid-area: lt; align-self: center; font-size: 22px; }
+  .rc-cf .rc-cf-lt::after { content: " L"; font: 600 12px "Inter", sans-serif; color: var(--muted); }
+  .rc-cf .rc-c-adit { grid-area: adit; font-size: 12px; color: var(--muted); }
+  .rc-cf .rc-c-adit:not(:empty)::before { content: "Aditivo "; }
+  .rc-cf .rc-c-adit:empty::after { content: none; }
+  .rc-cf .rc-c-ref { grid-area: ref; font-size: 12px; color: var(--muted); }
+  .rc-cf .rc-c-ref:not(:empty)::before { content: "Ref. "; }
+  .rc-cf[data-id] .rc-cf-acc { grid-area: acc; }
   .rc-cf .n { text-align: left; }
   .rc-cf-nueva, .rc-cf-edit { grid-template-columns: 1fr 1fr 64px; }
+  .rc-cf-nueva select, .rc-cf-edit select { grid-column: 2 / -1; }
   .rc-cf-nueva #rcc-numero, .rc-cf-edit [data-k="numero"] { grid-column: 1 / -1; }
   .rc-cf-add, .rc-cf-edit .rc-cf-acc { grid-column: 1 / -1; }
   .rc-cf-tot { grid-template-columns: 1fr 1fr; }
+  .rc-cf-tot .rc-tot-n { grid-column: auto; }
   .rc-cf-tot > span:empty { display: none; }
   .rc-bajo { grid-template-columns: 1fr; }
   .rc-form { grid-template-columns: 1fr; }
