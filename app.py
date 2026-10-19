@@ -141,6 +141,14 @@ from turismo_rendiciones import bp_rendiciones, init_rendiciones
 init_rendiciones()
 app.register_blueprint(bp_rendiciones)
 
+# ─── Rendición de combustible por sobre ──────────────────────────────────────
+# Como el sistema que usaba la oficina de Concepción: un sobre por coche con
+# los comprobantes de la cuenta de la estación, del km inicial al final. Cada
+# comprobante suma como carga del coche (consumo y control de robos).
+from rendicion_combustible import bp_rend_comb, init_rendicion_combustible
+init_rendicion_combustible()
+app.register_blueprint(bp_rend_comb)
+
 # ─── Tráfico nacional ────────────────────────────────────────────────────────
 # Las salidas del día (lo que antes era el Excel del grupo de WhatsApp): se
 # arma acá, el sistema sabe dónde quedó cada coche y sale un PDF único.
@@ -2114,6 +2122,11 @@ def api_editar_combustible(carga_id):
     """Corrige una carga mal cargada. Solo admin: tocar el odómetro o los
     litros cambia el rendimiento calculado del coche."""
     from database import actualizar_carga_combustible
+    from rendicion_combustible import sobre_de_carga
+    de = sobre_de_carga(carga_id)
+    if de and de[1]:
+        return jsonify({"ok": False, "msg": f"Esta carga es un comprobante del sobre {de[0]}: "
+                                             "corregila desde Rendición de combustible."}), 400
     ok, msg = actualizar_carga_combustible(carga_id, request.json or {})
     if ok:
         auditar(f"Corrigió una carga de combustible (#{carga_id})", "Combustible", msg)
@@ -2124,6 +2137,13 @@ def api_editar_combustible(carga_id):
 @rol_requerido("admin")
 def api_eliminar_combustible(carga_id):
     """Borra una carga. Solo admin — el auditor consulta, no modifica."""
+    from rendicion_combustible import sobre_de_carga, soltar_carga
+    de = sobre_de_carga(carga_id)
+    if de and de[1]:
+        return jsonify({"ok": False, "msg": f"Esta carga es un comprobante del sobre {de[0]}: "
+                                             "sacala desde Rendición de combustible."}), 400
+    if de:
+        soltar_carga(carga_id)
     eliminar_carga_combustible(carga_id)
     auditar(f"Eliminó una carga de combustible (#{carga_id})", "Combustible")
     return jsonify({"ok": True, "msg": "Carga eliminada."})

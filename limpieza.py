@@ -78,8 +78,8 @@ GRUPOS = {
     },
     "combustible": {
         "nombre": "Cargas de combustible",
-        "detalle": "Registros de litros, precio y odómetro",
-        "tablas": ["combustible"],
+        "detalle": "Registros de litros, precio y odómetro, y los sobres de la rendición de combustible",
+        "tablas": ["comb_comprobantes", "comb_sobres", "combustible"],
         "conteo": "combustible",
     },
     "neumaticos": {
@@ -154,7 +154,7 @@ def reinicio_total(usuario_admin=""):
         # Depósito
         "repuestos_movimientos", "repuestos",
         # Registros por vehículo
-        "combustible", "costos", "documentos", "fuera_servicio",
+        "comb_comprobantes", "comb_sobres", "combustible", "costos", "documentos", "fuera_servicio",
         "historial_eventos", "presupuestos_turismo",
         # Planes de mantenimiento
         "vehiculo_plan", "tareas_plan", "planes_mantenimiento",

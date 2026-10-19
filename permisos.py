@@ -23,6 +23,7 @@ GRUPOS_SECCIONES = [
     ("Operación", [
         ("trafico", "Tráfico"),
         ("servicios", "Servicios"),
+        ("comb_rendicion", "Rendición de combustible"),
     ]),
     ("Vehículo", [
         ("costos", "Costos"),
@@ -79,6 +80,8 @@ MODULOS_API = [
      ("/api/trafico",)),
     ({"servicios"},
      ("/api/servicios",)),
+    ({"comb_rendicion"},
+     ("/api/comb_rend",)),
     ({"compras", "repuestos", "proveedores"},
      ("/api/compras", "/api/repuestos")),
     ({"gerencial", "oee"},
