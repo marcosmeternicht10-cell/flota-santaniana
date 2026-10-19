@@ -2216,34 +2216,49 @@ def actualizar_ot(ot_id, **kwargs):
 
 
 def nombres_de_choferes():
-    """Nombres de chofer ya usados: los de las OTs y los tripulantes del
-    tráfico. Sin repetir el mismo nombre escrito con otras mayúsculas o
-    tildes; primero los más usados en las OTs."""
+    """Nombres de chofer para elegir al escribir: los choferes que tienen
+    usuario (corporativos y de línea), los de las OTs, los tripulantes del
+    tráfico y los de los sobres de combustible. Sin repetir a la misma
+    persona escrita distinto ("ALVARENGA, CESAR" y "Cesar Alvarenga" son la
+    misma): manda la forma del usuario, que es la que usan sus cargas."""
     import unicodedata
+
     def clave(t):
-        t = unicodedata.normalize("NFD", str(t or "")).encode("ascii", "ignore").decode()
-        return " ".join(t.upper().split())
-    vistos, salida = set(), []
+        t = unicodedata.normalize("NFD", str(t or "")).encode("ascii", "ignore").decode().upper()
+        partes = [x for x in "".join(ch if ch.isalnum() else " " for ch in t).split() if x]
+        return " ".join(sorted(partes))
+
+    consultas = [
+        # Los choferes con usuario primero: es el nombre con el que cargan
+        """SELECT nombre AS n FROM usuarios WHERE rol IN ('chofer_corp', 'chofer')
+           AND COALESCE(activo, 1) = 1 ORDER BY nombre""",
+        """SELECT conductor AS n FROM ordenes_trabajo WHERE COALESCE(conductor,'') <> ''
+           GROUP BY conductor ORDER BY COUNT(*) DESC""",
+        "SELECT nombre AS n FROM trafico_tripulantes ORDER BY nombre",
+        "SELECT chofer AS n FROM comb_sobres WHERE COALESCE(chofer,'') <> '' GROUP BY chofer ORDER BY COUNT(*) DESC",
+    ]
+    filas = []
     conn = get_connection()
     try:
-        filas = conn.execute("""SELECT conductor AS n, COUNT(*) AS c FROM ordenes_trabajo
-                                WHERE COALESCE(conductor,'') <> '' GROUP BY conductor
-                                ORDER BY COUNT(*) DESC""").fetchall()
-        try:
-            filas += conn.execute("SELECT nombre AS n, 0 AS c FROM trafico_tripulantes ORDER BY nombre").fetchall()
-        except Exception:
-            pass
-    except Exception:
-        filas = []
-    conn.close()
-    for r in filas:
-        n = " ".join(str(r["n"] or "").split())
+        for sql in consultas:
+            try:
+                filas += [r["n"] for r in conn.execute(sql).fetchall()]
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+    finally:
+        conn.close()
+    vistos, salida = set(), []
+    for n in filas:
+        n = " ".join(str(n or "").split())
         k = clave(n)
         if len(k) < 3 or k in vistos:
             continue
         vistos.add(k)
         salida.append(n)
-    return salida[:1500]
+    return salida[:2000]
 
 
 def cerrar_ot(ot_id, fecha_cierre=None):
