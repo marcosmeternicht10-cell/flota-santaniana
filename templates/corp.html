@@ -317,9 +317,9 @@
         </div>
 
         <div class="campo">
-          <label>Kilometraje del tablero <span class="opcional">(si lo tenés)</span></label>
+          <label>Kilometraje del tablero</label>
           <input type="text" id="cb-odo" inputmode="numeric" placeholder="ej: 470500">
-          <span class="ayuda">Sin el kilometraje la carga se registra igual, pero no se puede calcular el consumo del coche</span>
+          <span class="ayuda">Mirá el tablero al cargar y poné los kilómetros que marca</span>
         </div>
 
         <div class="campo">
@@ -377,18 +377,24 @@
     }
     function salir(){ if(confirm("¿Cerrar sesión?")) fetch("/api/logout",{method:"POST"}).then(()=>location.href="/"); }
 
+    // La fecha de hoy en la hora del celular. toISOString() da la de Londres:
+    // después de las 21 h de Paraguay ya ponía la fecha de mañana.
+    function hoyLocal(){
+      const d = new Date();
+      return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0,10);
+    }
     function verTab(cual){
       ["cargar","comb","mis"].forEach(t => {
         $("tab-" + t).classList.toggle("on", cual===t);
         $("vista-" + t).style.display = cual===t ? "" : "none";
       });
       if(cual==="mis") cargarMisRendiciones();
-      if(cual==="comb") $("cb-fecha").value = $("cb-fecha").value || new Date().toISOString().slice(0,10);
+      if(cual==="comb") $("cb-fecha").value = $("cb-fecha").value || hoyLocal();
     }
 
     // Cargar clientes al inicio
     async function init(){
-      $("f-fecha").value = new Date().toISOString().slice(0,10);
+      $("f-fecha").value = hoyLocal();
       const r = await fetch("/api/corp/config");
       const cfg = await r.json();
       CLIENTES_TRAMOS = cfg.clientes_tramos;
