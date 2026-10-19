@@ -966,6 +966,273 @@ def pdf_informe(res):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# FICHA DE UN TÉCNICO EN PDF (lo mismo que la ventana, para imprimir)
+# ════════════════════════════════════════════════════════════════════════════
+
+PERIODO_TXT = {"7": "últimos 7 días", "30": "últimos 30 días", "90": "últimos 90 días",
+               "anio": "este año", "mes": "este mes", "todo": "desde siempre"}
+TIPO_TXT = {"preventivo": "Preventivo", "correctivo": "Correctivo", "neumaticos": "Neumáticos",
+            "control": "Control", "otro": "Otro"}
+
+
+def pdf_ficha(f, etiqueta_periodo="", coche=""):
+    """La ficha del técnico: sus números del período, los coches donde más
+    trabajó, lo que tiene en curso y cada trabajo terminado con su OT."""
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.colors import HexColor, white
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfbase import pdfmetrics
+    import os
+    import trafico_pdf
+
+    F = trafico_pdf._fuentes()
+    W, H = A4
+    M = 34
+    aw = W - 2 * M
+    NAVY, AZUL, ROJO = HexColor("#1D344E"), HexColor("#1E5A96"), HexColor("#DC2641")
+    TINTA, GRIS, GRIS2 = HexColor("#16202C"), HexColor("#5B6B7F"), HexColor("#8796A8")
+    LINEA, SUAVE, CEBRA, CELESTE = HexColor("#D5DCE5"), HexColor("#F4F6F9"), HexColor("#F7F9FB"), HexColor("#8CBDEB")
+    AMBAR_F, AMBAR = HexColor("#FFF6E0"), HexColor("#B26A00")
+    COL_TIPO = {"preventivo": HexColor("#2F7C46"), "correctivo": ROJO, "neumaticos": HexColor("#6B4FA0"),
+                "control": AZUL, "otro": GRIS}
+    try:
+        logo = ImageReader(os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png"))
+    except Exception:
+        logo = None
+
+    p = f["persona"]
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    c.setTitle(f"N°{p['numero']} {p['nombre']} - trabajos")
+    c.setAuthor("La Santaniana")
+
+    def ancho(t, fu, sz):
+        return pdfmetrics.stringWidth(str(t), F[fu], sz)
+
+    def texto(x, y, t, fu, sz, color=TINTA, align="l"):
+        c.setFillColor(color)
+        c.setFont(F[fu], sz)
+        t = str(t)
+        if align == "r":
+            c.drawRightString(x, H - y, t)
+        elif align == "c":
+            c.drawCentredString(x, H - y, t)
+        else:
+            c.drawString(x, H - y, t)
+
+    def cortar(t, fu, sz, maxw):
+        t = str(t or "")
+        if ancho(t, fu, sz) <= maxw:
+            return t
+        while t and ancho(t + "…", fu, sz) > maxw:
+            t = t[:-1]
+        return t.rstrip() + "…"
+
+    def partir(t, fu, sz, maxw):
+        palabras, lineas, actual = str(t or "").split(), [], ""
+        for w in palabras:
+            prueba = (actual + " " + w).strip()
+            if actual and ancho(prueba, fu, sz) > maxw:
+                lineas.append(actual)
+                actual = w
+            else:
+                actual = prueba
+        if actual:
+            lineas.append(actual)
+        return lineas or [""]
+
+    def rect(x, y, w, h, fill=None, stroke=None, r=0, lw=0.8):
+        if fill is not None:
+            c.setFillColor(fill)
+        if stroke is not None:
+            c.setStrokeColor(stroke)
+            c.setLineWidth(lw)
+        args = dict(stroke=1 if stroke is not None else 0, fill=1 if fill is not None else 0)
+        if r:
+            c.roundRect(x, H - y - h, w, h, r, **args)
+        else:
+            c.rect(x, H - y - h, w, h, **args)
+
+    def linea(x1, y1, x2, y2, color=LINEA, lw=0.6):
+        c.setStrokeColor(color)
+        c.setLineWidth(lw)
+        c.line(x1, H - y1, x2, H - y2)
+
+    impresa = ahora_iso().replace("T", " ")[:16]
+    impresa = f"{impresa[8:10]}/{impresa[5:7]}/{impresa[0:4]} {impresa[11:16]}"
+    per_txt = PERIODO_TXT.get(etiqueta_periodo) or f"del {_fdm(f['desde'])} al {_fdm(f['hasta'])}"
+    pagina = [1]
+
+    def pie():
+        linea(M, H - 30, W - M, H - 30, LINEA, 0.5)
+        texto(M, H - 18, f"N°{p['numero']} {p['nombre']} · trabajos {per_txt}", "I5", 7.5, GRIS)
+        texto(W - M, H - 18, f"Hoja {pagina[0]} · impresa el {impresa}", "I5", 7.5, GRIS, align="r")
+
+    def encabezado(primera):
+        y = M
+        if logo:
+            c.drawImage(logo, M, H - y - 34, 46, 34, mask="auto", preserveAspectRatio=True)
+        texto(M + 56, y + 17, "FICHA DEL TÉCNICO", "D9", 21, NAVY)
+        texto(M + 56, y + 32, "LA SANTANIANA S.A.  ·  PERSONAL DE TALLER", "I6", 8.5, GRIS)
+        wbox = 120
+        rect(W - M - wbox, y, wbox, 40, fill=NAVY, r=6)
+        texto(W - M - wbox + 10, y + 15, "TÉCNICO", "I6", 7, CELESTE)
+        texto(W - M - wbox + 10, y + 34, f"N° {p['numero']}", "D9", 20, white)
+        rect(M, y + 47, aw * 0.4, 3, fill=ROJO)
+        rect(M + aw * 0.4 + 3, y + 47, aw * 0.6 - 3, 3, fill=AZUL)
+        y += 64
+        if not primera:
+            texto(M, y + 4, f"{p['nombre'].upper()} · SIGUE", "I7", 8, NAVY)
+            return y + 14
+        return y
+
+    def nueva_pagina():
+        pie()
+        c.showPage()
+        pagina[0] += 1
+        return encabezado(False)
+
+    # ── Primera hoja: quién es y sus números ──
+    y = encabezado(True)
+    texto(M, y + 18, p["nombre"].upper(), "D9", 22, TINTA)
+    datos = [p.get("puesto") or "Sin puesto"]
+    if p.get("edad_actual"):
+        datos.append(f"{p['edad_actual']} años")
+    if not p.get("activo", 1):
+        datos.append("de baja")
+    texto(M, y + 33, " · ".join(datos), "I5", 10, GRIS)
+    alcance = f"Trabajos {per_txt}" + (f" · solo el coche {coche}" if coche else "")
+    texto(W - M, y + 18, alcance.upper(), "I7", 7.5, AZUL, align="r")
+    texto(W - M, y + 31, f"del {_fdm(f['desde'])} al {_fdm(f['hasta'])}" if etiqueta_periodo != "todo" else "",
+          "I5", 8, GRIS, align="r")
+    y += 46
+
+    celdas = [("TRABAJOS", len(f["trabajos"]), "terminados"), ("OT", f["ots"], "distintas"),
+              ("COCHES", len(f["coches"]), "atendidos"), ("EN CURSO", len(f["en_curso"]), "OT abiertas"),
+              ("DESDE SIEMPRE", f["historico"], "terminados")]
+    cw = aw / len(celdas)
+    rect(M, y, aw, 56, fill=SUAVE, r=6)
+    for k, (t, v, sub) in enumerate(celdas):
+        x = M + k * cw
+        if k:
+            linea(x, y + 10, x, y + 46)
+        texto(x + cw / 2, y + 15, t, "I6", 6.6, GRIS, align="c")
+        texto(x + cw / 2, y + 38, str(v), "D9", 21, NAVY if k < 4 else GRIS, align="c")
+        texto(x + cw / 2, y + 49, sub, "I4", 6.6, GRIS, align="c")
+    y += 66
+
+    if f["tipos"]:
+        x = M
+        texto(x, y + 9, "POR TIPO:", "I7", 7, GRIS)
+        x += ancho("POR TIPO:", "I7", 7) + 8
+        for k, n in sorted(f["tipos"].items(), key=lambda kv: -kv[1]):
+            plural = {"preventivo": "preventivos", "correctivo": "correctivos", "neumaticos": "neumáticos",
+                      "control": "controles", "otro": "otros"}
+            lbl = f"{n} {(TIPO_TXT.get(k, k).lower() if n == 1 else plural.get(k, TIPO_TXT.get(k, k).lower()))}"
+            w = ancho(lbl, "I6", 8) + 14
+            rect(x, y, w, 13, fill=SUAVE, r=3)
+            c.setFillColor(COL_TIPO.get(k, GRIS))
+            c.circle(x + 6, H - (y + 6.5), 2.2, fill=1, stroke=0)
+            texto(x + 11, y + 9.3, lbl, "I6", 8, TINTA)
+            x += w + 6
+        y += 22
+
+    # ── Coches donde más trabajó (dos columnas de barras) ──
+    if f["coches"]:
+        texto(M, y + 10, "COCHES DONDE MÁS TRABAJÓ", "I7", 8, NAVY)
+        y += 18
+        top = f["coches"][:10]
+        maxn = max(x["n"] for x in top) or 1
+        colw = (aw - 20) / 2
+        filas = (len(top) + 1) // 2
+        for k, cc in enumerate(top):
+            col, fila = (0, k) if k < filas else (1, k - filas)
+            x = M + col * (colw + 20)
+            yy = y + fila * 17
+            texto(x, yy + 11, cortar(cc["coche"], "D8", 11, 50), "D8", 11, NAVY)
+            bw = colw - 90
+            rect(x + 56, yy + 4, bw, 8, fill=SUAVE, r=3)
+            rect(x + 56, yy + 4, max(4, bw * cc["n"] / maxn), 8, fill=AZUL, r=3)
+            texto(x + colw - 4, yy + 11, str(cc["n"]), "D8", 11, TINTA, align="r")
+        y += filas * 17 + 10
+
+    # ── Tabla de trabajos ──
+    COLS = [("FECHA", 50), ("COCHE", 50), ("TIPO", 66), ("TRABAJO", 0), ("OT", 44)]
+    fijo = sum(w for _, w in COLS)
+    COLS[3] = ("TRABAJO", aw - fijo)
+    LIM = H - 70
+
+    def cabecera_tabla(y, titulo, sub=""):
+        texto(M, y + 10, titulo, "I7", 8, NAVY)
+        if sub:
+            texto(M + ancho(titulo, "I7", 8) + 6, y + 10, sub, "I5", 7.5, GRIS)
+        y += 16
+        rect(M, y, aw, 18, fill=NAVY, r=3)
+        x = M
+        for t, w in COLS:
+            texto(x + 6 if t != "OT" else x + w - 6, y + 12, t, "I6", 6.6, white, align="l" if t != "OT" else "r")
+            x += w
+        return y + 18
+
+    def tabla(y, lista, titulo, sub="", fondo=None):
+        if y + 60 > LIM:
+            y = nueva_pagina()
+        y = cabecera_tabla(y, titulo, sub)
+        for k, t in enumerate(lista):
+            desc = t.get("descripcion") or ""
+            con = t.get("con") or []
+            lineas = partir(desc, "I5", 8.6, COLS[3][1] - 12)
+            extra = ("con " + ", ".join(f"N°{x['numero']} {x['nombre'].split(' ')[0]}" for x in con)) if con else ""
+            alto = 8 + len(lineas) * 11 + (10 if extra else 0) + 2
+            if y + alto > LIM:
+                y = nueva_pagina()
+                y = cabecera_tabla(y, titulo, "(sigue)")
+            if fondo:
+                rect(M, y, aw, alto, fill=fondo)
+            elif k % 2:
+                rect(M, y, aw, alto, fill=CEBRA)
+            x = M
+            fe = str(t.get("fecha") or "")
+            texto(x + 6, y + 13, f"{fe[8:10]}/{fe[5:7]}/{fe[2:4]}" if len(fe) >= 10 else "—", "I5", 8.4, TINTA)
+            x += COLS[0][1]
+            texto(x + 6, y + 13.5, cortar(t.get("coche") or "—", "D8", 11, COLS[1][1] - 10), "D8", 11, NAVY)
+            x += COLS[1][1]
+            tipo = t.get("tipo") or "otro"
+            c.setFillColor(COL_TIPO.get(tipo, GRIS))
+            c.circle(x + 9, H - (y + 10.5), 2.4, fill=1, stroke=0)
+            texto(x + 15, y + 13, TIPO_TXT.get(tipo, tipo.capitalize()), "I5", 8, GRIS)
+            x += COLS[2][1]
+            for i, ln in enumerate(lineas):
+                texto(x + 6, y + 13 + i * 11, ln, "I5", 8.6, TINTA)
+            if extra:
+                texto(x + 6, y + 13 + len(lineas) * 11, cortar(extra, "I4", 7.4, COLS[3][1] - 12), "I4", 7.4, GRIS)
+            x += COLS[3][1]
+            texto(x + COLS[4][1] - 6, y + 13, f"#{t.get('ot_id')}", "I6", 8.4, AZUL, align="r")
+            linea(M, y + alto, M + aw, y + alto)
+            y += alto
+        return y + 12
+
+    if f["en_curso"]:
+        y = tabla(y, f["en_curso"], "EN CURSO", "OT abiertas, todavía sin terminar", fondo=AMBAR_F)
+    if f["trabajos"]:
+        y = tabla(y, f["trabajos"], "TRABAJOS TERMINADOS", per_txt)
+    else:
+        if y + 40 > LIM:
+            y = nueva_pagina()
+        rect(M, y, aw, 34, fill=SUAVE, r=6)
+        texto(W / 2, y + 21, f"Sin trabajos terminados {per_txt}: puede que no haya trabajado en OT "
+                             f"o que no se haya anotado su número.", "I5", 8.5, GRIS, align="c")
+        y += 46
+
+    pie()
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # HOJAS POR TÉCNICO: cada uno con su hoja de la OT (sin costos)
 # ════════════════════════════════════════════════════════════════════════════
 # Como la planilla de papel del taller: fecha, OT, coche, km, chofer, el
@@ -1324,6 +1591,29 @@ def api_escritos():
         return jsonify({"ok": False, "msg": err}), 400
     _auditar("Pasó trabajos escritos a mano a un número", f"'{d.get('texto')}' → id {pid} ({n})")
     return jsonify({"ok": True, "n": n})
+
+
+@bp_personal.route("/api/personal/<int:pid>/ficha.pdf", methods=["GET"])
+def api_ficha_pdf(pid):
+    if not _puede_ver():
+        return _no()
+    desde, hasta, etq = _periodo_req()
+    vid = request.args.get("vehiculo_id") or None
+    f = ficha(pid, desde, hasta, vid)
+    if not f:
+        return jsonify({"ok": False, "msg": "No existe"}), 404
+    coche = ""
+    if vid:
+        conn = get_connection()
+        try:
+            v = conn.execute("SELECT n_interno, patente FROM vehiculos WHERE id=?", (int(vid),)).fetchone()
+            coche = str((v["n_interno"] or v["patente"]) if v else "")
+        finally:
+            conn.close()
+    p = f["persona"]
+    nombre = re.sub(r"[^A-Za-z0-9]+", "-", unicodedata.normalize("NFD", p["nombre"]).encode("ascii", "ignore").decode()).strip("-").lower()
+    return send_file(pdf_ficha(f, etq, coche), mimetype="application/pdf", as_attachment=False,
+                     download_name=f"tecnico-{p['numero']}-{nombre}.pdf")
 
 
 @bp_personal.route("/api/personal/pdf", methods=["GET"])
