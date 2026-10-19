@@ -5831,7 +5831,7 @@ async function abrirNuevaOT() {
           <div class="field"><label>KM</label><input id="ot-km" placeholder="765387" style="width:110px"></div>
         </div>
         <div class="form-row" style="margin-top:14px">
-          <div class="field" style="flex:1"><label>Conductor</label><input id="ot-cond" list="ot-l-cond-nueva" autocomplete="off" placeholder="Marco Aguiar"><datalist id="ot-l-cond-nueva"></datalist></div>
+          <div class="field" style="flex:1"><label>Conductor</label><input id="ot-cond" autocomplete="off" placeholder="Marco Aguiar"></div>
           <div class="field" style="flex:1"><label>Procedencia</label><input id="ot-proc" placeholder="Loreto"></div>
         </div>
         <div class="form-row" style="margin-top:14px">
@@ -5860,7 +5860,7 @@ Control general"></textarea>
   `;
   document.body.appendChild(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOT(); });
-  otChoferesDatalist("ot-l-cond-nueva");
+  otChoferesLista().then(() => acNombres($("#ot-cond"), () => window._choferesOT));
 }
 
 function cerrarModalOT() {
@@ -6158,6 +6158,67 @@ function otChoferHtml(ot) {
   return `<button type="button" class="ot-chofer ${n ? "" : "vacio"}" onclick="otChoferEditar()" title="Corregir el nombre del chofer">
     <span>${n || "Sin chofer"}</span><i class="ti ti-pencil"></i></button>`;
 }
+// ─── Buscador de nombres (choferes) ───
+// Encuentra a la persona escriba como escriba: "alvarenga cesar", "cesar
+// alvarenga", "alvar" o sin tildes encuentran a "ALVARENGA, CESAR". La lista
+// nativa del navegador solo encontraba el texto exacto, con la coma.
+const acNorm = t => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9Ñ ]+/g, " ").replace(/\s+/g, " ").trim();
+function acNombres(input, getLista, { max = 40 } = {}) {
+  if (!input || input._ac) return;
+  input._ac = true;
+  input.removeAttribute("list");
+  input.setAttribute("autocomplete", "off");
+  let pop = null, items = [], sel = -1;
+  const cerrar = () => { if (pop) { pop.remove(); pop = null; } items = []; sel = -1; };
+  const elegir = n => {
+    input.value = n;
+    cerrar();
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const marcar = k => {
+    sel = k;
+    pop?.querySelectorAll(".ac-op").forEach((el, i) => el.classList.toggle("on", i === k));
+    pop?.querySelectorAll(".ac-op")[k]?.scrollIntoView({ block: "nearest" });
+  };
+  const pintar = () => {
+    const q = acNorm(input.value);
+    const toks = q ? q.split(" ") : [];
+    const lista = getLista() || [];
+    items = (toks.length
+      ? lista.filter(n => { const w = acNorm(n).split(" "); return toks.every(t => w.some(x => x.startsWith(t))); })
+      : lista).slice(0, max);
+    if (!items.length || (items.length === 1 && items[0] === input.value.trim())) { cerrar(); return; }
+    if (!pop) {
+      pop = document.createElement("div");
+      pop.className = "ac-pop";
+      document.body.appendChild(pop);
+    }
+    const r = input.getBoundingClientRect();
+    const abajo = window.innerHeight - r.bottom;
+    pop.style.left = r.left + "px";
+    pop.style.width = Math.max(r.width, 240) + "px";
+    if (abajo < 220 && r.top > abajo) { pop.style.top = ""; pop.style.bottom = (window.innerHeight - r.top + 4) + "px"; }
+    else { pop.style.bottom = ""; pop.style.top = (r.bottom + 4) + "px"; }
+    pop.innerHTML = items.map((n, i) => `<div class="ac-op" data-i="${i}">${trEsc(n)}</div>`).join("")
+      + (toks.length ? "" : `<div class="ac-pie">Escribí apellido o nombre</div>`);
+    pop.querySelectorAll(".ac-op").forEach(el => {
+      el.addEventListener("mousedown", e => { e.preventDefault(); elegir(items[+el.dataset.i]); });
+    });
+    sel = -1;
+  };
+  input.addEventListener("input", pintar);
+  input.addEventListener("focus", pintar);
+  input.addEventListener("blur", () => setTimeout(cerrar, 120));
+  input.addEventListener("keydown", e => {
+    if (!pop || !items.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); marcar(Math.min(items.length - 1, sel + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); marcar(Math.max(0, sel - 1)); }
+    else if (e.key === "Enter" && sel >= 0) { e.preventDefault(); e.stopImmediatePropagation(); elegir(items[sel]); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cerrar(); }
+  }, true);
+  window.addEventListener("scroll", () => { if (pop && document.activeElement === input) pintar(); }, true);
+}
+
 async function otChoferesLista() {
   if (!window._choferesOT) window._choferesOT = (await api("/api/ots/conductores")) || [];
   return window._choferesOT;
@@ -6173,15 +6234,16 @@ async function otChoferesDatalist(id) {
 function otChoferEditar() {
   const ot = window._otChofer; if (!ot) return;
   $("#ot-chofer-box").innerHTML = `<span class="ot-chofer-ed">
-      <input id="ot-chofer-in" list="ot-l-choferes" value="${trEsc(ot.conductor || "")}" placeholder="Nombre del chofer"
+      <input id="ot-chofer-in" value="${trEsc(ot.conductor || "")}" placeholder="Nombre del chofer"
              maxlength="80" autocomplete="off" aria-label="Chofer"
              onkeydown="if(event.key==='Enter'){event.preventDefault();otChoferGuardar()} if(event.key==='Escape'){event.stopPropagation();otChoferCancelar()}">
       <datalist id="ot-l-choferes"></datalist>
       <button type="button" class="icon-btn ot-chofer-ok" onclick="otChoferGuardar()" title="Guardar"><i class="ti ti-check"></i></button>
       <button type="button" class="icon-btn" onclick="otChoferCancelar()" title="Cancelar"><i class="ti ti-x"></i></button>
     </span>`;
-  const i = $("#ot-chofer-in"); i.focus(); i.select();
-  otChoferesDatalist("ot-l-choferes");
+  const i = $("#ot-chofer-in");
+  otChoferesLista().then(() => acNombres(i, () => window._choferesOT));
+  i.focus(); i.select();
 }
 function otChoferCancelar() {
   const b = $("#ot-chofer-box");
@@ -18266,7 +18328,7 @@ async function rcNuevo(vid) {
         <div class="rc-f rc-f-coche"><span>Coche</span>${buscadorCoche("rcn-coche", coches, { seleccionado: vid || "", placeholder: "N° interno o patente" })}</div>
         <div class="rc-sug" id="rcn-sug" hidden></div>
         <label class="rc-f rc-f-km"><span>Km inicial</span><input id="rcn-km" inputmode="numeric" placeholder="del tablero"><small id="rcn-km-de"></small></label>
-        <label class="rc-f rc-f-chofer"><span>Chofer</span><input id="rcn-chofer" list="rcn-l-chof" placeholder="Apellido y nombre" maxlength="80" autocomplete="off">${rcDatalist("rcn-l-chof", listas.choferes)}</label>
+        <label class="rc-f rc-f-chofer"><span>Chofer</span><input id="rcn-chofer" placeholder="Apellido o nombre" maxlength="80" autocomplete="off"></label>
         <div class="rc-f rc-f-cuenta"><span>¿Dónde carga?</span>${rcLugarPicker("rcn-cuenta", "BASE")}</div>
         <label class="rc-f rc-f-obs"><span>Observaciones <i>(opcional)</i></span><input id="rcn-obs" maxlength="400"></label>
       </div>`,
@@ -18274,6 +18336,7 @@ async function rcNuevo(vid) {
           <button class="btn btn-primary" id="rcn-ok" onclick="rcCrear(this)"><i class="ti ti-mail-opened"></i> Abrir sobre</button>`,
   });
   window["_cocheCB_rcn-coche"] = id => rcSugerir(id);
+  acNombres($("#rcn-chofer"), () => rc.listas?.choferes);
   if (vid) rcSugerir(vid);
   setTimeout(() => (vid ? $("#rcn-km") : $("#rcn-coche-txt"))?.focus(), 60);
   o.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter" && !e.target.closest(".bcoche")) $("#rcn-ok").click(); }));
@@ -18359,13 +18422,13 @@ function rcPintarFicha() {
   box.innerHTML = `
     <div class="rc-ficha">
       <div class="rc-datos">
-        ${campo("chofer", "Chofer", s.chofer, `list="rc-l-chof" maxlength="80" autocomplete="off" placeholder="Apellido y nombre"`)}
+        ${campo("chofer", "Chofer", s.chofer, `maxlength="80" autocomplete="off" placeholder="Apellido o nombre"`)}
         ${ed ? `<div class="rc-f rc-f-lugar"><span>¿Dónde carga?</span>${rcLugarPicker("rc-cuenta", s.cuenta, "ficha", true).replace('type="hidden" id="rc-cuenta"', 'type="hidden" id="rc-cuenta" data-c="cuenta"')}</div>`
              : `<div class="rc-f ro"><span>Dónde carga</span><b>${rcEsc(rcLugarTxt(s.cuenta)) || "—"}</b></div>`}
         ${campo("numero", "N° de sobre", s.numero, `inputmode="numeric" maxlength="10"`)}
         ${ed ? `<label class="rc-f"><span>Apertura</span><input type="date" data-c="fecha_apertura" value="${s.fecha_apertura}" max="${trHoy()}" onchange="rcGuardarDato(this)"></label>`
              : `<div class="rc-f ro"><span>Apertura</span><b>${rcDM(s.fecha_apertura)}</b></div>`}
-        ${rcDatalist("rc-l-chof", rc.listas.choferes)}${rcDatalist("rc-l-cta", rc.listas.cuentas)}
+
       </div>
       <div class="rc-consumo">
         <div class="rc-cn"><span>Km inicial</span>${ed ? `<input inputmode="numeric" data-c="km_inicial" value="${s.km_inicial ? rvDec(s.km_inicial, 0) : ""}" onchange="rcGuardarDato(this)">` : `<b>${s.km_inicial ? rcN(s.km_inicial) : "—"}</b>`}</div>
@@ -18397,6 +18460,7 @@ function rcPintarFicha() {
       </div>
     </div>`;
   rcPintarPie();
+  acNombres(box.querySelector('input[data-c="chofer"]'), () => rc.listas?.choferes);
   // Si el botón que se tocó desapareció al repintar, el foco vuelve a la
   // ventana: así Escape la sigue cerrando
   if (!modal.contains(document.activeElement)) modal.focus();
