@@ -10975,7 +10975,7 @@ async function renderCorpCombustible() {
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-gas-station"></i> Combustible corporativos</h1>
-      <p>Cargas que registran los choferes desde el celular, con su resumen y PDF</p>
+      <p>Todas las cargas de combustible: las que hacen los choferes desde el celular y las de los sobres de la rendición</p>
     </div>
     <div class="section">
       <div class="emp-filtros">
@@ -10987,6 +10987,14 @@ async function renderCorpCombustible() {
           <button class="chip" onclick="combPeriodo('trimestre', this)">3 meses</button>
         </div>
         <div class="emp-detalle-filtros">
+          <div class="emp-campo">
+            <label>Cargas</label>
+            <select id="cbc-origen" onchange="cargarCombCorp()" title="De dónde vienen las cargas">
+              <option value="todas">Todas</option>
+              <option value="celular">Del celular</option>
+              <option value="sobres">De los sobres</option>
+            </select>
+          </div>
           <div class="emp-campo">
             <label>Chofer</label>
             <select id="cbc-chofer" onchange="cargarCombCorp()" style="min-width:170px">
@@ -11188,6 +11196,8 @@ function paramsCombCorp() {
   if (d) p.set("desde", d);
   if (h) p.set("hasta", h);
   p.set("agrupacion", $("#cbc-agrup").value);
+  const o = $("#cbc-origen")?.value;
+  if (o && o !== "todas") p.set("origen", o);
   return p;
 }
 
@@ -11318,7 +11328,7 @@ function panelComb(tab, r, cargas, agrup) {
     <tbody>${cargas.map(c => `<tr>
       <td style="white-space:nowrap">${c.fecha}</td>
       <td><b>#${c.n_interno || ""}</b></td>
-      <td style="font-size:12.5px">${c.chofer || "—"}</td>
+      <td style="font-size:12.5px">${c.chofer || "—"}${c.origen === "rendicion" ? ' <span class="cbc-org sobre" title="Comprobante de un sobre de la rendición de combustible">sobre</span>' : c.origen === "corporativo" ? "" : ' <span class="cbc-org" title="Cargada en el sistema por el taller o la oficina">oficina</span>'}</td>
       <td class="num">${c.odometro ? fmtNum(c.odometro) : '<span style="color:var(--lighter);font-size:12px">sin km</span>'}</td>
       <td class="num">${fmtL(c.litros)}</td>
       <td class="center">${c.litros_100km
