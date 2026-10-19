@@ -3838,7 +3838,10 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
     # Recién ahora se filtra: cada carga ya tiene su consumo calculado contra
     # la secuencia real del vehículo.
     if origen:
-        filas = [f for f in filas if (f.get("origen") or "taller") == origen]
+        if isinstance(origen, (list, tuple, set)):
+            filas = [f for f in filas if (f.get("origen") or "taller") in origen]
+        else:
+            filas = [f for f in filas if (f.get("origen") or "taller") == origen]
     if chofer:
         filas = [f for f in filas if f.get("chofer") == chofer]
 

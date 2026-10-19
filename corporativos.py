@@ -2722,10 +2722,19 @@ def api_corp_mis_cargas():
                     "cantidad": len(cargas)})
 
 
+def _origen_req():
+    """De dónde vienen las cargas que se muestran: todas (como el Control),
+    solo las del celular de los choferes, o solo las de los sobres de la
+    rendición de combustible."""
+    o = (request.args.get("origen") or "todas").strip().lower()
+    return {"celular": "corporativo", "sobres": "rendicion", "taller": "taller"}.get(o)
+
+
 @bp_corp.route("/api/corp/combustible", methods=["GET"])
 def api_corp_combustible_resumen():
-    """Resumen de las cargas de corporativos para el admin: por período, por
-    chofer, por bus y por cliente."""
+    """Resumen de las cargas de combustible para el admin: por período, por
+    chofer, por bus y por cliente. Por defecto todas las cargas (las mismas
+    que mira el Control); con ?origen=celular o sobres, solo esas."""
     if _rol_efectivo() not in ("admin", "auditor", "operador_corp"):
         return jsonify({"error": "Sin permiso"}), 403
     from database import obtener_cargas_combustible
@@ -2735,7 +2744,7 @@ def api_corp_combustible_resumen():
     agrup = request.args.get("agrupacion") or "total"
 
     cargas = obtener_cargas_combustible(desde=desde, hasta=hasta,
-                                        origen="corporativo", chofer=chofer,
+                                        origen=_origen_req(), chofer=chofer,
                                         limite=5000)
     cargas.sort(key=lambda x: (x.get("fecha") or ""), reverse=True)
     return jsonify({
@@ -2947,7 +2956,7 @@ def api_corp_combustible_pdf():
     chofer = request.args.get("chofer") or None
     agrup = request.args.get("agrupacion") or "total"
     cargas = obtener_cargas_combustible(desde=desde, hasta=hasta,
-                                        origen="corporativo", chofer=chofer,
+                                        origen=_origen_req(), chofer=chofer,
                                         limite=5000)
     cargas.sort(key=lambda x: (x.get("fecha") or ""), reverse=True)
     # El control va al final del PDF: es lo que sirve para sentarse a revisar
@@ -3127,7 +3136,7 @@ def api_corp_combustible_bus_pdf():
     hasta = request.args.get("hasta") or None
     chofer = request.args.get("chofer") or None
     cargas = obtener_cargas_combustible(desde=desde, hasta=hasta,
-                                        origen="corporativo", chofer=chofer,
+                                        origen=_origen_req(), chofer=chofer,
                                         limite=5000)
     pdf = generar_pdf_por_bus(resumen_combustible_corp(cargas, "total"),
                               desde or "", hasta or "", chofer or "", cargas)
@@ -4144,7 +4153,7 @@ def api_corp_combustible_excel():
     desde = request.args.get("desde") or None
     hasta = request.args.get("hasta") or None
     chofer = request.args.get("chofer") or None
-    cargas = obtener_cargas_combustible(desde=desde, hasta=hasta, origen="corporativo",
+    cargas = obtener_cargas_combustible(desde=desde, hasta=hasta, origen=_origen_req(),
                                         chofer=chofer, limite=100000)
     logo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
     contenido = generar_excel_cargas(
