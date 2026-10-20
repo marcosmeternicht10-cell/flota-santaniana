@@ -246,6 +246,27 @@ def auditar(accion, categoria="", detalle="", referencia=""):
         accion=accion, categoria=categoria, detalle=detalle, referencia=referencia)
 
 
+def compras_requerido(f):
+    """Las rutas de Compras: el rol Compras, administración y los usuarios de
+    taller que tienen la sección Compras habilitada (o acceso completo). Antes
+    solo dejaba pasar a los dos primeros: al de taller con la sección le
+    aparecía en el menú, entraba y la pantalla le contestaba "Sin permiso"."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if "usuario_id" not in session:
+            return jsonify({"error": "No autenticado", "login": True}), 401
+        rol = session.get("rol")
+        if rol == "taller":
+            from database import secciones_de_usuario
+            secs = secciones_de_usuario(session.get("usuario_id"))
+            if secs and "compras" not in secs:
+                return jsonify({"error": "No tenés habilitada la sección Compras"}), 403
+        elif rol not in ("admin", "compras"):
+            return jsonify({"error": "Sin permiso para esta acción"}), 403
+        return f(*args, **kwargs)
+    return wrapper
+
+
 # Rutas que NO requieren login
 RUTAS_PUBLICAS = {"/login", "/api/login", "/static"}
 
@@ -1813,7 +1834,7 @@ def api_enviar_compras(ot_id):
 
 
 @app.route("/api/compras/ots", methods=["GET"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_ots():
     """Lista las OTs en el circuito de compras (para la pantalla de Compras)."""
     estado = request.args.get("estado") or None
@@ -1821,7 +1842,7 @@ def api_compras_ots():
 
 
 @app.route("/api/compras/<int:ot_id>/presupuesto", methods=["POST"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_presupuesto(ot_id):
     """Compras carga el precio de cada item. La OT pasa a presupuestado."""
     d = request.json or {}
@@ -1836,7 +1857,7 @@ def api_compras_presupuesto(ot_id):
 
 
 @app.route("/api/compras/<int:ot_id>/firmar", methods=["POST"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_firmar(ot_id):
     """Tesorería firma el presupuesto: se habilitan los ítems que puede cubrir y
     el resto queda esperando fondos. La OT avanza con lo habilitado."""
@@ -1852,7 +1873,7 @@ def api_compras_firmar(ot_id):
 
 
 @app.route("/api/compras/cola_espera", methods=["GET"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_cola_espera():
     """Ítems esperando fondos: la cola de tesorería, más viejos primero."""
     from database import cola_espera_fondos
@@ -1860,7 +1881,7 @@ def api_compras_cola_espera():
 
 
 @app.route("/api/compras/liberar", methods=["POST"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_liberar():
     """Tesorería libera ítems de la cola cuando hay fondos."""
     from database import liberar_items
@@ -1874,7 +1895,7 @@ def api_compras_liberar():
 
 
 @app.route("/api/compras/<int:ot_id>/en_camino", methods=["POST"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_en_camino(ot_id):
     """Compras marca que fue a buscar los repuestos (en camino)."""
     marcar_en_camino_compras(ot_id)
@@ -1883,7 +1904,7 @@ def api_compras_en_camino(ot_id):
 
 
 @app.route("/api/compras/<int:ot_id>/entregar", methods=["POST"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_entregar(ot_id):
     """Compras entrega el material. Lo obligatorio es QUIÉN recibe (transfiere
     la responsabilidad). La foto de evidencia es opcional pero recomendada."""
@@ -1903,7 +1924,7 @@ def api_compras_entregar(ot_id):
 
 
 @app.route("/api/compras/talleres", methods=["GET"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_talleres():
     """Talleres externos ya usados en entregas, para autocompletar."""
     from database import talleres_usados
@@ -1918,7 +1939,7 @@ def api_compras_evidencia(ot_id):
 
 
 @app.route("/api/compras/<int:ot_id>/presupuesto_pdf", methods=["GET"])
-@rol_requerido("admin", "compras")
+@compras_requerido
 def api_compras_presupuesto_pdf(ot_id):
     """Genera el PDF del presupuesto con firma del Director (para Tesorería)."""
     ot = obtener_ot(ot_id)
