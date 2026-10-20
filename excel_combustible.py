@@ -172,7 +172,9 @@ def _filas(cargas):
             lugar_txt, punto = "Afuera", emblema or "Afuera (sin emblema)"
         else:
             lugar_txt, punto = "Sin dato", "Sin dato"
-        if c.get("rendimiento_dudoso"):
+        if c.get("parcial_deducida"):
+            estado = "Carga parcial (se suma a la siguiente)"
+        elif c.get("rendimiento_dudoso"):
             estado = "Revisar kilometraje"
         elif c.get("sin_odometro"):
             estado = "Sin kilometraje"

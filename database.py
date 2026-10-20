@@ -3726,6 +3726,11 @@ def registrar_carga_combustible(datos):
 # número de todo el vehículo.
 REND_MIN_KM_L = 0.5
 REND_MAX_KM_L = 12.0
+# Un tramo que da menos del 55 % de lo que gasta ese motor seguido de uno que
+# da más del 145 % no son dos tramos raros: es un tanque que no se llenó y se
+# completó en la carga siguiente. Se miden juntos.
+PARCIAL_SI_MENOS_DE = 0.55
+PARCIAL_SIGUIENTE_MAS_DE = 1.45
 
 
 def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
@@ -3771,7 +3776,39 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
     # Estado por vehículo: dónde quedó el último tanque lleno y cuántos litros
     # se cargaron desde entonces (contando las parciales del medio).
     estado = {}
-    for f in filas:
+
+    # Lo esperado para cada coche (L/100 km), para reconocer una carga parcial
+    # que se anotó como tanque lleno: pocos litros para muchos km.
+    refs = {"datos": None}
+
+    def ref_l100(vid):
+        if refs["datos"] is None:
+            try:
+                from flask import g, has_request_context
+                if has_request_context():
+                    if getattr(g, "_refs_consumo", None) is None:
+                        g._refs_consumo = _todas_las_referencias()
+                    refs["datos"] = g._refs_consumo
+                else:
+                    refs["datos"] = _todas_las_referencias()
+            except Exception:
+                refs["datos"] = _todas_las_referencias()
+        d = (refs["datos"] or {}).get(vid)
+        if not d:
+            return None
+        propia, _plan, ref_modelo = d
+        return propia if propia > 0 else (ref_modelo or None)
+    # Para cada carga, el próximo tanque lleno con kilometraje del mismo coche
+    siguiente, pendiente = {}, {}
+    for k in range(len(filas) - 1, -1, -1):
+        v = filas[k]["vehiculo_id"]
+        if pendiente.get(v) is not None:
+            siguiente[k] = pendiente[v]
+        if float(filas[k].get("odometro") or 0) > 0 and bool(filas[k].get("tanque_lleno", 1)):
+            pendiente[v] = k
+
+
+    for i, f in enumerate(filas):
         vid = f["vehiculo_id"]
         odo = float(f.get("odometro") or 0)
         litros = float(f.get("litros") or 0)
@@ -3801,6 +3838,39 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
         if e["odo_ref"] is not None and odo > e["odo_ref"]:
             km = odo - e["odo_ref"]
             consumidos = e["litros_acum"] + litros
+            # Pocos litros para los km recorridos: no llenó el tanque aunque
+            # se haya anotado como lleno (ej. 11 litros después de 450 km).
+            # Se toma como carga parcial: sus litros se suman a la carga que
+            # sigue y el tramo se mide desde el último tanque lleno. Si no, esta
+            # carga sale como "revisar" y la siguiente como un pico falso.
+            if lleno and consumidos > 0:
+                # Se mira junto con la carga siguiente, para no confundirlo con
+                # otra cosa (un coche que gasta poco, una referencia mal puesta,
+                # un kilometraje mal tipeado o cargas que no se anotaron):
+                #  - este tramo da muy poco (o más km por litro de lo posible),
+                #  - el siguiente da muy alto (el tanque se llenó recién ahí),
+                #  - y los dos juntos dan un consumo normal.
+                l100 = consumidos / km * 100
+                ref = ref_l100(vid)
+                par = False
+                j = siguiente.get(i)
+                if j is not None:
+                    km2 = float(filas[j].get("odometro") or 0) - odo
+                    lit2 = sum(float(filas[k].get("litros") or 0) for k in range(i + 1, j + 1))
+                    if km2 > 0 and lit2 > 0:
+                        rend_junto = (km + km2) / (consumidos + lit2)
+                        base = ref or ((consumidos + lit2) / (km + km2) * 100)
+                        bajo = km / consumidos > REND_MAX_KM_L or l100 < base * PARCIAL_SI_MENOS_DE
+                        alto = lit2 / km2 * 100 > base * PARCIAL_SIGUIENTE_MAS_DE
+                        par = bajo and alto and REND_MIN_KM_L <= rend_junto <= REND_MAX_KM_L
+                if par:
+                    f["km_recorridos"] = round(km)
+                    f["parcial_deducida"] = True
+                    e["litros_acum"] += litros
+                    e["previas"].append({"id": f.get("id"), "chofer": f.get("chofer") or "",
+                                         "litros": round(litros, 2), "sin_km": False, "parcial": True,
+                                         "fecha": f.get("fecha")})
+                    continue
             if lleno and consumidos > 0:
                 rend = km / consumidos
                 # Un dato absurdo no se promedia con los buenos: se marca y
@@ -3814,7 +3884,9 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
                     f["incluye"] = list(e["previas"])
                     # Tramo "limpio": todo lo consumido lo cargó quien lo
                     # cerró. Es el único que se le puede atribuir a un chofer.
-                    f["tramo_limpio"] = not any(p.get("sin_km") for p in e["previas"])
+                    f["tramo_limpio"] = not any(
+                        p.get("sin_km") or (p.get("parcial") and p.get("chofer") != (f.get("chofer") or ""))
+                        for p in e["previas"])
                     costo = float(f.get("costo_total") or 0)
                     f["costo_por_km"] = round(costo / km) if km else 0
                 else:
