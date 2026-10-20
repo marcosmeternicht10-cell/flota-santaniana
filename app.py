@@ -88,6 +88,10 @@ from ot_inventario import bp_ot_inv, init_ot_inventario
 init_ot_inventario()
 app.register_blueprint(bp_ot_inv)
 
+# ─── Cargar repuestos al inventario desde un Excel ───────────────────────────
+from repuestos_importar import bp_rep_imp
+app.register_blueprint(bp_rep_imp)
+
 # ─── Varios materiales por trabajo y OTs con varios coches ───────────────────
 from ot_materiales import bp_ot_mat, init_ot_materiales
 init_ot_materiales()
