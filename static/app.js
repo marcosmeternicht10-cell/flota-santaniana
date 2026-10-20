@@ -869,9 +869,11 @@ async function renderCombCargar() {
             // el número mentalmente como con los km por litro.
             const rend = c.litros_100km != null
               ? `<span style="font-weight:700">${c.litros_100km.toLocaleString("es-PY",{minimumFractionDigits:2})}</span>`
+              : c.parcial_deducida
+                ? `<span class="comb-parcial" title="Cargó pocos litros para los km que hizo: no llenó el tanque. Sus litros se suman a la carga siguiente, que mide el tramo completo.">parcial · suma a la siguiente</span>`
               : (c.rendimiento_dudoso
                   ? `<span style="color:var(--danger)" title="Revisá el kilometraje: el número no da">revisar ⚠</span>`
-                  : `<span style="color:var(--lighter);font-size:12px">primera carga</span>`);
+                  : `<span style="color:var(--lighter);font-size:12px">${c.sin_odometro ? "sin km" : "primera carga"}</span>`);
             return `<tr>
               <td>${c.fecha}</td>
               <td><b>${coche}</b></td>
@@ -11333,6 +11335,8 @@ function panelComb(tab, r, cargas, agrup) {
       <td class="num">${fmtL(c.litros)}</td>
       <td class="center">${c.litros_100km
         ? `<b>${c.litros_100km.toLocaleString("es-PY", { minimumFractionDigits: 2 })}</b>`
+        : c.parcial_deducida
+          ? '<span class="comb-parcial" title="Cargó pocos litros para los km que hizo: no llenó el tanque. Sus litros se suman a la carga siguiente, que mide el tramo completo.">parcial · suma a la siguiente</span>'
         : (c.rendimiento_dudoso
             ? '<span style="color:var(--danger)" title="Revisá el kilometraje: el número no da">revisar ⚠</span>'
             : `<span style="color:var(--lighter);font-size:12px">${c.sin_odometro ? "sin km" : "primera carga"}</span>`)}</td>
