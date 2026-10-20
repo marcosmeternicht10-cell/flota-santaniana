@@ -6736,3 +6736,46 @@ tr.cmp-coche td span { margin-left: 6px; font-weight: 500; color: var(--muted); 
   .pre-modal { padding: 18px 14px; }
   .pre-in { width: 104px; }
 }
+
+/* ─── Importar repuestos desde Excel ─── */
+.ri-zona { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 26px 20px; border: 2px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface2); text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+.ri-zona:hover { border-color: var(--brand-blue); background: var(--info-bg); }
+.ri-zona > .ti { font-size: 34px; color: var(--success); }
+.ri-zona b { font-size: 15px; }
+.ri-zona span { max-width: 640px; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.ri-zona input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.ri-zona.chico { flex-direction: row; justify-content: flex-start; gap: 10px; padding: 10px 14px; text-align: left; }
+.ri-zona.chico > .ti { font-size: 22px; }
+.ri-zona.chico b { font-size: 13.5px; }
+.ri-zona.cargando { opacity: .6; pointer-events: none; }
+.ri-resumen { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 10px; font-size: 13px; color: var(--muted); }
+.ri-resumen > span:first-child { margin-right: 4px; }
+.ri-chip { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 11px; font: 700 12px "Inter", sans-serif; }
+.ri-chip.nuevo { background: var(--success-bg); color: var(--success); }
+.ri-chip.existe { background: var(--info-bg); color: var(--brand-blue); }
+.ri-chip.falta { background: var(--warning-bg); color: var(--warning); }
+.ri-nota { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; background: var(--warning-bg); border: 1px solid var(--warning-bd); font-size: 13px; line-height: 1.45; }
+.ri-nota .ti { color: var(--warning); font-size: 17px; margin-top: 1px; }
+.ri-tabla-wrap { max-height: 52vh; overflow: auto; }
+.ri-tabla { font-size: 13px; }
+.ri-tabla thead th { position: sticky; top: 0; z-index: 1; background: var(--surface2); }
+.ri-tabla td { vertical-align: top; }
+.ri-tabla small { display: block; margin-top: 1px; font-size: 11px; color: var(--muted); }
+.ri-cod { white-space: nowrap; font: 600 12.5px "Inter", sans-serif; }
+.ri-desc { font-weight: 600; min-width: 190px; }
+.ri-tabla tr.ri-no td { background: var(--surface2); color: var(--muted); }
+.ri-tag { display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; font-size: 11.5px; font-weight: 600; }
+.ri-tag.existe { color: var(--brand-blue); }
+.ri-tag.repetido, .ri-tag.falta { color: var(--warning); }
+.ri-gris { color: var(--lighter); }
+.ri-tabla td.num, .ri-tabla td.ri-nw { white-space: nowrap; }
+.ri-cat { max-width: 180px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font: 500 12.5px "Inter", sans-serif; }
+.ri-stock { width: 74px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; text-align: right; font: 700 13px "Inter", sans-serif; }
+.ri-stock:focus, .ri-cat:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.ri-pie-txt { margin-right: auto; font-size: 12.5px; color: var(--muted); }
+.ri-pie-nota { margin-top: 8px; font-size: 12px; color: var(--muted); }
+.ri-error { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--danger-bg); border: 1px solid var(--danger-bd); color: var(--danger); font-size: 13px; }
+.ri-error ul { margin: 6px 0 0 18px; color: var(--text); }
+.ri-hecho { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--success-bg); color: var(--success); font-size: 14px; }
+.ri-gira { display: inline-block; animation: ri-gira 1s linear infinite; }
+@keyframes ri-gira { to { transform: rotate(360deg); } }

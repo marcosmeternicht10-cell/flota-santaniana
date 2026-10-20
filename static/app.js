@@ -7455,7 +7455,10 @@ async function renderRepuestos() {
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-packages"></i> Depósito de Repuestos</h1>
-      <div class="page-actions"><button class="btn btn-ghost" onclick="irA('proveedores')"><i class="ti ti-address-book"></i> Proveedores</button></div>
+      <div class="page-actions">
+        ${puedeEditar ? `<button class="btn btn-ghost" onclick="riAbrir()" title="Cargar muchos repuestos de una vez desde una planilla"><i class="ti ti-file-spreadsheet"></i> Importar Excel</button>` : ""}
+        <button class="btn btn-ghost" onclick="irA('proveedores')"><i class="ti ti-address-book"></i> Proveedores</button>
+      </div>
     </div>
 
     <div class="section">
@@ -7510,6 +7513,142 @@ async function renderRepuestos() {
   // refocus al buscador si venías escribiendo
   const inp = $("#rep-search");
   if (inp && repBuscar) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+}
+
+// ─── Importar repuestos desde un Excel ───
+// Se sube la planilla del depósito, se ve qué se va a cargar (con la
+// categoría y el stock para corregir) y recién al confirmar se da de alta.
+function riAbrir() {
+  window._ri = null;
+  rvModal({
+    titulo: "Importar repuestos desde Excel", icono: "file-spreadsheet", ancho: 1180, clase: "ri-modal",
+    sub: "Se carga todo de una vez. Antes de importar ves qué entra y podés corregir la categoría y el stock.",
+    cuerpo: `
+      <label class="ri-zona" id="ri-zona">
+        <i class="ti ti-file-spreadsheet"></i>
+        <b>Elegí la planilla del depósito (.xlsx)</b>
+        <span>Busca sola la hoja con los repuestos. Necesita los títulos <b>código</b> y <b>repuesto</b> (o descripción);
+          también lee marca, nº de coche, proveedor, precio y, si están, cantidad y stock mínimo.</span>
+        <input type="file" id="ri-archivo" accept=".xlsx,.xlsm" onchange="riLeer(this)">
+      </label>
+      <div id="ri-prev"></div>`,
+    pie: `<span class="ri-pie-txt" id="ri-pie-txt"></span>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" id="ri-ok" onclick="riImportar(this)" disabled><i class="ti ti-download"></i> Importar</button>`,
+  });
+}
+
+async function riLeer(inp) {
+  const f = inp.files && inp.files[0];
+  if (!f) return;
+  const zona = $("#ri-zona"), prev = $("#ri-prev");
+  zona.classList.add("cargando");
+  prev.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const fd = new FormData();
+  fd.append("archivo", f);
+  const r = await api("/api/repuestos/importar/leer", { method: "POST", body: fd });
+  zona.classList.remove("cargando");
+  inp.value = "";
+  if (!r || !r.ok) {
+    prev.innerHTML = `<div class="ri-error"><i class="ti ti-alert-triangle"></i> ${trEsc((r && r.msg) || "No se pudo leer el archivo")}</div>`;
+    return;
+  }
+  window._ri = { ...r, archivo: f.name };
+  zona.classList.add("chico");
+  zona.querySelector("b").textContent = f.name;
+  zona.querySelector("span").innerHTML = "Tocá acá para elegir otro archivo";
+  riPintar();
+}
+
+const RI_ESTADO = { existe: "Ya cargado", repetido: "Repetido", falta: "Incompleto" };
+function riPintar() {
+  const d = window._ri;
+  const n = k => d.filas.filter(f => f.estado === k).length;
+  const otros = d.filas.length - d.nuevos;
+  const opcCat = sel => d.categorias.map(c => `<option ${c === sel ? "selected" : ""}>${trEsc(c)}</option>`).join("");
+  $("#ri-prev").innerHTML = `
+    <div class="ri-resumen">
+      <span><i class="ti ti-table"></i> Hoja <b>«${trEsc(d.hoja)}»</b> · ${d.filas.length} ${d.filas.length === 1 ? "renglón" : "renglones"}</span>
+      <span class="ri-chip nuevo">${d.nuevos} nuevo${d.nuevos === 1 ? "" : "s"}</span>
+      ${n("existe") ? `<span class="ri-chip existe">${n("existe")} ya cargado${n("existe") === 1 ? "" : "s"}</span>` : ""}
+      ${n("repetido") + n("falta") ? `<span class="ri-chip falta">${n("repetido") + n("falta")} con problemas</span>` : ""}
+    </div>
+    ${d.con_cantidad ? "" : `<div class="ri-nota"><i class="ti ti-info-circle"></i>
+      <span>La planilla no trae <b>cantidades</b>. Si sabés cuántos hay de cada uno, ponelo en <b>Stock</b>; si lo dejás vacío, entra con 0 y después se carga la entrada.</span></div>`}
+    <div class="table-wrap ri-tabla-wrap"><table class="ri-tabla">
+      <thead><tr>
+        <th class="center"><input type="checkbox" id="ri-todos" ${d.nuevos ? "checked" : "disabled"} onchange="riTodos(this.checked)" aria-label="Marcar todos"></th>
+        <th>Código</th><th>Repuesto</th><th>Categoría</th><th>Proveedor</th><th>Coche</th>
+        <th class="num">Precio unit.</th><th class="num">Stock</th>
+      </tr></thead>
+      <tbody>${d.filas.map((f, i) => {
+        const ok = f.estado === "nuevo";
+        const prov = f.proveedor_oficial || f.proveedor;
+        return `<tr class="${ok ? "" : "ri-no"}" data-i="${i}">
+          <td class="center"><input type="checkbox" class="ri-ch" ${ok ? "checked" : "disabled"} onchange="riContar()" aria-label="Importar ${trEsc(f.codigo)}"></td>
+          <td class="ri-cod">${trEsc(f.codigo || "—")}<small>fila ${f.fila}</small></td>
+          <td><div class="ri-desc">${trEsc(f.descripcion || "—")}</div>${f.marca ? `<small>${trEsc(f.marca)}</small>` : ""}
+            ${ok ? "" : `<div class="ri-tag ${f.estado}" title="${trEsc(f.motivo || "")}"><i class="ti ti-${f.estado === "existe" ? "circle-check" : "alert-triangle"}"></i> ${f.estado === "existe" ? "Ya está en el inventario" : `${RI_ESTADO[f.estado] || ""} · ${trEsc(f.motivo || "")}`}</div>`}</td>
+          <td>${ok ? `<select class="ri-cat">${opcCat(f.categoria)}</select>` : `<span class="ri-gris">${trEsc(f.categoria)}</span>`}</td>
+          <td>${prov ? trEsc(prov) : '<span class="ri-gris">—</span>'}${prov && f.proveedor && prov !== f.proveedor ? `<small title="Así figura en el Excel">en el Excel: ${trEsc(f.proveedor)}</small>` : ""}</td>
+          <td class="ri-nw">${f.aplicacion ? trEsc(f.aplicacion) : '<span class="ri-gris">—</span>'}</td>
+          <td class="num">${f.precio ? gs(f.precio) : '<span class="ri-gris">—</span>'}</td>
+          <td class="num">${ok ? `<input class="ri-stock" inputmode="decimal" value="${f.cantidad != null ? f.cantidad : ""}" placeholder="0" aria-label="Stock de ${trEsc(f.codigo)}">` : ""}</td>
+        </tr>`;
+      }).join("")}</tbody>
+    </table></div>
+    ${otros ? `<p class="ri-pie-nota"><i class="ti ti-info-circle"></i> Lo que ya está en el inventario no se toca. Lo repetido o incompleto no se carga: corregilo en el Excel y volvé a importar.</p>` : ""}`;
+  riContar();
+}
+
+function riTodos(v) {
+  document.querySelectorAll(".ri-tabla .ri-ch:not(:disabled)").forEach(ch => ch.checked = v);
+  riContar();
+}
+function riContar() {
+  const sel = document.querySelectorAll(".ri-tabla .ri-ch:checked").length;
+  const tot = document.querySelectorAll(".ri-tabla .ri-ch:not(:disabled)").length;
+  const b = $("#ri-ok"), t = $("#ri-pie-txt"), todos = $("#ri-todos");
+  if (b) {
+    b.disabled = !sel;
+    b.innerHTML = `<i class="ti ti-download"></i> Importar ${sel} repuesto${sel === 1 ? "" : "s"}`;
+  }
+  if (t) t.textContent = tot ? `${sel} de ${tot} marcados` : "";
+  if (todos) { todos.checked = sel && sel === tot; todos.indeterminate = sel > 0 && sel < tot; }
+}
+
+async function riImportar(btn) {
+  const d = window._ri;
+  if (!d) return;
+  const filas = [];
+  for (const tr of document.querySelectorAll(".ri-tabla tbody tr")) {
+    if (!tr.querySelector(".ri-ch:checked")) continue;
+    const f = d.filas[+tr.dataset.i];
+    const st = tr.querySelector(".ri-stock").value.trim();
+    const cant = st ? parseFloat(st.replace(",", ".")) : 0;
+    if (st && !(cant >= 0)) { toast(`Revisá el stock de ${f.codigo}: tiene que ser un número`, "error"); tr.querySelector(".ri-stock").focus(); return; }
+    filas.push({ fila: f.fila, codigo: f.codigo, descripcion: f.descripcion, marca: f.marca,
+                 aplicacion: f.aplicacion, proveedor: f.proveedor_oficial || f.proveedor, precio: f.precio,
+                 cantidad: cant, minimo: f.minimo, unidad: f.unidad, categoria: tr.querySelector(".ri-cat").value });
+  }
+  if (!filas.length) return;
+  btn.disabled = true;
+  btn.innerHTML = `<i class="ti ti-loader-2 ri-gira"></i> Importando ${filas.length}…`;
+  const r = await api("/api/repuestos/importar", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filas, archivo: d.archivo })
+  });
+  if (!r || !r.ok) { btn.disabled = false; riContar(); if (r && r.msg) toast(r.msg, "error"); return; }
+  if (r.errores && r.errores.length) {
+    $("#ri-prev").innerHTML = `<div class="ri-hecho"><i class="ti ti-circle-check"></i> Se cargaron <b>${r.creados}</b> repuestos.</div>
+      <div class="ri-error"><i class="ti ti-alert-triangle"></i> ${r.errores.length} no se cargaron:
+        <ul>${r.errores.map(e => `<li><b>${trEsc(e.codigo || "—")}</b>: ${trEsc(e.msg)}</li>`).join("")}</ul></div>`;
+    btn.closest(".rv-modal").querySelector("#ri-ok").remove();
+  } else {
+    toast(`Se cargaron ${r.creados} repuestos al inventario`, "success");
+    btn.closest(".modal-overlay").remove();
+  }
+  renderRepuestos();
 }
 
 // ─── Lista de tarjetas de resultado ───
