@@ -5393,6 +5393,32 @@ async function renderCompras() {
 
 function setComprasTab(t) { comprasTab = t; renderCompras(); }
 
+// El material de un trabajo, renglón por renglón ("2 × Filtro de aceite")
+function cmpMateriales(it) {
+  const mats = it.materiales || [];
+  if (!mats.length) return it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—";
+  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}</div>`).join("");
+}
+// Los trabajos de la OT agrupados por coche (si la OT tiene varios)
+function cmpPorCoche(o, fila, columnas) {
+  const varios = (o.coches || []).length > 1;
+  let previo = null, html = "";
+  o.items.forEach(it => {
+    if (varios && it.ot_id !== previo) {
+      previo = it.ot_id;
+      html += `<tr class="cmp-coche"><td colspan="${columnas}"><i class="ti ti-bus"></i> ${it.coche_n ? "Coche " + trEsc(it.coche_n) : trEsc(it.coche_patente || "")}
+        ${it.coche_n && it.coche_patente ? `<span>${trEsc(it.coche_patente)}</span>` : ""}</td></tr>`;
+    }
+    html += fila(it);
+  });
+  return html;
+}
+function cmpTituloCoches(o) {
+  const cs = o.coches || [];
+  if (cs.length > 1) return `${cs.length} coches: ${cs.map(c => c.n_interno || c.patente).join(", ")}`;
+  return `${o.n_interno ? `Coche ${o.n_interno}` : o.patente} · ${o.patente}`;
+}
+
 function tarjetaCompra(o) {
   const coche = o.n_interno ? `Coche ${o.n_interno}` : o.patente;
   const totalPresup = o.items.reduce((s, i) => s + (i.precio_compras || 0), 0);
@@ -5418,7 +5444,7 @@ function tarjetaCompra(o) {
   return `
     <div class="card" style="margin-bottom:14px">
       <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
-        <span><i class="ti ti-clipboard-check"></i> OT #${o.id} · ${coche} · ${o.patente}</span>
+        <span><i class="ti ti-clipboard-check"></i> OT #${o.id} · ${cmpTituloCoches(o)}</span>
         <span style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:10px">
           ${o.pagos && o.pagos.parcial ? `<span class="badge warning"><i class="ti ti-hourglass"></i> ${o.pagos.en_espera} esperando fondos · ${gs(o.pagos.monto_espera)}</span>` : ""}
           ${o.fecha_envio_compras ? "Enviada: " + o.fecha_envio_compras.slice(0,10) : ""}
@@ -5431,12 +5457,12 @@ function tarjetaCompra(o) {
             ${o.estado_compras !== "en_espera" ? '<th class="num">Precio</th>' : ''}
           </tr></thead>
           <tbody>
-            ${o.items.map(it => `<tr class="${it.estado_pago === 'espera' ? 'item-en-espera' : ''}">
+            ${cmpPorCoche(o, it => `<tr class="${it.estado_pago === 'espera' ? 'item-en-espera' : ''}">
               <td>${it.descripcion}${it.estado_pago === 'espera' ? ' <span class="badge warning" style="font-size:10px"><i class="ti ti-hourglass"></i> espera fondos</span>' : ''}</td>
-              <td><b>${it.material_pedido || "—"}</b></td>
+              <td>${cmpMateriales(it)}</td>
               <td style="color:var(--muted)">${it.tecnico || "—"}</td>
               ${o.estado_compras !== "en_espera" ? `<td class="num">${gs(it.precio_compras || 0)}</td>` : ''}
-            </tr>`).join("")}
+            </tr>`, o.estado_compras !== "en_espera" ? 4 : 3)}
           </tbody>
         </table></div>
         ${o.estado_compras !== "en_espera" ? `<div style="text-align:right;margin-top:8px;font-weight:700;color:var(--brand-blue)">Total: ${gs(totalPresup)}</div>` : ''}
@@ -5447,7 +5473,9 @@ function tarjetaCompra(o) {
     </div>`;
 }
 
-// Modal para cargar/editar precios del presupuesto
+// Modal para cargar/editar precios del presupuesto: el precio por unidad de
+// cada material (el subtotal y el total se ven al escribir). El trabajo que no
+// tiene materiales anotados lleva un solo precio, como antes.
 async function abrirPresupuesto(otId) {
   const ots = await api("/api/compras/ots");
   const o = ots.find(x => x.id === otId);
@@ -5455,44 +5483,67 @@ async function abrirPresupuesto(otId) {
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
+  const precio = v => v ? String(Math.round(v)) : "";
+  const fila = it => {
+    const mats = it.materiales || [];
+    if (!mats.length) return `<tr class="pre-trab">
+        <td><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>
+        <td class="center" style="color:var(--lighter)">—</td>
+        <td style="color:var(--muted);font-size:12.5px">${it.material_pedido ? trEsc(it.material_pedido) : "Sin materiales anotados: precio del trabajo"}</td>
+        <td><input class="pre-in pre-item" data-id="${it.id}" data-q="1" inputmode="numeric" value="${precio(it.precio_compras)}" placeholder="0" oninput="preRecalcular()"></td>
+        <td class="num pre-sub">—</td></tr>`;
+    return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}">
+        ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>` : ""}
+        <td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
+        <td style="font-size:13px">${trEsc(m.descripcion)}</td>
+        <td><input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" inputmode="numeric" value="${precio(m.precio_unit)}" placeholder="0" oninput="preRecalcular()"></td>
+        <td class="num pre-sub">—</td></tr>`).join("");
+  };
   overlay.innerHTML = `
-    <div style="background:#fff;border-radius:16px;max-width:640px;width:100%;max-height:90vh;overflow:auto;padding:24px">
+    <div class="pre-modal">
       <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
-      <p style="font-size:13px;color:var(--muted);margin:0 0 18px">Poné el precio de cada material. ${o.patente} · ${o.n_interno ? "Coche " + o.n_interno : ""}</p>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Trabajo</th><th>Material</th><th>Mecánico</th><th class="num">Precio (Gs.)</th></tr></thead>
-        <tbody>
-          ${o.items.map(it => `<tr>
-            <td style="font-size:13px">${it.descripcion}</td>
-            <td style="font-size:13px"><b>${it.material_pedido || "—"}</b></td>
-            <td style="font-size:13px;color:var(--muted)">${it.tecnico || "—"}</td>
-            <td><input type="number" id="precio-${it.id}" value="${it.precio_compras || ''}" placeholder="0"
-                 style="width:120px;padding:8px;border:1.5px solid var(--border);border-radius:8px;text-align:right"></td>
-          </tr>`).join("")}
-        </tbody>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Poné el precio <b>por unidad</b> de cada material: el subtotal sale solo con la cantidad. ${cmpTituloCoches(o)}</p>
+      <div class="table-wrap"><table class="pre-tabla">
+        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material</th><th class="num">Precio unitario (Gs.)</th><th class="num">Subtotal</th></tr></thead>
+        <tbody>${cmpPorCoche(o, fila, 5)}</tbody>
       </table></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px">
+      <div class="pre-total"><span>Total a pedir a Tesorería</span><b id="pre-total">Gs. 0</b></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
         <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
         <button class="btn btn-primary" onclick="guardarPresupuesto(${o.id}, this)"><i class="ti ti-check"></i> Guardar presupuesto</button>
       </div>
     </div>`;
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   document.body.appendChild(overlay);
+  preRecalcular();
+  overlay.querySelector(".pre-in")?.focus();
+}
+
+const preNum = v => parseFloat(String(v || "").replace(/\./g, "").replace(/,/g, ".").replace(/[^\d.]/g, "")) || 0;
+function preRecalcular() {
+  let total = 0;
+  document.querySelectorAll(".pre-modal .pre-in").forEach(inp => {
+    const sub = preNum(inp.value) * (parseFloat(inp.dataset.q) || 1);
+    total += sub;
+    const td = inp.closest("tr").querySelector(".pre-sub");
+    if (td) td.textContent = inp.value.trim() ? gs(Math.round(sub)) : "—";
+  });
+  const t = document.getElementById("pre-total");
+  if (t) t.textContent = gs(Math.round(total));
 }
 
 async function guardarPresupuesto(otId, btn) {
-  const ots = await api("/api/compras/ots");
-  const o = ots.find(x => x.id === otId);
-  const precios = {};
+  const precios = {}, materiales = {};
   let alguno = false;
-  o.items.forEach(it => {
-    const val = document.getElementById(`precio-${it.id}`).value;
-    if (val !== "" && val !== null) { precios[it.id] = parseFloat(val) || 0; alguno = true; }
+  document.querySelectorAll(".pre-modal .pre-in").forEach(inp => {
+    if (!inp.value.trim()) return;
+    (inp.classList.contains("pre-mat") ? materiales : precios)[inp.dataset.id] = preNum(inp.value);
+    alguno = true;
   });
   if (!alguno) { toast("Cargá al menos un precio", "error"); return; }
   const r = await api(`/api/compras/${otId}/presupuesto`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ precios })
+    body: JSON.stringify({ precios, materiales })
   });
   if (r.ok) {
     toast("Presupuesto guardado", "success");
@@ -5724,13 +5775,16 @@ async function renderOts() {
             <tbody>
               ${ots.map(o => {
                 const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
-                const datos = [o.n_interno, o.patente, o.marca, o.modelo].map(x => String(x || "").toLowerCase()).join(" ");
-                return `<tr class="clickable ot-fila" onclick="abrirOT(${o.id})" data-id="${o.id}" data-n="${trEsc(String(o.n_interno || "").toLowerCase())}"
-                            data-p="${trEsc(String(o.patente || "").toLowerCase().replace(/[^a-z0-9]/g, ""))}" data-t="${trEsc(datos)}">
-                  <td><b>#${o.id}</b></td>
+                const cs = o.coches && o.coches.length > 1 ? o.coches : [o];
+                const datos = cs.map(c => [c.n_interno, c.patente, c.marca, c.modelo].map(x => String(x || "").toLowerCase()).join(" ")).join(" ");
+                return `<tr class="clickable ot-fila" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
+                            data-p="${trEsc(cs.map(c => String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "")).join(" "))}" data-t="${trEsc(datos)}">
+                  <td><b>#${o.numero || o.id}</b></td>
                   <td class="center">${badgeSalida(o.horario_salida)}</td>
                   <td>${o.fecha_apertura}</td>
-                  <td><b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}</td>
+                  <td>${cs.length > 1
+                    ? `<b>${cs.map(c => trEsc(String(c.n_interno || c.patente || ""))).join(" · ")}</b> <span class="ot-ncoches chico">${cs.length} coches</span>`
+                    : `<b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}`}</td>
                   <td>${o.conductor || "—"}</td>
                   <td>${o.procedencia || "—"}</td>
                   <td class="num">${o.km ? fmtNum(o.km) : "—"}</td>
@@ -5777,8 +5831,9 @@ function otFiltrarLista() {
     ver = f => f.dataset.id === id;
   } else {
     const qp = q.replace(/[^a-z0-9]/g, "");
-    const exacto = filas.some(f => f.dataset.n === q);
-    ver = exacto ? (f => f.dataset.n === q)
+    // Una OT puede tener varios coches: data-n trae sus números separados por espacio
+    const exacto = filas.some(f => f.dataset.n.split(" ").includes(q));
+    ver = exacto ? (f => f.dataset.n.split(" ").includes(q))
       : (f => f.dataset.n.includes(q) || (qp && f.dataset.p.includes(qp)) || f.dataset.t.includes(q));
   }
   let n = 0;
@@ -5840,18 +5895,21 @@ async function abrirNuevaOT() {
           <div class="field" style="flex:1"><label>Observaciones</label><input id="ot-obs" placeholder="Opcional"></div>
         </div>
 
-        <p style="margin:20px 0 8px;font-weight:600;font-size:13px;color:var(--brand-blue)">
+        <p style="margin:20px 0 8px;font-weight:600;font-size:13px;color:var(--brand-blue)" id="ot-items-tit">
           <i class="ti ti-list-check"></i> Items de la OT
         </p>
         <p class="hint">
           <i class="ti ti-bulb"></i>
-          Pegá la lista del chofer abajo, una línea por trabajo. El sistema detecta el tipo automáticamente.
+          Pegá la lista del chofer abajo, una línea por trabajo. El sistema detecta el tipo automáticamente. El material de cada trabajo se carga en la OT, al crearla.
         </p>
         <textarea id="ot-items-raw" rows="8" style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:13px;resize:vertical"
           placeholder="Cambio de aceite y filtros
 Revisión frenos
 Cambiar goma valijera
 Control general"></textarea>
+
+        <div id="ot-extra"></div>
+        <button type="button" class="ot-nc-mas" onclick="otNuevaCocheMas()"><i class="ti ti-bus"></i><i class="ti ti-plus"></i> Agregar otro coche a esta OT</button>
 
         <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
           <button class="btn btn-ghost" onclick="cerrarModalOT()">Cancelar</button>
@@ -5862,7 +5920,42 @@ Control general"></textarea>
   `;
   document.body.appendChild(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOT(); });
+  window._vehiculosOT = vehiculos;
+  window._otNuevaK = 1;
   otChoferesLista().then(() => acNombres($("#ot-cond"), () => window._choferesOT));
+}
+
+// Otro coche en la OT nueva: su coche, km, chofer y trabajos
+function otNuevaCocheMas() {
+  const k = ++window._otNuevaK;
+  const box = $("#ot-extra");
+  box.insertAdjacentHTML("beforeend", `
+    <div class="ot-nc" data-k="${k}">
+      <div class="ot-nc-cab"><i class="ti ti-bus"></i> <span>Coche ${box.children.length + 2}</span>
+        <button type="button" class="icon-btn" title="Sacar este coche" onclick="otNuevaCocheQuitar(this)"><i class="ti ti-x"></i></button></div>
+      <div class="form-row">
+        <div class="field" style="flex:1;min-width:200px"><label>Vehículo *</label>${buscadorCoche("ot-veh-" + k, window._vehiculosOT || [])}</div>
+        <div class="field"><label>KM</label><input class="ot-nc-km" placeholder="765387" style="width:110px"></div>
+        <div class="field" style="flex:1;min-width:160px"><label>Conductor</label><input class="ot-nc-cond" autocomplete="off" placeholder="Opcional"></div>
+      </div>
+      <textarea class="ot-nc-items" rows="4" placeholder="Trabajos de este coche, uno por línea"></textarea>
+    </div>`);
+  const bloque = box.lastElementChild;
+  acNombres(bloque.querySelector(".ot-nc-cond"), () => window._choferesOT);
+  otNuevaNumerar();
+  bloque.querySelector(".bcoche-input")?.focus();
+}
+function otNuevaCocheQuitar(btn) {
+  btn.closest(".ot-nc").remove();
+  otNuevaNumerar();
+}
+function otNuevaNumerar() {
+  const bloques = [...document.querySelectorAll("#ot-extra .ot-nc")];
+  bloques.forEach((b, i) => { b.querySelector(".ot-nc-cab span").textContent = `Coche ${i + 2}`; });
+  const tit = $("#ot-items-tit");
+  if (tit) tit.innerHTML = bloques.length
+    ? '<i class="ti ti-list-check"></i> Trabajos del coche 1'
+    : '<i class="ti ti-list-check"></i> Items de la OT';
 }
 
 function cerrarModalOT() {
@@ -5882,14 +5975,31 @@ function detectarTipoItem(desc) {
 async function guardarNuevaOT() {
   const vid = parseInt($("#ot-veh").value);
   const fecha = $("#ot-fecha").value;
+  if (!vid) { toast("Elegí el vehículo", "error"); $("#ot-veh-txt")?.focus(); return; }
   if (!fecha) { toast("La fecha es obligatoria", "error"); return; }
 
-  const raw = $("#ot-items-raw").value.trim();
-  const items = raw.split("\n").map(l => l.trim()).filter(l => l).map(l => {
-    // Sacar guiones, asteriscos, viñetas iniciales
-    const limpia = l.replace(/^[-*•·]\s*/, "");
-    return { descripcion: limpia, tipo: detectarTipoItem(limpia) };
-  });
+  // Sacar guiones, asteriscos, viñetas iniciales
+  const items = otLineas($("#ot-items-raw").value);
+
+  // Los otros coches de la misma OT
+  const extra = [];
+  const vistos = new Set([vid]);
+  for (const b of document.querySelectorAll("#ot-extra .ot-nc")) {
+    const v = parseInt(b.querySelector('input[type="hidden"]').value);
+    const its = otLineas(b.querySelector(".ot-nc-items").value);
+    const nombre = b.querySelector(".ot-nc-cab span").textContent;
+    if (!v) {
+      if (!its.length) continue;             // bloque vacío: se ignora
+      toast(`Elegí el vehículo del ${nombre.toLowerCase()}`, "error");
+      b.querySelector(".bcoche-input")?.focus();
+      return;
+    }
+    if (vistos.has(v)) { toast(`El ${nombre.toLowerCase()} está repetido`, "error"); return; }
+    vistos.add(v);
+    extra.push({ vehiculo_id: v, items: its,
+                 km: parseFloat(String(b.querySelector(".ot-nc-km").value || "").replace(/\./g, "").replace(/,/g, ".")) || 0,
+                 conductor: b.querySelector(".ot-nc-cond").value.trim() });
+  }
 
   const r = await api("/api/ots", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -5899,13 +6009,16 @@ async function guardarNuevaOT() {
       conductor: $("#ot-cond").value,
       procedencia: $("#ot-proc").value,
       observaciones: $("#ot-obs").value,
-      items: items
+      items: items,
+      coches_extra: extra
     })
   });
   if (r.ok) {
-    toast(`OT #${r.ot_id} creada con ${items.length} items`, "success");
+    const n = items.length + extra.reduce((s, e) => s + e.items.length, 0);
+    toast(`OT #${r.ot_id} creada${extra.length ? ` con ${extra.length + 1} coches` : ""} · ${n} trabajo${n === 1 ? "" : "s"}`, "success");
     cerrarModalOT();
-    renderOts();
+    await renderOts();
+    abrirOT(r.ot_id);              // para cargar el material y los técnicos
   } else toast(r.msg || "Error", "error");
 }
 
@@ -5989,7 +6102,8 @@ function generarReporteCorrectivos(btn) {
 
 // Enviar una OT al sector Compras
 async function enviarACompras(otId) {
-  if (!confirm("¿Enviar esta OT a Compras? Quedará en espera de presupuesto.")) return;
+  const g = ((window._otActual || {}).grupo || []).length;
+  if (!confirm(`¿Enviar esta OT a Compras${g > 1 ? ` (con sus ${g} coches)` : ""}? Quedará en espera de presupuesto.`)) return;
   const r = await api(`/api/ots/${otId}/enviar_compras`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ nota: "" })
@@ -6012,7 +6126,15 @@ function verFotoGrande(src) {
 
 async function abrirOT(otId) {
   const ot = await api(`/api/ots/${otId}`);
-  if (!ot) return;
+  if (!ot || ot.error) return;
+  // Al pasar de un coche a otro de la misma OT se reemplaza la ventana
+  document.getElementById("modal-ot-detalle")?.remove();
+  window._otActual = ot;
+  const grupo = (ot.grupo && ot.grupo.length) ? ot.grupo
+    : [{ id: ot.id, vehiculo_id: ot.vehiculo_id, n_interno: ot.n_interno, patente: ot.patente,
+         items: ot.items.length, completados: ot.items.filter(i => i.estado === "completado").length }];
+  const varios = grupo.length > 1;
+  const numero = ot.numero || ot.id;
 
   const overlay = document.createElement("div");
   overlay.id = "modal-ot-detalle";
@@ -6026,18 +6148,20 @@ async function abrirOT(otId) {
     <div style="background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-lg);max-width:1120px;width:100%;max-height:92vh;overflow:auto">
       <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;background:linear-gradient(135deg, var(--info-bg) 0%, var(--surface) 100%)">
         <div>
-          <h3 style="font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px">
-            <i class="ti ti-clipboard-check" style="color:var(--brand-blue)"></i> OT #${ot.id} · ${ot.patente}
-            ${ot.n_interno ? `<span style="font-weight:500;color:var(--muted)">Coche ${ot.n_interno}</span>` : ""}
+          <h3 style="font-size:17px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <i class="ti ti-clipboard-check" style="color:var(--brand-blue)"></i> OT #${numero}${varios
+              ? ` <span class="ot-ncoches">${grupo.length} coches</span>`
+              : ` · ${ot.patente} ${ot.n_interno ? `<span style="font-weight:500;color:var(--muted)">Coche ${ot.n_interno}</span>` : ""}`}
           </h3>
           <p style="font-size:12.5px;color:var(--muted);margin-top:3px">
-            ${ot.fecha_apertura} · <span id="ot-chofer-box">${otChoferHtml(ot)}</span> · ${ot.procedencia || 'Sin procedencia'} · ${ot.km ? fmtNum(ot.km) + ' km' : 'Sin km'}
+            ${varios ? `<b style="color:var(--text)">${ot.n_interno ? "Coche " + ot.n_interno : ot.patente}</b> · ` : ""}${ot.fecha_apertura} · <span id="ot-chofer-box">${otChoferHtml(ot)}</span> · ${ot.procedencia || 'Sin procedencia'} · ${ot.km ? fmtNum(ot.km) + ' km' : 'Sin km'}
           </p>
         </div>
         <button class="icon-btn" onclick="cerrarModalOTDetalle()"><i class="ti ti-x"></i></button>
       </div>
 
       <div style="padding:18px 22px">
+        ${otCochesBarra(ot, grupo)}
         <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:16px">
           <span class="badge ${ot.estado === 'cerrada' ? 'success' : ot.estado === 'en_proceso' ? 'warning' : 'danger'}">
             <span class="dot"></span> ${LABEL_ESTADO_OT[ot.estado]}
@@ -6089,12 +6213,7 @@ async function abrirOT(otId) {
                       </select>
                     </td>
                     <td class="pt-td">${ptCelda(it)}</td>
-                    <td class="ot-mat">
-                      <input type="text" value="${it.material_pedido || ''}" placeholder="ej: WD40, repuesto X"
-                        onblur="actualizarItem(${it.id},'material_pedido',this.value,this)"
-                        onkeydown="if(event.key==='Enter'){this.blur();}"
-                        style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
-                    </td>
+                    <td class="ot-mat">${otMatCelda(it)}</td>
                     <td class="td-action">
                       <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
                     </td>
@@ -6107,14 +6226,16 @@ async function abrirOT(otId) {
         `}
 
         <div class="form-row" style="margin-top:14px;align-items:flex-end">
-          <div class="field" style="flex:1"><label>Agregar item</label><input id="ot-new-item" placeholder="Descripción del trabajo"></div>
+          <div class="field" style="flex:1"><label>Agregar item${varios ? ` al ${ot.n_interno ? "coche " + ot.n_interno : ot.patente}` : ""}</label><input id="ot-new-item" placeholder="Descripción del trabajo"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();agregarItemOT(${ot.id})}"></div>
           <button class="btn btn-ghost" onclick="agregarItemOT(${ot.id})"><i class="ti ti-plus"></i> Agregar</button>
         </div>
+        ${varios && ot.id !== numero ? `<button type="button" class="pv-link ot-coche-quitar" onclick="otCocheQuitar()"><i class="ti ti-bus-off"></i> Sacar el ${ot.n_interno ? "coche " + ot.n_interno : ot.patente} de esta OT</button>` : ""}
 
         <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
           ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${ot.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
-          <button class="btn btn-ghost" onclick="window.open('/api/ots/${ot.id}/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir PDF</button>
-          <button class="btn btn-ghost" onclick="otHojas(${ot.id}, this)" title="Una hoja para cada técnico con sus trabajos, sin costos"><i class="ti ti-file-stack"></i> Hojas por técnico</button>
+          <button class="btn btn-ghost" onclick="window.open('/api/ots/${numero}/pdf','_blank')" title="${varios ? "La OT entera, con todos sus coches" : ""}"><i class="ti ti-printer"></i> Imprimir PDF</button>
+          <button class="btn btn-ghost" onclick="otHojas(${ot.id}, this)" title="Una hoja para cada técnico con sus trabajos, sin costos${varios ? " (de este coche)" : ""}"><i class="ti ti-file-stack"></i> Hojas por técnico${varios ? ` <small style="opacity:.7">· ${ot.n_interno || ot.patente}</small>` : ""}</button>
           ${!ot.estado_compras ?
             `<button class="btn btn-primary" onclick="enviarACompras(${ot.id})"><i class="ti ti-shopping-cart"></i> Enviar a Compras</button>` :
             `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}" style="align-self:center"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>`
@@ -6142,6 +6263,202 @@ function guardarPendientesOT() {
   if (activo && activo.tagName === "INPUT" && activo.closest("#modal-ot-detalle")) {
     activo.blur();
   }
+}
+
+// ─── Coches de la OT ───
+// Una OT puede abarcar varios coches: cada uno con sus trabajos, su km y su
+// chofer. Arriba del detalle van los coches como pestañas.
+function otCochesBarra(ot, grupo) {
+  const puede = ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+  const tabs = grupo.map(g => {
+    const act = g.id === ot.id;
+    const n = g.n_interno ? `Coche ${g.n_interno}` : (g.patente || "");
+    return `<button type="button" class="ot-coche ${act ? "on" : ""}" ${act ? 'aria-current="true"' : `onclick="abrirOT(${g.id})"`}
+              title="${act ? "Estás viendo este coche" : "Ver los trabajos de este coche"}">
+        <i class="ti ti-bus"></i><span>${trEsc(n)}</span><small>${g.completados || 0}/${g.items || 0}</small></button>`;
+  }).join("");
+  return `<div class="ot-coches">
+      ${grupo.length > 1 ? '<span class="ot-coches-lbl">Coches</span>' : ""}${tabs}
+      ${puede && ot.estado !== "cerrada" ? `<button type="button" class="ot-coche-mas" onclick="otCocheAgregar()" title="Sumar otro coche a esta misma OT"><i class="ti ti-plus"></i> Agregar coche</button>` : ""}
+    </div>
+    <div id="ot-coche-form"></div>`;
+}
+
+// Las líneas pegadas ("- Cambio de aceite") como trabajos con su tipo
+function otLineas(raw) {
+  return String(raw || "").split("\n").map(l => l.trim()).filter(Boolean).map(l => {
+    const limpia = l.replace(/^[-*•·]\s*/, "");
+    return { descripcion: limpia, tipo: detectarTipoItem(limpia) };
+  }).filter(i => i.descripcion);
+}
+
+async function otCocheAgregar() {
+  const box = $("#ot-coche-form");
+  if (!box) return;
+  if (box.innerHTML.trim()) { box.innerHTML = ""; return; }
+  if (!window._vehiculosOT) window._vehiculosOT = (await api("/api/vehiculos")) || [];
+  const ya = new Set(((window._otActual || {}).grupo || []).map(g => g.vehiculo_id));
+  const lista = window._vehiculosOT.filter(v => !ya.has(v.id));
+  box.innerHTML = `
+    <div class="ot-coche-nuevo">
+      <div class="ot-coche-nuevo-tit"><i class="ti ti-bus"></i> Otro coche en esta OT</div>
+      <div class="form-row">
+        <div class="field" style="flex:2;min-width:220px"><label>Coche *</label>${buscadorCoche("otc-veh", lista)}</div>
+        <div class="field"><label>KM</label><input id="otc-km" inputmode="numeric" placeholder="765387" style="width:120px"></div>
+        <div class="field" style="flex:1;min-width:170px"><label>Conductor</label><input id="otc-cond" autocomplete="off" placeholder="Opcional"></div>
+      </div>
+      <div class="field" style="margin-top:10px"><label>Trabajos de este coche</label>
+        <textarea id="otc-items" rows="3" placeholder="Uno por línea. También los podés agregar después."></textarea></div>
+      <div class="ot-coche-nuevo-btns">
+        <button type="button" class="btn btn-ghost" onclick="$('#ot-coche-form').innerHTML=''">Cancelar</button>
+        <button type="button" class="btn btn-primary" onclick="otCocheGuardar(this)"><i class="ti ti-plus"></i> Agregar a la OT</button>
+      </div>
+    </div>`;
+  otChoferesLista().then(() => acNombres($("#otc-cond"), () => window._choferesOT));
+  $("#otc-veh-txt")?.focus();
+}
+
+async function otCocheGuardar(btn) {
+  const ot = window._otActual;
+  const vid = parseInt($("#otc-veh").value);
+  if (!vid) { toast("Elegí el coche", "error"); $("#otc-veh-txt")?.focus(); return; }
+  const km = parseFloat(String($("#otc-km").value || "").replace(/\./g, "").replace(/,/g, ".")) || 0;
+  btn.disabled = true;
+  const r = await api(`/api/ots/${ot.id}/coches`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehiculo_id: vid, km, conductor: $("#otc-cond").value.trim(), items: otLineas($("#otc-items").value) })
+  });
+  btn.disabled = false;
+  if (!r || !r.ok) { if (r && r.msg) toast(r.msg, "error"); return; }
+  toast(`Coche agregado a la OT #${r.numero}`, "success");
+  await abrirOT(r.ot_id);
+}
+
+async function otCocheQuitar() {
+  const ot = window._otActual;
+  if (!ot) return;
+  const n = ot.n_interno ? `coche ${ot.n_interno}` : ot.patente;
+  const k = (ot.items || []).length;
+  if (!confirm(`¿Sacar el ${n} de la OT #${ot.numero}?` + (k ? `\n\nSe borran sus ${k} trabajo${k === 1 ? "" : "s"} con su material.` : ""))) return;
+  const r = await api(`/api/ots/${ot.id}/quitar_coche`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (!r || !r.ok) { if (r && r.msg) toast(r.msg, "error"); return; }
+  toast(`Se sacó el ${n} de la OT`, "success");
+  await abrirOT(r.numero);
+}
+
+// ─── Material de cada trabajo: varios, con su cantidad ───
+const otMatCantTxt = q => {
+  const n = Number(q || 0);
+  return Number.isInteger(n) ? String(n) : String(+n.toFixed(2)).replace(".", ",");
+};
+function otMatCant(t) {
+  const n = parseFloat(String(t || "").trim().replace(/\s/g, "").replace(",", "."));
+  return n > 0 ? n : null;
+}
+function otMatFila(m) {
+  return `<div class="ot-mat-fila" data-mid="${m ? m.id : ""}">
+      <input class="ot-mat-q" value="${m ? otMatCantTxt(m.cantidad) : "1"}" inputmode="decimal" aria-label="Cantidad" title="Cantidad"
+             onfocus="this.select()" onchange="otMatGuardar(this)" onkeydown="otMatTecla(event,this)">
+      <input class="ot-mat-d" value="${m ? trEsc(m.descripcion) : ""}" placeholder="Qué material" aria-label="Material" maxlength="160"
+             onchange="otMatGuardar(this)" onblur="otMatSoltar(this)" onkeydown="otMatTecla(event,this)">
+      <button type="button" class="ot-mat-x" title="Sacar este material" aria-label="Sacar este material" onclick="otMatQuitar(this)"><i class="ti ti-x"></i></button>
+    </div>`;
+}
+function otMatCelda(it) {
+  const mats = it.materiales || [];
+  return `<div class="ot-mats" data-item="${it.id}">${mats.map(otMatFila).join("")}
+      <button type="button" class="ot-mat-mas" onclick="otMatNuevo(this)"><i class="ti ti-plus"></i> ${mats.length ? "Otro material" : "Material"}</button>
+    </div>`;
+}
+function otMatNuevo(btn) {
+  btn.insertAdjacentHTML("beforebegin", otMatFila(null));
+  btn.innerHTML = '<i class="ti ti-plus"></i> Otro material';
+  btn.previousElementSibling.querySelector(".ot-mat-d").focus();
+}
+function otMatOk(el) {
+  el.defaultValue = el.value;
+  el.classList.remove("mal");
+  el.classList.add("ok");
+  setTimeout(() => el.classList.remove("ok"), 700);
+}
+async function otMatGuardar(inp) {
+  const fila = inp.closest(".ot-mat-fila"), caja = inp.closest(".ot-mats");
+  if (!fila || !caja) return;
+  const iq = fila.querySelector(".ot-mat-q"), id = fila.querySelector(".ot-mat-d");
+  const q = otMatCant(iq.value);
+  const desc = id.value.replace(/\s+/g, " ").trim();
+  if (q === null) {
+    toast("La cantidad tiene que ser un número mayor que cero", "error");
+    iq.classList.add("mal");
+    if (fila.dataset.mid) iq.value = iq.defaultValue;
+    return;
+  }
+  if (!fila.dataset.mid) {
+    // Material nuevo: se guarda en cuanto tiene qué es
+    if (!desc || fila._creando) return;
+    fila._creando = true;
+    const r = await api(`/api/ot_items/${caja.dataset.item}/materiales`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ descripcion: desc, cantidad: q })
+    });
+    fila._creando = false;
+    if (!r || !r.ok) { if (r && r.msg) toast(r.msg, "error"); id.classList.add("mal"); return; }
+    fila.dataset.mid = r.id;
+    otMatOk(id); iq.defaultValue = iq.value;
+    return;
+  }
+  if (!desc) {
+    toast("Para sacar el material tocá la ✕", "error");
+    id.value = id.defaultValue;
+    return;
+  }
+  const cambio = inp === iq ? { cantidad: q } : { descripcion: desc };
+  const r = await api(`/api/ot_items/materiales/${fila.dataset.mid}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cambio)
+  });
+  if (!r || !r.ok) { if (r && r.msg) toast(r.msg, "error"); inp.classList.add("mal"); return; }
+  otMatOk(inp);
+}
+// Un renglón nuevo que quedó vacío se va solo
+function otMatSoltar(inp) {
+  const fila = inp.closest(".ot-mat-fila");
+  setTimeout(() => {
+    if (!fila || !fila.isConnected || fila.dataset.mid || fila._creando) return;
+    if (fila.contains(document.activeElement)) return;
+    if (!fila.querySelector(".ot-mat-d").value.trim()) {
+      const caja = fila.closest(".ot-mats");
+      fila.remove();
+      const btn = caja?.querySelector(".ot-mat-mas");
+      if (btn && !caja.querySelector(".ot-mat-fila")) btn.innerHTML = '<i class="ti ti-plus"></i> Material';
+    }
+  }, 150);
+}
+function otMatTecla(e, inp) {
+  const fila = inp.closest(".ot-mat-fila");
+  if (e.key === "Enter") {
+    e.preventDefault();
+    if (inp.classList.contains("ot-mat-q")) { fila.querySelector(".ot-mat-d").focus(); return; }
+    // Enter en el material: queda guardado y se abre otro renglón
+    const btn = fila.closest(".ot-mats").querySelector(".ot-mat-mas");
+    if (!inp.value.trim()) { inp.blur(); return; }
+    inp.blur();
+    if (btn && fila.nextElementSibling === btn) otMatNuevo(btn);
+  } else if (e.key === "Escape") {
+    e.preventDefault(); e.stopPropagation();
+    if (!fila.dataset.mid) { inp.value = ""; inp.blur(); return; }
+    inp.value = inp.defaultValue;
+    inp.blur();
+  }
+}
+async function otMatQuitar(btn) {
+  const fila = btn.closest(".ot-mat-fila"), caja = btn.closest(".ot-mats");
+  if (fila.dataset.mid) {
+    const r = await api(`/api/ot_items/materiales/${fila.dataset.mid}`, { method: "DELETE" });
+    if (!r || !r.ok) { if (r && r.msg) toast(r.msg, "error"); return; }
+  }
+  fila.remove();
+  const mas = caja.querySelector(".ot-mat-mas");
+  if (mas && !caja.querySelector(".ot-mat-fila")) mas.innerHTML = '<i class="ti ti-plus"></i> Material';
 }
 
 // ─── Kilometraje verificado en la OT ───
@@ -6339,6 +6656,11 @@ async function otKmGuardar(btn) {
 
 function cerrarModalOTDetalle() {
   guardarPendientesOT();
+  // Un material escrito sin salir del renglón también se guarda
+  document.querySelectorAll("#modal-ot-detalle .ot-mat-fila").forEach(f => {
+    const d = f.querySelector(".ot-mat-d");
+    if (d && d.value.trim() && (!f.dataset.mid || d.value !== d.defaultValue)) otMatGuardar(d);
+  });
   const m = document.getElementById("modal-ot-detalle");
   if (m) m.remove();
   ptCerrarPop();
@@ -6403,7 +6725,8 @@ async function borrarItemOT(itemId, otId) {
 }
 
 async function cerrarOT(otId) {
-  if (!confirm("¿Cerrar la OT? Los items que queden pendientes se mantendrán.")) return;
+  const g = ((window._otActual || {}).grupo || []).length;
+  if (!confirm(`¿Cerrar la OT${g > 1 ? ` con sus ${g} coches` : ""}? Los items que queden pendientes se mantendrán.`)) return;
   await api(`/api/ots/${otId}/cerrar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
   toast("OT cerrada", "success");
   cerrarModalOTDetalle();
@@ -6441,16 +6764,20 @@ async function borrarOT(otId) {
   if (!ot || ot.error) return;
   const FASE = { abierta: "abierta", en_proceso: "en proceso", cerrada: "cerrada" };
   const COMPRAS = { en_espera: "esperando a Compras", presupuestado: "presupuestada", en_camino: "con repuestos en camino", entregado: "con repuestos entregados" };
-  const coche = ot.n_interno ? `coche ${ot.n_interno}` : ot.patente;
+  const grupo = ot.grupo || [];
+  const coche = grupo.length > 1
+    ? `${grupo.length} coches: ${grupo.map(g => g.n_interno || g.patente).join(", ")}`
+    : (ot.n_interno ? `coche ${ot.n_interno}` : ot.patente);
   const fase = [FASE[ot.estado] || ot.estado, COMPRAS[ot.estado_compras]].filter(Boolean).join(", ");
-  const n = (ot.items || []).length;
-  const msg = `¿Eliminar la OT #${otId} (${coche}, ${fase})?\n\n`
-    + `Se borra completa: ${n} ítem${n === 1 ? "" : "s"}, fotos, el presupuesto y la entrega de Compras, `
+  const n = grupo.length > 1 ? grupo.reduce((s, g) => s + (g.items || 0), 0) : (ot.items || []).length;
+  const numero = ot.numero || otId;
+  const msg = `¿Eliminar la OT #${numero} (${coche}, ${fase})?\n\n`
+    + `Se borra completa: ${n} ítem${n === 1 ? "" : "s"}${grupo.length > 1 ? " de todos sus coches" : ""}, fotos, el presupuesto y la entrega de Compras, `
     + `y los correctivos que se cargaron solos desde esta OT.\n\nNo se puede deshacer.`;
   if (!confirm(msg)) return;
   const r = await api(`/api/ots/${otId}`, { method: "DELETE" });
   if (!r || !r.ok) return;   // sin permiso: el aviso ya lo muestra api()
-  toast(`OT #${otId} eliminada`, "success");
+  toast(`OT #${numero} eliminada`, "success");
   const modal = document.getElementById("modal-ot-detalle");
   if (modal) modal.remove();
   // Se refresca la pantalla en la que se está
@@ -9191,7 +9518,7 @@ async function abrirFirma(otId) {
             <input type="checkbox" class="firma-check" data-id="${it.id}" data-precio="${it.precio_compras || 0}"
                    ${it.estado_pago !== "espera" ? "checked" : ""} onchange="firmaRecalcular()">
             <span class="firma-item-info">
-              <span class="firma-item-desc">${it.descripcion}</span>
+              <span class="firma-item-desc">${(o.coches || []).length > 1 ? `<span class="firma-item-coche">${it.coche_n ? "Coche " + it.coche_n : it.coche_patente || ""}</span> ` : ""}${it.descripcion}</span>
               <span class="firma-item-mat">${it.material_pedido || "—"}</span>
             </span>
             <span class="firma-item-precio">${gs(it.precio_compras || 0)}</span>
@@ -9292,7 +9619,7 @@ async function renderColaEspera() {
           ${cola.items.map(i => `<tr>
             <td><input type="checkbox" class="cola-check" data-id="${i.id}" data-precio="${i.precio_compras || 0}" onchange="colaRecalcular()"></td>
             <td style="font-size:12.5px;white-space:nowrap">${(i.fecha_espera || "").slice(0,10)}</td>
-            <td><b>${i.n_interno ? "#" + i.n_interno : i.patente}</b><br><span style="font-size:11px;color:var(--muted)">OT #${i.ot_id}</span></td>
+            <td><b>${i.n_interno ? "#" + i.n_interno : i.patente}</b><br><span style="font-size:11px;color:var(--muted)">OT #${i.numero || i.ot_id}</span></td>
             <td style="font-size:13px">${i.descripcion}</td>
             <td style="font-size:12.5px;color:var(--muted)">${i.material_pedido || "—"}</td>
             <td class="num">${gs(i.precio_compras || 0)}</td>

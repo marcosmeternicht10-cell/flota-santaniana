@@ -6378,8 +6378,7 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .ot-items th, .ot-items td { padding-left: 10px; padding-right: 10px; }
 .ot-items .pv-it-desc { min-width: 230px; }
 .ot-items .pt-td { min-width: 150px; width: 200px; }
-.ot-items td.ot-mat { width: 170px; }
-.ot-items td.ot-mat input { width: 100%; min-width: 120px; height: 32px; border-radius: 8px !important; }
+.ot-items td.ot-mat { width: 290px; min-width: 250px; vertical-align: top; padding-top: 8px; padding-bottom: 8px; }
 @media (max-width: 640px) { .ot-items .pv-it-desc { min-width: 170px; } }
 
 /* ── OT: corregir el chofer desde el encabezado ── */
@@ -6669,3 +6668,71 @@ button.pv-ley { font: 500 12.5px "Inter", sans-serif; }
 .cbc-org { display: inline-block; margin-left: 4px; padding: 0 6px; border-radius: 5px; background: var(--surface2); color: var(--muted); font: 600 10.5px "Inter", sans-serif; vertical-align: 1px; }
 .cbc-org.sobre { background: var(--info-bg); color: var(--brand-blue); }
 .comb-parcial { display: inline-block; padding: 1px 8px; border-radius: 6px; background: var(--surface2); color: var(--muted); font: 600 11.5px "Inter", sans-serif; white-space: nowrap; cursor: help; }
+
+/* ─── OT con varios coches: pestañas, agregar y sacar ─── */
+.ot-coches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.ot-coches-lbl { font: 600 11px "Inter", sans-serif; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.ot-coche { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); font: 600 13px "Inter", sans-serif; color: var(--text); cursor: pointer; transition: background .15s, border-color .15s; }
+.ot-coche .ti { font-size: 15px; color: var(--muted); }
+.ot-coche small { font: 600 11px "Inter", sans-serif; color: var(--muted); padding: 1px 6px; border-radius: 6px; background: var(--surface3); }
+.ot-coche:hover { border-color: var(--brand-blue); background: var(--info-bg); }
+.ot-coche.on { border-color: var(--brand-blue); background: var(--brand-blue); color: #fff; cursor: default; }
+.ot-coche.on .ti { color: #fff; }
+.ot-coche.on small { background: rgba(255,255,255,.18); color: #fff; }
+.ot-coche-mas { display: inline-flex; align-items: center; gap: 5px; height: 34px; padding: 0 12px; border: 1px dashed var(--brand-blue); border-radius: 9px; background: none; font: 600 12.5px "Inter", sans-serif; color: var(--brand-blue); cursor: pointer; }
+.ot-coche-mas:hover { background: var(--info-bg); }
+.ot-coche-nuevo { margin: -4px 0 16px; padding: 14px 16px; border: 1px solid var(--info-bd); border-radius: var(--radius-sm); background: var(--info-bg); }
+.ot-coche-nuevo-tit { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; font: 700 13px "Inter", sans-serif; color: var(--brand-blue); }
+.ot-coche-nuevo textarea { width: 100%; resize: vertical; }
+.ot-coche-nuevo-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.ot-coche-quitar { display: inline-flex; align-items: center; gap: 4px; margin-top: 10px; color: var(--muted); }
+.ot-coche-quitar:hover { color: var(--danger); }
+.ot-ncoches { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 11px; background: var(--info-bg); color: var(--brand-blue); font: 700 12px "Inter", sans-serif; }
+.ot-ncoches.chico { height: 19px; padding: 0 7px; font-size: 11px; vertical-align: 1px; }
+
+/* Nueva OT: otro coche */
+.ot-nc { margin-top: 14px; padding: 12px 14px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface2); }
+.ot-nc-cab { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; font: 700 13px "Inter", sans-serif; color: var(--brand-blue); }
+.ot-nc-cab .icon-btn { margin-left: auto; }
+.ot-nc input:not(.bcoche-input) { padding: 10px 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); font: 14px "Inter", sans-serif; }
+.ot-nc-items { width: 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font: 13px "Inter", sans-serif; resize: vertical; }
+.ot-nc-mas { display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; margin-top: 14px; padding: 11px; border: 1.5px dashed var(--border-strong); border-radius: var(--radius-sm); background: none; font: 600 13px "Inter", sans-serif; color: var(--brand-blue); cursor: pointer; }
+.ot-nc-mas .ti-plus { font-size: 13px; margin-left: -4px; }
+.ot-nc-mas:hover { border-color: var(--brand-blue); background: var(--info-bg); }
+
+/* ─── Material de cada trabajo ─── */
+.ot-mats { display: flex; flex-direction: column; gap: 4px; }
+.ot-mat-fila { display: grid; grid-template-columns: 46px 1fr 26px; gap: 4px; align-items: center; }
+.ot-mat-fila input { height: 30px; min-width: 0; padding: 0 7px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); font: 500 12.5px "Inter", sans-serif; color: var(--text); transition: border-color .15s, background .3s; }
+.ot-mat-fila input:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.ot-mat-fila .ot-mat-q { text-align: center; font-weight: 700; }
+.ot-mat-fila input.ok { background: var(--success-bg); border-color: var(--success-bd); }
+.ot-mat-fila input.mal { border-color: var(--danger); }
+.ot-mat-x { width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--light); cursor: pointer; }
+.ot-mat-x:hover { background: var(--danger-bg); color: var(--danger); }
+.ot-mat-mas { align-self: flex-start; display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 8px; border: 0; border-radius: 6px; background: none; font: 600 12px "Inter", sans-serif; color: var(--brand-blue); cursor: pointer; }
+.ot-mat-mas:hover { background: var(--info-bg); }
+
+/* ─── Compras: material por renglón, coches y presupuesto por material ─── */
+.cmp-mat { font-size: 13px; line-height: 1.45; }
+.cmp-mat-q { display: inline-block; min-width: 22px; padding: 0 5px; margin-right: 3px; border-radius: 5px; background: var(--surface3); font-weight: 700; text-align: center; }
+tr.cmp-coche td { padding-top: 10px; padding-bottom: 6px; background: var(--info-bg); font: 700 12.5px "Inter", sans-serif; color: var(--brand-blue); }
+tr.cmp-coche td span { margin-left: 6px; font-weight: 500; color: var(--muted); }
+.pre-modal { background: #fff; border-radius: 16px; max-width: 900px; width: 100%; max-height: 90vh; overflow: auto; padding: 24px; }
+.pre-tabla td { vertical-align: middle; }
+.pre-tabla tr.pre-trab td { border-top: 1px solid var(--border-strong); }
+.pre-tabla tr.pre-mas td { border-top: 1px dashed var(--border); }
+.pre-desc { font-size: 13px; font-weight: 600; }
+.pre-tec { font-size: 11.5px; color: var(--muted); }
+.pre-in { width: 130px; padding: 8px; border: 1.5px solid var(--border); border-radius: 8px; text-align: right; font: 600 13px "Inter", sans-serif; }
+.pre-in:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+.pre-sub { white-space: nowrap; font-weight: 600; color: var(--muted); }
+.pre-total { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--info-bg); font: 600 13px "Inter", sans-serif; color: var(--brand-blue); }
+.pre-total b { font: 700 20px "Barlow Semi Condensed", sans-serif; }
+.firma-item-coche { display: inline-block; padding: 0 6px; margin-right: 2px; border-radius: 5px; background: var(--info-bg); color: var(--brand-blue); font-size: 11.5px; font-weight: 700; vertical-align: 1px; }
+@media (max-width: 640px) {
+  .ot-coche { height: 32px; padding: 0 10px; font-size: 12.5px; }
+  .ot-items td.ot-mat { min-width: 230px; }
+  .pre-modal { padding: 18px 14px; }
+  .pre-in { width: 104px; }
+}
