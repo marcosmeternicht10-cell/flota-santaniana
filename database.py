@@ -2011,18 +2011,26 @@ def estado_neumaticos_vehiculo(vehiculo_id):
 # ════════════════════════════════════════════════════════════════════════════
 
 def crear_ot(vehiculo_id, fecha_apertura, km=0, conductor="", procedencia="",
-             observaciones="", items=None):
+             observaciones="", items=None, ot_grupo=None):
     """
     Crea una OT con sus items.
     items: lista de dicts [{descripcion, tipo, costo}]
+    ot_grupo: si es un coche más de otra OT, el número de la OT principal.
     """
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO ordenes_trabajo
-            (vehiculo_id, fecha_apertura, km, conductor, procedencia, observaciones)
-        VALUES (?,?,?,?,?,?)
-    """, (vehiculo_id, fecha_apertura, km, conductor, procedencia, observaciones))
+    if ot_grupo:
+        cur.execute("""
+            INSERT INTO ordenes_trabajo
+                (vehiculo_id, fecha_apertura, km, conductor, procedencia, observaciones, ot_grupo)
+            VALUES (?,?,?,?,?,?,?)
+        """, (vehiculo_id, fecha_apertura, km, conductor, procedencia, observaciones, ot_grupo))
+    else:
+        cur.execute("""
+            INSERT INTO ordenes_trabajo
+                (vehiculo_id, fecha_apertura, km, conductor, procedencia, observaciones)
+            VALUES (?,?,?,?,?,?)
+        """, (vehiculo_id, fecha_apertura, km, conductor, procedencia, observaciones))
     ot_id = cur.lastrowid
 
     if items:
@@ -2051,9 +2059,23 @@ def obtener_ot(ot_id):
     items = conn.execute("""
         SELECT * FROM ot_items WHERE ot_id=? ORDER BY id
     """, (ot_id,)).fetchall()
-    conn.close()
     ot = dict(ot)
     ot["items"] = [dict(i) for i in items]
+    # Los materiales de cada trabajo y los otros coches de la OT
+    try:
+        import ot_materiales as om
+        mats = om.materiales_de_items(conn, [i["id"] for i in ot["items"]])
+        for i in ot["items"]:
+            i["materiales"] = mats.get(i["id"], [])
+        ids = om.ids_grupo(conn, ot_id)
+        ot["numero"] = ids[0] if ids else ot_id
+        ot["grupo"] = om.miembros(conn, ids)
+    except Exception:
+        for i in ot["items"]:
+            i.setdefault("materiales", [])
+        ot["numero"] = ot_id
+        ot["grupo"] = []
+    conn.close()
     # Quién hizo cada ítem (por número del personal de taller)
     try:
         import personal_taller
@@ -2107,7 +2129,11 @@ def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None):
     q += " ORDER BY o.fecha_apertura DESC, o.id DESC"
     rows = conn.execute(q, params).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    salida = [dict(r) for r in rows]
+    # El número que ve la gente: el de la OT principal si es un coche agregado
+    for o in salida:
+        o["numero"] = o.get("ot_grupo") or o["id"]
+    return salida
 
 
 def agregar_item_ot(ot_id, descripcion, tipo="control", costo=0, observaciones=""):
@@ -2191,26 +2217,52 @@ def eliminar_item_ot(item_id):
     conn = get_connection()
     # El correctivo que se generó solo al completar este ítem se va con él
     conn.execute("DELETE FROM correctivos WHERE observaciones LIKE ?", (f"%-item{int(item_id)}]%",))
+    try:
+        import ot_materiales
+        ot_materiales.borrar_de_items(conn, [int(item_id)])
+    except Exception:
+        pass
     conn.execute("DELETE FROM ot_items WHERE id=?", (item_id,))
     conn.commit()
     conn.close()
 
 
+# Lo que es de la OT entera (vale para todos sus coches). El km y el chofer
+# son de cada coche.
+CAMPOS_DE_TODA_LA_OT = ("estado", "fecha_cierre", "procedencia", "observaciones")
+
+
+def _ids_de_la_ot(conn, ot_id):
+    try:
+        import ot_materiales
+        return ot_materiales.ids_grupo(conn, ot_id) or [ot_id]
+    except Exception:
+        return [ot_id]
+
+
 def actualizar_ot(ot_id, **kwargs):
     if not kwargs:
         return
-    campos = ", ".join(f"{k}=?" for k in kwargs.keys())
-    valores = list(kwargs.values()) + [ot_id]
     conn = get_connection()
-    conn.execute(f"UPDATE ordenes_trabajo SET {campos} WHERE id=?", valores)
+    todos = {k: v for k, v in kwargs.items() if k in CAMPOS_DE_TODA_LA_OT}
+    propios = {k: v for k, v in kwargs.items() if k not in CAMPOS_DE_TODA_LA_OT}
+    ids = _ids_de_la_ot(conn, ot_id) if todos else [ot_id]
+    if todos:
+        campos = ", ".join(f"{k}=?" for k in todos.keys())
+        for i in ids:
+            conn.execute(f"UPDATE ordenes_trabajo SET {campos} WHERE id=?", list(todos.values()) + [i])
+    if propios:
+        campos = ", ".join(f"{k}=?" for k in propios.keys())
+        conn.execute(f"UPDATE ordenes_trabajo SET {campos} WHERE id=?", list(propios.values()) + [ot_id])
     conn.commit()
     conn.close()
     try:
         import plan_preventivo
-        if kwargs.get("estado") == "cerrada":
-            plan_preventivo.al_cerrar_ot(ot_id)
-        elif kwargs.get("estado") in ("abierta", "en_proceso"):
-            plan_preventivo.al_reabrir_ot(ot_id)
+        for i in ids:
+            if kwargs.get("estado") == "cerrada":
+                plan_preventivo.al_cerrar_ot(i)
+            elif kwargs.get("estado") in ("abierta", "en_proceso"):
+                plan_preventivo.al_reabrir_ot(i)
     except Exception:
         pass
 
@@ -2266,16 +2318,19 @@ def cerrar_ot(ot_id, fecha_cierre=None):
     from datetime import date
     fecha = fecha_cierre or hoy()
     conn = get_connection()
-    conn.execute("""UPDATE ordenes_trabajo
-        SET estado='cerrada', fecha_cierre=? WHERE id=?""", (fecha, ot_id))
-    # Borrar las fotos adjuntas: ya se resolvió, no ocupan más espacio
-    conn.execute("DELETE FROM ot_fotos WHERE ot_id=?", (ot_id,))
+    ids = _ids_de_la_ot(conn, ot_id)     # todos los coches de la OT
+    for i in ids:
+        conn.execute("""UPDATE ordenes_trabajo
+            SET estado='cerrada', fecha_cierre=? WHERE id=?""", (fecha, i))
+        # Borrar las fotos adjuntas: ya se resolvió, no ocupan más espacio
+        conn.execute("DELETE FROM ot_fotos WHERE ot_id=?", (i,))
     conn.commit()
     conn.close()
     # Si el coche había entrado por un turno del preventivo, queda cumplido
     try:
         import plan_preventivo
-        plan_preventivo.al_cerrar_ot(ot_id)
+        for i in ids:
+            plan_preventivo.al_cerrar_ot(i)
     except Exception:
         pass
 
@@ -2306,10 +2361,41 @@ def eliminar_ot(ot_id):
     except Exception:
         pass
     conn.execute("DELETE FROM correctivos WHERE observaciones LIKE ?", (f"%[OT#{ot_id}-item%",))
+    try:
+        conn.execute("DELETE FROM ot_materiales WHERE ot_id=?", (ot_id,))
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     conn.execute("DELETE FROM ot_items WHERE ot_id=?", (ot_id,))
+    # Si era la OT principal de varios coches, el siguiente pasa a serlo
+    # (si no, los demás coches quedarían colgando de una OT que no existe)
+    try:
+        hijos = [r["id"] for r in conn.execute(
+            "SELECT id FROM ordenes_trabajo WHERE ot_grupo=? ORDER BY id", (ot_id,)).fetchall()]
+        if hijos:
+            conn.execute("UPDATE ordenes_trabajo SET ot_grupo=NULL WHERE id=?", (hijos[0],))
+            for h in hijos[1:]:
+                conn.execute("UPDATE ordenes_trabajo SET ot_grupo=? WHERE id=?", (hijos[0], h))
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     conn.execute("DELETE FROM ordenes_trabajo WHERE id=?", (ot_id,))
     conn.commit()
     conn.close()
+
+
+def eliminar_ot_completa(ot_id):
+    """Borra la OT con todos sus coches."""
+    conn = get_connection()
+    ids = _ids_de_la_ot(conn, ot_id)
+    conn.close()
+    for i in reversed(ids):       # los agregados primero, la principal al final
+        eliminar_ot(i)
+    return ids
 
 
 # ─── Fotos adjuntas a las OTs (se borran al cerrar la OT) ───────────────────
@@ -3106,39 +3192,56 @@ def _oee_con_datos(vehiculo_id, desde, hasta, d):
 #  Presupuestado (PDF para Tesorería) → Compras entrega + foto → Entregado
 # ════════════════════════════════════════════════════════════════════════════
 
+# En Compras una OT de varios coches va junta: todo lo que cambia de estado
+# se aplica a todos sus coches.
+
+def _en_compras(conn, ot_id, sets, valores):
+    ids = _ids_de_la_ot(conn, ot_id)
+    for i in ids:
+        conn.execute(f"UPDATE ordenes_trabajo SET {sets} WHERE id=?", list(valores) + [i])
+    return ids
+
+
 def enviar_ot_a_compras(ot_id, nota=""):
     """El taller manda la OT a Compras. Queda 'en_espera'."""
-    from datetime import datetime
     conn = get_connection()
-    conn.execute("""UPDATE ordenes_trabajo
-        SET estado_compras='en_espera', fecha_envio_compras=?, nota_compras=?
-        WHERE id=?""", (ahora_iso(), nota, ot_id))
+    _en_compras(conn, ot_id, "estado_compras='en_espera', fecha_envio_compras=?, nota_compras=?",
+                (ahora_iso(), nota))
     conn.commit()
     conn.close()
 
 
-def guardar_presupuesto_compras(ot_id, precios_por_item):
-    """Compras carga el precio de cada item. precios_por_item = {item_id: precio}.
-    La OT pasa a 'presupuestado'."""
-    from datetime import datetime
+def guardar_presupuesto_compras(ot_id, precios_por_item, precios_materiales=None):
+    """Compras carga los precios: por unidad de cada material
+    (precios_materiales = {material_id: precio}) y, para el trabajo que no
+    tiene materiales anotados, el precio del trabajo (precios_por_item =
+    {item_id: precio}). La OT pasa a 'presupuestado'."""
     conn = get_connection()
-    for item_id, precio in precios_por_item.items():
-        conn.execute("UPDATE ot_items SET precio_compras=? WHERE id=? AND ot_id=?",
-                     (float(precio or 0), int(item_id), ot_id))
-    conn.execute("""UPDATE ordenes_trabajo
-        SET estado_compras='presupuestado', fecha_presupuesto=?
-        WHERE id=?""", (ahora_iso(), ot_id))
+    ids = _ids_de_la_ot(conn, ot_id)
+    marcas_ids = ",".join("?" * len(ids))
+    con_materiales = set()
+    try:
+        import ot_materiales
+        ot_materiales.precios_de_materiales(conn, ids, precios_materiales or {})
+        filas = conn.execute(f"SELECT DISTINCT item_id FROM ot_materiales WHERE ot_id IN ({marcas_ids})",
+                             ids).fetchall()
+        con_materiales = {r["item_id"] for r in filas}
+    except Exception:
+        pass
+    for item_id, precio in (precios_por_item or {}).items():
+        if int(item_id) in con_materiales:
+            continue          # su precio es la suma de sus materiales
+        conn.execute(f"UPDATE ot_items SET precio_compras=? WHERE id=? AND ot_id IN ({marcas_ids})",
+                     [float(precio or 0), int(item_id)] + ids)
+    _en_compras(conn, ot_id, "estado_compras='presupuestado', fecha_presupuesto=?", (ahora_iso(),))
     conn.commit()
     conn.close()
 
 
 def marcar_en_camino_compras(ot_id):
     """Compras marca que ya fue a buscar los repuestos. La OT pasa a 'en_camino'."""
-    from datetime import datetime
     conn = get_connection()
-    conn.execute("""UPDATE ordenes_trabajo
-        SET estado_compras='en_camino', fecha_en_camino=?
-        WHERE id=?""", (ahora_iso(), ot_id))
+    _en_compras(conn, ot_id, "estado_compras='en_camino', fecha_en_camino=?", (ahora_iso(),))
     conn.commit()
     conn.close()
 
@@ -3158,7 +3261,9 @@ def firmar_presupuesto(ot_id, ids_habilitados):
     ahora = ahora_iso()
     ids = set(int(i) for i in (ids_habilitados or []))
     conn = get_connection()
-    items = conn.execute("SELECT id FROM ot_items WHERE ot_id=?", (ot_id,)).fetchall()
+    ots = _ids_de_la_ot(conn, ot_id)
+    items = conn.execute(f"SELECT id FROM ot_items WHERE ot_id IN ({','.join('?' * len(ots))})",
+                         ots).fetchall()
     if not items:
         conn.close()
         return False, "La orden no tiene ítems."
@@ -3174,9 +3279,7 @@ def firmar_presupuesto(ot_id, ids_habilitados):
                     fecha_espera=COALESCE(fecha_espera, ?)
                 WHERE id=? AND estado_pago != 'habilitado'""", (ahora, it["id"]))
     if ids:
-        conn.execute("""UPDATE ordenes_trabajo
-            SET estado_compras='en_camino', fecha_en_camino=?
-            WHERE id=?""", (ahora, ot_id))
+        _en_compras(conn, ot_id, "estado_compras='en_camino', fecha_en_camino=?", (ahora,))
         msg = f"{len(ids)} ítem(s) habilitado(s), {len(items)-len(ids)} en espera."
     else:
         msg = "Ningún ítem habilitado: la orden completa quedó en espera de fondos."
@@ -3199,7 +3302,7 @@ def liberar_items(item_ids):
         conn.execute("""UPDATE ot_items
             SET estado_pago='habilitado', fecha_habilitado=?, fecha_espera=NULL
             WHERE id=?""", (ahora, int(iid)))
-    for ot_id in ots_tocadas:
+    for ot_id in {i for o in ots_tocadas for i in _ids_de_la_ot(conn, o)}:
         conn.execute("""UPDATE ordenes_trabajo
             SET estado_compras='en_camino', fecha_en_camino=?
             WHERE id=? AND estado_compras IN ('entregado','presupuestado','en_espera')""",
@@ -3216,7 +3319,7 @@ def cola_espera_fondos():
     rows = conn.execute("""
         SELECT i.id, i.descripcion, i.material_pedido, i.precio_compras,
                i.fecha_espera, i.tipo,
-               o.id AS ot_id, o.fecha_apertura, o.estado AS estado_ot,
+               o.id AS ot_id, COALESCE(o.ot_grupo, o.id) AS numero, o.fecha_apertura, o.estado AS estado_ot,
                v.patente, v.n_interno, v.marca, v.modelo
         FROM ot_items i
         JOIN ordenes_trabajo o ON o.id = i.ot_id
@@ -3243,10 +3346,11 @@ def resumen_pagos_ot(ot_id):
     """Cuánto de una OT está habilitado y cuánto espera — para mostrar el estado
     real de la orden (completa, parcial, o toda en espera)."""
     conn = get_connection()
-    rows = conn.execute("""
+    ots = _ids_de_la_ot(conn, ot_id)
+    rows = conn.execute(f"""
         SELECT estado_pago, COUNT(*) AS cant, COALESCE(SUM(precio_compras),0) AS monto
-        FROM ot_items WHERE ot_id=? GROUP BY estado_pago
-    """, (ot_id,)).fetchall()
+        FROM ot_items WHERE ot_id IN ({','.join('?' * len(ots))}) GROUP BY estado_pago
+    """, ots).fetchall()
     conn.close()
     r = {"habilitado": {"cant": 0, "monto": 0}, "espera": {"cant": 0, "monto": 0},
          "sin_presupuestar": {"cant": 0, "monto": 0}}
@@ -3270,11 +3374,8 @@ def registrar_entrega_compras(ot_id, foto_base64=None, nombre="entrega.jpg",
         conn.execute(
             "INSERT INTO compras_evidencia (ot_id, datos, nombre, fecha) VALUES (?,?,?,?)",
             (ot_id, foto_base64, nombre, ahora_iso()))
-    conn.execute("""UPDATE ordenes_trabajo
-        SET estado_compras='entregado', fecha_entrega=?,
-            taller_entrega=?, recibido_por=?
-        WHERE id=?""", (ahora_iso(),
-                        taller_entrega.strip(), recibido_por.strip(), ot_id))
+    _en_compras(conn, ot_id, "estado_compras='entregado', fecha_entrega=?, taller_entrega=?, recibido_por=?",
+                (ahora_iso(), taller_entrega.strip(), recibido_por.strip()))
     conn.commit()
     conn.close()
 
@@ -3304,7 +3405,9 @@ def obtener_evidencia_compras(ot_id):
 
 
 def obtener_ots_compras(estado_compras=None):
-    """Lista las OTs que están en el circuito de compras (para la pantalla de Compras)."""
+    """Lista las OTs que están en el circuito de compras (para la pantalla de
+    Compras). Una OT de varios coches sale una sola vez, con los trabajos de
+    todos sus coches (cada trabajo dice de qué coche es) y sus materiales."""
     conn = get_connection()
     sql = """
         SELECT o.*, v.patente, v.marca, v.modelo, v.n_interno
@@ -3318,11 +3421,40 @@ def obtener_ots_compras(estado_compras=None):
         params.append(estado_compras)
     sql += " ORDER BY o.fecha_envio_compras DESC"
     rows = conn.execute(sql, params).fetchall()
-    ots = []
+    try:
+        import ot_materiales as om
+    except Exception:
+        om = None
+    ots, vistas = [], set()
     for r in rows:
         d = dict(r)
-        items = conn.execute("SELECT * FROM ot_items WHERE ot_id=? ORDER BY id", (d["id"],)).fetchall()
-        d["items"] = [dict(i) for i in items]
+        ids = om.ids_grupo(conn, d["id"]) if om else [d["id"]]
+        if ids[0] in vistas:
+            continue
+        vistas.add(ids[0])
+        if ids[0] != d["id"]:
+            cab = conn.execute("""SELECT o.*, v.patente, v.marca, v.modelo, v.n_interno
+                                  FROM ordenes_trabajo o JOIN vehiculos v ON v.id = o.vehiculo_id
+                                  WHERE o.id=?""", (ids[0],)).fetchone()
+            if cab:
+                d = dict(cab)
+        d["numero"] = d["id"]
+        m = ",".join("?" * len(ids))
+        items = conn.execute(f"""
+            SELECT i.*, v.n_interno AS coche_n, v.patente AS coche_patente
+            FROM ot_items i JOIN ordenes_trabajo o ON o.id = i.ot_id
+            JOIN vehiculos v ON v.id = o.vehiculo_id
+            WHERE i.ot_id IN ({m}) ORDER BY i.ot_id, i.id
+        """, ids).fetchall()
+        orden = {oid: k for k, oid in enumerate(ids)}
+        d["items"] = sorted([dict(i) for i in items], key=lambda i: (orden.get(i["ot_id"], 99), i["id"]))
+        if om:
+            mats = om.materiales_de_items(conn, [i["id"] for i in d["items"]])
+            for i in d["items"]:
+                i["materiales"] = mats.get(i["id"], [])
+            d["coches"] = om.miembros(conn, ids)
+        else:
+            d["coches"] = []
         d["tiene_evidencia"] = conn.execute(
             "SELECT COUNT(*) c FROM compras_evidencia WHERE ot_id=?", (d["id"],)).fetchone()["c"] > 0
         # Estado presupuestario: cuánto habilitado vs. cuánto esperando fondos

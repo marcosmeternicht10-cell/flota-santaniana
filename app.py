@@ -88,6 +88,11 @@ from ot_inventario import bp_ot_inv, init_ot_inventario
 init_ot_inventario()
 app.register_blueprint(bp_ot_inv)
 
+# ─── Varios materiales por trabajo y OTs con varios coches ───────────────────
+from ot_materiales import bp_ot_mat, init_ot_materiales
+init_ot_materiales()
+app.register_blueprint(bp_ot_mat)
+
 # ─── Módulo de Carga de Historial Retroactivo ────────────────────────────────
 # El historial en papel de cada bus se tipea acá con fecha retroactiva.
 from historial_carga import bp_historial, init_historial_module
@@ -1212,7 +1217,12 @@ def api_ots():
     vid = request.args.get("vehiculo_id", type=int)
     desde = request.args.get("desde")
     hasta = request.args.get("hasta")
-    return jsonify(obtener_ots(estado=estado, vehiculo_id=vid, desde=desde, hasta=hasta))
+    ots = obtener_ots(estado=estado, vehiculo_id=vid, desde=desde, hasta=hasta)
+    if not vid:
+        # Una fila por OT: los coches agregados van en la fila de la principal
+        from ot_materiales import agrupar_lista
+        ots = agrupar_lista(ots)
+    return jsonify(ots)
 
 
 @app.route("/api/ots/<int:ot_id>", methods=["GET"])
@@ -1294,6 +1304,17 @@ def api_verificar_km_ot(ot_id):
 def api_crear_ot():
     d = request.json
     try:
+        # Los otros coches de la misma OT (cada uno con sus trabajos)
+        extra, vistos = [], {int(d["vehiculo_id"])}
+        for c in d.get("coches_extra") or []:
+            try:
+                vid = int(c.get("vehiculo_id"))
+            except (TypeError, ValueError):
+                continue
+            if vid in vistos:
+                return jsonify({"ok": False, "msg": "Hay un coche repetido en la OT."}), 400
+            vistos.add(vid)
+            extra.append((vid, float(c.get("km", 0) or 0), (c.get("conductor") or "").strip(), c.get("items") or []))
         ot_id = crear_ot(
             int(d["vehiculo_id"]), d["fecha_apertura"],
             km=float(d.get("km", 0) or 0),
@@ -1302,10 +1323,16 @@ def api_crear_ot():
             observaciones=d.get("observaciones", ""),
             items=d.get("items", [])
         )
-        n_items = len(d.get("items", []))
+        for vid, km, cond, its in extra:
+            crear_ot(vid, d["fecha_apertura"], km=km, conductor=cond,
+                     procedencia=d.get("procedencia", ""), observaciones=d.get("observaciones", ""),
+                     items=its, ot_grupo=ot_id)
+        n_items = len(d.get("items", [])) + sum(len(e[3]) for e in extra)
         auditar(f"Creó la OT #{ot_id}", "Órdenes de Trabajo",
-                f"Vehículo ID {d.get('vehiculo_id')}, {n_items} trabajo(s), km {d.get('km','?')}")
-        return jsonify({"ok": True, "ot_id": ot_id})
+                f"Vehículo ID {d.get('vehiculo_id')}"
+                + (f" y {len(extra)} coche(s) más" if extra else "")
+                + f", {n_items} trabajo(s), km {d.get('km','?')}")
+        return jsonify({"ok": True, "ot_id": ot_id, "coches": 1 + len(extra)})
     except (KeyError, ValueError) as e:
         return jsonify({"ok": False, "msg": str(e)}), 400
 
@@ -1477,13 +1504,19 @@ def api_eliminar_ot(ot_id):
     ot = obtener_ot(ot_id)
     if not ot:
         return jsonify({"ok": False, "error": "Esa OT ya no existe"}), 404
-    eliminar_ot(ot_id)
+    # Se borra la OT entera, con todos sus coches
+    from database import eliminar_ot_completa
+    grupo = ot.get("grupo") or []
+    eliminar_ot_completa(ot_id)
     fase = ot.get("estado") or ""
     if ot.get("estado_compras"):
         fase += f" · compras: {ot['estado_compras']}"
-    auditar(f"Eliminó la OT #{ot_id}", "Órdenes de Trabajo",
-            f"Coche {ot.get('n_interno') or ''} {ot.get('patente') or ''} · {ot.get('fecha_apertura') or ''}"
-            f" · {len(ot.get('items') or [])} ítem(s) · {fase}")
+    coches = ", ".join(str(g.get("n_interno") or g.get("patente") or "") for g in grupo) \
+        or f"{ot.get('n_interno') or ''} {ot.get('patente') or ''}"
+    n_items = sum(int(g.get("items") or 0) for g in grupo) if grupo else len(ot.get("items") or [])
+    auditar(f"Eliminó la OT #{ot.get('numero') or ot_id}", "Órdenes de Trabajo",
+            f"Coche{'s' if len(grupo) > 1 else ''} {coches} · {ot.get('fecha_apertura') or ''}"
+            f" · {n_items} ítem(s) · {fase}")
     return jsonify({"ok": True})
 
 
@@ -1636,10 +1669,14 @@ def api_ot_pdf(ot_id):
     ot = obtener_ot(ot_id)
     if not ot:
         return jsonify({"ok": False, "msg": "OT no encontrada"}), 404
+    # Con varios coches sale la OT entera: un bloque por coche
+    numero = ot.get("numero") or ot_id
+    coches = [obtener_ot(g["id"]) for g in (ot.get("grupo") or [])] or [ot]
+    coches = [c for c in coches if c]
     os.makedirs("reportes", exist_ok=True)
-    ruta = f"reportes/OT_{ot_id}.pdf"
-    generar_ot_pdf(ot, ruta)
-    return send_file(ruta, as_attachment=True, download_name=f"OT_{ot_id}.pdf")
+    ruta = f"reportes/OT_{numero}.pdf"
+    generar_ot_pdf(coches[0], ruta, coches=coches)
+    return send_file(ruta, as_attachment=True, download_name=f"OT_{numero}.pdf")
 
 
 @app.route("/api/reporte_trabajos_pdf", methods=["GET"])
@@ -1846,14 +1883,24 @@ def api_compras_ots():
 def api_compras_presupuesto(ot_id):
     """Compras carga el precio de cada item. La OT pasa a presupuestado."""
     d = request.json or {}
-    precios = d.get("precios", {})  # {item_id: precio}
-    if not precios:
+    precios = d.get("precios") or {}            # {item_id: precio} (trabajos sin materiales)
+    materiales = d.get("materiales") or {}      # {material_id: precio por unidad}
+    if not precios and not materiales:
         return jsonify({"ok": False, "msg": "Cargá al menos un precio"}), 400
-    guardar_presupuesto_compras(ot_id, precios)
-    total = sum(float(v or 0) for v in precios.values())
-    auditar(f"Presupuestó la OT #{ot_id}", "Compras",
-            f"{len(precios)} item(s), total Gs. {int(total):,}".replace(",", "."))
-    return jsonify({"ok": True})
+    guardar_presupuesto_compras(ot_id, precios, materiales)
+    ot = obtener_ot(ot_id) or {}
+    try:
+        from ot_materiales import grupo_ids
+        ids = grupo_ids(ot_id)
+    except Exception:
+        ids = [ot_id]
+    total = 0
+    for i in ids:
+        o = obtener_ot(i) or {}
+        total += sum(float(it.get("precio_compras") or 0) for it in o.get("items") or [])
+    auditar(f"Presupuestó la OT #{ot.get('numero') or ot_id}", "Compras",
+            f"{len(precios) + len(materiales)} precio(s), total Gs. {int(total):,}".replace(",", "."))
+    return jsonify({"ok": True, "total": round(total)})
 
 
 @app.route("/api/compras/<int:ot_id>/firmar", methods=["POST"])
@@ -1941,15 +1988,17 @@ def api_compras_evidencia(ot_id):
 @app.route("/api/compras/<int:ot_id>/presupuesto_pdf", methods=["GET"])
 @compras_requerido
 def api_compras_presupuesto_pdf(ot_id):
-    """Genera el PDF del presupuesto con firma del Director (para Tesorería)."""
+    """El pedido de fondos para Tesorería: por coche y por trabajo, cada
+    material con cantidad y precio, el total en números y en letras, y las
+    firmas de quien pide, quien autoriza y Tesorería."""
     ot = obtener_ot(ot_id)
     if not ot:
         return jsonify({"ok": False, "msg": "OT no encontrada"}), 404
-    os.makedirs("reportes", exist_ok=True)
-    ruta = f"reportes/Presupuesto_OT_{ot_id}.pdf"
-    from pdf_export import generar_presupuesto_compras_pdf
-    generar_presupuesto_compras_pdf(ot, ruta)
-    return send_file(ruta, as_attachment=True, download_name=f"Presupuesto_OT_{ot_id}.pdf")
+    from tesoreria_pdf import datos_pedido, pdf_pedido_fondos
+    d = datos_pedido(ot_id, session.get("nombre") or session.get("usuario") or "")
+    buf = pdf_pedido_fondos(d)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"Tesoreria_OT_{d['numero']}.pdf")
 
 
 # ─── API: Turismo (presupuestos) ───────────────────────────────────────────────

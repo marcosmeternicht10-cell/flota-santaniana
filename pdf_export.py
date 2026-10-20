@@ -690,12 +690,29 @@ def _logo_path():
     return None
 
 
-def generar_ot_pdf(ot, ruta_salida):
+def _esc_pdf(t):
+    return str(t or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _cant_pdf(q):
+    try:
+        q = float(q or 0)
+    except (TypeError, ValueError):
+        return "1"
+    return str(int(q)) if q == int(q) else f"{q:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+def generar_ot_pdf(ot, ruta_salida, coches=None):
     """
     Genera un PDF formal de UNA orden de trabajo, lista para imprimir.
     Es adaptable: muestra todos los items que tenga la OT (preventivos,
-    correctivos, neumáticos, etc.), con su técnico, estado y costo.
+    correctivos, neumáticos, etc.), con su técnico, estado, costo y el
+    material de cada trabajo. Si la OT abarca varios coches (coches = la
+    lista de cada coche con sus ítems), sale un bloque por coche.
     """
+    coches = coches or [ot]
+    varios = len(coches) > 1
+    numero = ot.get("numero") or ot["id"]
     doc = SimpleDocTemplate(ruta_salida, pagesize=A4,
                             topMargin=15*mm, bottomMargin=15*mm,
                             leftMargin=16*mm, rightMargin=16*mm)
@@ -713,14 +730,22 @@ def generar_ot_pdf(ot, ruta_salida):
 
     story = []
 
+    def nombre_coche(o):
+        return f"Coche {o.get('n_interno')}" if o.get("n_interno") else o.get("patente", "")
+
     # ── Encabezado: logo + título ──
     logo = _logo_path()
-    coche = f"Coche {ot.get('n_interno')}" if ot.get("n_interno") else ot.get("patente", "")
+    coche = nombre_coche(ot)
+    if varios:
+        linea_sub = (f"OT N° {numero} &nbsp;·&nbsp; {len(coches)} coches: "
+                     + ", ".join(nombre_coche(o).replace("Coche ", "") for o in coches))
+    else:
+        linea_sub = f"OT N° {numero} &nbsp;·&nbsp; {coche} &nbsp;·&nbsp; {ot.get('patente','')}"
     encabezado_txt = [
         Paragraph("<b>LA SANTANIANA</b>", ParagraphStyle("Emp", parent=normal,
             fontSize=13, textColor=colors.HexColor(ROJO))),
         Paragraph("Orden de Trabajo", titulo),
-        Paragraph(f"OT N° {ot['id']} &nbsp;·&nbsp; {coche} &nbsp;·&nbsp; {ot.get('patente','')}", sub),
+        Paragraph(linea_sub, sub),
     ]
     if logo:
         try:
@@ -743,78 +768,93 @@ def generar_ot_pdf(ot, ruta_salida):
     story.append(linea)
     story.append(Spacer(1, 4*mm))
 
-    # ── Datos de la OT (ficha) ──
-    veh = f"{ot.get('marca','')} {ot.get('modelo','')}".strip()
-    estado_ot = LABEL_ESTADO_OT.get(ot.get("estado",""), ot.get("estado",""))
-    datos = [
-        [Paragraph("<b>Vehículo</b>", small), Paragraph(f"{coche} — {ot.get('patente','')}", small),
-         Paragraph("<b>Estado</b>", small), Paragraph(estado_ot, small)],
-        [Paragraph("<b>Marca/Modelo</b>", small), Paragraph(veh or "—", small),
-         Paragraph("<b>Fecha apertura</b>", small), Paragraph(ot.get("fecha_apertura","—"), small)],
-        [Paragraph("<b>Kilómetros</b>", small), Paragraph(f"{int(ot.get('km',0) or 0):,}".replace(",","."), small),
-         Paragraph("<b>Fecha cierre</b>", small), Paragraph(ot.get("fecha_cierre") or "—", small)],
-        [Paragraph("<b>Conductor</b>", small), Paragraph(ot.get("conductor") or "—", small),
-         Paragraph("<b>Procedencia</b>", small), Paragraph(ot.get("procedencia") or "—", small)],
-    ]
-    tabla_datos = Table(datos, colWidths=[30*mm, 54*mm, 30*mm, 54*mm])
-    tabla_datos.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (0,-1), colors.HexColor(GRIS_CLARO)),
-        ("BACKGROUND", (2,0), (2,-1), colors.HexColor(GRIS_CLARO)),
-        ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#D9E2EE")),
-        ("INNERGRID", (0,0), (-1,-1), 0.25, colors.HexColor("#D9E2EE")),
-        ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
-        ("LEFTPADDING", (0,0), (-1,-1), 6), ("RIGHTPADDING", (0,0), (-1,-1), 6),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-    ]))
-    story.append(tabla_datos)
-
-    # ── Items / trabajos (lo adaptable) ──
-    story.append(Paragraph("Trabajos a realizar / realizados", seccion))
-    items = ot.get("items", [])
-    if items:
-        filas = [[
-            Paragraph("<b>#</b>", small),
-            Paragraph("<b>Descripción</b>", small),
-            Paragraph("<b>Tipo</b>", small),
-            Paragraph("<b>Estado</b>", small),
-            Paragraph("<b>Técnico</b>", small),
-            Paragraph("<b>Costo</b>", small),
-        ]]
-        total = 0
-        for i, it in enumerate(items, 1):
-            total += (it.get("costo") or 0)
-            filas.append([
-                Paragraph(str(i), small),
-                Paragraph(it.get("descripcion",""), small),
-                Paragraph(LABEL_TIPO_OT.get(it.get("tipo",""), it.get("tipo","")), small),
-                Paragraph(LABEL_ESTADO_ITEM.get(it.get("estado",""), it.get("estado","")), small),
-                Paragraph(it.get("tecnico") or "—", small),
-                Paragraph(gs(it.get("costo")), small),
-            ])
-        # Fila total
-        filas.append([
-            Paragraph("", small), Paragraph("", small), Paragraph("", small),
-            Paragraph("", small), Paragraph("<b>TOTAL</b>", small),
-            Paragraph(f"<b>{gs(total)}</b>", small),
-        ])
-        tabla_items = Table(filas, colWidths=[8*mm, 64*mm, 24*mm, 22*mm, 26*mm, 24*mm])
-        tabla_items.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,0), colors.HexColor(AZUL)),
-            ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-            ("ALIGN", (5,0), (5,-1), "RIGHT"),
-            ("ALIGN", (0,0), (0,-1), "CENTER"),
-            ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#E8EEF7")),
-            ("TEXTCOLOR", (0,-1), (-1,-1), colors.HexColor(AZUL)),
+    for n_coche, oc in enumerate(coches):
+        coche = nombre_coche(oc)
+        if varios:
+            story.append(Paragraph(f"{coche} — {oc.get('patente','')}", seccion))
+        # ── Datos de la OT (ficha) ──
+        veh = f"{oc.get('marca','')} {oc.get('modelo','')}".strip()
+        estado_ot = LABEL_ESTADO_OT.get(oc.get("estado",""), oc.get("estado",""))
+        datos = [
+            [Paragraph("<b>Vehículo</b>", small), Paragraph(f"{coche} — {oc.get('patente','')}", small),
+             Paragraph("<b>Estado</b>", small), Paragraph(estado_ot, small)],
+            [Paragraph("<b>Marca/Modelo</b>", small), Paragraph(veh or "—", small),
+             Paragraph("<b>Fecha apertura</b>", small), Paragraph(oc.get("fecha_apertura","—"), small)],
+            [Paragraph("<b>Kilómetros</b>", small), Paragraph(f"{int(oc.get('km',0) or 0):,}".replace(",","."), small),
+             Paragraph("<b>Fecha cierre</b>", small), Paragraph(oc.get("fecha_cierre") or "—", small)],
+            [Paragraph("<b>Conductor</b>", small), Paragraph(oc.get("conductor") or "—", small),
+             Paragraph("<b>Procedencia</b>", small), Paragraph(oc.get("procedencia") or "—", small)],
+        ]
+        tabla_datos = Table(datos, colWidths=[30*mm, 54*mm, 30*mm, 54*mm])
+        tabla_datos.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (0,-1), colors.HexColor(GRIS_CLARO)),
+            ("BACKGROUND", (2,0), (2,-1), colors.HexColor(GRIS_CLARO)),
             ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#D9E2EE")),
             ("INNERGRID", (0,0), (-1,-1), 0.25, colors.HexColor("#D9E2EE")),
-            ("ROWBACKGROUNDS", (0,1), (-2,-1), [colors.white, colors.HexColor("#FAFBFD")]),
-            ("TOPPADDING", (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
-            ("LEFTPADDING", (0,0), (-1,-1), 5), ("RIGHTPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING", (0,0), (-1,-1), 5), ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("LEFTPADDING", (0,0), (-1,-1), 6), ("RIGHTPADDING", (0,0), (-1,-1), 6),
             ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
         ]))
-        story.append(tabla_items)
-    else:
-        story.append(Paragraph("<i>Esta orden no tiene trabajos cargados.</i>", small))
+        story.append(tabla_datos)
+
+        # ── Items / trabajos (lo adaptable) ──
+        if varios:
+            story.append(Spacer(1, 3*mm))
+        else:
+            story.append(Paragraph("Trabajos a realizar / realizados", seccion))
+        items = oc.get("items", [])
+        if items:
+            filas = [[
+                Paragraph("<b>#</b>", small),
+                Paragraph("<b>Descripción</b>", small),
+                Paragraph("<b>Tipo</b>", small),
+                Paragraph("<b>Estado</b>", small),
+                Paragraph("<b>Técnico</b>", small),
+                Paragraph("<b>Costo</b>", small),
+            ]]
+            total = 0
+            for i, it in enumerate(items, 1):
+                total += (it.get("costo") or 0)
+                desc = _esc_pdf(it.get("descripcion",""))
+                mats = it.get("materiales") or []
+                if mats:
+                    desc += "<br/><font size='7.5' color='#5B6B7F'>Material: " + _esc_pdf(" · ".join(
+                        (m["descripcion"] if float(m.get("cantidad") or 1) == 1
+                         else f"{_cant_pdf(m.get('cantidad'))} × {m['descripcion']}") for m in mats)) + "</font>"
+                elif it.get("material_pedido"):
+                    desc += f"<br/><font size='7.5' color='#5B6B7F'>Material: {_esc_pdf(it['material_pedido'])}</font>"
+                filas.append([
+                    Paragraph(str(i), small),
+                    Paragraph(desc, small),
+                    Paragraph(LABEL_TIPO_OT.get(it.get("tipo",""), it.get("tipo","")), small),
+                    Paragraph(LABEL_ESTADO_ITEM.get(it.get("estado",""), it.get("estado","")), small),
+                    Paragraph(it.get("tecnico") or "—", small),
+                    Paragraph(gs(it.get("costo")), small),
+                ])
+            # Fila total
+            filas.append([
+                Paragraph("", small), Paragraph("", small), Paragraph("", small),
+                Paragraph("", small), Paragraph("<b>TOTAL</b>", small),
+                Paragraph(f"<b>{gs(total)}</b>", small),
+            ])
+            tabla_items = Table(filas, colWidths=[8*mm, 64*mm, 24*mm, 22*mm, 26*mm, 24*mm])
+            tabla_items.setStyle(TableStyle([
+                ("BACKGROUND", (0,0), (-1,0), colors.HexColor(AZUL)),
+                ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+                ("ALIGN", (5,0), (5,-1), "RIGHT"),
+                ("ALIGN", (0,0), (0,-1), "CENTER"),
+                ("BACKGROUND", (0,-1), (-1,-1), colors.HexColor("#E8EEF7")),
+                ("TEXTCOLOR", (0,-1), (-1,-1), colors.HexColor(AZUL)),
+                ("BOX", (0,0), (-1,-1), 0.5, colors.HexColor("#D9E2EE")),
+                ("INNERGRID", (0,0), (-1,-1), 0.25, colors.HexColor("#D9E2EE")),
+                ("ROWBACKGROUNDS", (0,1), (-2,-1), [colors.white, colors.HexColor("#FAFBFD")]),
+                ("TOPPADDING", (0,0), (-1,-1), 4), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+                ("LEFTPADDING", (0,0), (-1,-1), 5), ("RIGHTPADDING", (0,0), (-1,-1), 5),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ]))
+            story.append(tabla_items)
+        else:
+            story.append(Paragraph("<i>Esta orden no tiene trabajos cargados.</i>", small))
 
     # ── Observaciones ──
     if ot.get("observaciones"):
@@ -926,7 +966,7 @@ def generar_reporte_periodo_pdf(ots, desde, hasta, ruta_salida):
             trabajos = f"{o.get('items_completados',0)}/{o.get('total_items',0)} completados"
             estado = LABEL_ESTADO_OT.get(o.get("estado",""), o.get("estado",""))
             filas.append([
-                Paragraph(f"#{o['id']}", small),
+                Paragraph(f"#{o.get('numero') or o['id']}", small),
                 Paragraph(o.get("fecha_apertura","—"), small),
                 Paragraph(f"{coche}<br/><font size='7' color='#888'>{o.get('patente','')}</font>", small),
                 Paragraph(trabajos, small),
