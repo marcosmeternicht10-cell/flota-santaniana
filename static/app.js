@@ -17990,11 +17990,11 @@ function caTablero() {
       <div class="tr-tab-estado">${chip}${sub ? `<small>${sub}</small>` : ""}</div>
       <div class="tr-tab-acciones">
         ${dia.version ? `<button class="tr-tab-btn" onclick="caVersiones()" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
-        ${hayAlgo ? `<button class="tr-tab-btn" onclick="caVerPdf(${pendiente ? "null" : dia.version})" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
-          <button class="tr-tab-btn" onclick="caDescargar(${pendiente ? "null" : dia.version}, this)" title="Descargar la hoja como imagen"><i class="ti ti-photo-down"></i><span>Imagen</span></button>` : ""}
+        ${hayAlgo ? `<button class="tr-tab-btn" onclick="caMenuArchivo(this, 'pdf')" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}: una hoja por empresa"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
+          <button class="tr-tab-btn" onclick="caMenuArchivo(this, 'imagen')" title="Descargar la hoja de una empresa como imagen"><i class="ti ti-photo-down"></i><span>Imagen</span></button>` : ""}
         ${puede ? `<button class="tr-tab-btn" onclick="caMas(this)" title="Copiar de otro día, vaciar"><i class="ti ti-dots"></i></button>` : ""}
         ${puede && pendiente ? `<button class="tr-publicar" onclick="caPublicar(this)"><i class="ti ti-send"></i> Publicar versión ${(dia.version || 0) + 1}</button>`
-          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onpointerenter="caTraer(${dia.version})" onclick="caCompartir(${dia.version}, this)"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
+          : hayAlgo && dia.version ? `<button class="tr-publicar compartir" onclick="caMenuArchivo(this, 'compartir')"><i class="ti ti-brand-whatsapp"></i> Compartir</button>` : ""}
       </div>
       <div class="tr-tab-dias">${dias.join("")}</div>
     </div>`;
@@ -18093,7 +18093,12 @@ function caCliente(c) {
       <div class="ca-cli-cab">
         <h3>${caEsc(c.cliente)}</h3>
         <span class="ca-cli-cuenta ${listos === vis.length && vis.length ? "ok" : ""}">${listos} de ${vis.length} listo${vis.length === 1 ? "" : "s"}${c.variables.length ? ` · ${c.variables.length} variable${c.variables.length === 1 ? "" : "s"}` : ""}</span>
-        ${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNuevaVariable('${caEsc(c.cliente)}')"><i class="ti ti-plus"></i> Variable</button>` : ""}
+        <span class="ca-cli-arch">
+          ${vis.length || c.variables.length ? `
+            <button class="btn btn-ghost btn-sm" onclick="caVerPdf(caVersionArchivo(), '${caEsc(c.cliente)}')" title="La hoja de ${caEsc(c.cliente)}"><i class="ti ti-file-type-pdf"></i> PDF</button>
+            <button class="btn btn-ghost btn-sm" ${caVersionPublicada() ? `onpointerenter="caTraer(caVersionArchivo(), 'imagen', '${caEsc(c.cliente)}')"` : ""} onclick="${caVersionPublicada() ? `caCompartir(caVersionArchivo(), this, '${caEsc(c.cliente)}')` : `caDescargar(caVersionArchivo(), this, '${caEsc(c.cliente)}')`}" title="${caVersionPublicada() ? "Mandar la hoja de " + caEsc(c.cliente) + " al grupo" : "Descargar la hoja de " + caEsc(c.cliente) + " como imagen"}"><i class="ti ti-${caVersionPublicada() ? "brand-whatsapp" : "photo-down"}"></i></button>` : ""}
+          ${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNuevaVariable('${caEsc(c.cliente)}')"><i class="ti ti-plus"></i> Variable</button>` : ""}
+        </span>
       </div>
       <div class="ca-filas">
         ${vis.map(t => caFila(t)).join("")}
@@ -18114,6 +18119,20 @@ function caClaseControl(t) {
   return est.some(e => ["otro_coche", "parcial", "otro_chofer", "sin_rendir", "corrio"].includes(e)) ? "dif" : "";
 }
 
+// Cada tramo se ve con la ENTRADA y la SALIDA por separado: muchas veces el
+// entrante lo hace un chofer y el saliente otro. Si es el mismo en las dos,
+// el servidor lo guarda como tramo completo (así lo compara con lo rendido).
+const CA_MITAD = { entrante: "Entrada", saliente: "Salida" };
+function caMitades(t) {
+  if (t.modo === "dividido") {
+    const por = Object.fromEntries((t.slots || []).map(s => [s.lado, s]));
+    return ["entrante", "saliente"].map(l => por[l] || { lado: l, chofer_usuario: "", chofer_nombre: "", coche: "" });
+  }
+  const s = (t.slots || [])[0] || {};
+  return ["entrante", "saliente"].map((l, i) => ({ ...s, lado: l, junto: true, control: i === 0 ? s.control : null }));
+}
+function caHoraMitad(t, lado) { return lado === "saliente" ? (t.hora_fin || t.hora || "") : (t.hora || ""); }
+
 function caFila(t) {
   const horas = t.hora ? `<b>${t.hora}</b>${t.hora_fin ? `<small>a ${t.hora_fin}</small>` : ""}` : `<b class="sin">--:--</b>`;
   const clases = ["ca-fila", `e-${t.estado}`, t.modo === "dividido" ? "dividido" : "", caClaseControl(t)].join(" ");
@@ -18125,9 +18144,9 @@ function caFila(t) {
         <b title="${caEsc(t.tramo)}">${caEsc(t.corto)}</b>
         ${!t.esperado ? `<span class="ca-tag">no suele correr este día</span>` : ""}
       </div>
-      <div class="ca-slots">${t.slots.map(s => caSlot(t, s)).join("")}</div>
+      <div class="ca-slots mitades">${caMitades(t).map(s => caSlot(t, s)).join("")}</div>
       <div class="ca-acc">
-        ${puede ? `<button class="icon-btn" title="Dividir, no corre" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
+        ${puede ? `<button class="icon-btn" title="No corre, igualar la salida" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
       </div>
     </div>`;
 }
@@ -18135,10 +18154,11 @@ function caFila(t) {
 function caSlot(t, s) {
   const k = caClave(t.cliente, t.tramo, s.lado);
   const puede = caPuede();
-  const lado = s.lado === "completo" ? "" : `<span class="ca-lado ${s.lado}">${s.lado === "entrante" ? "ENT" : "SAL"}</span>`;
+  const hora = caHoraMitad(t, s.lado);
+  const lado = s.lado === "completo" ? "" : `<span class="ca-lado ${s.lado}"><small>${CA_MITAD[s.lado]}</small><b>${hora || "--:--"}</b></span>`;
   const ctl = s.control ? CA_CONTROL[s.control.estado] : null;
   return `
-    <div class="ca-slot">
+    <div class="ca-slot ${s.lado}">
       ${lado}
       ${puede ? `
         <button class="ca-chofer ${s.chofer_usuario ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="chofer"
@@ -18260,7 +18280,7 @@ function caOcupaciones() {
   for (const c of ca.d.clientes) {
     for (const t of c.tramos) for (const s of t.slots) {
       if (!s.chofer_usuario) continue;
-      (out[s.chofer_usuario] = out[s.chofer_usuario] || []).push({ k: caClave(t.cliente, t.tramo, s.lado), txt: `${t.corto}${s.lado !== "completo" ? ` (${s.lado})` : ""} ${t.hora || ""}`.trim(), cliente: t.cliente, rango: s.rango });
+      (out[s.chofer_usuario] = out[s.chofer_usuario] || []).push({ k: caClave(t.cliente, t.tramo, s.lado), txt: `${t.corto} ${s.lado === "completo" ? `${t.hora || ""}${t.hora_fin ? "–" + t.hora_fin : ""}` : `${CA_MITAD[s.lado].toLowerCase()} ${caHoraMitad(t, s.lado)}`}`.trim(), cliente: t.cliente, rango: s.rango });
     }
     for (const s of c.variables) {
       if (!s.chofer_usuario) continue;
@@ -18273,7 +18293,7 @@ function caRangoDe(cliente, tramo, lado) {
   const c = ca.d.clientes.find(x => x.cliente === cliente);
   const t = c && c.tramos.find(x => x.tramo === tramo);
   if (!t) return null;
-  const s = t.slots.find(x => x.lado === lado) || t.slots[0];
+  const s = t.slots.find(x => x.lado === lado);
   if (s && s.rango) return s.rango;
   // Sin asignar todavía: se calcula como lo hace el servidor
   if (t.ini == null) return null;
@@ -18288,10 +18308,10 @@ function caElegirChofer(btn, lado) {
   const k = caClave(cliente, tramo, lado);
   const c = ca.d.clientes.find(x => x.cliente === cliente);
   const t = c && c.tramos.find(x => x.tramo === tramo);
-  const s = t && t.slots.find(x => x.lado === lado);
+  const s = t && caMitades(t).find(x => x.lado === lado);
   caPicker(btn, {
     actual: s && s.chofer_usuario, k, rango: caRangoDe(cliente, tramo, lado),
-    titulo: `${cliente} · ${t ? t.corto : tramo}${lado !== "completo" ? ` (${lado})` : ""}`,
+    titulo: `${cliente} · ${t ? t.corto : tramo}${CA_MITAD[lado] ? ` · ${CA_MITAD[lado].toLowerCase()} ${t ? caHoraMitad(t, lado) : ""}` : ""}`,
     elegir: u => {
       const ch = ca.listas.choferes.find(x => x.usuario === u);
       ca.foco = { k, campo: "coche" };
@@ -18378,14 +18398,13 @@ function caPicker(btn, o) {
 function caMasTramo(btn) {
   const { cliente, tramo, modo } = caFilaDe(btn);
   const items = [];
-  if (modo === "dividido") items.push({ icono: "arrows-join", html: "<b>Unir</b><span>Un solo chofer hace entrante y saliente</span>", fn: () => caDividir(cliente, tramo, true) });
-  else items.push({ icono: "arrows-split", html: "<b>Dividir</b><span>El entrante lo hace uno y el saliente otro</span>", fn: () => caDividir(cliente, tramo, false) });
+  if (modo === "dividido") items.push({ icono: "arrows-join", html: "<b>La salida igual que la entrada</b><span>El mismo chofer y coche hacen las dos</span>", fn: () => caDividir(cliente, tramo, true) });
   items.push({ icono: "player-pause", html: "<b>No corre este día</b><span>No cuenta como faltante</span>", fn: () => caNoCorre(cliente, tramo, true) });
   trMenu(btn, items);
 }
 async function caDividir(cliente, tramo, unir) {
   const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/dividir`, { cliente, tramo, unir });
-  caAplicar(r, unir ? "Tramo unido" : "Tramo dividido: entrante y saliente");
+  caAplicar(r, unir ? "La salida quedó igual que la entrada" : "Entrada y salida separadas");
 }
 function caNoCorreBtn(btn, marcar) { const { cliente, tramo } = caFilaDe(btn); caNoCorre(cliente, tramo, marcar); }
 async function caNoCorre(cliente, tramo, marcar) {
@@ -18478,37 +18497,77 @@ async function caPublicar(btn) {
 }
 
 // ─── PDF, imagen, compartir, versiones ───
-function caVerPdf(v) { window.open(`/api/corp/asig/dia/${ca.fecha}/pdf${v ? `?v=${v}` : ""}`, "_blank"); }
-async function caTraer(v, tipo = "imagen") {
-  const clave = `${ca.fecha}|${tipo}|${v || "borrador"}`;
+// Una hoja por empresa: cada una va a su grupo.
+function caVersionPublicada() {
+  const dia = (ca.d && ca.d.dia) || {};
+  return !!(dia.version && !dia.modificado);
+}
+// Con cambios sin publicar se ve el borrador; si no, la última versión
+function caVersionArchivo() {
+  const dia = (ca.d && ca.d.dia) || {};
+  return dia.version && !dia.modificado ? dia.version : null;
+}
+function caEmpresasConAlgo() {
+  return ((ca.d && ca.d.clientes) || []).filter(c => c.tramos.some(t => t.estado !== "no_corre") || c.variables.length);
+}
+function caMenuArchivo(btn, tipo) {
+  const v = caVersionArchivo();
+  const emp = caEmpresasConAlgo();
+  // Para compartir, las imágenes se van armando mientras se elige (el
+  // celular solo deja compartir enseguida después del toque)
+  if (tipo === "compartir" && v) emp.forEach(c => caTraer(v, "imagen", c.cliente));
+  const icono = { pdf: "file-type-pdf", imagen: "photo-down", compartir: "brand-whatsapp" }[tipo];
+  const accion = { pdf: "La hoja para ver o imprimir", imagen: "Descargar la imagen", compartir: "Mandarla a su grupo" }[tipo];
+  const items = emp.map(c => {
+    const vivos = c.tramos.filter(t => t.estado !== "no_corre").length + c.variables.length;
+    return { icono, html: `<b>${caEsc(c.cliente)}</b><span>${vivos} tramo${vivos === 1 ? "" : "s"} · ${accion.toLowerCase()}</span>`,
+             fn: () => tipo === "pdf" ? caVerPdf(v, c.cliente) : tipo === "imagen" ? caDescargar(v, btn, c.cliente) : caCompartir(v, btn, c.cliente) };
+  });
+  if (tipo === "pdf" && emp.length > 1)
+    items.push({ icono: "files", html: "<b>Todas las empresas</b><span>Un PDF con una hoja para cada una</span>", fn: () => caVerPdf(v) });
+  if (!items.length) { toast("Todavía no hay nada asignado", "error"); return; }
+  trMenu(btn, items);
+}
+function caQs(v, cliente) {
+  const p = [];
+  if (v) p.push(`v=${v}`);
+  if (cliente) p.push(`cliente=${encodeURIComponent(cliente)}`);
+  return p.length ? "?" + p.join("&") : "";
+}
+function caVerPdf(v, cliente) { window.open(`/api/corp/asig/dia/${ca.fecha}/pdf${caQs(v, cliente)}`, "_blank"); }
+async function caTraer(v, tipo = "imagen", cliente = "") {
+  const clave = `${ca.fecha}|${tipo}|${v || "borrador"}|${cliente}`;
   if (v && ca.archivos[clave]) return ca.archivos[clave];
-  const x = await fetch(`/api/corp/asig/dia/${ca.fecha}/${tipo}${v ? `?v=${v}` : ""}`).catch(() => null);
+  const x = await fetch(`/api/corp/asig/dia/${ca.fecha}/${tipo}${caQs(v, cliente)}`).catch(() => null);
   if (!x || !x.ok) return null;
   const b = await x.blob();
   if (v) ca.archivos[clave] = b;
   return b;
 }
-function caArchivo(v, ext) { return `corporativos-${ca.fecha}${v ? `-v${v}` : "-borrador"}.${ext}`; }
-async function caDescargar(v, btn) {
-  const blob = await trConEspera(btn, () => caTraer(v));
+function caArchivo(v, ext, cliente) {
+  const quien = cliente ? caNorm(cliente).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-" : "";
+  return `corporativos-${quien}${ca.fecha}${v ? `-v${v}` : "-borrador"}.${ext}`;
+}
+async function caDescargar(v, btn, cliente = "") {
+  const blob = await trConEspera(btn, () => caTraer(v, "imagen", cliente));
   if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = caArchivo(v, "png");
+  a.download = caArchivo(v, "png", cliente);
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-async function caCompartir(v, btn) {
-  const blob = await trConEspera(btn, () => caTraer(v));
+async function caCompartir(v, btn, cliente = "") {
+  const blob = await trConEspera(btn, () => caTraer(v, "imagen", cliente));
   if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
-  const archivo = new File([blob], caArchivo(v, "png"), { type: "image/png" });
-  const nombre = `Corporativos ${trLargo(ca.fecha)}`;
+  const archivo = new File([blob], caArchivo(v, "png", cliente), { type: "image/png" });
+  const nombre = `Corporativos${cliente ? " " + cliente : ""} ${trLargo(ca.fecha)}`;
   if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
-    try { await navigator.share({ files: [archivo], title: nombre, text: `${nombre} · versión ${v}` }); return; }
+    try { await navigator.share({ files: [archivo], title: nombre, text: `${nombre}${v ? ` · versión ${v}` : ""}` }); return; }
     catch (e) { if (e.name === "AbortError") return; }
   }
-  caDescargar(v);
-  toast("Se descargó la imagen: adjuntala en el grupo de WhatsApp", "success");
+  caDescargar(v, null, cliente);
+  toast(`Se descargó la imagen de ${cliente || "corporativos"}: adjuntala en su grupo de WhatsApp`, "success");
 }
 async function caVersiones() {
   const vs = await api(`/api/corp/asig/dia/${ca.fecha}/versiones`);
@@ -18521,8 +18580,7 @@ async function caVersiones() {
         <span class="ca-ver-n">v${v.version}</span>
         <span class="ca-ver-i"><b>${p.slice(8, 10)}/${p.slice(5, 7)} a las ${p.slice(11, 16)}${v.publicado_por ? ` · ${caEsc(v.publicado_por.split(" ")[0])}` : ""}</b>
           <small>${v.cambios.length ? v.cambios.map(c => caEsc(c.txt)).join("<br>") : v.version === 1 ? "Primera versión" : "Sin cambios"}</small></span>
-        <span class="ca-ver-b"><button class="btn btn-ghost btn-sm" onclick="caVerPdf(${v.version})"><i class="ti ti-file-type-pdf"></i> PDF</button>
-          <button class="btn btn-ghost btn-sm" onclick="caDescargar(${v.version}, this)"><i class="ti ti-photo-down"></i></button></span>
+        <span class="ca-ver-b"><button class="btn btn-ghost btn-sm" onclick="caVerPdf(${v.version})" title="Una hoja por empresa"><i class="ti ti-file-type-pdf"></i> PDF</button></span>
       </div>`; }).join("")}</div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
   });
