@@ -18658,38 +18658,67 @@ async function otHojas(otId, btn) {
   guardarPendientesOT();
   await new Promise(r => setTimeout(r, 220));
   if (pt.pend && pt.pend.size) await Promise.all([...pt.pend]).catch(() => {});
-  const d = await api(`/api/ots/${otId}/hojas`);
+  let d = await api(`/api/ots/${otId}/hojas`);
   if (!d || !d.ok) { toast((d && d.msg) || "No se pudo armar las hojas", "error"); return; }
   if (!d.hojas.length) {
     toast("Primero poné el número del técnico en cada trabajo (columna Técnico)", "error");
     return;
   }
-  const o = rvModal({
-    titulo: "Hojas por técnico", icono: "file-stack", ancho: 520, clase: "ot-hojas",
-    sub: `OT #${otId} · una hoja para cada uno con sus trabajos, sin costos`,
-    cuerpo: `
-      <div class="oth-lista">${d.hojas.map(h => `
+  // Una OT junta trabajos de varios días: se elige lo pendiente, un día o todo
+  const DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+  const txtOp = op => {
+    if (!op.dia) return op.txt;
+    const [y, m, dd] = op.dia.split("-");
+    const dt = new Date(+y, +m - 1, +dd);
+    return `${DIAS[dt.getDay()]} ${dd}/${m}`;
+  };
+  const chips = () => (d.opciones || []).length > 2 || (d.opciones || []).some(op => op.clave === "todo" && op.n !== (d.opciones[0] || {}).n)
+    ? `<div class="oth-cuales">${d.opciones.map(op => `
+        <button type="button" class="oth-chip ${op.clave === d.cuales ? "on" : ""}" data-c="${trEsc(op.clave)}" ${op.n ? "" : "disabled"}>
+          ${op.clave === "pendientes" ? '<i class="ti ti-clock"></i>' : op.clave === "todo" ? '<i class="ti ti-list"></i>' : '<i class="ti ti-calendar"></i>'}
+          <span>${trEsc(txtOp(op))}</span><small>${op.n}</small>
+        </button>`).join("")}</div>` : "";
+  const lista = () => d.hojas.length ? `<div class="oth-lista">${d.hojas.map(h => `
         <label class="oth-op">
           <input type="checkbox" value="${trEsc(h.clave)}" checked>
           <span class="oth-num ${h.numero == null ? "sin" : ""}">${h.numero != null ? h.numero : "<i class='ti ti-pencil'></i>"}</span>
           <span class="oth-quien"><b>${trEsc(h.nombre)}</b><small>${h.numero == null ? "Escrito sin número" : trEsc(h.puesto || "")}</small></span>
           <span class="oth-cant">${h.trabajos} trabajo${h.trabajos === 1 ? "" : "s"}</span>
-        </label>`).join("")}</div>
-      ${d.sin_tecnico.length ? `<div class="oth-aviso"><i class="ti ti-info-circle"></i><span>${d.sin_tecnico.length === 1 ? "Un trabajo no tiene" : `${d.sin_tecnico.length} trabajos no tienen`} técnico y no sale en ninguna hoja: ${d.sin_tecnico.map(trEsc).join(", ")}.</span></div>` : ""}`,
+        </label>`).join("")}</div>`
+    : `<div class="oth-vacio"><i class="ti ti-user-question"></i><span>En lo elegido ningún trabajo tiene técnico asignado.</span></div>`;
+  const aviso = () => d.sin_tecnico.length ? `<div class="oth-aviso"><i class="ti ti-info-circle"></i><span>${d.sin_tecnico.length === 1 ? "Un trabajo no tiene" : `${d.sin_tecnico.length} trabajos no tienen`} técnico y no sale en ninguna hoja: ${d.sin_tecnico.map(trEsc).join(", ")}.</span></div>` : "";
+  const o = rvModal({
+    titulo: "Hojas por técnico", icono: "file-stack", ancho: 540, clase: "ot-hojas",
+    sub: `OT #${otId} · una hoja para cada uno con sus trabajos, sin costos`,
+    cuerpo: `<div id="oth-cuerpo"></div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
-          <button class="btn btn-primary" id="oth-ok"><i class="ti ti-printer"></i> <span>Imprimir ${d.hojas.length} hoja${d.hojas.length === 1 ? "" : "s"}</span></button>`,
+          <button class="btn btn-primary" id="oth-ok"><i class="ti ti-printer"></i> <span></span></button>`,
   });
+  const cuerpo = o.querySelector("#oth-cuerpo");
   const ok = o.querySelector("#oth-ok");
   const contar = () => {
     const n = o.querySelectorAll(".oth-op input:checked").length;
     ok.disabled = !n;
-    ok.querySelector("span").textContent = n ? `Imprimir ${n} hoja${n === 1 ? "" : "s"}` : "Elegí al menos uno";
+    ok.querySelector("span").textContent = n ? `Imprimir ${n} hoja${n === 1 ? "" : "s"}` : (d.hojas.length ? "Elegí al menos uno" : "Nada para imprimir");
   };
-  o.querySelectorAll(".oth-op input").forEach(i => i.addEventListener("change", contar));
+  const pintar = () => {
+    cuerpo.innerHTML = chips() + lista() + aviso();
+    cuerpo.querySelectorAll(".oth-op input").forEach(i => i.addEventListener("change", contar));
+    cuerpo.querySelectorAll(".oth-chip").forEach(b => b.onclick = async () => {
+      if (b.classList.contains("on")) return;
+      cuerpo.querySelectorAll(".oth-chip").forEach(x => x.disabled = true);
+      const nd = await api(`/api/ots/${otId}/hojas?cuales=${encodeURIComponent(b.dataset.c)}`);
+      if (nd && nd.ok) d = nd; else toast((nd && nd.msg) || "No se pudo cambiar", "error");
+      pintar();
+    });
+    contar();
+  };
+  pintar();
   ok.onclick = () => {
     const sel = [...o.querySelectorAll(".oth-op input:checked")].map(i => i.value);
-    const todas = sel.length === d.hojas.length;
-    window.open(`/api/ots/${otId}/hojas.pdf${todas ? "" : "?quienes=" + encodeURIComponent(sel.join("|"))}`, "_blank");
+    const qs = new URLSearchParams({ cuales: d.cuales });
+    if (sel.length !== d.hojas.length) qs.set("quienes", sel.join("|"));
+    window.open(`/api/ots/${otId}/hojas.pdf?${qs}`, "_blank");
     o.remove();
   };
 }
