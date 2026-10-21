@@ -72,6 +72,15 @@ AGREGADOS = [
     ("2026-10-15b", [
         (26, "Victor Ramirez", "Electricista", None),
     ]),
+    # Claudio Díaz ya estaba como N°21: si sigue en la lista no se repite; si
+    # lo habían dado de baja, vuelve; si lo borraron, entra con el 31
+    ("2026-10-21", [
+        (27, "Dario López", "Mecánica general", None),
+        (28, "Javier Marin", "Mecánica general", None),
+        (29, "Cristian Britos", "Mecánica general", None),
+        (30, "Anacleto Alonzo", "Mecánica general", None),
+        (31, "Claudio Díaz", "Mecánica general", None),
+    ]),
 ]
 
 CAMPOS = ("numero", "nombre", "puesto", "edad", "nacimiento", "ci", "telefono", "activo")
@@ -177,6 +186,11 @@ def init_personal_taller():
             conn.execute("INSERT INTO taller_personal_cargas (tanda, aplicada_el) VALUES (?,?) ON CONFLICT (tanda) DO NOTHING",
                          (tanda, ahora_iso()))
             conn.commit()
+            try:
+                _vincular_escritos(conn, [g[1] for g in gente])
+                conn.commit()
+            except Exception:
+                _rollback(conn)
     except Exception:
         _rollback(conn)
     conn.close()
@@ -186,11 +200,15 @@ def _sumar(conn, gente):
     """Agrega gente a la lista: si ya está (mismo nombre) no la repite; si su
     número ya lo tiene otra persona, le toca el siguiente libre."""
     ahora = ahora_iso()
-    filas = conn.execute("SELECT numero, nombre FROM taller_personal").fetchall()
+    filas = conn.execute("SELECT id, numero, nombre, activo FROM taller_personal").fetchall()
     nombres = {_norm(r["nombre"]) for r in filas}
     usados = {r["numero"] for r in filas}
     for numero, nombre, puesto, edad in gente:
         if _norm(nombre) in nombres:
+            # Ya está: si lo habían dado de baja, vuelve a estar activo
+            for r in filas:
+                if _norm(r["nombre"]) == _norm(nombre) and not r["activo"]:
+                    conn.execute("UPDATE taller_personal SET activo=1, actualizado_el=? WHERE id=?", (ahora, r["id"]))
             continue
         if numero in usados:
             numero = max(usados | {0}) + 1
@@ -199,6 +217,35 @@ def _sumar(conn, gente):
                      (numero, nombre, puesto, edad, ahora, ahora))
         usados.add(numero)
         nombres.add(_norm(nombre))
+
+
+def _vincular_escritos(conn, nombres):
+    """Los trabajos donde se escribió a mano el nombre completo de alguien que
+    recién se suma a la lista pasan a ser suyos (con su número)."""
+    claves = {_norm(n) for n in nombres if _norm(n)}
+    por_nombre = {}
+    for r in conn.execute("SELECT id, nombre FROM taller_personal").fetchall():
+        if _norm(r["nombre"]) in claves:
+            por_nombre.setdefault(_norm(r["nombre"]), r["id"])
+    if not por_nombre:
+        return
+    tocados = []
+    for f in conn.execute("SELECT id, tecnico_otro FROM ot_items WHERE COALESCE(tecnico_otro,'') != ''").fetchall():
+        partes = [t.strip() for t in re.split(r"\s*,\s*", f["tecnico_otro"] or "") if t.strip()]
+        quedan, suyos = [], []
+        for t in partes:
+            pid = por_nombre.get(_norm(t))
+            (suyos.append(pid) if pid else quedan.append(t))
+        if not suyos:
+            continue
+        for pid in suyos:
+            conn.execute("""INSERT INTO ot_item_personal (item_id, personal_id, asignado_el, asignado_por)
+                            VALUES (?,?,?,?) ON CONFLICT (item_id, personal_id) DO NOTHING""",
+                         (f["id"], pid, ahora_iso(), "sistema"))
+        conn.execute("UPDATE ot_items SET tecnico_otro=? WHERE id=?", (", ".join(quedan)[:120], f["id"]))
+        tocados.append(f["id"])
+    if tocados:
+        _recalcular_texto(conn, tocados)
 
 
 def _migrar_texto_viejo(conn):
