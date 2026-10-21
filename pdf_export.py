@@ -702,6 +702,27 @@ def _cant_pdf(q):
     return str(int(q)) if q == int(q) else f"{q:.2f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
+_DIAS_ES = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+
+def _dia_trabajos(fecha, items):
+    """'Martes 20/10/2026 · Reportó Armando Acosta (chofer)' para separar los
+    trabajos por el día en que entraron a la OT."""
+    try:
+        d = datetime.date.fromisoformat(str(fecha)[:10])
+        txt = f"{_DIAS_ES[d.weekday()]} {d.day:02d}/{d.month:02d}/{d.year}"
+    except Exception:
+        txt = "Sin fecha"
+    quienes = []
+    for it in items:
+        o, r = it.get("origen") or "", (it.get("reportado_por") or "").strip()
+        q = (f"reportó {r} (chofer)" if o == "chofer" and r else "reporte del chofer" if o == "chofer"
+             else "turno del preventivo" if o == "preventivo" else "cargado en el taller")
+        if q not in quienes:
+            quienes.append(q)
+    return txt + (" · " + ", ".join(quienes) if quienes else "")
+
+
 def generar_ot_pdf(ot, ruta_salida, coches=None):
     """
     Genera un PDF formal de UNA orden de trabajo, lista para imprimir.
@@ -813,7 +834,22 @@ def generar_ot_pdf(ot, ruta_salida, coches=None):
                 Paragraph("<b>Costo</b>", small),
             ]]
             total = 0
+            # Si los trabajos entraron en días distintos, van separados por día
+            dias = []
+            for it in items:
+                f = str(it.get("fecha") or "")[:10]
+                if f not in dias:
+                    dias.append(f)
+            separar = len(dias) > 1
+            filas_dia, dia_prev = [], None
             for i, it in enumerate(items, 1):
+                f = str(it.get("fecha") or "")[:10]
+                if separar and f != dia_prev:
+                    dia_prev = f
+                    filas.append([Paragraph(f"<b>{_esc_pdf(_dia_trabajos(f, [x for x in items if str(x.get('fecha') or '')[:10] == f]))}</b>",
+                                            ParagraphStyle("OtDia", parent=small, textColor=colors.HexColor(AZUL))),
+                                  "", "", "", "", ""])
+                    filas_dia.append(len(filas) - 1)
                 total += (it.get("costo") or 0)
                 desc = _esc_pdf(it.get("descripcion",""))
                 mats = it.get("materiales") or []
@@ -852,6 +888,10 @@ def generar_ot_pdf(ot, ruta_salida, coches=None):
                 ("LEFTPADDING", (0,0), (-1,-1), 5), ("RIGHTPADDING", (0,0), (-1,-1), 5),
                 ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
             ]))
+            if filas_dia:
+                tabla_items.setStyle(TableStyle(
+                    [c for r in filas_dia for c in (("SPAN", (0, r), (-1, r)),
+                                                    ("BACKGROUND", (0, r), (-1, r), colors.HexColor("#EAF1F8")))]))
             story.append(tabla_items)
         else:
             story.append(Paragraph("<i>Esta orden no tiene trabajos cargados.</i>", small))

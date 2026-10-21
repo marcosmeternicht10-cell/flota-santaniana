@@ -2041,6 +2041,19 @@ def crear_ot(vehiculo_id, fecha_apertura, km=0, conductor="", procedencia="",
                 (ot_id, it["descripcion"], it.get("tipo", "control"),
                  it.get("estado", "pendiente"), it.get("costo", 0)))
     conn.commit()
+    # Cada trabajo con su fecha y de dónde vino (para verlos separados por día)
+    try:
+        import ot_unica
+        org = ot_unica.origen_de(procedencia)
+        conn.execute("""UPDATE ot_items SET fecha=?, origen=?, reportado_por=?
+                        WHERE ot_id=? AND COALESCE(fecha,'')=''""",
+                     (fecha_apertura, org, conductor if org == "chofer" else "", ot_id))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     conn.close()
     return ot_id
 
@@ -2056,9 +2069,16 @@ def obtener_ot(ot_id):
     if not ot:
         conn.close()
         return None
-    items = conn.execute("""
-        SELECT * FROM ot_items WHERE ot_id=? ORDER BY id
-    """, (ot_id,)).fetchall()
+    try:
+        items = conn.execute("""
+            SELECT * FROM ot_items WHERE ot_id=? ORDER BY COALESCE(fecha,''), id
+        """, (ot_id,)).fetchall()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        items = conn.execute("SELECT * FROM ot_items WHERE ot_id=? ORDER BY id", (ot_id,)).fetchall()
     ot = dict(ot)
     ot["items"] = [dict(i) for i in items]
     # Los materiales de cada trabajo y los otros coches de la OT
@@ -2109,6 +2129,7 @@ def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None):
         SELECT o.*, v.patente, v.marca, v.modelo, v.n_interno, v.horario_salida,
             (SELECT COUNT(*) FROM ot_items WHERE ot_id=o.id) AS total_items,
             (SELECT COUNT(*) FROM ot_items WHERE ot_id=o.id AND estado='completado') AS items_completados,
+            (SELECT MAX(fecha) FROM ot_items WHERE ot_id=o.id) AS ultima_fecha,
             -- lo de los ítems más lo que se sacó del depósito para esta OT
             COALESCE((SELECT SUM(costo) FROM ot_items WHERE ot_id=o.id), 0)
               + COALESCE((SELECT SUM(m.cantidad * m.costo_unitario) FROM repuestos_movimientos m
@@ -2136,14 +2157,25 @@ def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None):
     return salida
 
 
-def agregar_item_ot(ot_id, descripcion, tipo="control", costo=0, observaciones=""):
+def agregar_item_ot(ot_id, descripcion, tipo="control", costo=0, observaciones="", origen="taller", reportado_por=""):
     conn = get_connection()
-    conn.execute("""INSERT INTO ot_items
+    cur = conn.execute("""INSERT INTO ot_items
         (ot_id, descripcion, tipo, costo, observaciones)
         VALUES (?,?,?,?,?)""",
         (ot_id, descripcion, tipo, costo, observaciones))
+    iid = cur.lastrowid
     conn.commit()
+    try:
+        conn.execute("UPDATE ot_items SET fecha=?, origen=?, reportado_por=? WHERE id=?",
+                     (hoy(), origen, reportado_por or "", iid))
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     conn.close()
+    return iid
 
 
 def actualizar_item_ot(item_id, **kwargs):

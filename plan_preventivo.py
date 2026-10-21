@@ -1114,8 +1114,9 @@ def agregar_a_ot(ot_id, tareas):
             tid = int(tid)
             if tid not in del_coche or tid in ya:
                 continue
-            conn.execute("""INSERT INTO ot_items (ot_id, descripcion, tipo, estado, costo, tareas_plan)
-                            VALUES (?,?,'preventivo','pendiente',0,?)""", (ot_id, del_coche[tid]["tarea"], str(tid)))
+            conn.execute("""INSERT INTO ot_items (ot_id, descripcion, tipo, estado, costo, tareas_plan, fecha, origen)
+                            VALUES (?,?,'preventivo','pendiente',0,?,?,'preventivo')""",
+                         (ot_id, del_coche[tid]["tarea"], str(tid), _hoy_txt()))
             n += 1
         conn.commit()
         return n
@@ -1270,17 +1271,30 @@ def abrir_ot_de_turno(tid, usuario=""):
         conn.close()
     items = [{"descripcion": tareas[x]["tarea"], "tipo": "preventivo", "estado": "pendiente", "costo": 0} for x in ids]
     obs = "Turno del preventivo" + (f" · {t['notas']}" if t.get("notas") else "")
-    ot_id = db.crear_ot(vid, _hoy_txt(), km=km, conductor="", procedencia="Preventivo (turno)",
-                        observaciones=obs, items=items)
+    # Si el coche ya tiene su OT abierta, las tareas del turno se suman ahí
+    import ot_unica
     conn = get_connection()
-    filas = conn.execute("SELECT id, descripcion FROM ot_items WHERE ot_id=? ORDER BY id", (ot_id,)).fetchall()
-    for fila, tid_tarea in zip(filas, ids):
-        conn.execute("UPDATE ot_items SET tareas_plan=? WHERE id=?", (str(tid_tarea), fila["id"]))
+    try:
+        abierta = ot_unica.ot_abierta_de(conn, vid)
+    finally:
+        conn.close()
+    if abierta:
+        ot_id = abierta
+        nuevos = ot_unica.agregar_items(ot_id, items, origen="preventivo", fecha=_hoy_txt())
+    else:
+        ot_id = db.crear_ot(vid, _hoy_txt(), km=km, conductor="", procedencia="Preventivo (turno)",
+                            observaciones=obs, items=items)
+        nuevos = None
+    conn = get_connection()
+    if nuevos is None:
+        nuevos = [r["id"] for r in conn.execute("SELECT id FROM ot_items WHERE ot_id=? ORDER BY id", (ot_id,)).fetchall()]
+    for iid, tid_tarea in zip(nuevos, ids):
+        conn.execute("UPDATE ot_items SET tareas_plan=? WHERE id=?", (str(tid_tarea), iid))
     # Queda en el día que vino de verdad (si se adelantó, libera el lugar del otro día)
     conn.execute("UPDATE taller_turnos SET estado='en_taller', ot_id=?, fecha=? WHERE id=?", (ot_id, _hoy_txt(), tid))
     conn.commit()
     conn.close()
-    return {"ok": True, "ot_id": ot_id}
+    return {"ok": True, "ot_id": ot_id, "sumada": bool(abierta)}
 
 
 def cumplir_turno(tid, d, usuario=""):

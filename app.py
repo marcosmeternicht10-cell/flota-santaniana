@@ -171,6 +171,13 @@ app.register_blueprint(bp_trafico)
 from servicios import bp_servicios, init_servicios
 init_servicios()
 app.register_blueprint(bp_servicios)
+
+# ─── Una sola OT abierta por coche ───────────────────────────────────────────
+# Lo nuevo de un coche se suma a su OT abierta (separado por fecha) y las OTs
+# pendientes que tenía se juntan en una. Va al final: toca tablas de varios
+# módulos (preventivo, depósito, materiales).
+from ot_unica import init_ot_unica
+init_ot_unica()
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -1308,6 +1315,8 @@ def api_verificar_km_ot(ot_id):
 def api_crear_ot():
     d = request.json
     try:
+        import ot_unica
+        from db_compat import get_connection as _gc
         # Los otros coches de la misma OT (cada uno con sus trabajos)
         extra, vistos = [], {int(d["vehiculo_id"])}
         for c in d.get("coches_extra") or []:
@@ -1319,26 +1328,77 @@ def api_crear_ot():
                 return jsonify({"ok": False, "msg": "Hay un coche repetido en la OT."}), 400
             vistos.add(vid)
             extra.append((vid, float(c.get("km", 0) or 0), (c.get("conductor") or "").strip(), c.get("items") or []))
-        ot_id = crear_ot(
-            int(d["vehiculo_id"]), d["fecha_apertura"],
-            km=float(d.get("km", 0) or 0),
-            conductor=d.get("conductor", ""),
-            procedencia=d.get("procedencia", ""),
-            observaciones=d.get("observaciones", ""),
-            items=d.get("items", [])
-        )
+        conn = _gc()
+        try:
+            abierta = ot_unica.ot_abierta_de(conn, int(d["vehiculo_id"]))
+        finally:
+            conn.close()
+        sumadas = []
+        if abierta:
+            # El coche ya tiene su OT abierta: los trabajos se suman ahí (con la
+            # fecha de hoy) en vez de abrir otra
+            ot_id = abierta
+            ot_unica.agregar_items(ot_id, d.get("items", []), origen="taller",
+                                   reportado_por=d.get("conductor", ""), fecha=d.get("fecha_apertura"))
+            conn = _gc()
+            try:
+                ot_unica.subir_km(conn, ot_id, d.get("km"))
+                conn.commit()
+            finally:
+                conn.close()
+            sumadas.append(ot_id)
+        else:
+            ot_id = crear_ot(
+                int(d["vehiculo_id"]), d["fecha_apertura"],
+                km=float(d.get("km", 0) or 0),
+                conductor=d.get("conductor", ""),
+                procedencia=d.get("procedencia", ""),
+                observaciones=d.get("observaciones", ""),
+                items=d.get("items", [])
+            )
+        from ot_materiales import grupo_ids
+        cabeza = (grupo_ids(ot_id) or [ot_id])[0]
         for vid, km, cond, its in extra:
+            conn = _gc()
+            try:
+                otra = ot_unica.ot_abierta_de(conn, vid)
+            finally:
+                conn.close()
+            if otra:
+                # Ese coche también tiene su OT abierta: sus trabajos van ahí y,
+                # si está suelta, esa OT pasa a ser parte de esta (varios coches)
+                ot_unica.agregar_items(otra, its, origen="taller", reportado_por=cond, fecha=d.get("fecha_apertura"))
+                conn = _gc()
+                try:
+                    ot_unica.sumar_al_grupo(conn, cabeza, otra)
+                    conn.commit()
+                finally:
+                    conn.close()
+                sumadas.append(otra)
+                continue
             crear_ot(vid, d["fecha_apertura"], km=km, conductor=cond,
                      procedencia=d.get("procedencia", ""), observaciones=d.get("observaciones", ""),
-                     items=its, ot_grupo=ot_id)
+                     items=its, ot_grupo=cabeza)
         n_items = len(d.get("items", [])) + sum(len(e[3]) for e in extra)
-        auditar(f"Creó la OT #{ot_id}", "Órdenes de Trabajo",
+        auditar((f"Sumó trabajos a la OT #{cabeza}" if abierta else f"Creó la OT #{ot_id}"), "Órdenes de Trabajo",
                 f"Vehículo ID {d.get('vehiculo_id')}"
                 + (f" y {len(extra)} coche(s) más" if extra else "")
-                + f", {n_items} trabajo(s), km {d.get('km','?')}")
-        return jsonify({"ok": True, "ot_id": ot_id, "coches": 1 + len(extra)})
+                + f", {n_items} trabajo(s), km {d.get('km','?')}"
+                + (" · el coche ya tenía la OT abierta" if abierta else ""))
+        return jsonify({"ok": True, "ot_id": ot_id, "numero": cabeza, "coches": 1 + len(extra),
+                        "sumada": bool(abierta), "sumadas": sumadas})
     except (KeyError, ValueError) as e:
         return jsonify({"ok": False, "msg": str(e)}), 400
+
+
+@app.route("/api/ots/abierta", methods=["GET"])
+def api_ot_abierta():
+    """La OT abierta de un coche (para avisar en 'Nueva OT' que se suma ahí)."""
+    import ot_unica
+    vid = request.args.get("vehiculo_id", type=int)
+    if not vid:
+        return jsonify(None)
+    return jsonify(ot_unica.abierta(vid))
 
 
 # ─── Endpoints para los CHOFERES ────────────────────────────────────────────
@@ -1434,12 +1494,31 @@ def api_chofer_reportar():
 
         fecha_hoy = hoy()
         chofer = session.get("nombre") or session.get("usuario") or "Chofer"
-        ot_id = crear_ot(
-            vehiculo_id, fecha_hoy, km=km,
-            conductor=chofer, procedencia="WhatsApp/Chofer",
-            observaciones=f"Reporte cargado por el chofer.",
-            items=items
-        )
+        import ot_unica
+        from db_compat import get_connection as _gc
+        conn = _gc()
+        try:
+            abierta = ot_unica.ot_abierta_de(conn, vehiculo_id)
+        finally:
+            conn.close()
+        if abierta:
+            # El coche ya está con su OT abierta en el taller: el reporte se
+            # suma ahí, con la fecha de hoy y el nombre del chofer
+            ot_id = abierta
+            ot_unica.agregar_items(ot_id, items, origen="chofer", reportado_por=chofer, fecha=fecha_hoy)
+            conn = _gc()
+            try:
+                ot_unica.subir_km(conn, ot_id, km)
+                conn.commit()
+            finally:
+                conn.close()
+        else:
+            ot_id = crear_ot(
+                vehiculo_id, fecha_hoy, km=km,
+                conductor=chofer, procedencia="WhatsApp/Chofer",
+                observaciones=f"Reporte cargado por el chofer.",
+                items=items
+            )
 
         # Guardar fotos si el chofer adjuntó (vienen comprimidas en base64)
         fotos = d.get("fotos", [])
@@ -1461,23 +1540,42 @@ def api_chofer_reportar():
 @app.route("/api/chofer/mis_reportes", methods=["GET"])
 @login_requerido
 def api_chofer_mis_reportes():
-    """Reportes cargados desde la pantalla del chofer, con su estado."""
+    """Lo que reportó este chofer, por día y coche, con cómo va: en espera,
+    en taller o resuelto. Como un coche tiene una sola OT abierta, el reporte
+    puede haber quedado sumado a una OT que ya estaba."""
+    from db_compat import get_connection as _gc
     chofer = session.get("nombre") or session.get("usuario") or "Chofer"
-    # Traer las OTs cuya procedencia es del chofer (las últimas 20)
-    ots = obtener_ots()
+    conn = _gc()
+    try:
+        filas = conn.execute("""
+            SELECT i.ot_id, i.fecha, i.estado, o.estado AS estado_ot, v.patente, v.n_interno
+            FROM ot_items i JOIN ordenes_trabajo o ON o.id = i.ot_id
+            JOIN vehiculos v ON v.id = o.vehiculo_id
+            WHERE i.origen = 'chofer' AND i.reportado_por = ?
+            ORDER BY i.fecha DESC, i.id DESC
+        """, (chofer,)).fetchall()
+    finally:
+        conn.close()
+    grupos = {}
+    for f in filas:
+        k = (f["ot_id"], f["fecha"])
+        g = grupos.setdefault(k, {"id": f["ot_id"], "fecha": f["fecha"], "patente": f["patente"],
+                                  "n_interno": f["n_interno"], "estados": []})
+        g["estados"].append(f["estado"])
+        g["estado_ot"] = f["estado_ot"]
     mias = []
-    for o in ots:
-        if o.get("procedencia") == "WhatsApp/Chofer":
-            mias.append({
-                "id": o["id"],
-                "fecha": o.get("fecha_apertura", ""),
-                "patente": o.get("patente", ""),
-                "n_interno": o.get("n_interno", ""),
-                "estado": o.get("estado", "abierta"),
-                "observaciones": o.get("observaciones", ""),
-            })
-    mias = mias[:20]
-    return jsonify(mias)
+    for g in grupos.values():
+        est = g.pop("estados")
+        if all(e == "completado" for e in est):
+            g["estado"] = "cerrada"
+        elif any(e in ("en_proceso", "completado") for e in est):
+            g["estado"] = "en_proceso"
+        else:
+            g["estado"] = "abierta"
+        g["trabajos"] = len(est)
+        g.pop("estado_ot", None)
+        mias.append(g)
+    return jsonify(mias[:20])
 
 
 @app.route("/api/ots/<int:ot_id>", methods=["PATCH"])
@@ -1485,6 +1583,15 @@ def api_actualizar_ot(ot_id):
     d = request.json or {}
     # Solo estos campos: el chofer y el km tienen su propia ruta, con permiso
     campos = {k: v for k, v in d.items() if k in ("estado", "fecha_cierre", "observaciones", "procedencia")}
+    import ot_unica
+    if campos.get("estado") == "cerrada":
+        motivo = ot_unica.motivo_para_no_cerrar(ot_id)
+        if motivo:
+            return jsonify({"ok": False, "msg": motivo}), 400
+    elif campos.get("estado") in ("abierta", "en_proceso"):
+        motivo = ot_unica.motivo_para_no_reabrir(ot_id)
+        if motivo:
+            return jsonify({"ok": False, "msg": motivo}), 400
     if campos:
         actualizar_ot(ot_id, **campos)
     return jsonify({"ok": True})
@@ -1493,6 +1600,11 @@ def api_actualizar_ot(ot_id):
 @app.route("/api/ots/<int:ot_id>/cerrar", methods=["POST"])
 def api_cerrar_ot(ot_id):
     d = request.json or {}
+    # Se cierra recién cuando están todos los trabajos completados
+    import ot_unica
+    motivo = ot_unica.motivo_para_no_cerrar(ot_id)
+    if motivo:
+        return jsonify({"ok": False, "msg": motivo}), 400
     cerrar_ot(ot_id, fecha_cierre=d.get("fecha_cierre"))
     auditar(f"Cerró la OT #{ot_id}", "Órdenes de Trabajo")
     return jsonify({"ok": True})

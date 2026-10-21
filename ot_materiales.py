@@ -193,6 +193,7 @@ def agrupar_lista(ots):
             o["total_items"] = sum(int(m.get("total_items") or 0) for m in ms)
             o["items_completados"] = sum(int(m.get("items_completados") or 0) for m in ms)
             o["costo_total"] = sum(float(m.get("costo_total") or 0) for m in ms)
+            o["ultima_fecha"] = max((m.get("ultima_fecha") or "" for m in ms), default="")
             estados = {m.get("estado") for m in ms}
             if estados == {"cerrada"}:
                 o["estado"] = "cerrada"
@@ -225,6 +226,27 @@ def agregar_coche(ot_id, vehiculo_id, km=0, conductor=""):
                           list(ids) + [vehiculo_id]).fetchone()
         if ya:
             return False, "Ese coche ya está en esta OT."
+        # Un coche tiene una sola OT abierta: si ya tiene una, esa pasa a ser
+        # parte de esta OT (con todo lo que tenía), en vez de abrir otra
+        try:
+            import ot_unica
+            suya = ot_unica.ot_abierta_de(conn, vehiculo_id)
+        except Exception:
+            suya = None
+        if suya:
+            s = dict(conn.execute("""SELECT o.id, o.ot_grupo, v.n_interno, v.patente,
+                                            (SELECT COUNT(*) FROM ordenes_trabajo x WHERE x.ot_grupo = o.id) AS hijos
+                                     FROM ordenes_trabajo o JOIN vehiculos v ON v.id = o.vehiculo_id WHERE o.id=?""",
+                                  (suya,)).fetchone())
+            if s["ot_grupo"] or s["hijos"]:
+                return False, (f"El coche {s['n_interno'] or s['patente']} ya está en la OT "
+                               f"#{s['ot_grupo'] or s['id']}, que es de varios coches.")
+            if cab.get("estado_compras"):
+                return False, (f"El coche {s['n_interno'] or s['patente']} ya tiene abierta la OT #{suya} "
+                               f"y esta OT ya está en Compras: no se pueden juntar.")
+            conn.execute("UPDATE ordenes_trabajo SET ot_grupo=? WHERE id=?", (h, suya))
+            conn.commit()
+            return True, suya
         cols = ["vehiculo_id", "km", "conductor", "ot_grupo"] + [c for c in COPIA_DE_LA_PRINCIPAL if c in cab]
         vals = [vehiculo_id, float(km or 0), conductor or "", h] + [cab.get(c) for c in COPIA_DE_LA_PRINCIPAL if c in cab]
         cur = conn.cursor()
