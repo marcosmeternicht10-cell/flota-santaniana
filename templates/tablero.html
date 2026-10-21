@@ -294,7 +294,7 @@
       const horario = (o.horario_salida || "").trim();
       const salidaHtml = horario
         ? `<div class="salida-box ${esUrgente ? 'urgente' : ''}"><i class="ti ti-clock-hour-8"></i> ${horario}</div>`
-        : `<div class="ot-id">OT #${o.id}</div>`;
+        : `<div class="ot-id">OT #${o.numero || o.id}</div>`;
 
       return `
         <div class="ot-card ${o.estado} ${esUrgente ? 'card-urgente' : ''}">
@@ -305,7 +305,7 @@
             </div>
             ${salidaHtml}
           </div>
-          <div class="patente-chip"><i class="ti ti-license"></i> ${o.patente || ""} · ${o.marca || ""}${horario ? "" : " · OT #" + o.id}</div>
+          <div class="patente-chip"><i class="ti ti-license"></i> ${o.patente || ""} · ${o.marca || ""}${horario ? "" : " · OT #" + (o.numero || o.id)}</div>
           <div class="estados">${badges}</div>
           <div class="progreso">
             <div class="progreso-texto"><span>Trabajos completados</span><span>${compl}/${total}</span></div>
