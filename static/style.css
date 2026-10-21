@@ -6799,3 +6799,17 @@ tr.cmp-coche td span { margin-left: 6px; font-weight: 500; color: var(--muted); 
 .ri-hecho { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--success-bg); color: var(--success); font-size: 14px; }
 .ri-gira { display: inline-block; animation: ri-gira 1s linear infinite; }
 @keyframes ri-gira { to { transform: rotate(360deg); } }
+
+/* ─── Una OT abierta por coche: los trabajos por día ─── */
+tr.ot-dia-fila td { padding: 9px 10px 7px !important; background: var(--info-bg); border-top: 1px solid var(--info-bd); }
+.ot-dia-f { font: 700 13px "Inter", sans-serif; color: var(--brand-blue); margin-right: 8px; }
+.ot-dia-f .ti { margin-right: 2px; }
+.ot-dia-q { font-size: 12.5px; color: var(--muted); }
+.ot-dia-n { float: right; padding: 1px 8px; border-radius: 10px; background: #fff; font: 600 11.5px "Inter", sans-serif; color: var(--muted); }
+.ot-dia-n.ok { background: var(--success-bg); color: var(--success); }
+.ot-cerrar-falta { display: inline-flex; align-items: center; gap: 5px; align-self: center; font-size: 12.5px; font-weight: 600; color: var(--warning); }
+.ot-ya-abierta { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--info-bg); border: 1px solid var(--info-bd); font-size: 13px; line-height: 1.45; color: var(--text); }
+.ot-ya-abierta .ti { color: var(--brand-blue); font-size: 18px; margin-top: 1px; }
+.ot-ya-abierta[hidden] { display: none; }
+.ot-fila-ult { display: block; font-size: 11px; color: var(--muted); }
+#modal-ot-detalle .btn-success:disabled { opacity: .42; cursor: not-allowed; filter: saturate(.6); }

@@ -5781,7 +5781,7 @@ async function renderOts() {
                             data-p="${trEsc(cs.map(c => String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "")).join(" "))}" data-t="${trEsc(datos)}">
                   <td><b>#${o.numero || o.id}</b></td>
                   <td class="center">${badgeSalida(o.horario_salida)}</td>
-                  <td>${o.fecha_apertura}</td>
+                  <td>${o.fecha_apertura}${o.ultima_fecha && o.ultima_fecha > o.fecha_apertura ? `<span class="ot-fila-ult" title="Fecha del último trabajo que se sumó">último ${o.ultima_fecha.slice(8, 10)}/${o.ultima_fecha.slice(5, 7)}</span>` : ""}</td>
                   <td>${cs.length > 1
                     ? `<b>${cs.map(c => trEsc(String(c.n_interno || c.patente || ""))).join(" · ")}</b> <span class="ot-ncoches chico">${cs.length} coches</span>`
                     : `<b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}`}</td>
@@ -5922,7 +5922,29 @@ Control general"></textarea>
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOT(); });
   window._vehiculosOT = vehiculos;
   window._otNuevaK = 1;
+  overlay.querySelector("#bc-ot-veh").closest(".form-row").insertAdjacentHTML("afterend", '<div class="ot-ya-abierta" id="ot-ya-ot-veh" hidden></div>');
+  window["_cocheCB_ot-veh"] = vid => otAvisoAbierta("ot-veh", vid);
   otChoferesLista().then(() => acNombres($("#ot-cond"), () => window._choferesOT));
+}
+
+// Un coche tiene una sola OT abierta: si ya tiene una, lo que se cargue acá
+// se suma ahí (con la fecha de hoy), y se avisa antes de guardar.
+async function otAvisoAbierta(id, vid) {
+  const caja = document.getElementById("ot-ya-" + id);
+  if (!caja) return;
+  caja.hidden = true;
+  // El botón dice qué va a pasar: abrir una OT o sumar a la que ya tiene
+  const boton = id === "ot-veh" ? document.querySelector("#modal-ot .btn-primary[onclick^='guardarNuevaOT']") : null;
+  if (boton) boton.innerHTML = '<i class="ti ti-device-floppy"></i> Crear OT';
+  if (!vid) return;
+  const a = await api(`/api/ots/abierta?vehiculo_id=${vid}`);
+  if (!a || !a.ot_id || String(document.getElementById(id)?.value) !== String(vid)) return;
+  if (boton) boton.innerHTML = `<i class="ti ti-arrow-merge"></i> Sumar a la OT #${a.numero}`;
+  const v = (window._vehiculosOT || []).find(x => x.id === vid) || {};
+  caja.innerHTML = `<i class="ti ti-arrow-merge"></i><span>El coche <b>${trEsc(v.n_interno || v.patente || "")}</b> ya tiene abierta la
+    <b>OT #${a.numero}</b> (desde el ${trEsc(String(a.desde || "").slice(8, 10) + "/" + String(a.desde || "").slice(5, 7))},
+    ${a.pendientes} trabajo${a.pendientes === 1 ? "" : "s"} sin terminar). Lo que cargues <b>se suma a esa OT</b>, con la fecha de hoy.</span>`;
+  caja.hidden = false;
 }
 
 // Otro coche en la OT nueva: su coche, km, chofer y trabajos
@@ -5938,9 +5960,11 @@ function otNuevaCocheMas() {
         <div class="field"><label>KM</label><input class="ot-nc-km" placeholder="765387" style="width:110px"></div>
         <div class="field" style="flex:1;min-width:160px"><label>Conductor</label><input class="ot-nc-cond" autocomplete="off" placeholder="Opcional"></div>
       </div>
+      <div class="ot-ya-abierta" id="ot-ya-ot-veh-${k}" hidden></div>
       <textarea class="ot-nc-items" rows="4" placeholder="Trabajos de este coche, uno por línea"></textarea>
     </div>`);
   const bloque = box.lastElementChild;
+  window["_cocheCB_ot-veh-" + k] = vid => otAvisoAbierta("ot-veh-" + k, vid);
   acNombres(bloque.querySelector(".ot-nc-cond"), () => window._choferesOT);
   otNuevaNumerar();
   bloque.querySelector(".bcoche-input")?.focus();
@@ -6015,7 +6039,9 @@ async function guardarNuevaOT() {
   });
   if (r.ok) {
     const n = items.length + extra.reduce((s, e) => s + e.items.length, 0);
-    toast(`OT #${r.ot_id} creada${extra.length ? ` con ${extra.length + 1} coches` : ""} · ${n} trabajo${n === 1 ? "" : "s"}`, "success");
+    toast(r.sumada
+      ? `Se sumó${n ? ` ${n} trabajo${n === 1 ? "" : "s"}` : ""} a la OT #${r.numero || r.ot_id}, que el coche ya tenía abierta`
+      : `OT #${r.ot_id} creada${extra.length ? ` con ${extra.length + 1} coches` : ""} · ${n} trabajo${n === 1 ? "" : "s"}`, "success");
     cerrarModalOT();
     await renderOts();
     abrirOT(r.ot_id);              // para cargar el material y los técnicos
@@ -6196,7 +6222,7 @@ async function abrirOT(otId) {
                 <th class="center">Estado</th><th>Técnico</th><th>Material necesario</th><th class="td-action"></th>
               </tr></thead>
               <tbody>
-                ${ot.items.map((it, idx) => `
+                ${ot.items.map((it, idx) => `${otSeparadorDia(ot, idx)}
                   <tr class="pv-ot-tr">
                     <td class="center" style="color:var(--muted)">${idx+1}</td>
                     <td><div class="pv-it-desc">${it.descripcion}</div></td>
@@ -6240,8 +6266,13 @@ async function abrirOT(otId) {
             `<button class="btn btn-primary" onclick="enviarACompras(${ot.id})"><i class="ti ti-shopping-cart"></i> Enviar a Compras</button>` :
             `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}" style="align-self:center"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>`
           }
-          ${ot.estado !== 'cerrada' ?
-            `<button class="btn btn-success" onclick="cerrarOT(${ot.id})"><i class="ti ti-circle-check"></i> Cerrar OT</button>` :
+          ${ot.estado !== 'cerrada' ? (() => {
+            const falta = otFaltan(ot, grupo);
+            return falta
+              ? `<span class="ot-cerrar-falta" title="La OT se cierra cuando todos los trabajos están completados"><i class="ti ti-lock"></i> Para cerrar falta${falta === 1 ? "" : "n"} ${falta} trabajo${falta === 1 ? "" : "s"}</span>
+                 <button class="btn btn-success" disabled title="Completá todos los trabajos para poder cerrar"><i class="ti ti-circle-check"></i> Cerrar OT</button>`
+              : `<button class="btn btn-success" onclick="cerrarOT(${ot.id})"><i class="ti ti-circle-check"></i> Cerrar OT</button>`;
+          })() :
             `<button class="btn btn-ghost" onclick="reabrirOT(${ot.id})"><i class="ti ti-arrow-back"></i> Reabrir</button>`
           }
           <button class="btn btn-ghost" onclick="cerrarModalOTDetalle()">Cerrar ventana</button>
@@ -6263,6 +6294,37 @@ function guardarPendientesOT() {
   if (activo && activo.tagName === "INPUT" && activo.closest("#modal-ot-detalle")) {
     activo.blur();
   }
+}
+
+// ─── Los trabajos separados por el día en que entraron a la OT ───
+// Un coche tiene una sola OT abierta: lo que reporta el chofer otro día, el
+// turno del preventivo o lo que agrega el taller se suma ahí con su fecha.
+const OT_DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+function otFechaItem(ot, it) { return String(it.fecha || ot.fecha_apertura || "").slice(0, 10); }
+function otSeparadorDia(ot, idx) {
+  const it = ot.items[idx];
+  const f = otFechaItem(ot, it);
+  const dias = new Set(ot.items.map(x => otFechaItem(ot, x)));
+  if (dias.size < 2 || (idx > 0 && otFechaItem(ot, ot.items[idx - 1]) === f)) return "";
+  const del = ot.items.filter(x => otFechaItem(ot, x) === f);
+  const quien = [];
+  for (const x of del) {
+    const r = (x.reportado_por || "").trim();
+    const q = x.origen === "chofer" ? (r ? `Reportó ${caNombre(r)}` : "Reporte del chofer")
+      : x.origen === "preventivo" ? "Turno del preventivo" : "Cargado en el taller";
+    if (!quien.includes(q)) quien.push(q);
+  }
+  const d = f ? new Date(f + "T12:00:00") : null;
+  const hechos = del.filter(x => x.estado === "completado").length;
+  return `<tr class="ot-dia-fila"><td colspan="7">
+      <span class="ot-dia-f"><i class="ti ti-calendar-event"></i> ${d ? `${OT_DIAS[d.getDay()]} ${f.slice(8, 10)}/${f.slice(5, 7)}` : "Sin fecha"}</span>
+      <span class="ot-dia-q">${trEsc(quien.join(" · "))}</span>
+      <span class="ot-dia-n ${hechos === del.length ? "ok" : ""}">${hechos}/${del.length} hecho${del.length === 1 ? "" : "s"}</span>
+    </td></tr>`;
+}
+function otFaltan(ot, grupo) {
+  if (grupo && grupo.length > 1) return grupo.reduce((s, g) => s + Math.max(0, (g.items || 0) - (g.completados || 0)), 0);
+  return (ot.items || []).filter(i => i.estado !== "completado").length;
 }
 
 // ─── Coches de la OT ───
@@ -6726,17 +6788,19 @@ async function borrarItemOT(itemId, otId) {
 
 async function cerrarOT(otId) {
   const g = ((window._otActual || {}).grupo || []).length;
-  if (!confirm(`¿Cerrar la OT${g > 1 ? ` con sus ${g} coches` : ""}? Los items que queden pendientes se mantendrán.`)) return;
-  await api(`/api/ots/${otId}/cerrar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (!confirm(`¿Cerrar la OT${g > 1 ? ` con sus ${g} coches` : ""}? Todos los trabajos están completados.`)) return;
+  const r = await api(`/api/ots/${otId}/cerrar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo cerrar la OT", "error"); return; }
   toast("OT cerrada", "success");
   cerrarModalOTDetalle();
 }
 
 async function reabrirOT(otId) {
-  await api(`/api/ots/${otId}`, {
+  const r = await api(`/api/ots/${otId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ estado: "abierta", fecha_cierre: null })
   });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo reabrir la OT", "error"); return; }
   toast("OT reabierta", "success");
   cerrarModalOTDetalle();
 }
@@ -16722,7 +16786,9 @@ async function pvAutoGuardar(btn) {
 async function pvTurnoOT(tid) {
   const r = await pvPost(`/api/prev/turnos/${tid}/ot`, {});
   if (!r.ok) { toast(r.msg || "No se pudo abrir la OT", "error"); return; }
-  toast(r.ya_estaba ? `La OT #${r.ot_id} ya estaba abierta` : `OT #${r.ot_id} abierta con lo del turno`, "success");
+  toast(r.ya_estaba ? `La OT #${r.ot_id} ya estaba abierta`
+        : r.sumada ? `Lo del turno se sumó a la OT #${r.ot_id}, que el coche ya tenía abierta`
+        : `OT #${r.ot_id} abierta con lo del turno`, "success");
   await pvRefrescarDespuesDeTurno();
   abrirOT(r.ot_id);
 }
