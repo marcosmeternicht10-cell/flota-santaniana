@@ -5706,18 +5706,21 @@ async function renderOts() {
   const counts = { abierta: 0, en_proceso: 0, cerrada: 0 };
   (await api("/api/ots")).forEach(o => counts[o.estado] = (counts[o.estado] || 0) + 1);
 
-  // Ordenar las OTs activas por urgencia de horario de salida (el que sale antes, primero).
-  // Las cerradas se dejan por fecha. Las sin horario van al final.
-  if (otFiltroEstado !== "cerrada") {
-    ots.sort((a, b) => {
-      const cerrA = a.estado === "cerrada" ? 1 : 0;
-      const cerrB = b.estado === "cerrada" ? 1 : 0;
-      if (cerrA !== cerrB) return cerrA - cerrB;  // activas arriba
-      const ua = minutosHorario(a.horario_salida);
-      const ub = minutosHorario(b.horario_salida);
-      return ua - ub;  // más temprano = más urgente
-    });
-  }
+  // Separadas por fecha: las activas arriba, cada día con lo que entró ese día
+  // (una OT abierta que sumó un trabajo hoy sube a hoy); las cerradas debajo,
+  // por el día en que se cerraron. Dentro del día, el que sale antes primero.
+  ots.sort((a, b) => {
+    const cerrA = a.estado === "cerrada" ? 1 : 0;
+    const cerrB = b.estado === "cerrada" ? 1 : 0;
+    if (cerrA !== cerrB) return cerrA - cerrB;
+    const fa = otFechaLista(a), fb = otFechaLista(b);
+    if (fa !== fb) return fa < fb ? 1 : -1;
+    if (!cerrA) {
+      const d = minutosHorario(a.horario_salida) - minutosHorario(b.horario_salida);
+      if (d) return d;
+    }
+    return (b.id || 0) - (a.id || 0);
+  });
 
   content.innerHTML = `
     <div class="page-header">
@@ -5773,11 +5776,12 @@ async function renderOts() {
               <th class="center">Estado</th><th class="td-action"></th>
             </tr></thead>
             <tbody>
-              ${ots.map(o => {
+              ${ots.map((o, i) => {
+                const sep = otSeparadorLista(ots, i);
                 const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
                 const cs = o.coches && o.coches.length > 1 ? o.coches : [o];
                 const datos = cs.map(c => [c.n_interno, c.patente, c.marca, c.modelo].map(x => String(x || "").toLowerCase()).join(" ")).join(" ");
-                return `<tr class="clickable ot-fila" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
+                return `${sep}<tr class="clickable ot-fila" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
                             data-p="${trEsc(cs.map(c => String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "")).join(" "))}" data-t="${trEsc(datos)}">
                   <td><b>#${o.numero || o.id}</b></td>
                   <td class="center">${badgeSalida(o.horario_salida)}</td>
@@ -5814,6 +5818,38 @@ async function renderOts() {
   otFiltrarLista();
 }
 
+// La fecha con la que la OT se ubica en la lista: la abierta, el último día
+// que entró algo; la cerrada, el día en que se cerró.
+function otFechaLista(o) {
+  const a = String(o.fecha_apertura || "").slice(0, 10);
+  if (o.estado === "cerrada") return String(o.fecha_cierre || "").slice(0, 10) || a;
+  const u = String(o.ultima_fecha || "").slice(0, 10);
+  return u > a ? u : a;
+}
+function otSeparadorLista(ots, i) {
+  const o = ots[i], ant = ots[i - 1];
+  const cerr = o.estado === "cerrada";
+  const f = otFechaLista(o);
+  let html = "";
+  if (cerr && (!ant || ant.estado !== "cerrada") && otFiltroEstado !== "cerrada") {
+    const n = ots.filter(x => x.estado === "cerrada").length;
+    html += `<tr class="ot-lista-bloque"><td colspan="11"><i class="ti ti-circle-check"></i> Cerradas <span>${n}</span></td></tr>`;
+  } else if (ant && (ant.estado === "cerrada") === cerr && otFechaLista(ant) === f) {
+    return "";
+  }
+  const del = ots.filter(x => (x.estado === "cerrada") === cerr && otFechaLista(x) === f);
+  const hoy = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const ayer = new Date(Date.now() - new Date().getTimezoneOffset() * 60000 - 864e5).toISOString().slice(0, 10);
+  const d = f ? new Date(f + "T12:00:00") : null;
+  const dia = !d ? "Sin fecha" : `${OT_DIAS[d.getDay()]} ${f.slice(8, 10)}/${f.slice(5, 7)}${f.slice(0, 4) !== hoy.slice(0, 4) ? "/" + f.slice(2, 4) : ""}`;
+  const pre = f === hoy ? "Hoy · " : f === ayer ? "Ayer · " : "";
+  const falta = cerr ? 0 : del.reduce((s, x) => s + Math.max(0, (x.total_items || 0) - (x.items_completados || 0)), 0);
+  return html + `<tr class="ot-lista-dia${cerr ? " cerr" : ""}"><td colspan="11">
+      <span class="ot-dia-f"><i class="ti ti-calendar-event"></i> ${pre}${dia}</span>
+      <span class="ot-dia-n">${del.length} OT${del.length === 1 ? "" : "s"}${falta ? ` · ${falta} trabajo${falta === 1 ? "" : "s"} pendiente${falta === 1 ? "" : "s"}` : ""}</span>
+    </td></tr>`;
+}
+
 // Buscador de coche en la lista de OTs. Si el número coincide justo con un
 // coche, muestra solo ese (escribir "1700" no trae también el 21700); si no,
 // busca por parte del número, la patente, la marca o el modelo. "#45" busca
@@ -5842,6 +5878,13 @@ function otFiltrarLista() {
     const si = ver(f);
     f.hidden = !si;
     if (si) { n++; coches.add(f.dataset.n || f.dataset.p); }
+  });
+  // Los separadores de día (y el de cerradas) se ocultan si no queda nada debajo
+  let bloque = null, dia = null;
+  [...filas[0].parentElement.children].forEach(tr => {
+    if (tr.classList.contains("ot-lista-bloque")) { bloque = tr; dia = null; tr.hidden = true; return; }
+    if (tr.classList.contains("ot-lista-dia")) { dia = tr; tr.hidden = true; return; }
+    if (!tr.hidden) { if (bloque) bloque.hidden = false; if (dia) dia.hidden = false; }
   });
   const tabla = filas[0].closest(".table-wrap");
   if (tabla) tabla.hidden = q && !n;

@@ -6824,4 +6824,12 @@ tr.ot-dia-fila td { padding: 9px 10px 7px !important; background: var(--info-bg)
 .ot-ya-abierta .ti { color: var(--brand-blue); font-size: 18px; margin-top: 1px; }
 .ot-ya-abierta[hidden] { display: none; }
 .ot-fila-ult { display: block; font-size: 11px; color: var(--muted); }
+/* Lista de OTs separada por día */
+tr.ot-lista-dia td { padding: 10px 16px 8px !important; background: var(--info-bg); border-top: 1px solid var(--info-bd); }
+tr.ot-lista-dia.cerr td { background: var(--surface2); border-top-color: var(--border); }
+tr.ot-lista-dia.cerr .ot-dia-f { color: var(--muted); }
+tr.ot-lista-dia .ot-dia-n { background: var(--surface); }
+tr.ot-lista-bloque td { padding: 26px 16px 9px !important; background: var(--surface); border-top: 2px solid var(--border); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+tr.ot-lista-bloque .ti { font-size: 15px; vertical-align: -2px; margin-right: 4px; color: var(--success); }
+tr.ot-lista-bloque span { margin-left: 6px; padding: 1px 8px; border-radius: 10px; background: var(--surface3); font-size: 11.5px; letter-spacing: 0; }
 #modal-ot-detalle .btn-success:disabled { opacity: .42; cursor: not-allowed; filter: saturate(.6); }
