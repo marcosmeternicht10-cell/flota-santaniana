@@ -178,6 +178,10 @@ app.register_blueprint(bp_servicios)
 # módulos (preventivo, depósito, materiales).
 from ot_unica import init_ot_unica
 init_ot_unica()
+# Por qué quedó pendiente cada trabajo (lo de días anteriores se resalta)
+from ot_pendientes import bp_ot_pend, init_ot_pendientes
+init_ot_pendientes()
+app.register_blueprint(bp_ot_pend)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -1233,6 +1237,12 @@ def api_ots():
         # Una fila por OT: los coches agregados van en la fila de la principal
         from ot_materiales import agrupar_lista
         ots = agrupar_lista(ots)
+    # Lo que quedó pendiente de días anteriores, y por qué
+    try:
+        from ot_pendientes import marcar_atrasados
+        marcar_atrasados(ots)
+    except Exception:
+        pass
     return jsonify(ots)
 
 
@@ -1249,6 +1259,8 @@ def api_ot(ot_id):
     ot["km_verif"] = km_verificacion(ot["vehiculo_id"])
     ot["puede_verificar_km"] = _puede_editar_km_sesion()
     ot["puede_corregir_chofer"] = ot["puede_verificar_km"]
+    # El día de hoy (Paraguay): lo de días anteriores sin hacer va resaltado
+    ot["hoy"] = hoy()
     return jsonify(ot)
 
 
