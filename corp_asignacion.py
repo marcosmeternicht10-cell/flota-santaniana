@@ -610,8 +610,47 @@ def _fecha_ok(f):
         raise Error("Fecha inválida")
 
 
+def _vacia(f):
+    return not (f.get("chofer_usuario") or f.get("coche"))
+
+
+def _iguales(a, b):
+    return (a.get("chofer_usuario") or "") == (b.get("chofer_usuario") or "") and \
+        _coche_norm(a.get("coche")) == _coche_norm(b.get("coche"))
+
+
+def _normalizar_tramo(conn, dia_id, cli, tr, quien=""):
+    """La entrada y la salida se ven siempre por separado, pero si quedan con
+    el mismo chofer y el mismo coche se guardan como un tramo completo (así
+    las compara el control con lo rendido). Si las dos quedan vacías, no se
+    guarda nada."""
+    filas = [f for f in _filas(conn, dia_id) if f["cliente"] == cli and f["tramo"] == tr]
+    ent = next((f for f in filas if f["lado"] == "entrante"), None)
+    sal = next((f for f in filas if f["lado"] == "saliente"), None)
+    if not ent and not sal:
+        return
+    ent, sal = ent or {"lado": "entrante"}, sal or {"lado": "saliente"}
+    if _vacia(ent) and _vacia(sal):
+        for f in (ent, sal):
+            if f.get("id"):
+                conn.execute("DELETE FROM corp_asig WHERE id=?", (f["id"],))
+        return
+    if _iguales(ent, sal):
+        base = ent if ent.get("id") else sal
+        conn.execute("UPDATE corp_asig SET lado='completo', nota=? WHERE id=?",
+                     ((ent.get("nota") or sal.get("nota") or ""), base["id"]))
+        otra = sal if base is ent else ent
+        if otra.get("id"):
+            conn.execute("DELETE FROM corp_asig WHERE id=?", (otra["id"],))
+
+
 def guardar_slot(fecha, d, quien=""):
-    """Chofer, coche o nota de un tramo (completo, entrante o saliente)."""
+    """Chofer, coche o nota de la entrada o la salida de un tramo (o del tramo
+    completo, como mandaban las pantallas de antes).
+
+    La primera vez que se elige algo en una mitad, la otra (si está vacía)
+    queda igual: casi siempre el mismo chofer hace las dos. Si la otra la hace
+    otro, se cambia solo esa."""
     cli, tr = _tramo_ok(d.get("cliente"), d.get("tramo"))
     lado = d.get("lado") or "completo"
     if lado not in LADOS_TRAMO:
@@ -627,17 +666,24 @@ def guardar_slot(fecha, d, quien=""):
             filas = [f for f in filas if f["lado"] != "no_corre"]
         divid = any(f["lado"] in ("entrante", "saliente") for f in filas)
         if lado == "completo" and divid:
-            raise Error("Ese tramo está dividido: elegí entrante o saliente")
+            raise Error("Ese tramo tiene la entrada y la salida separadas: elegí cuál")
+        ahora = ahora_iso()
         if lado != "completo" and not divid:
-            # Se divide sobre la marcha: lo que estaba como completo pasa al entrante
+            # Se separa: las dos mitades arrancan con lo que tenía el tramo completo
             comp = next((f for f in filas if f["lado"] == "completo"), None)
             if comp:
                 conn.execute("UPDATE corp_asig SET lado='entrante' WHERE id=?", (comp["id"],))
                 comp["lado"] = "entrante"
-            otro = "saliente" if lado == "entrante" else "entrante"
-            if not any(f["lado"] == otro for f in filas):
-                conn.execute("""INSERT INTO corp_asig (dia_id, cliente, tramo, lado, actualizado_el, actualizado_por)
-                                VALUES (?,?,?,?,?,?)""", (dia_id, cli, tr, otro, ahora_iso(), quien[:80]))
+            base = comp or {}
+            nuevas = ["saliente"] if comp else ["entrante", "saliente"]
+            for ld in nuevas:
+                cur = conn.execute("""INSERT INTO corp_asig (dia_id, cliente, tramo, lado, chofer_usuario, chofer_nombre,
+                                                             coche, nota, actualizado_el, actualizado_por)
+                                      VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                                   (dia_id, cli, tr, ld, base.get("chofer_usuario") or "", base.get("chofer_nombre") or "",
+                                    base.get("coche") or "", base.get("nota") or "", ahora, quien[:80]))
+                filas.append({**base, "id": cur.lastrowid, "lado": ld,
+                              "chofer_usuario": base.get("chofer_usuario") or "", "coche": base.get("coche") or ""})
         f = next((x for x in filas if x["lado"] == lado), None)
         cambios = {}
         if "chofer_usuario" in d:
@@ -646,16 +692,37 @@ def guardar_slot(fecha, d, quien=""):
             cambios["coche"] = _coche_ok(d.get("coche"))
         if "nota" in d:
             cambios["nota"] = str(d.get("nota") or "").strip()[:120]
-        cambios["actualizado_el"], cambios["actualizado_por"] = ahora_iso(), quien[:80]
+        sello = {"actualizado_el": ahora, "actualizado_por": quien[:80]}
         if f:
-            conn.execute(f"UPDATE corp_asig SET {', '.join(k + '=?' for k in cambios)} WHERE id=?",
-                         tuple(cambios.values()) + (f["id"],))
+            todo = {**cambios, **sello}
+            conn.execute(f"UPDATE corp_asig SET {', '.join(k + '=?' for k in todo)} WHERE id=?",
+                         tuple(todo.values()) + (f["id"],))
             fid = f["id"]
         else:
-            cols = ["dia_id", "cliente", "tramo", "lado"] + list(cambios)
+            todo = {**cambios, **sello}
+            cols = ["dia_id", "cliente", "tramo", "lado"] + list(todo)
             cur = conn.execute(f"INSERT INTO corp_asig ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})",
-                               (dia_id, cli, tr, lado) + tuple(cambios.values()))
+                               (dia_id, cli, tr, lado) + tuple(todo.values()))
             fid = cur.lastrowid
+        if lado != "completo":
+            # Lo que todavía falta en la otra mitad se completa con esto: el
+            # chofer, si allá no hay chofer (y el coche es el mismo o no hay);
+            # el coche, si allá no hay coche y lo hace el mismo chofer. Lo que
+            # la otra mitad ya tiene distinto no se toca.
+            otra = next((x for x in filas if x["lado"] == ("saliente" if lado == "entrante" else "entrante")), None)
+            esta = {**(f or {}), **cambios}
+            copia = {}
+            if otra and otra.get("id"):
+                if cambios.get("chofer_usuario") and not otra.get("chofer_usuario") and \
+                        (not otra.get("coche") or _coche_norm(otra.get("coche")) == _coche_norm(esta.get("coche"))):
+                    copia["chofer_usuario"], copia["chofer_nombre"] = cambios["chofer_usuario"], cambios["chofer_nombre"]
+                chofer_otra = copia.get("chofer_usuario", otra.get("chofer_usuario")) or ""
+                if cambios.get("coche") and not otra.get("coche") and chofer_otra == (esta.get("chofer_usuario") or ""):
+                    copia["coche"] = cambios["coche"]
+            if copia:
+                conn.execute(f"UPDATE corp_asig SET {', '.join(k + '=?' for k in copia)} WHERE id=?",
+                             tuple(copia.values()) + (otra["id"],))
+            _normalizar_tramo(conn, dia_id, cli, tr, quien)
         # Un completo que quedó vacío no hace falta guardarlo
         if lado == "completo" and fid:
             r = conn.execute("SELECT * FROM corp_asig WHERE id=?", (fid,)).fetchone()
@@ -886,64 +953,115 @@ def foto(d):
     return {"fecha": d["fecha"], "filas": filas}
 
 
-def _desc_k(f):
+NOMBRE_MITAD = {"entrante": "entrada", "saliente": "salida"}
+
+
+def _desc_k(f, con_lado=True):
     if f["lado"] == "variable":
         return f"{f['cliente']} variable {f.get('hora') or ''} {f.get('detalle') or ''}".replace("  ", " ").strip()
-    lado = "" if f["lado"] in ("completo", "no_corre") else f" ({f['lado']})"
-    hora = info_tramo(f["tramo"])["hora"]
+    i = info_tramo(f["tramo"])
+    hora = (i["hora_fin"] or i["hora"]) if f["lado"] == "saliente" and con_lado else i["hora"]
+    lado = f" ({NOMBRE_MITAD[f['lado']]})" if con_lado and f["lado"] in NOMBRE_MITAD else ""
     return f"{_con_cliente(f['cliente'], tramo_corto(f['tramo']))}{(' ' + hora) if hora else ''}{lado}"
+
+
+def _por_mitad(filas):
+    """Un tramo completo cuenta como su entrada y su salida con lo mismo: así
+    separar una mitad no aparece como 'se quitó el tramo y se agregaron dos'."""
+    out = {}
+    for f in filas:
+        if f["lado"] == "completo":
+            for ld in ("entrante", "saliente"):
+                g = {**f, "lado": ld, "k": f"{f['cliente']}|{f['tramo']}|{ld}"}
+                out[g["k"]] = g
+        else:
+            out[f["k"]] = f
+    return out
+
+
+def _partes(v, f):
+    partes = []
+    if v.get("chofer_usuario") != f.get("chofer_usuario"):
+        if not f.get("chofer_usuario"):
+            partes.append(f"sale {nombre_lindo(v['chofer_nombre'])}, queda sin chofer")
+        elif not v.get("chofer_usuario"):
+            partes.append(f"va {nombre_lindo(f['chofer_nombre'])}")
+        else:
+            partes.append(f"chofer {nombre_lindo(v['chofer_nombre'])} → {nombre_lindo(f['chofer_nombre'])}")
+    if _coche_norm(v.get("coche")) != _coche_norm(f.get("coche")):
+        if not f.get("coche"):
+            partes.append(f"se sacó el coche {v['coche']}")
+        elif not v.get("coche"):
+            partes.append(f"va el coche {f['coche']}")
+        else:
+            partes.append(f"coche {v['coche']} → {f['coche']}")
+    if f["lado"] == "variable" and (v.get("hora") != f.get("hora") or v.get("detalle") != f.get("detalle")):
+        partes.append("cambió el horario o el detalle")
+    return partes
 
 
 def comparar(antes, ahora):
     if not antes:
         return []
-    va = {f["k"]: f for f in antes["filas"]}
-    vn = {f["k"]: f for f in ahora["filas"]}
-    cambios = []
+    va = _por_mitad(antes["filas"])
+    vn = _por_mitad(ahora["filas"])
     tramo_k = lambda f: f"{f['cliente']}|{f['tramo']}" if f["lado"] != "variable" else f["k"]
-    for k, f in vn.items():
-        v = va.get(k)
-        if f["lado"] == "no_corre":
-            if not v:
-                cambios.append({"k": tramo_k(f), "txt": f"{_desc_k(f)}: no corre" + (f" ({f['nota']})" if f.get("nota") else "")})
+    vacio = {"chofer_usuario": "", "chofer_nombre": "", "coche": ""}
+    # Lo que cambió en cada mitad (o en cada variable)
+    por_k = {}
+    for k in list(vn) + [k for k in va if k not in vn]:
+        f, v = vn.get(k), va.get(k)
+        ref = f or v
+        if ref["lado"] == "no_corre":
+            if f and not v:
+                por_k[k] = ("no_corre", f)
+            elif v and not f:
+                por_k[k] = ("vuelve", v)
             continue
-        if not v:
+        if ref["lado"] == "variable":
+            if f and not v:
+                por_k[k] = ("nuevo_var", f)
+            elif v and not f:
+                por_k[k] = ("quitado_var", v)
+            else:
+                p = _partes(v, f)
+                if p:
+                    por_k[k] = ("cambio", f, p)
+            continue
+        p = _partes(v or {**vacio, "lado": ref["lado"]}, f or {**vacio, "lado": ref["lado"]})
+        if p:
+            por_k[k] = ("cambio", ref, p)
+    cambios, hechos = [], set()
+    for k, x in por_k.items():
+        if k in hechos:
+            continue
+        hechos.add(k)
+        f = x[1]
+        base = {"k": tramo_k(f), "cliente": f["cliente"]}
+        if x[0] == "no_corre":
+            cambios.append({**base, "txt": f"{_desc_k(f, False)}: no corre" + (f" ({f['nota']})" if f.get("nota") else "")})
+        elif x[0] == "vuelve":
+            cambios.append({**base, "txt": f"{_desc_k(f, False)}: vuelve a correr"})
+        elif x[0] == "nuevo_var":
             partes = []
             if f.get("chofer_nombre"):
                 partes.append(f"va {nombre_lindo(f['chofer_nombre'])}")
             if f.get("coche"):
                 partes.append(f"con el {f['coche']}")
-            cambios.append({"k": tramo_k(f), "txt": f"{_desc_k(f)}: " + (" ".join(partes) or "se agregó")})
-            continue
-        partes = []
-        if v.get("chofer_usuario") != f.get("chofer_usuario"):
-            if not f.get("chofer_usuario"):
-                partes.append(f"sale {nombre_lindo(v['chofer_nombre'])}, queda sin chofer")
-            elif not v.get("chofer_usuario"):
-                partes.append(f"va {nombre_lindo(f['chofer_nombre'])}")
-            else:
-                partes.append(f"chofer {nombre_lindo(v['chofer_nombre'])} → {nombre_lindo(f['chofer_nombre'])}")
-        if _coche_norm(v.get("coche")) != _coche_norm(f.get("coche")):
-            if not f.get("coche"):
-                partes.append(f"se sacó el coche {v['coche']}")
-            elif not v.get("coche"):
-                partes.append(f"va el coche {f['coche']}")
-            else:
-                partes.append(f"coche {v['coche']} → {f['coche']}")
-        if f["lado"] == "variable" and (v.get("hora") != f.get("hora") or v.get("detalle") != f.get("detalle")):
-            partes.append("cambió el horario o el detalle")
-        if partes:
-            cambios.append({"k": tramo_k(f), "txt": f"{_desc_k(f)}: " + "; ".join(partes)})
-    for k, v in va.items():
-        if k in vn:
-            continue
-        if v["lado"] == "no_corre":
-            cambios.append({"k": tramo_k(v), "txt": f"{_desc_k(v)}: vuelve a correr"})
-        elif v["lado"] == "variable":
-            cambios.append({"k": tramo_k(v), "txt": f"Se quitó el {_desc_k(v)}"})
-        elif v.get("chofer_usuario") or v.get("coche"):
-            cambios.append({"k": tramo_k(v), "txt": f"{_desc_k(v)}: se quitó" +
-                            (f" a {nombre_lindo(v['chofer_nombre'])}" if v.get("chofer_nombre") else "")})
+            cambios.append({**base, "txt": f"{_desc_k(f)}: " + (" ".join(partes) or "se agregó")})
+        elif x[0] == "quitado_var":
+            cambios.append({**base, "txt": f"Se quitó el {_desc_k(f)}"})
+        else:
+            partes = x[2]
+            # Si la entrada y la salida cambiaron igual, va en un solo renglón
+            if f["lado"] in NOMBRE_MITAD:
+                otra = f"{f['cliente']}|{f['tramo']}|{'saliente' if f['lado'] == 'entrante' else 'entrante'}"
+                y = por_k.get(otra)
+                if y and y[0] == "cambio" and y[2] == partes:
+                    hechos.add(otra)
+                    cambios.append({**base, "txt": f"{_desc_k(f, False)}: " + "; ".join(partes)})
+                    continue
+            cambios.append({**base, "txt": f"{_desc_k(f)}: " + "; ".join(partes)})
     return cambios
 
 
@@ -1012,7 +1130,8 @@ def _dia_desde_foto(foto_d, fecha):
     return clientes
 
 
-def datos_para_pdf(fecha, version=None):
+def datos_para_pdf(fecha, version=None, cliente=None):
+    """Lo que va en la hoja. Con cliente, solo esa empresa (y sus cambios)."""
     d = armar_dia(fecha, con_control=False)
     if not d["existe"]:
         return None
@@ -1042,6 +1161,18 @@ def datos_para_pdf(fecha, version=None):
                 info["cambios"] = comparar(json.loads(v["datos"]), foto(d))
     finally:
         conn.close()
+    if cliente:
+        cli = next((c for c in info["clientes"] if _norm(c["cliente"]) == _norm(cliente)), None)
+        if not cli:
+            return None
+        info["clientes"] = [cli]
+        info["cliente"] = cli["cliente"]
+        # Los cambios de esa empresa (los de versiones viejas no traen la
+        # empresa: se reconocen porque el texto empieza con su nombre)
+        info["cambios"] = [c for c in info["cambios"]
+                           if (c.get("cliente") == cli["cliente"]) or
+                           (not c.get("cliente") and _norm(c.get("txt")).startswith(_norm(cli["cliente"])))]
+        info["resumen"] = _resumen_de(info["clientes"])
     info["cambiadas"] = {c["k"] for c in info["cambios"]}
     return info
 
@@ -1296,11 +1427,15 @@ def _archivo(fecha, tipo):
         fecha = _fecha_ok(fecha)
     except Error as e:
         return jsonify({"ok": False, "msg": str(e)}), 400
-    info = datos_para_pdf(fecha, request.args.get("v"))
+    cliente = (request.args.get("cliente") or "").strip()
+    info = datos_para_pdf(fecha, request.args.get("v"), cliente or None)
     if not info:
-        return jsonify({"ok": False, "msg": "No hay asignación ese día"}), 404
+        return jsonify({"ok": False, "msg": "No hay asignación de esa empresa ese día" if cliente
+                        else "No hay asignación ese día"}), 404
     import corp_asig_pdf
-    nombre = f"corporativos-{fecha}" + (f"-v{info['version']}" if not info["borrador"] and info["version"] else "-borrador")
+    quien = re.sub(r"[^A-Za-z0-9]+", "-", info.get("cliente") or "").strip("-").lower()
+    nombre = f"corporativos-{quien + '-' if quien else ''}{fecha}" + \
+        (f"-v{info['version']}" if not info["borrador"] and info["version"] else "-borrador")
     if tipo == "imagen":
         return Response(corp_asig_pdf.generar_imagen(info), mimetype="image/png",
                         headers={"Content-Disposition": f'inline; filename="{nombre}.png"'})
