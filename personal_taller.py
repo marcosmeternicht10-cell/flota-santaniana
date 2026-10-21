@@ -567,6 +567,7 @@ def asignar_escrito(texto, pid, quien=""):
 
 FECHA_TRABAJO = """COALESCE(NULLIF(SUBSTR(COALESCE(i.fecha_completado,''),1,10),''),
                             NULLIF(SUBSTR(COALESCE(o.fecha_cierre,''),1,10),''),
+                            NULLIF(SUBSTR(COALESCE(i.fecha,''),1,10),''),
                             SUBSTR(o.fecha_apertura,1,10))"""
 
 
@@ -789,7 +790,8 @@ def tecnicos_para_gerencial(desde, hasta):
         items = [dict(r) for r in conn.execute("""
             SELECT i.id, i.tipo, COALESCE(i.costo,0) AS costo, i.tecnico_otro, i.tecnico
             FROM ot_items i JOIN ordenes_trabajo o ON o.id = i.ot_id
-            WHERE o.fecha_apertura BETWEEN ? AND ?""", (desde, hasta)).fetchall()]
+            WHERE COALESCE(NULLIF(SUBSTR(COALESCE(i.fecha,''),1,10),''), o.fecha_apertura) BETWEEN ? AND ?""",
+            (desde, hasta)).fetchall()]
         gente = _personas_de_items(conn, [i["id"] for i in items])
         out = {}
         for it in items:
@@ -1239,12 +1241,42 @@ def pdf_ficha(f, etiqueta_periodo="", coche=""):
 # detalle de lo que tiene que hacer ESE técnico, materiales, horas y firmas.
 # Una hoja por técnico: el pintor no recibe lo del gomero. Sin montos.
 
-def hojas_de_ot(ot):
+def _fecha_item(ot, it):
+    return str(it.get("fecha") or ot.get("fecha_apertura") or "")[:10]
+
+
+def items_de_hojas(ot, cuales="pendientes"):
+    """Qué trabajos van en las hojas. Un coche tiene una sola OT abierta que
+    junta trabajos de varios días: por defecto sale lo pendiente; también un
+    día puntual ('dia:2026-10-21') o todo."""
+    its = ot.get("items") or []
+    if cuales == "todo":
+        return its
+    if str(cuales).startswith("dia:"):
+        d = str(cuales)[4:14]
+        return [i for i in its if _fecha_item(ot, i) == d]
+    return [i for i in its if i.get("estado") != "completado"]
+
+
+def opciones_hojas(ot):
+    its = ot.get("items") or []
+    dias = {}
+    for i in its:
+        dias.setdefault(_fecha_item(ot, i), []).append(i)
+    ops = [{"clave": "pendientes", "txt": "Lo pendiente", "n": len([i for i in its if i.get("estado") != "completado"])}]
+    if len(dias) > 1:
+        for d in sorted(dias, reverse=True):
+            ops.append({"clave": f"dia:{d}", "txt": d, "n": len(dias[d]), "dia": d})
+    ops.append({"clave": "todo", "txt": "Todo", "n": len(its)})
+    return ops
+
+
+def hojas_de_ot(ot, cuales="pendientes"):
     """Agrupa los ítems de la OT por técnico. Devuelve la lista de hojas, en
     orden de número (los escritos sin número al final), y los ítems que no
     tienen a nadie."""
     grupos, sin_nadie = {}, []
-    for it in ot.get("items") or []:
+    for it in items_de_hojas(ot, cuales):
         gente = it.get("personal") or []
         otros = [t for t in re.split(r"\s*,\s*", it.get("tecnico_otro") or "") if t.strip()]
         if not gente and not otros:
@@ -1381,7 +1413,11 @@ def pdf_hojas(ot, hojas):
 
         # ── Datos de la OT ──
         aw = W - 2 * M
-        caja(M, y, aw * 0.55 - 6, 34, "Fecha:", fdm(ot.get("fecha_apertura")))
+        # Los días de los trabajos de esta hoja (una OT junta varios días)
+        dias_h = sorted({_fecha_item(ot, it) for it in g["items"] if _fecha_item(ot, it)})
+        fecha_txt = fdm(dias_h[0]) if len(dias_h) == 1 else \
+            (f"{fdm(dias_h[0])[:5]} al {fdm(dias_h[-1])}" if dias_h else fdm(ot.get("fecha_apertura")))
+        caja(M, y, aw * 0.55 - 6, 34, "Fecha:", fecha_txt)
         caja(M + aw * 0.55, y, aw * 0.45, 34, "OT Nro.:", str(ot["id"]), grande=True)
         y += 44
         caja(M, y, aw * 0.30 - 6, 34, "Coche:", coche, grande=True)
@@ -1644,9 +1680,15 @@ def api_hojas_info(ot_id):
     ot = db.obtener_ot(ot_id)
     if not ot:
         return jsonify({"ok": False, "msg": "La OT no existe"}), 404
-    hojas, sin = hojas_de_ot(ot)
-    return jsonify({"ok": True, "hojas": [{"clave": g["clave"], "numero": g["numero"], "nombre": g["nombre"],
-                                           "puesto": g["puesto"], "trabajos": len(g["items"])} for g in hojas],
+    cuales = request.args.get("cuales") or ""
+    hojas, sin = hojas_de_ot(ot, cuales or "pendientes")
+    if not cuales and not hojas:
+        # Ya está todo hecho: se ofrece todo (por si es para archivar)
+        cuales = "todo"
+        hojas, sin = hojas_de_ot(ot, cuales)
+    return jsonify({"ok": True, "cuales": cuales or "pendientes", "opciones": opciones_hojas(ot),
+                    "hojas": [{"clave": g["clave"], "numero": g["numero"], "nombre": g["nombre"],
+                               "puesto": g["puesto"], "trabajos": len(g["items"])} for g in hojas],
                     "sin_tecnico": [it.get("descripcion") for it in sin]})
 
 
@@ -1659,12 +1701,15 @@ def api_hojas_pdf(ot_id):
     ot = db.obtener_ot(ot_id)
     if not ot:
         return jsonify({"ok": False, "msg": "La OT no existe"}), 404
-    hojas, _ = hojas_de_ot(ot)
+    cuales = request.args.get("cuales") or "pendientes"
+    hojas, _ = hojas_de_ot(ot, cuales)
     pedidas = [q for q in (request.args.get("quienes") or "").split("|") if q]
     if pedidas:
         hojas = [g for g in hojas if g["clave"] in pedidas]
     if not hojas:
-        return jsonify({"ok": False, "msg": "Ningún trabajo de esta OT tiene técnico asignado"}), 400
+        msg = "Ningún trabajo de esta OT tiene técnico asignado" if cuales == "todo" else \
+            "En lo elegido no hay trabajos con técnico asignado"
+        return jsonify({"ok": False, "msg": msg}), 400
     buf = pdf_hojas(ot, hojas)
     return send_file(buf, mimetype="application/pdf", as_attachment=False,
                      download_name=f"OT_{ot_id}_hojas_tecnicos.pdf")
