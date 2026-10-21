@@ -5333,6 +5333,7 @@ const LABEL_ESTADO_OT = {
 
 let otFiltroEstado = "";
 let otBusqueda = "";     // el coche que se está buscando en la lista de OTs (queda al volver)
+let otFiltroMotivo = ""; // "" | "*" (todas las que tienen algo atrasado) | la clave de un motivo | "__sin"
 
 // ═══════════════ PANTALLA DE COMPRAS / DEPÓSITO ═══════════════
 let comprasTab = "en_espera";
@@ -5718,6 +5719,9 @@ async function renderOts() {
     if (!cerrA) {
       const d = minutosHorario(a.horario_salida) - minutosHorario(b.horario_salida);
       if (d) return d;
+      // Las que arrastran trabajos de días anteriores, primero
+      const t = (b.atrasados || 0) - (a.atrasados || 0);
+      if (t) return t;
     }
     return (b.id || 0) - (a.id || 0);
   });
@@ -5765,6 +5769,7 @@ async function renderOts() {
         </label>
       </div>
       <div class="ot-buscar-res" id="ot-q-res" hidden></div>
+      ${otFiltroEstado === "cerrada" ? "" : otResumenAtrasados(ots)}
 
       ${ots.length === 0 ? `<div class="empty"><i class="ti ti-clipboard-off"></i>Sin OTs ${otFiltroEstado ? 'en este filtro' : 'todavía'}.<br>Tocá <b>Nueva OT</b> para cargar la primera.</div>` : `
         <div class="table-wrap">
@@ -5781,14 +5786,16 @@ async function renderOts() {
                 const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
                 const cs = o.coches && o.coches.length > 1 ? o.coches : [o];
                 const datos = cs.map(c => [c.n_interno, c.patente, c.marca, c.modelo].map(x => String(x || "").toLowerCase()).join(" ")).join(" ");
-                return `${sep}<tr class="clickable ot-fila" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
+                const motK = (o.atrasados_motivos || []).map(m => m.clave).concat(o.atrasados_sin_motivo ? ["__sin"] : []);
+                return `${sep}<tr class="clickable ot-fila${o.atrasados ? " atr" : ""}" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
+                            data-atr="${o.atrasados || 0}" data-mot="${trEsc(motK.join("|"))}"
                             data-p="${trEsc(cs.map(c => String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "")).join(" "))}" data-t="${trEsc(datos)}">
                   <td><b>#${o.numero || o.id}</b></td>
                   <td class="center">${badgeSalida(o.horario_salida)}</td>
                   <td>${o.fecha_apertura}${o.ultima_fecha && o.ultima_fecha > o.fecha_apertura ? `<span class="ot-fila-ult" title="Fecha del último trabajo que se sumó">último ${o.ultima_fecha.slice(8, 10)}/${o.ultima_fecha.slice(5, 7)}</span>` : ""}</td>
                   <td>${cs.length > 1
                     ? `<b>${cs.map(c => trEsc(String(c.n_interno || c.patente || ""))).join(" · ")}</b> <span class="ot-ncoches chico">${cs.length} coches</span>`
-                    : `<b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}`}</td>
+                    : `<b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}`}${otAtrasadosLinea(o)}</td>
                   <td>${o.conductor || "—"}</td>
                   <td>${o.procedencia || "—"}</td>
                   <td class="num">${o.km ? fmtNum(o.km) : "—"}</td>
@@ -5815,6 +5822,54 @@ async function renderOts() {
         <div class="empty" id="ot-q-vacio" hidden><i class="ti ti-search-off"></i><span></span></div>
       `}
     </div>`;
+  otFiltrarLista();
+}
+
+// Lo que una OT arrastra de días anteriores, en su fila de la lista
+function otAtrasadosLinea(o) {
+  if (!o.atrasados) return "";
+  const partes = (o.atrasados_motivos || []).map(m => `${m.motivo} ${m.n}`);
+  if (o.atrasados_sin_motivo) partes.push(`Sin motivo ${o.atrasados_sin_motivo}`);
+  const desde = o.atrasados_desde ? ` desde el ${o.atrasados_desde.slice(8, 10)}/${o.atrasados_desde.slice(5, 7)}` : "";
+  const txt = `${o.atrasados} pendiente${o.atrasados === 1 ? "" : "s"}${desde}`;
+  return `<div class="ot-atr-lin" title="${trEsc(txt + ": " + partes.join(" · "))}">
+      <i class="ti ti-alert-triangle"></i><b>${txt}</b>${partes.length ? `<span> · ${trEsc(partes.join(" · "))}</span>` : ""}</div>`;
+}
+// Arriba de la lista: cuánto quedó pendiente de días anteriores y por qué.
+// Cada motivo filtra la lista.
+function otResumenAtrasados(ots) {
+  const con = ots.filter(o => o.atrasados && o.estado !== "cerrada");
+  if (!con.length) { otFiltroMotivo = ""; return ""; }
+  const tot = con.reduce((s, o) => s + o.atrasados, 0);
+  const mot = {};
+  let sin = 0;
+  con.forEach(o => {
+    (o.atrasados_motivos || []).forEach(m => {
+      mot[m.clave] = mot[m.clave] || { motivo: m.motivo, n: 0 };
+      mot[m.clave].n += m.n;
+    });
+    sin += o.atrasados_sin_motivo || 0;
+  });
+  const lista = Object.entries(mot).sort((a, b) => b[1].n - a[1].n);
+  if (otFiltroMotivo && otFiltroMotivo !== "*" && otFiltroMotivo !== "__sin" && !mot[otFiltroMotivo]) otFiltroMotivo = "";
+  const chip = (k, txt, n, cls = "") => `<button type="button" class="ot-res-chip ${cls} ${otFiltroMotivo === k ? "on" : ""}" onclick="otFiltrarMotivo('${k.replace(/'/g, "\\'")}')"
+      aria-pressed="${otFiltroMotivo === k}">${txt}<small>${n}</small></button>`;
+  return `<div class="ot-res-atr">
+      <div class="ot-res-t"><i class="ti ti-alert-triangle"></i><span><b>Quedaron pendientes de días anteriores:</b> ${tot} trabajo${tot === 1 ? "" : "s"} en ${con.length} OT${con.length === 1 ? "" : "s"}</span></div>
+      <div class="ot-res-chips">
+        ${chip("*", "Ver solo esas", con.length, "todas")}
+        ${lista.map(([k, m]) => chip(k, trEsc(m.motivo), m.n)).join("")}
+        ${sin ? chip("__sin", "Sin motivo", sin, "sin") : ""}
+      </div>
+    </div>`;
+}
+function otFiltrarMotivo(k) {
+  otFiltroMotivo = otFiltroMotivo === k ? "" : k;
+  document.querySelectorAll(".ot-res-chip").forEach(b => {
+    const on = b.getAttribute("onclick").includes(`'${k}'`) && otFiltroMotivo === k;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
   otFiltrarLista();
 }
 
@@ -5860,6 +5915,8 @@ function otFiltrarLista() {
   const x = $("#ot-q-x"), res = $("#ot-q-res"), vacio = $("#ot-q-vacio");
   if (x) x.hidden = !q;
   if (!filas.length) { if (res) res.hidden = true; return; }
+  const mk = otFiltroMotivo;
+  const okMot = f => !mk || (mk === "*" ? f.dataset.atr !== "0" : (f.dataset.mot || "").split("|").includes(mk));
   let ver;
   if (!q) ver = () => true;
   else if (/^#\s*\d+$/.test(q) || /^ot\s*#?\s*\d+$/.test(q)) {
@@ -5875,7 +5932,7 @@ function otFiltrarLista() {
   let n = 0;
   const coches = new Set();
   filas.forEach(f => {
-    const si = ver(f);
+    const si = ver(f) && okMot(f);
     f.hidden = !si;
     if (si) { n++; coches.add(f.dataset.n || f.dataset.p); }
   });
@@ -5887,10 +5944,11 @@ function otFiltrarLista() {
     if (!tr.hidden) { if (bloque) bloque.hidden = false; if (dia) dia.hidden = false; }
   });
   const tabla = filas[0].closest(".table-wrap");
-  if (tabla) tabla.hidden = q && !n;
+  if (tabla) tabla.hidden = (q || mk) && !n;
   if (vacio) {
-    vacio.hidden = !(q && !n);
-    if (q && !n) vacio.querySelector("span").innerHTML = `Ninguna OT ${otFiltroEstado ? "en este filtro " : ""}de «${trEsc(otBusqueda.trim())}».<br>Probá con el N° de coche o la patente.`;
+    vacio.hidden = !((q || mk) && !n);
+    if (q && !n) vacio.querySelector("span").innerHTML = `Ninguna OT ${otFiltroEstado ? "en este filtro " : ""}de «${trEsc(otBusqueda.trim())}»${mk ? " con lo pendiente elegido arriba" : ""}.<br>Probá con el N° de coche o la patente.`;
+    else if (mk && !n) vacio.querySelector("span").innerHTML = `Ninguna OT ${otFiltroEstado ? "en este filtro " : ""}con ese motivo.`;
   }
   if (res) {
     res.hidden = !q || !n;
@@ -6236,6 +6294,7 @@ async function abrirOT(otId) {
             <span class="dot"></span> ${LABEL_ESTADO_OT[ot.estado]}
           </span>
           <span class="badge">${compl}/${ot.items.length} completados</span>
+          <span id="ot-badge-atr">${otBadgeAtrasados(ot)}</span>
           ${ot.estado_compras ? `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>` : ''}
           ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
         </div>
@@ -6264,32 +6323,7 @@ async function abrirOT(otId) {
                 <th class="center">#</th><th>Descripción</th><th class="center">Tipo</th>
                 <th class="center">Estado</th><th>Técnico</th><th>Material necesario</th><th class="td-action"></th>
               </tr></thead>
-              <tbody>
-                ${ot.items.map((it, idx) => `${otSeparadorDia(ot, idx)}
-                  <tr class="pv-ot-tr">
-                    <td class="center" style="color:var(--muted)">${idx+1}</td>
-                    <td><div class="pv-it-desc">${it.descripcion}</div></td>
-                    <td class="center">
-                      <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
-                        ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo===t?'selected':''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
-                      </select>
-                    </td>
-                    <td class="center">
-                      <select onchange="actualizarItem(${it.id},'estado',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
-                        <option value="pendiente" ${it.estado==='pendiente'?'selected':''}>Pendiente</option>
-                        <option value="en_proceso" ${it.estado==='en_proceso'?'selected':''}>En proceso</option>
-                        <option value="completado" ${it.estado==='completado'?'selected':''}>Completado</option>
-                      </select>
-                    </td>
-                    <td class="pt-td">${ptCelda(it)}</td>
-                    <td class="ot-mat">${otMatCelda(it)}</td>
-                    <td class="td-action">
-                      <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
-                    </td>
-                  </tr>
-                  <tr class="pv-it-fila"><td></td><td colspan="6"><div class="pv-it" id="pv-it-${it.id}" data-desc="${String(it.descripcion || "").replace(/"/g, "&quot;")}"></div></td></tr>
-                `).join("")}
-              </tbody>
+              <tbody>${otCuerpoItems(ot)}</tbody>
             </table>
           </div>
         `}
@@ -6365,6 +6399,239 @@ function otSeparadorDia(ot, idx) {
       <span class="ot-dia-n ${hechos === del.length ? "ok" : ""}">${hechos}/${del.length} hecho${del.length === 1 ? "" : "s"}</span>
     </td></tr>`;
 }
+// ─── Lo de hoy y lo que quedó pendiente de otros días ───
+// La OT abierta de un coche se ve como la OT del día: arriba, resaltado, lo
+// que quedó sin hacer de días anteriores con el motivo (lo escribe el taller
+// con sus palabras); después lo de hoy; y lo ya hecho otros días, plegado.
+const OT_PUEDE_MOTIVO = () => ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
+function otHoy(ot) {
+  return (ot && ot.hoy) || new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function otEsAtrasado(ot, it) {
+  return ot.estado !== "cerrada" && it.estado !== "completado" && otFechaItem(ot, it) < otHoy(ot);
+}
+function otDiasDesde(f, hoy) {
+  if (!f) return 0;
+  return Math.max(0, Math.round((new Date(hoy + "T12:00:00") - new Date(f + "T12:00:00")) / 864e5));
+}
+function otDiaTxt(f) {
+  if (!f) return "Sin fecha";
+  const d = new Date(f + "T12:00:00");
+  return `${OT_DIAS[d.getDay()]} ${f.slice(8, 10)}/${f.slice(5, 7)}`;
+}
+function otQuienes(del) {
+  const quien = [];
+  for (const x of del) {
+    const r = (x.reportado_por || "").trim();
+    const q = x.origen === "chofer" ? (r ? `Reportó ${caNombre(r)}` : "Reporte del chofer")
+      : x.origen === "preventivo" ? "Turno del preventivo" : "Cargado en el taller";
+    if (!quien.includes(q)) quien.push(q);
+  }
+  return quien.join(" · ");
+}
+function otBadgeAtrasados(ot) {
+  const atr = (ot.items || []).filter(it => otEsAtrasado(ot, it));
+  if (!atr.length) return "";
+  const sin = atr.filter(it => !(it.motivo_pendiente || "").trim()).length;
+  return `<span class="badge danger"><i class="ti ti-alert-triangle"></i> ${atr.length} pendiente${atr.length === 1 ? "" : "s"} de otros días${sin ? ` · ${sin} sin motivo` : ""}</span>`;
+}
+function otCuerpoItems(ot) {
+  const hoy = otHoy(ot);
+  const todos = ot.items.map((it, idx) => ({ it, idx }));
+  // Cerrada: todo junto por día, como historial
+  if (ot.estado === "cerrada") return todos.map(({ it, idx }) => otSeparadorDia(ot, idx) + otFilaItem(ot, it, idx, "")).join("");
+  const atr = todos.filter(x => otEsAtrasado(ot, x.it));
+  const deHoy = todos.filter(x => otFechaItem(ot, x.it) >= hoy);
+  const hechos = todos.filter(x => x.it.estado === "completado" && otFechaItem(ot, x.it) < hoy);
+  let h = "";
+  if (atr.length) {
+    h += `<tr class="ot-sec ot-sec-atr"><td colspan="7"><div class="ot-sec-in">
+        <span class="ot-sec-t"><i class="ti ti-alert-triangle"></i> Pendiente de otros días</span>
+        <span class="ot-sec-q" id="ot-sec-atr-q">${otAtrCabTxt(ot)}</span>
+      </div></td></tr>`;
+    h += atr.map(x => otFilaItem(ot, x.it, x.idx, "atr")).join("");
+  }
+  const hechosHoy = deHoy.filter(x => x.it.estado === "completado").length;
+  h += `<tr class="ot-sec ot-sec-hoy"><td colspan="7"><div class="ot-sec-in">
+      <span class="ot-sec-t"><i class="ti ti-calendar-event"></i> Hoy · ${otDiaTxt(hoy)}</span>
+      <span class="ot-sec-q">${trEsc(otQuienes(deHoy.map(x => x.it)))}</span>
+      ${deHoy.length ? `<span class="ot-dia-n ${hechosHoy === deHoy.length ? "ok" : ""}" id="ot-sec-hoy-n">${hechosHoy}/${deHoy.length} hecho${deHoy.length === 1 ? "" : "s"}</span>` : ""}
+    </div></td></tr>`;
+  h += deHoy.length ? deHoy.map(x => otFilaItem(ot, x.it, x.idx, "hoy")).join("")
+    : `<tr class="ot-sec-vacio"><td colspan="7">Hoy todavía no entró nada para este coche${atr.length ? ": queda lo pendiente de arriba" : ""}.</td></tr>`;
+  if (hechos.length) {
+    h += `<tr class="ot-sec ot-sec-hecho"><td colspan="7">
+        <button type="button" class="ot-sec-tog" onclick="otHechosVer(this)" aria-expanded="false">
+          <i class="ti ti-chevron-right"></i> Ya hecho otros días <span>${hechos.length}</span>
+        </button></td></tr>`;
+    let ant = null;
+    for (const x of hechos) {
+      const f = otFechaItem(ot, x.it);
+      if (f !== ant) {
+        const del = hechos.filter(y => otFechaItem(ot, y.it) === f).map(y => y.it);
+        h += `<tr class="ot-dia-fila ot-hecho-fila" hidden><td colspan="7">
+            <span class="ot-dia-f"><i class="ti ti-calendar-event"></i> ${otDiaTxt(f)}</span>
+            <span class="ot-dia-q">${trEsc(otQuienes(del))}</span>
+            <span class="ot-dia-n ok">${del.length} hecho${del.length === 1 ? "" : "s"}</span>
+          </td></tr>`;
+        ant = f;
+      }
+      h += otFilaItem(ot, x.it, x.idx, "hecho");
+    }
+  }
+  return h;
+}
+function otAtrCabTxt(ot) {
+  const atr = (ot.items || []).filter(it => otEsAtrasado(ot, it));
+  const hechos = atr.filter(it => it.estado === "completado").length;
+  const sin = atr.filter(it => !(it.motivo_pendiente || "").trim()).length;
+  return `${atr.length} trabajo${atr.length === 1 ? "" : "s"}${sin ? ` · <b>${sin} sin motivo</b>` : " · todos con motivo"}`;
+}
+function otHechosVer(btn) {
+  const abrir = btn.getAttribute("aria-expanded") !== "true";
+  btn.setAttribute("aria-expanded", abrir ? "true" : "false");
+  btn.closest("tbody").querySelectorAll(".ot-hecho-fila").forEach(tr => tr.hidden = !abrir);
+}
+function otFilaItem(ot, it, idx, modo) {
+  const oculto = modo === "hecho" ? " hidden" : "";
+  const cls = modo === "hecho" ? " ot-hecho-fila" : "";
+  const f = otFechaItem(ot, it);
+  const dias = otDiasDesde(f, otHoy(ot));
+  const desde = modo === "atr"
+    ? `<div class="ot-atr-desde"><i class="ti ti-clock-exclamation"></i> Desde el ${otDiaTxt(f).toLowerCase()} · hace ${dias} día${dias === 1 ? "" : "s"}</div>` : "";
+  const mot = (modo === "atr" || (modo === "hoy" && it.estado !== "completado")) ? otMotivoCaja(it, modo === "atr") : "";
+  return `<tr class="pv-ot-tr${modo === "atr" ? " ot-tr-atr" : ""}${it.estado === "completado" && modo === "atr" ? " ot-tr-hecho" : ""}${cls}" data-iid="${it.id}" data-modo="${modo}"${oculto}>
+      <td class="center" style="color:var(--muted)">${idx + 1}</td>
+      <td><div class="pv-it-desc">${trEsc(it.descripcion || "")}</div>${desde}${mot}</td>
+      <td class="center">
+        <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
+          ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo === t ? 'selected' : ''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
+        </select>
+      </td>
+      <td class="center">
+        <select onchange="actualizarItem(${it.id},'estado',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+          <option value="pendiente" ${it.estado === 'pendiente' ? 'selected' : ''}>Pendiente</option>
+          <option value="en_proceso" ${it.estado === 'en_proceso' ? 'selected' : ''}>En proceso</option>
+          <option value="completado" ${it.estado === 'completado' ? 'selected' : ''}>Completado</option>
+        </select>
+      </td>
+      <td class="pt-td">${ptCelda(it)}</td>
+      <td class="ot-mat">${otMatCelda(it)}</td>
+      <td class="td-action">
+        <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
+      </td>
+    </tr>
+    <tr class="pv-it-fila${cls}"${oculto}><td></td><td colspan="6"><div class="pv-it" id="pv-it-${it.id}" data-desc="${String(it.descripcion || "").replace(/"/g, "&quot;")}"></div></td></tr>`;
+}
+
+// ─── El motivo de lo pendiente: lo escribe el taller, se ofrecen los ya usados ───
+function otMotivoCaja(it, fuerte) {
+  const m = (it.motivo_pendiente || "").trim();
+  const puede = OT_PUEDE_MOTIVO();
+  let dentro;
+  if (m) dentro = `<button type="button" class="ot-mot-chip" ${puede ? `onclick="otMotivoEditar(this)" title="Cambiar el motivo"` : "disabled"}><i class="ti ti-tag"></i><span>${trEsc(m)}</span>${puede ? '<i class="ti ti-pencil ot-mot-lapiz"></i>' : ""}</button>`;
+  else if (!puede) dentro = fuerte ? `<span class="ot-mot-chip falta"><i class="ti ti-alert-triangle"></i><span>Sin motivo</span></span>` : "";
+  else if (fuerte) dentro = `<button type="button" class="ot-mot-chip falta" onclick="otMotivoEditar(this)"><i class="ti ti-alert-triangle"></i><span>¿Por qué quedó pendiente?</span></button>`;
+  else dentro = `<button type="button" class="ot-mot-link" onclick="otMotivoEditar(this)"><i class="ti ti-tag"></i> Motivo, si queda pendiente</button>`;
+  return `<div class="ot-mot${fuerte ? " fuerte" : ""}" data-iid="${it.id}">${dentro}</div>`;
+}
+async function otMotivoEditar(btn) {
+  const caja = btn.closest(".ot-mot");
+  const ot = window._otActual;
+  const it = ((ot && ot.items) || []).find(x => String(x.id) === caja.dataset.iid);
+  if (!it) return;
+  if (!window._otMotivos) {
+    const r = await api("/api/ot_motivos");
+    window._otMotivos = (r && r.motivos) || [];
+  }
+  const actual = (it.motivo_pendiente || "").trim();
+  caja.classList.add("editando");
+  caja.innerHTML = `
+    <div class="ot-mot-ed">
+      <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="¿Por qué quedó? Ej: falta el repuesto" aria-label="Motivo de pendiente" autocomplete="off">
+      <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
+      ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar</button>` : ""}
+      <button type="button" class="icon-btn ot-mot-no" title="Cancelar" aria-label="Cancelar"><i class="ti ti-x"></i></button>
+    </div>
+    <div class="ot-mot-sug"></div>`;
+  const inp = caja.querySelector(".ot-mot-in"), sug = caja.querySelector(".ot-mot-sug");
+  const pintarSug = () => {
+    const q = acNorm(inp.value);
+    const lista = window._otMotivos.filter(m => m.motivo !== actual && (!q || acNorm(m.motivo).includes(q))).slice(0, 8);
+    sug.innerHTML = lista.length
+      ? `<span class="ot-mot-sug-t">Ya usados:</span>` + lista.map(m => `<button type="button" class="ot-mot-s" data-m="${trEsc(m.motivo)}">${trEsc(m.motivo)}${m.pendientes ? `<small title="Trabajos pendientes con este motivo">${m.pendientes}</small>` : ""}</button>`).join("")
+      : (window._otMotivos.length ? "" : `<span class="ot-mot-sug-t">Escribilo con tus palabras: la próxima vez aparece acá para elegirlo.</span>`);
+    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => otMotivoGuardar(caja, it, b.dataset.m));
+  };
+  pintarSug();
+  inp.addEventListener("input", pintarSug);
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); otMotivoGuardar(caja, it, inp.value); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); otMotivoCerrar(caja, it); }
+  });
+  caja.querySelector(".ot-mot-ok").onclick = () => otMotivoGuardar(caja, it, inp.value);
+  caja.querySelector(".ot-mot-no").onclick = () => otMotivoCerrar(caja, it);
+  const q = caja.querySelector(".ot-mot-quitar");
+  if (q) q.onclick = () => otMotivoGuardar(caja, it, "");
+  inp.focus();
+  inp.select();
+}
+function otMotivoCerrar(caja, it) {
+  caja.outerHTML = otMotivoCaja(it, caja.classList.contains("fuerte"));
+}
+async function otMotivoGuardar(caja, it, motivo) {
+  motivo = String(motivo || "").replace(/\s+/g, " ").trim();
+  if (motivo === (it.motivo_pendiente || "").trim()) { otMotivoCerrar(caja, it); return; }
+  caja.querySelectorAll("button, input").forEach(x => x.disabled = true);
+  const r = await api(`/api/ot_items/${it.id}/motivo`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo })
+  });
+  if (!r || !r.ok) {
+    toast((r && r.msg) || "No se pudo guardar el motivo", "error");
+    caja.querySelectorAll("button, input").forEach(x => x.disabled = false);
+    return;
+  }
+  it.motivo_pendiente = r.motivo || "";
+  window._otMotivos = r.motivos || window._otMotivos;
+  otMotivoCerrar(caja, it);
+  otRefrescarCabeceras();
+  toast(r.motivo ? "Motivo anotado" : "Motivo quitado", "success");
+}
+// Después de cambiar un estado o un motivo: los contadores de arriba al día
+function otRefrescarCabeceras() {
+  const ot = window._otActual;
+  if (!ot) return;
+  const b = $("#ot-badge-atr");
+  if (b) b.innerHTML = otBadgeAtrasados(ot);
+  const q = $("#ot-sec-atr-q");
+  if (q) q.innerHTML = otAtrCabTxt(ot);
+  const n = $("#ot-sec-hoy-n");
+  if (n) {
+    const hoy = otHoy(ot);
+    const deHoy = ot.items.filter(it => otFechaItem(ot, it) >= hoy);
+    const h = deHoy.filter(it => it.estado === "completado").length;
+    n.textContent = `${h}/${deHoy.length} hecho${deHoy.length === 1 ? "" : "s"}`;
+    n.classList.toggle("ok", h === deHoy.length);
+  }
+}
+function otItemEstadoCambio(itemId, estado) {
+  const ot = window._otActual;
+  const it = ot && (ot.items || []).find(x => x.id === itemId);
+  if (!it) return;
+  it.estado = estado;
+  const tr = document.querySelector(`#modal-ot-detalle tr.pv-ot-tr[data-iid="${itemId}"]`);
+  if (tr) {
+    const modo = tr.dataset.modo;
+    if (modo === "atr") tr.classList.toggle("ot-tr-hecho", estado === "completado");
+    if (modo === "hoy") {
+      const caja = tr.querySelector(".ot-mot");
+      if (estado === "completado") caja?.remove();
+      else if (!caja) tr.querySelector(".pv-it-desc")?.insertAdjacentHTML("afterend", otMotivoCaja(it, false));
+    }
+  }
+  otRefrescarCabeceras();
+}
+
 function otFaltan(ot, grupo) {
   if (grupo && grupo.length > 1) return grupo.reduce((s, g) => s + Math.max(0, (g.items || 0) - (g.completados || 0)), 0);
   return (ot.items || []).filter(i => i.estado !== "completado").length;
@@ -6796,6 +7063,7 @@ async function actualizarItem(itemId, campo, valor, el) {
     toast(nombre, "success");
     // Si el ítem es del plan, al completarlo se cargó en el preventivo
     if (campo === "estado" || campo === "descripcion") pvOtRefrescar();
+    if (campo === "estado") otItemEstadoCambio(itemId, valor);
     if (el) {           // destello verde para confirmar que quedó
       el.style.transition = "background .2s";
       el.style.background = "var(--success-bg)";
