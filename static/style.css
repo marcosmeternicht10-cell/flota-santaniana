@@ -6521,6 +6521,50 @@ tr.ot-fila.atr td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
   .tr-rot-f[data-id] + .tr-rot-f[data-id] .icon-btn { margin-top: 0; }
 }
 .tr-rot-f.ro .tr-rot-fl { margin-top: 0; }
+/* Rotaciones: días de la semana y el internacional (sale de / vuelve a) */
+.tr-rot-dias { flex-basis: 100%; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.tr-rot-dias > span { font: 600 10.5px "Inter", sans-serif; color: var(--muted); margin-right: 4px; }
+.tr-rot-dias small { font-size: 11px; color: var(--light); margin-left: 4px; }
+.tr-rot-d { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border-strong); background: var(--surface); color: var(--muted); font: 700 11.5px "Inter", sans-serif; cursor: pointer; padding: 0; }
+.tr-rot-d.on { background: var(--azul-oscuro); border-color: var(--azul-oscuro); color: #fff; }
+.tr-rot-d:hover:not(:disabled) { border-color: var(--brand-blue); }
+.tr-rot-d:disabled { cursor: default; }
+.tr-rot-f .tr-rot-dmas { margin-left: 0; color: var(--light); }
+.tr-rot-f .tr-rot-dmas:hover { color: var(--brand-blue); }
+.tr-rot-f.int { padding: 10px 0; border-bottom: 1px dashed var(--border); }
+.tr-rot-f.int .tr-rot-l { width: 116px; }
+.tr-rot-f.int label span { width: auto; }
+
+/* Cuántas salidas lleva el día (internacional) */
+.tr-esperado { display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 8px 12px; border-radius: 10px; background: var(--info-bg); color: var(--text); font-size: 13px; }
+.tr-esperado .ti { font-size: 17px; color: var(--brand-blue); }
+.tr-patron { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: -4px 0 14px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); font-size: 12.5px; }
+.tr-pat-dia { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--azul-oscuro); text-transform: uppercase; letter-spacing: .04em; font-size: 11.5px; }
+.tr-pat-i { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; background: var(--success-bg); color: var(--success); }
+.tr-pat-i > span { color: var(--text); }
+.tr-pat-i small { color: var(--muted); }
+.tr-pat-i.falta { background: var(--warning-bg); color: #8A5A00; }
+.tr-pat-i.falta b { color: #8A5A00; }
+.tr-pat-i.sobra { background: var(--info-bg); color: var(--brand-blue); }
+.tr-pat-cfg { margin-left: auto; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; display: grid; place-items: center; }
+.tr-pat-cfg:hover { color: var(--brand-blue); border-color: var(--brand-blue); }
+.tr-pt { display: flex; flex-direction: column; gap: 4px; }
+.tr-pt-cab, .tr-pt-f { display: grid; grid-template-columns: 110px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; }
+.tr-pt-cab b { font-size: 12px; color: var(--muted); }
+.tr-pt-cab small { font-weight: 400; }
+.tr-pt-f { padding: 6px 8px; border-radius: 10px; }
+.tr-pt-f.dif { background: var(--info-bg); }
+.tr-pt-dia { font: 700 13px "Inter", sans-serif; color: var(--azul-oscuro); letter-spacing: .03em; }
+.tr-pt-c { display: flex; gap: 6px; }
+.tr-pt-n { width: 58px; height: 34px; border: 1px solid var(--border-strong); border-radius: 8px; text-align: center; font: 700 15px var(--display); color: var(--azul-oscuro); }
+.tr-pt-nota { flex: 1; min-width: 0; height: 34px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; font: 12px "Inter", sans-serif; color: var(--muted); }
+.tr-pt-n:focus, .tr-pt-nota:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+@media (max-width: 640px) {
+  .tr-pt-cab { display: none; }
+  .tr-pt-f { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .tr-pt-c::before { content: attr(data-l); width: 58px; flex-shrink: 0; align-self: center; font-size: 11.5px; color: var(--muted); }
+  .tr-pat-cfg { margin-left: 0; }
+}
 @media (max-width: 640px) {
   .tr-rot-f .tr-rot-l { width: 84px; }
   .tr-rot-a { display: none !important; }

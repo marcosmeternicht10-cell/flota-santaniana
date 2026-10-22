@@ -2489,13 +2489,23 @@ function trInicioVacio() {
   const ant = tr.d.dia_anterior;
   if (!trPuede()) return `<div class="tr-vacio-solo"><i class="ti ti-calendar-off"></i>Todavía no se armó el tráfico de este día.</div>`;
   const opciones = [];
+  const sem = trInt() && tr.d.dia_semana_pasada && tr.d.dia_semana_pasada !== ant ? tr.d.dia_semana_pasada : null;
+  if (sem) {
+    opciones.push(`
+      <button class="tr-op principal" onclick="trCopiar('${sem}', false, true)">
+        <i class="ti ti-calendar-repeat"></i>
+        <b>Armar desde el ${trLargo(sem)}</b>
+        <span>El mismo día de la semana pasada: trae las salidas que lleva este día. En cada regreso pone el coche que está en Buenos Aires.</span>
+        <em>Recomendado</em>
+      </button>`);
+  }
   if (ant) {
     opciones.push(`
-      <button class="tr-op principal" onclick="trCopiar('${ant}', false, true)">
+      <button class="tr-op ${sem ? "" : "principal"}" onclick="trCopiar('${ant}', false, true)">
         <i class="ti ti-wand"></i>
         <b>Armar desde el ${trLargo(ant)}</b>
         <span>Copia los horarios y en cada regreso pone el coche que quedó allá, con su tripulación. Las idas quedan para completar.</span>
-        <em>Recomendado</em>
+        ${sem ? "" : "<em>Recomendado</em>"}
       </button>
       <button class="tr-op" onclick="trCopiar('${ant}', true, false)">
         <i class="ti ti-copy"></i>
@@ -2535,7 +2545,8 @@ function trInicioVacio() {
     <div class="tr-vacio">
       <div class="tr-vacio-cab">
         <h2>¿Cómo armamos el ${trInt() ? "internacional del " : ""}${trLargo(tr.fecha)}?</h2>
-        <p>${ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+        <p>${sem ? "Cada día de la semana lleva sus salidas: lo más rápido es partir del mismo día de la semana pasada." : ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+        ${trEsperadoTxt()}
       </div>
       <div class="tr-ops">${opciones.join("")}</div>
       <form class="tr-nuevo-corr tr-vacio-nuevo" onsubmit="event.preventDefault(); trAgregarBloque(this)">
@@ -2584,7 +2595,80 @@ function trResumen() {
       ${r.con_aviso ? n(r.con_aviso, r.con_aviso === 1 ? "con aviso" : "con avisos", "aviso", "trIrAProblema('aviso')") : ""}
       ${r.refuerzos ? n(r.refuerzos, r.refuerzos === 1 ? "refuerzo" : "refuerzos", "ref") : ""}
       ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con papeles vencidos" : "coches con papeles vencidos", "doc", "trIrAProblema('doc')") : ""}
+    </div>${trPatronControl()}`;
+}
+
+// ─── Cuántas salidas lleva este día de la semana (internacional) ───
+const TR_LADO_TXT = { ida: ["De acá", "salida", "salidas", "cargadas"], regreso: ["De allá", "regreso", "regresos", "cargados"] };
+const trDiaPlural = n => { const x = String(n || "").toLowerCase(); return /s$/.test(x) ? x : x + "s"; };
+function trEsperadoTxt() {
+  const e = tr.d.esperado;
+  if (!e) return "";
+  const parte = l => {
+    const x = e[l] || {}, n = x.cantidad || 0;
+    if (!n) return "";
+    const [, uno, varios] = TR_LADO_TXT[l];
+    return `<b>${n} ${n === 1 ? uno : varios} ${l === "ida" ? "de acá" : "de allá"}</b>${x.nota ? ` (${trEsc(x.nota)})` : ""}`;
+  };
+  const partes = ["ida", "regreso"].map(parte).filter(Boolean);
+  return partes.length ? `<div class="tr-esperado"><i class="ti ti-calendar-week"></i><span>Los ${trEsc(trDiaPlural(e.dia))} llevan ${partes.join(" y ")}.</span></div>` : "";
+}
+function trPatronControl() {
+  const p = tr.d.patron;
+  if (!p || !trInt()) return "";
+  const item = l => {
+    const x = p[l] || {};
+    if (!x.esperadas) return "";
+    const [lbl, , , cargadas] = TR_LADO_TXT[l];
+    const est = x.faltan ? "falta" : x.sobran ? "sobra" : "ok";
+    const fin = x.faltan ? `<b>falta${x.faltan === 1 ? "" : "n"} ${x.faltan}</b>` : x.sobran ? `${x.sobran} de más` : "completo";
+    return `<span class="tr-pat-i ${est}" title="${trEsc(x.nota || "")}">
+        <i class="ti ti-${est === "ok" ? "circle-check" : est === "falta" ? "alert-triangle" : "info-circle"}"></i>
+        <span>${lbl}: ${x.hay} ${cargadas} · lleva ${x.esperadas}${x.nota ? ` <small>(${trEsc(x.nota)})</small>` : ""} · ${fin}</span></span>`;
+  };
+  const items = ["ida", "regreso"].map(item).filter(Boolean);
+  if (!items.length) return "";
+  return `<div class="tr-patron">
+      <span class="tr-pat-dia"><i class="ti ti-calendar-week"></i> Los ${trEsc(trDiaPlural(p.dia))}</span>
+      ${items.join("")}
+      ${trPuede() ? `<button class="tr-pat-cfg" onclick="trPatron()" title="Cambiar cuántas salidas lleva cada día"><i class="ti ti-adjustments-horizontal"></i></button>` : ""}
     </div>`;
+}
+async function trPatron() {
+  const d = await api(`/api/trafico/patron?${trT()}`);
+  if (!d || !d.ok) { toast((d && d.msg) || "No se pudo traer", "error"); return; }
+  const puede = d.puede_editar;
+  const celda = (x, l) => `<div class="tr-pt-c" data-l="${TR_LADO_TXT[l][0]}">
+      <input type="number" min="0" max="30" class="tr-pt-n" data-dia="${x.dia}" data-l="${l}" data-k="cantidad" value="${x[l].cantidad || 0}" ${puede ? "" : "disabled"} aria-label="${TR_LADO_TXT[l][0]} el ${x.nombre.toLowerCase()}">
+      <input class="tr-pt-nota" data-dia="${x.dia}" data-l="${l}" data-k="nota" value="${trEsc(x[l].nota || "")}" placeholder="nota" maxlength="80" ${puede ? "" : "disabled"}>
+    </div>`;
+  const o = rvModal({
+    titulo: "Salidas por día", icono: "calendar-week", ancho: 700, clase: "tr-pt-m",
+    sub: "Cuántas salidas de acá y regresos de allá lleva cada día. El tráfico avisa si falta alguna. 0 = ese día no se controla.",
+    cuerpo: `<div class="tr-pt">
+        <div class="tr-pt-cab"><span></span><b>${TR_LADO_TXT.ida[0]} <small>salidas</small></b><b>${TR_LADO_TXT.regreso[0]} <small>regresos</small></b></div>
+        ${d.dias.map(x => `<div class="tr-pt-f ${x.ida.cantidad > 2 || x.regreso.cantidad > 2 ? "dif" : ""}"><span class="tr-pt-dia">${trEsc(x.nombre)}</span>${celda(x, "ida")}${celda(x, "regreso")}</div>`).join("")}
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">${puede ? "Cancelar" : "Cerrar"}</button>
+          ${puede ? `<button class="btn btn-primary" id="tr-pt-ok"><i class="ti ti-check"></i> Guardar</button>` : ""}`,
+  });
+  const ok = o.querySelector("#tr-pt-ok");
+  if (!ok) return;
+  ok.onclick = async () => {
+    const dias = {};
+    o.querySelectorAll("[data-dia]").forEach(i => {
+      const x = dias[i.dataset.dia] = dias[i.dataset.dia] || { dia: +i.dataset.dia };
+      x[i.dataset.l] = x[i.dataset.l] || {};
+      x[i.dataset.l][i.dataset.k] = i.dataset.k === "cantidad" ? (parseInt(i.value, 10) || 0) : i.value.trim();
+    });
+    ok.disabled = true;
+    const r = await api(`/api/trafico/patron?${trT()}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tipo: tr.tipo, dias: Object.values(dias) }) });
+    ok.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+    toast("Salidas por día guardadas", "success");
+    o.remove();
+    if (tr.fecha) trCargar(tr.fecha);
+  };
 }
 
 function trIrAProblema(tipo) {
@@ -3347,12 +3431,16 @@ async function trVersiones(btn) {
 
 function trMas(btn) {
   const ant = tr.d.dia_anterior;
+  // En el internacional cada día de la semana es distinto: se parte del mismo día de la semana pasada
+  const sem = trInt() && tr.d.dia_semana_pasada && tr.d.dia_semana_pasada !== ant ? tr.d.dia_semana_pasada : null;
   trMenu(btn, [
     trInt() ? { icono: "file-spreadsheet", html: "<b>Importar la planilla</b><span>Uno o varios días: cada uno va a su fecha</span>", fn: trImportar }
             : { icono: "file-spreadsheet", html: "<b>Importar el Excel</b><span>Reemplaza lo cargado en este día</span>", fn: trImportar },
+    ...(sem ? [{ icono: "calendar-repeat", html: `<b>Rearmar desde el ${trCorto(sem)}</b><span>El mismo día de la semana pasada: trae las salidas de este día</span>`, fn: () => trCopiar(sem, false, true) }] : []),
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
-    ...(!trInt() ? [{ icono: "repeat", html: "<b>Rotaciones de los coches</b><span>Con qué regreso vuelve el coche de cada ida</span>", fn: trRotaciones }] : []),
+    { icono: "repeat", html: "<b>Rotaciones de los coches</b><span>Con qué regreso vuelve el coche de cada ida</span>", fn: trRotaciones },
+    ...(trInt() ? [{ icono: "calendar-week", html: "<b>Salidas por día</b><span>Cuántas salidas y regresos lleva cada día de la semana</span>", fn: trPatron }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
   ]);
 }
@@ -3361,48 +3449,87 @@ function trMas(btn) {
 // (el de las 09:00 a Concepción vuelve mañana 09:00, etc.). Con esto,
 // "Completar" pone en cada regreso el coche que corresponde.
 async function trRotaciones() {
-  const d = await api("/api/trafico/rotaciones");
+  const d = await api(`/api/trafico/rotaciones?${trT()}`);
   if (!d || !d.reglas) { toast("No se pudieron traer las rotaciones", "error"); return; }
   const o = rvModal({
-    titulo: "Rotaciones de los coches", icono: "repeat", ancho: 760, clase: "tr-rot-m",
-    sub: "Con qué regreso vuelve el coche de cada ida. Al completar los regresos va ese coche con su tripulación.",
+    titulo: `Rotaciones de los coches${trInt() ? " · internacional" : ""}`, icono: "repeat", ancho: 800, clase: "tr-rot-m",
+    sub: trInt()
+      ? "Con qué regreso vuelve el coche de cada salida. Sin hora, la primera salida va con el primer regreso y la segunda con el segundo. Lo que no tiene regla va con el coche que llegó antes a Buenos Aires."
+      : "Con qué regreso vuelve el coche de cada ida. Al completar los regresos va ese coche con su tripulación.",
     cuerpo: `<div id="tr-rot-cuerpo"></div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
   });
   o._rot = d;
   trRotPintar(o);
 }
+const TR_ROT_DIAS = [[1, "L", "lunes"], [2, "M", "martes"], [3, "M", "miércoles"], [4, "J", "jueves"], [5, "V", "viernes"], [6, "S", "sábado"], [7, "D", "domingo"]];
+function trRotDiasSet(r) { return new Set(String(r.dias || "").split(",").filter(Boolean).map(Number)); }
+function trRotDiasTxt(r) {
+  const d = trRotDiasSet(r);
+  if (!d.size || d.size === 7) return "";
+  return "los " + TR_ROT_DIAS.filter(x => d.has(x[0])).map(x => x[2]).join(", ").replace(/, ([^,]*)$/, " y $1");
+}
 function trRotPintar(o) {
-  const d = o._rot, puede = d.puede_editar;
+  const d = o._rot, puede = d.puede_editar, inter = d.tipo === "internacional";
   const grupos = {};
   d.corredores.forEach(c => { grupos[c] = []; });
-  d.reglas.forEach(r => { (grupos[r.corredor] = grupos[r.corredor] || []).push(r); });
+  d.reglas.forEach(r => { const c = r.corredor_ver || r.corredor; (grupos[c] = grupos[c] || []).push(r); });
   const dias = n => [["0", "el mismo día"], ["1", "al día siguiente"], ["2", "a los 2 días"], ["3", "a los 3 días"]]
     .map(([v, t]) => `<option value="${v}" ${String(n) === v ? "selected" : ""}>${t}</option>`).join("");
+  const chipsDias = r => {
+    const set = trRotDiasSet(r), todos = !set.size;
+    return `<div class="tr-rot-dias" data-id="${r.id}"><span>${inter ? "Sale los" : "Vale los"}</span>
+      ${TR_ROT_DIAS.map(([n, l, largo]) => `<button type="button" class="tr-rot-d ${todos || set.has(n) ? "on" : ""}" data-n="${n}" title="${largo}" ${puede ? `onclick="trRotDia(this)"` : "disabled"}>${l}</button>`).join("")}
+      <small>${todos ? "todos los días" : ""}</small></div>`;
+  };
   const fila = r => puede ? `
-    <div class="tr-rot-f" data-id="${r.id}">
-      <label><span>Sale</span><input class="tr-rot-h" data-c="ida_hora" value="${trEsc(r.ida_hora)}" inputmode="numeric" maxlength="5"></label>
+    <div class="tr-rot-f ${inter ? "int" : ""}" data-id="${r.id}">
+      ${inter ? `<label><span>Sale de</span><input class="tr-rot-l" data-c="ida_desde" value="${trEsc(r.ida_desde || "")}" placeholder="ASUNCION…" maxlength="20"></label>` : ""}
+      <label><span>${inter ? "a las <i>(opcional)</i>" : "Sale"}</span><input class="tr-rot-h" data-c="ida_hora" value="${trEsc(r.ida_hora || "")}" inputmode="numeric" maxlength="5" placeholder="${inter ? "—" : ""}"></label>
       <i class="ti ti-arrow-right tr-rot-fl"></i>
       <label><span>Vuelve</span><select data-c="vuelta_dias">${dias(r.vuelta_dias)}</select></label>
-      <label><span>a las</span><input class="tr-rot-h" data-c="vuelta_hora" value="${trEsc(r.vuelta_hora)}" inputmode="numeric" maxlength="5"></label>
-      <label><span>desde <i>(opcional)</i></span><input class="tr-rot-l" data-c="vuelta_desde" value="${trEsc(r.vuelta_desde)}" placeholder="LOT, ATQ…" maxlength="20"></label>
-      <label class="tr-rot-a"><span>va a <i>(opcional)</i></span><input class="tr-rot-l" data-c="ida_a" value="${trEsc(r.ida_a)}" placeholder="—" maxlength="20"></label>
+      <label><span>a las${inter ? " <i>(opcional)</i>" : ""}</span><input class="tr-rot-h" data-c="vuelta_hora" value="${trEsc(r.vuelta_hora || "")}" inputmode="numeric" maxlength="5" placeholder="${inter ? "—" : ""}"></label>
+      ${inter ? `<label><span>a</span><input class="tr-rot-l" data-c="vuelta_a" value="${trEsc(r.vuelta_a || "")}" placeholder="VILLARRICA…" maxlength="20"></label>`
+              : `<label><span>desde <i>(opcional)</i></span><input class="tr-rot-l" data-c="vuelta_desde" value="${trEsc(r.vuelta_desde || "")}" placeholder="LOT, ATQ…" maxlength="20"></label>
+      <label class="tr-rot-a"><span>va a <i>(opcional)</i></span><input class="tr-rot-l" data-c="ida_a" value="${trEsc(r.ida_a || "")}" placeholder="—" maxlength="20"></label>`}
       <button class="icon-btn" title="Quitar" onclick="trRotQuitar(this, ${r.id})"><i class="ti ti-trash"></i></button>
+      ${inter || trRotDiasSet(r).size ? chipsDias(r) : `<button type="button" class="tr-rot-dmas icon-btn" title="Que valga solo algunos días de la semana" aria-label="Elegir los días" onclick="this.outerHTML = this.dataset.h" data-h="${trEsc(chipsDias(r))}"><i class="ti ti-calendar-week"></i></button>`}
       ${r.nota ? `<small class="tr-rot-nota">${trEsc(r.nota)}</small>` : ""}
     </div>` : `
-    <div class="tr-rot-f ro"><b>${trEsc(r.ida_hora)}</b>${r.ida_a ? `<span class="tr-rot-a-ro">a ${trEsc(r.ida_a)}</span>` : ""}<i class="ti ti-arrow-right tr-rot-fl"></i>
-      <span>vuelve ${["el mismo día", "al día siguiente", "a los 2 días", "a los 3 días"][r.vuelta_dias || 0]} a las <b>${trEsc(r.vuelta_hora)}</b>${r.vuelta_desde ? ` desde ${trEsc(r.vuelta_desde)}` : ""}</span></div>`;
+    <div class="tr-rot-f ro">${r.ida_desde ? `<span>De <b>${trEsc(r.ida_desde)}</b></span>` : ""}<b>${trEsc(r.ida_hora || "")}</b>${r.ida_a ? `<span class="tr-rot-a-ro">a ${trEsc(r.ida_a)}</span>` : ""}<i class="ti ti-arrow-right tr-rot-fl"></i>
+      <span>vuelve ${["el mismo día", "al día siguiente", "a los 2 días", "a los 3 días"][r.vuelta_dias || 0]}${r.vuelta_hora ? ` a las <b>${trEsc(r.vuelta_hora)}</b>` : ""}${r.vuelta_desde ? ` desde ${trEsc(r.vuelta_desde)}` : ""}${r.vuelta_a ? ` a ${trEsc(r.vuelta_a)}` : ""}</span>
+      ${trRotDiasTxt(r) ? `<small class="tr-rot-nota">${inter ? "Sale" : "Vale"} ${trRotDiasTxt(r)}</small>` : ""}</div>`;
+  const orden = (a, b) => (a.ida_desde || "").localeCompare(b.ida_desde || "") || (a.ida_hora || "").localeCompare(b.ida_hora || "") || (a.dias || "").localeCompare(b.dias || "");
   o.querySelector("#tr-rot-cuerpo").innerHTML = Object.entries(grupos).map(([c, rs]) => `
     <div class="tr-rot-g">
-      <div class="tr-rot-cab"><b>${trEsc(c)}</b><span>${rs.length ? `${rs.length} ida${rs.length === 1 ? "" : "s"} con vuelta fija` : "Sin rotación: va el coche que está allá"}</span>
+      <div class="tr-rot-cab"><b>${trEsc(c)}</b><span>${rs.length ? `${rs.length} ${inter ? `regla${rs.length === 1 ? "" : "s"}` : `ida${rs.length === 1 ? "" : "s"}`} con vuelta fija` : "Sin rotación: va el coche que está allá"}</span>
         ${puede ? `<button class="btn btn-ghost btn-sm" data-corredor="${trEsc(c)}" onclick="trRotAgregar(this, this.dataset.corredor)"><i class="ti ti-plus"></i> Agregar</button>` : ""}</div>
-      ${rs.sort((a, b) => a.ida_hora.localeCompare(b.ida_hora)).map(fila).join("")}
+      ${rs.sort(orden).map(fila).join("")}
     </div>`).join("");
   o.querySelectorAll(".tr-rot-f[data-id] [data-c]").forEach(el => el.addEventListener("change", () => trRotGuardar(o, el)));
 }
+async function trRotDia(btn) {
+  const caja = btn.closest(".tr-rot-dias"), o = btn.closest(".modal-overlay");
+  const todos = [...caja.querySelectorAll(".tr-rot-d")];
+  // Con todos prendidos, tocar uno deja solo ese; si no, se prende o se apaga
+  if (todos.every(b => b.classList.contains("on"))) todos.forEach(b => b.classList.toggle("on", b === btn));
+  else btn.classList.toggle("on");
+  let sel = todos.filter(b => b.classList.contains("on")).map(b => +b.dataset.n);
+  if (!sel.length) { todos.forEach(b => b.classList.add("on")); sel = []; }
+  const r = await api(`/api/trafico/rotaciones/${caja.dataset.id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dias: sel.length === 7 ? [] : sel }),
+  });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  o._rot.reglas = r.reglas;
+  const marca = caja.querySelector("small");
+  if (marca) marca.textContent = sel.length && sel.length < 7 ? "" : "todos los días";
+  toast("Días guardados", "success");
+  if (tr.fecha) trCargar(tr.fecha);
+}
 async function trRotGuardar(o, el) {
   const f = el.closest(".tr-rot-f");
-  if (el.classList.contains("tr-rot-h")) el.value = trHora(el.value);
+  if (el.classList.contains("tr-rot-h")) el.value = el.value.trim() ? trHora(el.value) : "";
+  if (el.classList.contains("tr-rot-l")) el.value = el.value.toUpperCase();
   const r = await api(`/api/trafico/rotaciones/${f.dataset.id}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ [el.dataset.c]: el.value }),
   });
@@ -3414,6 +3541,22 @@ async function trRotGuardar(o, el) {
 }
 async function trRotAgregar(btn, corredor) {
   const o = btn.closest(".modal-overlay");
+  if (o._rot.tipo === "internacional") {
+    const desde = prompt("¿De dónde sale? (ej. ASUNCION, VILLARRICA)", "");
+    if (!desde) return;
+    const a = prompt("¿A dónde vuelve? (ej. VILLARRICA)", desde);
+    if (!a) return;
+    const r = await api("/api/trafico/rotaciones", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo: "internacional", corredor, ida_desde: desde, vuelta_a: a, vuelta_dias: 1 }),
+    });
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+    o._rot.reglas = r.reglas;
+    trRotPintar(o);
+    toast("Regla agregada: marcá los días que sale y cuándo vuelve", "success");
+    if (tr.fecha) trCargar(tr.fecha);
+    return;
+  }
   const ida = prompt(`${corredor}: ¿a qué hora sale la ida? (ej. 09:00)`, "");
   if (!ida) return;
   const vuelta = prompt("¿A qué hora vuelve? (ej. 21:00)", "");
