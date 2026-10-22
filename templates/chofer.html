@@ -79,10 +79,9 @@
     }
     textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
     .ayuda-texto {
-      font-size: 12.5px; color: var(--muted); margin-top: 8px;
-      display: flex; align-items: center; gap: 6px;
+      font-size: 12.5px; color: var(--muted); margin-top: 8px; line-height: 1.45;
     }
-    .ayuda-texto .ti { color: var(--azul); font-size: 16px; }
+    .ayuda-texto .ti { color: var(--azul); font-size: 16px; vertical-align: -3px; margin-right: 4px; }
 
     /* Zona de fotos */
     .botones-foto { display: flex; gap: 10px; }
@@ -151,7 +150,17 @@
     }
     .badge.abierta, .badge.pendiente { background: var(--warn-bg); color: var(--warn); }
     .badge.en_proceso { background: #e6effb; color: var(--azul); }
-    .badge.cerrada, .badge.completada { background: var(--ok-bg); color: var(--ok); }
+    .badge.cerrada, .badge.completada, .badge.resuelto { background: var(--ok-bg); color: var(--ok); }
+    .badge.en_revision { background: var(--warn-bg); color: var(--warn); }
+    .badge.en_taller { background: #e6effb; color: var(--azul); }
+    .badge.mas_adelante { background: #eef0f4; color: var(--muted); }
+    .badge.no_se_hace { background: var(--rojo-bg); color: var(--rojo); }
+    .problemas { list-style: none; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .problemas li { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 14px; padding-top: 6px; border-top: 1px dashed var(--borde); }
+    .problemas li:first-child { border-top: 0; padding-top: 0; }
+    .problemas .txt { flex: 1; min-width: 0; }
+    .problemas .motivo { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .problemas .badge { font-size: 10px; padding: 2px 8px; flex-shrink: 0; }
 
     .vacio { text-align: center; color: var(--muted); padding: 24px 10px; font-size: 14px; }
     .vacio .ti { font-size: 38px; display: block; margin-bottom: 8px; opacity: 0.5; }
@@ -251,7 +260,7 @@
     <div class="card exito" id="exito-card" style="display:none">
       <div class="check"><i class="ti ti-check"></i></div>
       <h3>¡Reporte enviado!</h3>
-      <p>El taller ya lo recibió. Podés ver el estado abajo.</p>
+      <p>El taller lo va a revisar y decidir qué se hace primero. Abajo ves en qué quedó cada cosa.</p>
       <button class="btn-otro" onclick="nuevoReporte()"><i class="ti ti-plus"></i> Cargar otro</button>
     </div>
 
@@ -415,17 +424,23 @@
           cont.innerHTML = '<div class="vacio"><i class="ti ti-inbox"></i> Todavía no cargaste reportes.</div>';
           return;
         }
-        const estadoLabel = { abierta: "En espera", pendiente: "En espera", en_proceso: "En taller", cerrada: "Resuelto", completada: "Resuelto" };
+        const estadoLabel = { abierta: "En espera", pendiente: "En espera", en_proceso: "En taller", cerrada: "Resuelto", completada: "Resuelto",
+                              en_revision: "En revisión", mas_adelante: "Más adelante", en_taller: "En el taller", resuelto: "Resuelto", no_se_hace: "No se hace" };
+        const esc = t => String(t || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
         cont.innerHTML = reps.map(rep => {
           const coche = rep.n_interno ? `Coche ${rep.n_interno}` : rep.patente;
           const est = rep.estado || "abierta";
           const label = estadoLabel[est] || est;
+          const probs = (rep.problemas || []).length > 1 || (rep.problemas || []).some(p => p.estado !== est || p.motivo)
+            ? `<ul class="problemas">${rep.problemas.map(p => `<li><span class="txt">${esc(p.txt)}${p.motivo ? `<span class="motivo">${esc(p.motivo)}</span>` : ""}</span><span class="badge ${p.estado}">${estadoLabel[p.estado] || p.estado}</span></li>`).join("")}</ul>`
+            : (rep.problemas || []).length ? `<ul class="problemas"><li><span class="txt">${esc(rep.problemas[0].txt)}</span></li></ul>` : "";
           return `<div class="reporte-item">
             <div class="linea1">
               <span class="patente">${coche} · ${rep.patente}</span>
               <span class="badge ${est}">${label}</span>
             </div>
             <div class="fecha">${rep.fecha}</div>
+            ${probs}
           </div>`;
         }).join("");
       } catch (e) {
