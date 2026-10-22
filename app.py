@@ -194,6 +194,10 @@ app.register_blueprint(bp_ot_afuera)
 from ot_pedidos import bp_ot_pedidos, init_ot_pedidos
 init_ot_pedidos()
 app.register_blueprint(bp_ot_pedidos)
+# Agencias de venta de pasajes: fichas, contratos con versiones, papeles y vencimientos
+from agencias import bp_agencias, init_agencias
+init_agencias()
+app.register_blueprint(bp_agencias)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0

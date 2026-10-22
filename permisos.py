@@ -62,6 +62,9 @@ GRUPOS_SECCIONES = [
         ("turismo_rendiciones", "Rendiciones de viaje"),
         ("turismo", "Presupuestos"),
     ]),
+    ("Comercial", [
+        ("agencias", "Agencias y contratos"),
+    ]),
 ]
 
 SECCIONES_VALIDAS = {clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs}
@@ -84,6 +87,8 @@ MODULOS_API = [
      ("/api/comb_rend",)),
     ({"compras", "repuestos", "proveedores"},
      ("/api/compras", "/api/repuestos")),
+    ({"agencias"},
+     ("/api/agencias",)),
     ({"gerencial", "oee"},
      ("/api/reporte_gerencial", "/api/exportar_reporte_gerencial",
       "/api/dossier", "/api/oee")),

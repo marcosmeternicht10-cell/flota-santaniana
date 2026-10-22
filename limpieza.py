@@ -119,6 +119,12 @@ GRUPOS = {
         "tablas": ["presupuestos_turismo"],
         "conteo": "presupuestos_turismo",
     },
+    "agencias": {
+        "nombre": "Agencias y contratos",
+        "detalle": "Las agencias de venta de pasajes con sus contratos y papeles",
+        "tablas": ["agencia_documentos", "agencia_contratos", "agencias"],
+        "conteo": "agencias",
+    },
     "rendiciones_corp": {
         "nombre": "Rendiciones de corporativos",
         "detalle": "Servicios que cargaron los choferes desde el celular. "
@@ -158,6 +164,8 @@ def reinicio_total(usuario_admin=""):
         # Registros por vehículo
         "comb_comprobantes", "comb_sobres", "combustible", "costos", "documentos", "fuera_servicio",
         "historial_eventos", "presupuestos_turismo",
+        # Agencias de venta de pasajes
+        "agencia_documentos", "agencia_contratos", "agencias",
         # Planes de mantenimiento
         "vehiculo_plan", "tareas_plan", "planes_mantenimiento",
         # Y por último la flota
