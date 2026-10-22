@@ -4252,7 +4252,6 @@ function svFlota() {
   const d = sv.d, t = d.totales, cs = d.coches;
   const max = Math.max(1, ...cs.map(c => c.servicios));
   const mediana = cs.length ? cs.map(c => c.servicios).sort((a, b) => a - b)[Math.floor(cs.length / 2)] : 0;
-  const top = cs.slice(0, 10);
   const uso = t.uso_flota ?? 0;
   return `
     <div class="sv-medidor" data-tip="${svTip({ t: "Coches en uso por día", f: [[svNum(t.coches_por_dia, 1), "en promedio"], [svNum(t.flota_base), svHacen()], [`${svNum(uso, 1)}%`, "en uso"]] })}">
@@ -4260,18 +4259,17 @@ function svFlota() {
       <div class="sv-med-pista"><i style="--w:${Math.min(100, uso)}%"></i></div>
       <small>Los que ${svHacen()} son los que salieron alguna vez en ese tráfico (turismo y corporativos no cuentan).</small>
     </div>
-    <h4 class="sv-sub">Los que más salieron <span>mediana: ${mediana} servicios</span></h4>
-    <div class="sv-barras chico">${top.map((c, i) => {
+    <h4 class="sv-sub">${cs.length > 10 ? "Todos, del que más salió al que menos" : "Los que más salieron"} <span>mediana: ${mediana} servicios</span></h4>
+    ${svListaScroll(cs.length, 10, cs.map((c, i) => {
       const tip = { t: `Coche ${c.coche}${c.modelo ? ` · ${c.modelo}` : ""}`, f: [[svNum(c.servicios), "servicios"], [svNum(c.dias), "días con salida"], [svNum(c.refuerzos), "refuerzos"]].concat(c.km ? [[svNum(c.km), "km"]] : []).concat([[c.corredor, "corredor principal"]]), p: "Tocá para ver sus servicios" };
       return `
-        <button class="sv-fila-barra" style="--i:${i}" data-tip="${svTip(tip)}" onclick="svAbrir('coche','${svEsc(c.coche)}')">
-          <span class="sv-fb-nom"><span class="sv-chapa">${svEsc(c.coche)}</span></span>
+        <button class="sv-fila-barra" style="--i:${Math.min(i, 10)}" data-tip="${svTip(tip)}" onclick="svAbrir('coche','${svEsc(c.coche)}')">
+          <span class="sv-fb-nom">${cs.length > 10 ? `<em class="sv-rank">${i + 1}</em>` : ""}<span class="sv-chapa">${svEsc(c.coche)}</span></span>
           <span class="sv-fb-pista"><i class="sv-fb-a" style="--w:${c.servicios / max * 100}%"></i>
             ${mediana ? `<i class="sv-mediana" style="--x:${mediana / max * 100}%" title="Mediana"></i>` : ""}</span>
           <span class="sv-fb-val"><b>${c.servicios}</b></span>
         </button>`;
-    }).join("")}</div>
-    ${cs.length > 10 ? `<button class="sv-link" onclick="svVerTabla(this.closest('.sv-card').querySelector('.sv-vista'))">Ver los ${cs.length} coches <i class="ti ti-arrow-right"></i></button>` : ""}
+    }).join(""), "coches")}
     <h4 class="sv-sub">No salieron en el período <span>${d.parados.length || "ninguno"}</span></h4>
     ${d.parados.length ? `<div class="sv-parados">${d.parados.map(p => {
       const est = p.estado || [];
@@ -4292,6 +4290,29 @@ function svTablaCoches() {
   </tbody></table>`;
 }
 
+// Una lista larga de barras: se ven las primeras y el resto se baja con la
+// rueda (o el dedo) en la misma vista, con el número de puesto y cuántos quedan
+function svListaScroll(total, visibles, filas, que) {
+  if (total <= visibles) return `<div class="sv-barras chico">${filas}</div>`;
+  return `
+    <div class="sv-scroll-caja" style="--vis:${visibles}">
+      <div class="sv-barras chico sv-scroll" onscroll="svScrollMarca(this)" tabindex="0" aria-label="Lista de ${total} ${que}: se baja para ver el resto">${filas}</div>
+      <div class="sv-scroll-pie"><i class="ti ti-arrows-vertical"></i><span>Bajá para ver los ${total} ${que}</span></div>
+    </div>`;
+}
+function svScrollMarca(el) {
+  const caja = el.closest(".sv-scroll-caja");
+  if (!caja) return;
+  const fin = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+  caja.classList.toggle("fin", fin);
+  caja.classList.toggle("bajo", el.scrollTop > 4);
+  const filas = el.querySelectorAll(".sv-fila-barra");
+  const alto = filas.length ? el.scrollHeight / filas.length : 1;
+  const ult = Math.min(filas.length, Math.round((el.scrollTop + el.clientHeight) / alto));
+  const pie = caja.querySelector(".sv-scroll-pie span");
+  if (pie) pie.textContent = fin ? `Son ${filas.length} en total` : `Viendo hasta el ${ult} de ${filas.length}`;
+}
+
 // ─── La tripulación ──────────────────────────────────────────────────────
 
 function svTripulacion() {
@@ -4300,7 +4321,6 @@ function svTripulacion() {
   const max = Math.max(1, ...ps.map(p => p.servicios));
   const ord = ps.map(p => p.servicios).sort((a, b) => a - b);
   const mediana = ord[Math.floor(ord.length / 2)];
-  const top = ps.slice(0, 14);
   const prom = ord.reduce((a, b) => a + b, 0) / ord.length;
   return `
     <div class="sv-trip-res">
@@ -4308,18 +4328,17 @@ function svTripulacion() {
       <div><b>${svNum(prom, 1)}</b><span>servicios en promedio</span></div>
       <div><b>${mediana}</b><span>la mitad hizo esto o menos</span></div>
     </div>
-    <h4 class="sv-sub">Los que más servicios hicieron <span>la rayita es la mediana</span></h4>
-    <div class="sv-barras chico">${top.map((p, i) => {
+    <h4 class="sv-sub">${ps.length > 14 ? "Todos, del que más servicios hizo al que menos" : "Los que más servicios hicieron"} <span>la rayita es la mediana</span></h4>
+    ${svListaScroll(ps.length, 14, ps.map((p, i) => {
       const tip = { t: p.nombre, f: [[svNum(p.servicios), "servicios"], [svNum(p.dias), "días con salida"], [svNum(p.coches), "coches distintos"], [svNum(p.refuerzos), "refuerzos"]].concat(p.km ? [[svNum(p.km), "km"]] : []), p: "Tocá para ver sus viajes" };
       return `
-        <button class="sv-fila-barra" style="--i:${i}" data-tip="${svTip(tip)}" data-n="${svEsc(p.nombre)}" onclick="svAbrir('tripulante', this.dataset.n)">
-          <span class="sv-fb-nom">${svEsc(p.nombre)}</span>
+        <button class="sv-fila-barra" style="--i:${Math.min(i, 14)}" data-tip="${svTip(tip)}" data-n="${svEsc(p.nombre)}" onclick="svAbrir('tripulante', this.dataset.n)">
+          <span class="sv-fb-nom">${ps.length > 14 ? `<em class="sv-rank">${i + 1}</em>` : ""}${svEsc(p.nombre)}</span>
           <span class="sv-fb-pista"><i class="sv-fb-a" style="--w:${p.servicios / max * 100}%"></i>
             <i class="sv-mediana" style="--x:${mediana / max * 100}%"></i></span>
           <span class="sv-fb-val"><b>${p.servicios}</b></span>
         </button>`;
-    }).join("")}</div>
-    ${ps.length > 14 ? `<button class="sv-link" onclick="svVerTabla(this.closest('.sv-card').querySelector('.sv-vista'))">Ver los ${ps.length} tripulantes <i class="ti ti-arrow-right"></i></button>` : ""}`;
+    }).join(""), "tripulantes")}`;
 }
 
 function svTablaTrip() {
@@ -6438,6 +6457,7 @@ async function abrirOT(otId) {
           </span>
           <span class="badge">${compl}/${ot.items.length} completados</span>
           <span id="ot-badge-atr">${otBadgeAtrasados(ot)}</span>
+          <span id="ot-badge-fac">${otBadgeFacturas(ot)}</span>
           ${ot.estado_compras ? `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>` : ''}
           ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
         </div>
@@ -6500,8 +6520,10 @@ async function abrirOT(otId) {
       </div>
     </div>
   `;
+  overlay.insertAdjacentHTML("beforeend", `<datalist id="ot-af-talleres"></datalist>`);
   document.body.appendChild(overlay);
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOTDetalle(); });
+  if (OT_PUEDE_MOTIVO()) otAfueraTalleres();
   otDepCargar(ot);
   pvOtCargar(ot);
   ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
@@ -6645,14 +6667,14 @@ function otFilaItem(ot, it, idx, modo) {
   const mot = (modo === "atr" || (modo === "hoy" && it.estado !== "completado")) ? otMotivoCaja(it, modo === "atr") : "";
   return `<tr class="pv-ot-tr${modo === "atr" ? " ot-tr-atr" : ""}${it.estado === "completado" && modo === "atr" ? " ot-tr-hecho" : ""}${cls}" data-iid="${it.id}" data-modo="${modo}"${oculto}>
       <td class="center" style="color:var(--muted)">${idx + 1}</td>
-      <td><div class="pv-it-desc">${trEsc(it.descripcion || "")}</div>${desde}${mot}</td>
+      <td><div class="pv-it-desc">${trEsc(it.descripcion || "")}</div>${desde}${mot}${otAfueraCaja(it)}</td>
       <td class="center">
         <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
           ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo === t ? 'selected' : ''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
         </select>
       </td>
       <td class="center">
-        <select onchange="actualizarItem(${it.id},'estado',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
+        <select class="ot-estado-sel" onchange="actualizarItem(${it.id},'estado',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px">
           <option value="pendiente" ${it.estado === 'pendiente' ? 'selected' : ''}>Pendiente</option>
           <option value="en_proceso" ${it.estado === 'en_proceso' ? 'selected' : ''}>En proceso</option>
           <option value="completado" ${it.estado === 'completado' ? 'selected' : ''}>Completado</option>
@@ -6772,7 +6794,124 @@ function otItemEstadoCambio(itemId, estado) {
       else if (!caja) tr.querySelector(".pv-it-desc")?.insertAdjacentHTML("afterend", otMotivoCaja(it, false));
     }
   }
+  otAfueraRepintar(it);
   otRefrescarCabeceras();
+}
+
+// ─── Trabajos hechos fuera del taller: la foto de la factura es el aval ───
+function otBadgeFacturas(ot) {
+  const n = (ot.items || []).filter(it => it.afuera && !it.factura).length;
+  return n ? `<span class="badge warning"><i class="ti ti-file-invoice"></i> ${n} hecho${n === 1 ? "" : "s"} afuera sin factura</span>` : "";
+}
+function otAfueraCaja(it) {
+  const puede = OT_PUEDE_MOTIVO();
+  if (!it.afuera) {
+    if (!puede || it.estado === "completado") return "";
+    return `<div class="ot-af" data-iid="${it.id}"><button type="button" class="ot-af-link" onclick="otAfueraMarcar(${it.id}, true)"><i class="ti ti-building-factory-2"></i> Se hace fuera del taller</button></div>`;
+  }
+  const f = it.factura;
+  return `<div class="ot-af on ${f ? "con" : "sin"}" data-iid="${it.id}">
+      <div class="ot-af-cab"><i class="ti ti-building-factory-2"></i><b>Fuera del taller</b>
+        ${puede ? `<input class="ot-af-taller" list="ot-af-talleres" value="${trEsc(it.taller_externo || "")}" placeholder="¿Dónde? ej. Rectificadora…" maxlength="80" onchange="otAfueraTaller(${it.id}, this)" aria-label="Dónde se hizo">`
+                : (it.taller_externo ? `<span class="ot-af-donde">${trEsc(it.taller_externo)}</span>` : "")}
+        ${puede && it.estado !== "completado" ? `<button type="button" class="ot-af-x" title="No, se hace en el taller" aria-label="Se hace en el taller" onclick="otAfueraMarcar(${it.id}, false)"><i class="ti ti-x"></i></button>` : ""}
+      </div>
+      ${f ? `<div class="ot-af-fila"><button type="button" class="ot-af-fac" onclick="otFacturaVer(${it.id})" title="Ver la factura"><i class="ti ti-file-invoice"></i><span>Factura${f.nro ? " " + trEsc(f.nro) : ""}</span></button>
+              ${puede ? `<button type="button" class="ot-af-cambiar" onclick="otFacturaSubir(${it.id})">Cambiar</button>` : ""}
+              <small class="ot-af-quien">Subida el ${otFechaHora(f.subida_el)}${f.subida_por ? " por " + trEsc(f.subida_por.split(" ")[0]) : ""}</small></div>`
+          : `<div class="ot-af-falta"><span><i class="ti ti-alert-triangle"></i> Falta la foto de la factura</span>${puede ? `<button type="button" class="ot-af-subir" onclick="otFacturaSubir(${it.id})"><i class="ti ti-camera"></i> Subir factura</button>` : ""}</div>`}
+    </div>`;
+}
+function otAfueraRepintar(it) {
+  const caja = document.querySelector(`#modal-ot-detalle .ot-af[data-iid="${it.id}"]`);
+  const nuevo = otAfueraCaja(it);
+  if (caja) caja.outerHTML = nuevo || "";
+  else if (nuevo) document.querySelector(`#modal-ot-detalle tr.pv-ot-tr[data-iid="${it.id}"] td:nth-child(2)`)?.insertAdjacentHTML("beforeend", nuevo);
+  const b = $("#ot-badge-fac");
+  if (b && window._otActual) b.innerHTML = otBadgeFacturas(window._otActual);
+}
+async function otAfueraTalleres() {
+  const r = await api("/api/ot_talleres_externos");
+  const dl = document.getElementById("ot-af-talleres");
+  if (dl && r && r.talleres) dl.innerHTML = r.talleres.map(t => `<option value="${trEsc(t)}">`).join("");
+}
+async function otAfueraMarcar(iid, on) {
+  const it = ((window._otActual || {}).items || []).find(x => x.id === iid);
+  if (!it) return;
+  if (!on && it.factura && !confirm("Ya tiene la foto de la factura. ¿Igual se hizo en el taller?")) return;
+  const r = await api(`/api/ot_items/${iid}/afuera`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ afuera: on }) });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  it.afuera = r.afuera; it.taller_externo = r.taller; it.factura = r.factura;
+  otAfueraRepintar(it);
+  if (on) setTimeout(() => document.querySelector(`#modal-ot-detalle .ot-af[data-iid="${iid}"] .ot-af-taller`)?.focus(), 50);
+  toast(on ? "Marcado como hecho afuera: para completarlo va a pedir la factura" : "Se hace en el taller", "success");
+}
+async function otAfueraTaller(iid, inp) {
+  const it = ((window._otActual || {}).items || []).find(x => x.id === iid);
+  const r = await api(`/api/ot_items/${iid}/afuera`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ taller: inp.value }) });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); inp.classList.add("mal"); return; }
+  inp.classList.remove("mal");
+  if (it) it.taller_externo = r.taller;
+  inp.value = r.taller || "";
+  otMatOk(inp);
+}
+function otEstadoSelect(iid, estado) {
+  const sel = document.querySelector(`#modal-ot-detalle tr.pv-ot-tr[data-iid="${iid}"] .ot-estado-sel`);
+  if (sel) sel.value = estado || "pendiente";
+}
+async function otFacturaVer(iid) {
+  const r = await api(`/api/ot_items/${iid}/factura`);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se encontró la factura", "error"); return; }
+  verFotoGrande(r.foto);
+}
+function otFacturaSubir(iid, completar = false) {
+  const it = ((window._otActual || {}).items || []).find(x => x.id === iid);
+  if (!it) return;
+  let foto = null;
+  const o = rvModal({
+    titulo: completar ? "Para completarlo, la factura" : "Factura del trabajo", icono: "file-invoice", ancho: 460, clase: "ot-fac-m",
+    sub: `${trEsc(it.descripcion || "")}${completar ? " · se hizo fuera del taller: la foto de la factura es el aval de que se hizo y de lo que se pagó." : ""}`,
+    cuerpo: `
+      <label class="rv-f"><span>¿Dónde se hizo?</span><input id="otf-taller" list="ot-af-talleres" value="${trEsc(it.taller_externo || "")}" placeholder="Nombre del taller" maxlength="80"></label>
+      <input type="file" id="otf-camara" accept="image/*" capture="environment" hidden>
+      <input type="file" id="otf-galeria" accept="image/*" hidden>
+      <div class="otf-botones">
+        <button type="button" class="btn btn-ghost" onclick="document.getElementById('otf-camara').click()"><i class="ti ti-camera"></i> Sacar foto</button>
+        <button type="button" class="btn btn-ghost" onclick="document.getElementById('otf-galeria').click()"><i class="ti ti-photo"></i> Elegir foto</button>
+      </div>
+      <div id="otf-prev" class="otf-prev"><i class="ti ti-file-invoice"></i><span>Todavía no hay foto</span></div>
+      <label class="rv-f"><span>Nº de factura <i>(opcional)</i></span><input id="otf-nro" placeholder="001-001-0001234" maxlength="40" inputmode="numeric"></label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="otf-ok" disabled><i class="ti ti-check"></i> ${completar ? "Guardar y completar" : "Guardar factura"}</button>`,
+  });
+  const prev = o.querySelector("#otf-prev"), ok = o.querySelector("#otf-ok");
+  const tomar = async f => {
+    if (!f) return;
+    prev.innerHTML = `<span class="otf-cargando">Preparando la foto…</span>`;
+    try { foto = await comprimirFoto(f); } catch (e) { foto = null; }
+    prev.innerHTML = foto ? `<img src="${foto}" alt="Factura">` : `<i class="ti ti-alert-triangle"></i><span>No se pudo leer la foto</span>`;
+    prev.classList.toggle("con", !!foto);
+    ok.disabled = !foto;
+  };
+  o.querySelector("#otf-camara").addEventListener("change", e => tomar(e.target.files[0]));
+  o.querySelector("#otf-galeria").addEventListener("change", e => tomar(e.target.files[0]));
+  ok.onclick = async () => {
+    if (!foto) return;
+    ok.disabled = true;
+    const r = await api(`/api/ot_items/${iid}/factura`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ foto, nro: o.querySelector("#otf-nro").value, taller: o.querySelector("#otf-taller").value }),
+    });
+    if (!r || !r.ok) { ok.disabled = false; toast((r && r.msg) || "No se pudo subir la factura", "error"); return; }
+    it.afuera = r.afuera; it.taller_externo = r.taller; it.factura = r.factura;
+    o.remove();
+    otAfueraRepintar(it);
+    toast("Factura guardada", "success");
+    if (completar) {
+      otEstadoSelect(iid, "completado");
+      await actualizarItem(iid, "estado", "completado");
+    }
+  };
 }
 
 function otFaltan(ot, grupo) {
@@ -7188,6 +7327,15 @@ function cerrarModalOTDetalle() {
 }
 
 async function actualizarItem(itemId, campo, valor, el) {
+  // Un trabajo hecho afuera se completa con la foto de la factura
+  if (campo === "estado" && valor === "completado") {
+    const it = ((window._otActual || {}).items || []).find(x => x.id === itemId);
+    if (it && it.afuera && !it.factura) {
+      otEstadoSelect(itemId, it.estado);
+      otFacturaSubir(itemId, true);
+      return;
+    }
+  }
   if (campo === "costo") {
     valor = (valor || "0").toString().replace(/\./g, "").replace(/,/g, ".");
   }
@@ -7212,6 +7360,11 @@ async function actualizarItem(itemId, campo, valor, el) {
       el.style.background = "var(--success-bg)";
       setTimeout(() => { el.style.background = ""; }, 700);
     }
+  } else if (r && r.falta_factura) {
+    const it = ((window._otActual || {}).items || []).find(x => x.id === itemId);
+    otEstadoSelect(itemId, it ? it.estado : "pendiente");
+    if (it) { it.afuera = true; it.factura = null; }
+    otFacturaSubir(itemId, true);
   } else {
     toast((r && (r.msg || r.error)) || "No se pudo guardar el cambio", "error");
     if (el) {

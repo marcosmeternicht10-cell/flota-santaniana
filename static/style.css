@@ -4260,6 +4260,20 @@ html[data-tr-dir="ant"]::view-transition-new(tr-dia) { animation: trVtEntraIzq .
 .sv-fb-val b { margin-right: 3px; font: 700 15px var(--display); color: var(--sv-tinta); }
 .sv-barras.chico .sv-fila-barra { grid-template-columns: minmax(96px, 38%) minmax(0, 1fr) 44px; padding: 5px 8px; }
 .sv-barras.chico .sv-fb-pista { height: 11px; }
+/* Listas largas (todos los tripulantes, todos los coches): se bajan en la misma vista */
+.sv-scroll-caja { position: relative; }
+.sv-scroll { max-height: calc(var(--vis, 14) * 30px + 6px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.sv-scroll::-webkit-scrollbar { width: 6px; }
+.sv-scroll::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+.sv-scroll:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 2px; border-radius: 8px; }
+.sv-scroll-caja::before, .sv-scroll-caja::after { content: ""; position: absolute; left: 0; right: 10px; height: 26px; pointer-events: none; transition: opacity .25s; }
+.sv-scroll-caja::before { top: 0; background: linear-gradient(var(--surface), transparent); opacity: 0; }
+.sv-scroll-caja::after { bottom: 30px; background: linear-gradient(transparent, var(--surface)); }
+.sv-scroll-caja.bajo::before { opacity: 1; }
+.sv-scroll-caja.fin::after { opacity: 0; }
+.sv-scroll-pie { display: flex; align-items: center; justify-content: center; gap: 5px; height: 30px; font-size: 12px; color: var(--muted); }
+.sv-scroll-pie .ti { font-size: 14px; }
+.sv-rank { display: inline-block; min-width: 22px; margin-right: 6px; font: 600 11.5px "Inter", sans-serif; font-style: normal; color: var(--light); text-align: right; font-variant-numeric: tabular-nums; }
 .sv-mediana { position: absolute; left: var(--x); top: -4px; bottom: -4px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--azul-oscuro); opacity: .75; }
 .sv-chapa {
   display: inline-block; min-width: 56px; padding: 3px 8px; border-radius: 6px; text-align: center;
@@ -6465,6 +6479,41 @@ tr.ot-tr-atr.ot-tr-hecho .ot-mot, tr.ot-tr-atr.ot-tr-hecho .ot-atr-desde { opaci
 .ot-mot-s:hover { border-color: var(--brand-blue); background: var(--info-bg); }
 .ot-mot-s small { padding: 0 6px; border-radius: 8px; background: var(--danger-bg); color: var(--danger); font-size: 10.5px; font-weight: 700; }
 .ot-mot.editando { min-width: 260px; }
+
+/* ── Trabajo hecho fuera del taller: la factura es el aval ── */
+.ot-af { margin-top: 6px; }
+.ot-af-link { display: inline-flex; align-items: center; gap: 4px; padding: 2px 0; border: 0; background: none; color: var(--muted); font-family: inherit; font-size: 11.5px; cursor: pointer; }
+.ot-af-link:hover { color: var(--brand-blue); text-decoration: underline; }
+.ot-af.on { padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); max-width: 340px; }
+.ot-af.on.sin { border-color: var(--warning-bd); background: var(--warning-bg); }
+.ot-af.on.con { border-color: var(--success-bd); background: var(--success-bg); }
+.ot-af-cab { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.ot-af-cab > .ti { font-size: 15px; color: var(--muted); }
+.ot-af-cab b { white-space: nowrap; }
+.ot-af-taller { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 7px; background: #fff; font-family: inherit; font-size: 12px; }
+.ot-af-taller:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30, 90, 150, .12); }
+.ot-af-taller.ok { border-color: var(--success); }
+.ot-af-taller.mal { border-color: var(--danger); }
+.ot-af-donde { font-weight: 600; }
+.ot-af-x { width: 24px; height: 24px; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; display: grid; place-items: center; flex-shrink: 0; }
+.ot-af-x:hover { background: var(--surface3); color: var(--danger); }
+.ot-af-falta { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; font-weight: 600; color: #7A5200; }
+.ot-af-falta .ti { color: var(--warning); }
+.ot-af-subir { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border: 0; border-radius: 7px; background: var(--azul-oscuro); color: #fff; font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ot-af-subir:hover { filter: brightness(1.1); }
+.ot-af-fila { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; margin-top: 6px; }
+.ot-af-fac { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 10px; border: 1px solid var(--success-bd); border-radius: 999px; background: #fff; color: var(--success); font-family: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ot-af-fac span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ot-af-quien { flex-basis: 100%; font-size: 11px; color: var(--muted); }
+.ot-af-fac:hover { border-color: var(--success); }
+.ot-af-cambiar { border: 0; background: none; color: var(--muted); font-family: inherit; font-size: 11.5px; cursor: pointer; text-decoration: underline; }
+.ot-fac-m .rv-modal-cuerpo { display: flex; flex-direction: column; gap: 12px; }
+.otf-botones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.otf-prev { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 150px; border: 2px dashed var(--border-strong); border-radius: 12px; color: var(--light); font-size: 12.5px; overflow: hidden; }
+.otf-prev .ti { font-size: 34px; }
+.otf-prev.con { border-style: solid; border-color: var(--success-bd); padding: 6px; }
+.otf-prev img { max-width: 100%; max-height: 280px; border-radius: 8px; object-fit: contain; }
+.otf-cargando { color: var(--muted); }
 
 /* ── Lista de OTs: lo que quedó pendiente de días anteriores ── */
 tr.ot-fila.atr td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
