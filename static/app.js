@@ -6945,7 +6945,10 @@ function pdFila(p) {
     <article class="pd-fila ${abiertos ? "p-" + pr : ""} ${pd.sel.has(p.id) ? "sel" : ""}" data-id="${p.id}">
       ${abiertos ? `<input type="checkbox" class="pd-check" ${pd.sel.has(p.id) ? "checked" : ""} aria-label="Elegir" onchange="pdElegir(${p.id}, this.checked)">` : ""}
       <div class="pd-txt">
-        <p>${trEsc(p.descripcion)}</p>
+        <p>${trEsc(p.descripcion)}${abiertos ? `<button type="button" class="pd-editar" onclick="pdEditar(${p.id})" title="Corregir el pedido" aria-label="Corregir el pedido"><i class="ti ti-pencil"></i></button>` : ""}</p>
+        ${p.descripcion_original ? `<div class="pd-orig">${/^\(separado de: /.test(p.descripcion_original)
+          ? `<i class="ti ti-arrows-split-2"></i> Separado de «${trEsc(p.descripcion_original.replace(/^\(separado de: /, "").replace(/\)$/, ""))}»`
+          : `<i class="ti ti-pencil"></i> Corregido${p.editado_por ? ` por ${trEsc(p.editado_por.split(" ")[0])}` : ""} · el chofer escribió «${trEsc(p.descripcion_original)}»`}</div>` : ""}
         <div class="pd-meta">
           <span class="pd-tipo">${PD_TIPO[p.tipo] || trEsc(p.tipo || "")}</span>
           <span><i class="ti ti-user"></i> ${trEsc(caNombre(p.chofer || "") || "—")}</span>
@@ -6967,6 +6970,53 @@ function pdFila(p) {
         </div>
       </div>` : pd.estado === "descartado" ? `<div class="pd-acc"><button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> Volver a nuevos</button></div>` : ""}
     </article>`;
+}
+// Corregir el pedido antes de decidir: el texto (varias líneas = varios
+// pedidos), el tipo, el coche si el chofer eligió mal, y una nota
+async function pdEditar(id) {
+  const p = pdBuscar(id);
+  const fila = document.querySelector(`.pd-fila[data-id="${id}"]`);
+  if (!p || !fila) return;
+  if (!pd.vehiculos) pd.vehiculos = (await api("/api/vehiculos")) || [];
+  const txt = fila.querySelector(".pd-txt");
+  fila.classList.add("editando");
+  txt.innerHTML = `
+    <div class="pd-ed">
+      <label class="rv-f"><span>Qué hay que hacer</span>
+        <textarea id="pd-ed-txt-${id}" rows="2" maxlength="900">${trEsc(p.descripcion)}</textarea></label>
+      <small class="pd-ed-ayuda"><i class="ti ti-arrows-split-2"></i> Si son dos cosas, escribí una por línea y se separan en dos pedidos.</small>
+      <div class="pd-ed-fila">
+        <label class="rv-f"><span>Tipo</span><select id="pd-ed-tipo-${id}">${Object.entries(PD_TIPO).map(([k, t]) => `<option value="${k}" ${p.tipo === k ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        <div class="rv-f pd-ed-coche"><span>Coche</span>${buscadorCoche(`pd-ed-veh-${id}`, pd.vehiculos, { seleccionado: p.vehiculo_id })}</div>
+      </div>
+      <label class="rv-f"><span>Nota del taller <i>(opcional)</i></span><input id="pd-ed-nota-${id}" value="${trEsc(p.nota || "")}" maxlength="200" placeholder="Ej: ver junto con el service de la semana que viene"></label>
+      <div class="pd-ed-btns">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="pdPintar()">Cancelar</button>
+        <button type="button" class="btn btn-primary btn-sm" id="pd-ed-ok-${id}"><i class="ti ti-check"></i> Guardar</button>
+      </div>
+    </div>`;
+  const ta = txt.querySelector("textarea");
+  const crecer = () => { ta.style.height = "auto"; ta.style.height = Math.min(220, ta.scrollHeight + 2) + "px"; };
+  ta.addEventListener("input", crecer); crecer();
+  ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); pdPintar(); }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); txt.querySelector(`#pd-ed-ok-${id}`).click(); }
+  });
+  txt.querySelector(`#pd-ed-ok-${id}`).onclick = async () => {
+    const cuerpo = {
+      descripcion: ta.value, tipo: txt.querySelector(`#pd-ed-tipo-${id}`).value,
+      vehiculo_id: document.getElementById(`pd-ed-veh-${id}`).value || p.vehiculo_id,
+      nota: txt.querySelector(`#pd-ed-nota-${id}`).value,
+    };
+    if (!cuerpo.descripcion.trim()) { toast("El pedido no puede quedar vacío", "error"); ta.focus(); return; }
+    const r = await api(`/api/ot_pedidos/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+    toast(String(cuerpo.vehiculo_id) !== String(p.vehiculo_id) ? `${r.msg}: pasó a otro coche` : r.msg, "success");
+    await pdCargar();
+    const f = document.querySelector(`.pd-fila[data-id="${id}"]`);
+    if (f && !trQuieto()) { f.classList.remove("ilumina"); void f.offsetWidth; f.classList.add("ilumina"); }
+  };
 }
 function pdBuscar(id) {
   for (const c of pd.d.coches) { const p = c.pedidos.find(x => x.id === id); if (p) return p; }
