@@ -202,6 +202,7 @@ function irA(sec) {
     inventario_neu: renderInventarioNeu,
     ots: renderOts,
     pedidos_ot: renderPedidosOT,
+    agencias: renderAgencias,
     compras: renderCompras,
     repuestos: renderRepuestos,
     proveedores: renderProveedores,
@@ -259,6 +260,16 @@ async function renderDashboard() {
       });
     }
   });
+  // Agencias: contratos vencidos o por vencer, garantías y papeles vencidos
+  if (typeof agPuedeVer === "function" && agPuedeVer()) {
+    const av = await api("/api/agencias/avisos").catch(() => null);
+    // Van primero (si no, con muchos preventivos vencidos no se llegan a ver)
+    (av && av.avisos || []).filter(a => a.urgente).slice(0, 4).reverse().forEach(a => alertas.unshift({
+      tipo: a.nivel === "mal" ? "danger" : "warning", icono: "building-store",
+      titulo: `Agencia ${a.agencia} · ${a.que === "contrato" ? "contrato" : a.que === "garantia" ? "garantía" : "papeles"}`,
+      meta: a.txt, urgente: true, ir: `agIrA(${a.agencia_id})`,
+    }));
+  }
   // Ordenar: urgentes primero
   alertas.sort((a, b) => (b.urgente ? 1 : 0) - (a.urgente ? 1 : 0));
 
@@ -310,7 +321,7 @@ async function renderDashboard() {
       ${alertas.length ? `
         <div class="section-title"><i class="ti ti-bell"></i> Alertas críticas (${alertas.length})</div>
         ${alertas.slice(0, 8).map(a => `
-          <div class="dash-alert ${a.tipo}">
+          <div class="dash-alert ${a.tipo} ${a.ir ? "clic" : ""}" ${a.ir ? `role="button" tabindex="0" onclick="${a.ir}" onkeydown="if(event.key==='Enter')${a.ir}"` : ""}>
             <i class="ti ti-${a.icono}"></i>
             <div class="dash-alert-text">
               <div class="dash-alert-title">${a.titulo}</div>
@@ -4588,6 +4599,13 @@ function svContar() {
 
 // ─── Arranque ───────────────────────────────────────────────────────────
 setCoche(null);
+// Agencias: el número del menú con lo que hay que atender
+if (["admin", "taller", "auditor"].includes(window.USUARIO_ROL)) {
+  setTimeout(() => agActualizarBadge(), 1500);
+  setInterval(() => { if (!document.hidden) agActualizarBadge(); }, 600000);
+} else {
+  document.querySelector('.nav-item[data-sec="agencias"]')?.style.setProperty("display", "none");
+}
 if (["admin", "taller"].includes(window.USUARIO_ROL)) {
   setTimeout(() => pdActualizarBadge(), 1200);
   setInterval(() => { if (!document.hidden) pdActualizarBadge(); }, 120000);
@@ -4611,13 +4629,13 @@ if (window.USUARIO_ROL === "compras") {
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible", "corp_asignacion",
                             "corp_resumen", "corp_historial", "corp_empresas",
-                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion"];
+                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación") s.style.display = "none";
+    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación" && t !== "Comercial") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="corp_resumen"]')?.classList.add("active");
   renderCorpResumen();
@@ -20420,4 +20438,938 @@ async function rcTraerSilencioso() {
   if (!$("#rc-cuerpo")) return;
   const d = await api(`/api/comb_rend?${rcQS()}`);
   if (d && d.sobres && $("#rc-cuerpo")) { rc.datos = d; rcPintarEstados(); rcPintar(); }
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// AGENCIAS Y CONTRATOS: las agencias que venden pasajes de la empresa, en qué
+// condiciones, qué vence y dónde quedan. La ubicación abre Google Maps con
+// enlaces comunes (sin clave ni costo): ver el local, cómo llegar, compartirlo
+// por WhatsApp y armar un recorrido por varias agencias.
+// ════════════════════════════════════════════════════════════════════════════
+const ag = { d: null, filtro: "todas", ciudad: "", q: "", vista: "lista", id: null, f: null, tab: "contrato", recorrido: false, sel: [] };
+const AG_NIVEL = {
+  mal: ["Hay que atender", "alert-triangle"], ojo: ["A tener en cuenta", "clock-exclamation"], ok: ["Al día", "circle-check"],
+  suspendida: ["Suspendida", "player-pause"], baja: ["Dada de baja", "archive"],
+};
+const AG_ICONO_AVISO = { contrato: "file-certificate", garantia: "shield-exclamation", papel: "file-alert" };
+const agPuede = () => ["admin", "taller"].includes(window.USUARIO_ROL);
+const agEsc = s => trEsc(s);
+const agPuedeVer = () => ["admin", "taller", "auditor"].includes(window.USUARIO_ROL) && puedeVerSeccion("agencias");
+
+function agFecha(f) {
+  if (!f) return "—";
+  const [y, m, d] = String(f).slice(0, 10).split("-");
+  return d ? `${d}/${m}/${y}` : "—";
+}
+function agGs(n) { return "Gs. " + fmtNum(Math.round(+n || 0)); }
+function agNombreCorto(n) { return String(n || "").split(" ")[0]; }
+function agWa(num) {
+  // 0991 534 292 → 595991534292 (el formato que pide wa.me)
+  let d = String(num || "").replace(/\D/g, "");
+  if (d.startsWith("595")) return d;
+  if (d.startsWith("0")) d = d.slice(1);
+  return d.length >= 8 ? "595" + d : d;
+}
+function agMasDias(f, n) {
+  const d = new Date(f + "T12:00");
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function agMasMeses(f, n) {
+  const d = new Date(f + "T12:00");
+  const dia = d.getDate();
+  d.setDate(1); d.setMonth(d.getMonth() + n);
+  const ult = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(dia, ult));
+  return d.toISOString().slice(0, 10);
+}
+
+// ─── Google Maps (enlaces, sin clave) ───
+function agTieneUbic(a) { return a.lat != null || !!a.ubicacion_link || !!a.direccion; }
+function agPunto(a) {
+  // Lo que se le da a Maps como destino o parada: coordenadas si hay; si no, el texto
+  if (a.lat != null && a.lng != null) return `${a.lat},${a.lng}`;
+  const l = a.ubicacion_link || "";
+  if (l && !/^https?:/i.test(l)) return l;
+  return [a.direccion || a.nombre, a.ciudad, "Paraguay"].filter(Boolean).join(", ");
+}
+function agMapsVer(a) {
+  if (a.lat != null && a.lng != null) return `https://www.google.com/maps/search/?api=1&query=${a.lat},${a.lng}`;
+  if (/^https?:/i.test(a.ubicacion_link || "")) return a.ubicacion_link;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(agPunto(a))}`;
+}
+function agMapsIr(a) {
+  // Con solo el link corto (sin coordenadas) se abre el lugar: ahí está el botón "Cómo llegar"
+  if (a.lat == null && /^https?:/i.test(a.ubicacion_link || "")) return a.ubicacion_link;
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(agPunto(a))}&travelmode=driving`;
+}
+function agTextoCompartir(a) {
+  return [a.nombre, [a.lugar, a.direccion, a.ciudad].filter(Boolean).join(", "), agMapsVer(a)].filter(Boolean).join("\n");
+}
+async function agCopiar(id) {
+  const a = (ag.f && ag.f.agencia.id === id) ? ag.f.agencia : ag.d.agencias.find(x => x.id === id);
+  if (!a) return;
+  try { await navigator.clipboard.writeText(agMapsVer(a)); toast("Link de la ubicación copiado", "success"); }
+  catch { prompt("Copiá el link:", agMapsVer(a)); }
+}
+function agBotonesMaps(a) {
+  if (!agTieneUbic(a)) {
+    return `<span class="ag-sinubic" title="Cargá el link de Google Maps en los datos de la agencia"><i class="ti ti-map-pin-off"></i> Sin ubicación</span>`;
+  }
+  const exacta = a.lat != null || /^https?:/i.test(a.ubicacion_link || "");
+  return `
+    <a class="ag-maps" href="${agEsc(agMapsVer(a))}" target="_blank" rel="noopener" title="${exacta ? "Ver el local en Google Maps" : "Se busca por la dirección: puede no ser exacto"}">
+      <i class="ti ti-map-pin${exacta ? "-filled" : ""}"></i><span>Ver en Maps</span></a>
+    <a class="ag-maps" href="${agEsc(agMapsIr(a))}" target="_blank" rel="noopener" title="Cómo llegar desde donde estás">
+      <i class="ti ti-navigation"></i><span>Cómo llegar</span></a>`;
+}
+
+// ─── Número del menú y avisos ───
+async function agActualizarBadge() {
+  const b = document.getElementById("nav-agencias-n");
+  if (!b || !agPuedeVer()) return;
+  const r = await api("/api/agencias/avisos").catch(() => null);
+  if (!r) return;
+  b.hidden = !r.atender;
+  b.textContent = r.atender;
+  b.title = `${r.atender} agencia${r.atender === 1 ? "" : "s"} para atender (contratos vencidos o que vencen en 30 días, papeles o garantías vencidas)`;
+}
+
+// ─── Pantalla ───
+async function renderAgencias() {
+  status("Agencias de venta de pasajes: contratos, vencimientos y ubicación");
+  // Si se llegó desde un aviso del dashboard, abre directo esa ficha
+  const pendiente = ag.pendiente;
+  ag.pendiente = null;
+  ag.vista = pendiente ? "ficha" : "lista"; ag.id = pendiente || null; ag.f = null; ag.tab = "contrato";
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-building-store"></i> Agencias y contratos</h1>
+      <p>Las agencias que venden pasajes de la empresa: en qué condiciones lo hacen, qué vence y dónde quedan.</p>
+    </div>
+    <div class="section ag" id="ag-raiz">${pvCargando()}</div>`;
+  await agCargar();
+}
+async function agCargar() {
+  const d = await api("/api/agencias");
+  const raiz = document.getElementById("ag-raiz");
+  if (!raiz) return;
+  if (!d || !d.agencias) { raiz.innerHTML = `<div class="ag-vacio"><i class="ti ti-plug-x"></i><b>No se pudo cargar</b></div>`; return; }
+  ag.d = d;
+  agActualizarBadge();
+  if (ag.vista === "ficha" && ag.id) return agAbrir(ag.id, true);
+  agPintarLista();
+}
+function agFiltro(k) { ag.filtro = ag.filtro === k && k !== "todas" ? "todas" : k; agPintarLista(); }
+
+function agPintarLista() {
+  const raiz = document.getElementById("ag-raiz");
+  if (!raiz || !ag.d) return;
+  const r = ag.d.resumen;
+  const tiles = [
+    ["todas", "Agencias activas", r.activas, "building-store", ""],
+    ["mal", "Hay que atender", r.mal, "alert-triangle", r.mal ? "mal" : "cero"],
+    ["ojo", "Por vencer o con papeles pendientes", r.ojo, "clock-exclamation", r.ojo ? "ojo" : "cero"],
+    ["ok", "Al día", r.ok, "circle-check", "ok"],
+  ];
+  const inactivas = r.suspendidas + r.bajas;
+  raiz.innerHTML = `
+    <div class="ag-tiles">${tiles.map(([k, t, n, i, c]) => `
+      <button class="ag-tile ${c} ${ag.filtro === k ? "on" : ""}" onclick="agFiltro('${k}')" aria-pressed="${ag.filtro === k}">
+        <span class="ag-tile-ic"><i class="ti ti-${i}"></i></span><b>${n}</b><span class="ag-tile-t">${t}</span></button>`).join("")}
+    </div>
+    <div class="ag-barra">
+      <label class="rv-buscar ag-buscar"><i class="ti ti-search"></i>
+        <input id="ag-q" value="${agEsc(ag.q)}" placeholder="Agencia, ciudad, RUC o responsable" autocomplete="off" oninput="ag.q=this.value;agPintarTarjetas()"></label>
+      ${r.ciudades.length > 1 ? `<select class="ag-ciudad" aria-label="Ciudad" onchange="ag.ciudad=this.value;agPintarTarjetas()">
+        <option value="">Todas las ciudades</option>${r.ciudades.map(c => `<option ${ag.ciudad === c ? "selected" : ""}>${agEsc(c)}</option>`).join("")}</select>` : ""}
+      ${inactivas ? `<button class="ag-inact ${ag.filtro === "inactivas" ? "on" : ""}" onclick="agFiltro('inactivas')"><i class="ti ti-archive"></i> Suspendidas y de baja (${inactivas})</button>` : ""}
+      <span class="ag-barra-der">
+        <button class="btn btn-ghost btn-sm ag-rec-btn ${ag.recorrido ? "on" : ""}" onclick="agRecorrido()" title="Elegí varias agencias y Google Maps arma el camino"><i class="ti ti-route"></i> ${ag.recorrido ? "Terminar recorrido" : "Armar recorrido"}</button>
+        ${agPuede() ? `<button class="btn btn-primary btn-sm" onclick="agFormAgencia()"><i class="ti ti-plus"></i> Nueva agencia</button>` : ""}
+      </span>
+    </div>
+    ${ag.recorrido ? `<div class="ag-rec-ayuda"><i class="ti ti-hand-finger"></i> Tocá el círculo de cada agencia en el orden en que las vas a visitar. Maps arranca desde donde estés.</div>` : ""}
+    <div id="ag-tarjetas" class="ag-tarjetas"></div>
+    <div id="ag-rec-barra"></div>`;
+  agPintarTarjetas(true);
+}
+
+function agVisibles() {
+  const w = caNorm(ag.q).trim().split(/\s+/).filter(Boolean);
+  return ag.d.agencias.filter(a => {
+    const activa = a.estado === "activa";
+    if (ag.filtro === "inactivas" ? activa : !activa) return false;
+    if (["mal", "ojo", "ok"].includes(ag.filtro) && a.nivel !== ag.filtro) return false;
+    if (ag.ciudad && a.ciudad !== ag.ciudad) return false;
+    if (w.length) {
+      const t = caNorm([a.nombre, a.razon_social, a.ruc, a.representante, a.ciudad, a.lugar, a.direccion].join(" "));
+      if (!w.every(x => t.includes(x))) return false;
+    }
+    return true;
+  });
+}
+function agPintarTarjetas(animar) {
+  const caja = document.getElementById("ag-tarjetas");
+  if (!caja) return;
+  caja.classList.toggle("quieta", !animar);
+  const vis = agVisibles();
+  if (!ag.d.agencias.length) {
+    caja.innerHTML = `<div class="ag-vacio grande"><i class="ti ti-building-store"></i><b>Todavía no hay agencias cargadas</b>
+      <p>Cargá cada agencia con sus datos y la ubicación del local; después, su contrato y sus papeles.</p>
+      ${agPuede() ? `<button class="btn btn-primary" onclick="agFormAgencia()"><i class="ti ti-plus"></i> Cargar la primera</button>` : ""}</div>`;
+  } else if (!vis.length) {
+    caja.innerHTML = `<div class="ag-vacio"><i class="ti ti-filter-off"></i><b>Ninguna agencia con ese filtro</b>
+      <button class="pv-link" onclick="ag.filtro='todas';ag.q='';ag.ciudad='';agPintarLista()">Ver todas</button></div>`;
+  } else {
+    caja.innerHTML = vis.map((a, i) => agTarjeta(a, i)).join("");
+  }
+  agPintarBarraRecorrido();
+}
+
+function agBarraVigencia(c, hoy) {
+  if (c.por_empezar) return `<div class="ag-vig-txt">Arranca el ${agFecha(c.desde)}</div>`;
+  if (!c.hasta) return `<div class="ag-vig-txt">Desde el ${agFecha(c.desde)} · sin fecha de fin</div>`;
+  const ini = new Date(c.desde + "T00:00"), fin = new Date(c.hasta + "T00:00"), h = new Date((hoy || trHoy()) + "T00:00");
+  const pct = Math.max(2, Math.min(100, (h - ini) / Math.max(1, fin - ini) * 100));
+  const d = c.dias;
+  const cls = c.renov_auto ? "auto" : d < 0 ? "mal" : d <= 60 ? "ojo" : "ok";
+  const txt = c.renov_auto ? `<i class="ti ti-repeat"></i> Se renueva solo el ${agFecha(c.hasta)}`
+    : d < 0 ? `Venció el ${agFecha(c.hasta)}` : d === 0 ? "Vence hoy" : `Vence en <b>${d}</b> día${d === 1 ? "" : "s"} · ${agFecha(c.hasta)}`;
+  return `<div class="ag-vig-barra ${cls}" aria-hidden="true"><span style="width:${pct}%"></span></div><div class="ag-vig-txt ${cls}">${txt}</div>`;
+}
+
+function agTarjeta(a, i) {
+  const c = a.contrato;
+  const [nivelTxt, nivelIc] = AG_NIVEL[a.nivel] || ["", "point"];
+  const orden = ag.sel.indexOf(a.id);
+  const avisos = a.avisos || [];
+  return `
+    <article class="ag-card n-${a.nivel} ${orden >= 0 ? "elegida" : ""}" data-id="${a.id}" style="--i:${Math.min(i, 12)}">
+      ${ag.recorrido ? `<button class="ag-rec-check ${orden >= 0 ? "on" : ""}" onclick="agElegir(${a.id})" aria-label="${orden >= 0 ? "Sacar del recorrido" : "Sumar al recorrido"}">${orden >= 0 ? orden + 1 : `<i class="ti ti-plus"></i>`}</button>` : ""}
+      <button class="ag-card-cab" onclick="agAbrir(${a.id})">
+        <span class="ag-nivel n-${a.nivel}"><i class="ti ti-${nivelIc}"></i>${nivelTxt}</span>
+        <h3>${agEsc(a.nombre)}</h3>
+        <p><i class="ti ti-map-pin"></i> ${agEsc([a.ciudad, a.lugar].filter(Boolean).join(" · ") || "Sin ciudad")}</p>
+      </button>
+      <div class="ag-card-cuerpo">
+        ${c ? `
+          <div class="ag-com"><b>${agEsc(c.comision_txt)}</b><small>de comisión${c.rutas.length ? ` · ${c.rutas.length === 1 ? "1 ruta" : c.rutas.length + " rutas"} con otra` : ""}</small></div>
+          <div class="ag-vig">${agBarraVigencia(c, ag.d.hoy)}</div>`
+        : `<div class="ag-sin-c"><i class="ti ti-file-off"></i> Sin contrato cargado</div>`}
+        ${avisos.length ? `<ul class="ag-avisos">${avisos.slice(0, 2).map(x => `<li class="${x.nivel}"><i class="ti ti-${AG_ICONO_AVISO[x.que] || "point"}"></i><span>${agEsc(x.txt)}</span></li>`).join("")}
+          ${avisos.length > 2 ? `<li class="mas">y ${avisos.length - 2} cosa${avisos.length - 2 === 1 ? "" : "s"} más</li>` : ""}</ul>` : ""}
+        ${a.estado !== "activa" && a.estado_motivo ? `<p class="ag-motivo"><i class="ti ti-info-circle"></i> ${agEsc(a.estado_motivo)}</p>` : ""}
+      </div>
+      <div class="ag-card-pie">
+        ${agBotonesMaps(a)}
+        ${a.whatsapp ? `<a class="ag-maps wa" href="https://wa.me/${agWa(a.whatsapp)}" target="_blank" rel="noopener" aria-label="Escribir por WhatsApp a ${agEsc(a.nombre)}" title="Escribir por WhatsApp"><i class="ti ti-brand-whatsapp"></i></a>` : ""}
+      </div>
+      ${ag.recorrido ? "" : `<button class="ag-ir" onclick="agAbrir(${a.id})" aria-label="Abrir la ficha de ${agEsc(a.nombre)}" title="Abrir la ficha"><i class="ti ti-arrow-right"></i></button>`}
+    </article>`;
+}
+
+// ─── Recorrido por varias agencias ───
+function agRecorrido() {
+  ag.recorrido = !ag.recorrido;
+  if (!ag.recorrido) ag.sel = [];
+  agPintarLista();
+}
+function agElegir(id) {
+  const i = ag.sel.indexOf(id);
+  if (i >= 0) ag.sel.splice(i, 1);
+  else {
+    const a = ag.d.agencias.find(x => x.id === id);
+    if (a && !agTieneUbic(a) && !a.ciudad) { toast("Esa agencia no tiene ubicación ni dirección cargada", "error"); return; }
+    if (ag.sel.length >= 10) { toast("Google Maps arma recorridos de hasta 10 paradas", "error"); return; }
+    ag.sel.push(id);
+  }
+  agPintarTarjetas();
+}
+function agUrlRecorrido() {
+  const ps = ag.sel.map(id => ag.d.agencias.find(x => x.id === id)).filter(Boolean).map(agPunto);
+  if (!ps.length) return "";
+  const dest = ps[ps.length - 1], medio = ps.slice(0, -1);
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}${medio.length ? `&waypoints=${encodeURIComponent(medio.join("|"))}` : ""}&travelmode=driving`;
+}
+function agPintarBarraRecorrido() {
+  const b = document.getElementById("ag-rec-barra");
+  if (!b) return;
+  if (!ag.recorrido) { b.innerHTML = ""; return; }
+  const elegidas = ag.sel.map(id => ag.d.agencias.find(x => x.id === id)).filter(Boolean);
+  b.innerHTML = `
+    <div class="ag-rec-barra">
+      <div class="ag-rec-lista">${elegidas.length
+        ? elegidas.map((a, i) => `<span><em>${i + 1}</em>${agEsc(a.nombre)}</span>`).join(`<i class="ti ti-chevron-right"></i>`)
+        : `<span class="vacio">Todavía no elegiste ninguna agencia</span>`}</div>
+      ${elegidas.length > 4 ? `<small>En el navegador del celular, Maps puede mostrar solo las primeras paradas: con la app se ven todas.</small>` : ""}
+      <div class="ag-rec-acc">
+        ${elegidas.length ? `<button class="btn btn-ghost btn-sm" onclick="ag.sel=[];agPintarTarjetas()">Vaciar</button>` : ""}
+        <a class="btn btn-primary btn-sm ${elegidas.length ? "" : "deshab"}" ${elegidas.length ? `href="${agEsc(agUrlRecorrido())}" target="_blank" rel="noopener"` : `aria-disabled="true"`}>
+          <i class="ti ti-route"></i> Abrir en Google Maps</a>
+      </div>
+    </div>`;
+}
+
+// ─── Ficha de una agencia ───
+async function agAbrir(id, refrescar) {
+  ag.vista = "ficha"; ag.id = id;
+  const raiz = document.getElementById("ag-raiz");
+  if (!raiz) return;
+  if (!refrescar) { raiz.innerHTML = pvCargando(); ag.tab = ag.tab || "contrato"; }
+  const f = await api(`/api/agencias/${id}`);
+  if (!f || !f.agencia) { toast("No se encontró la agencia", "error"); ag.vista = "lista"; ag.id = null; agPintarLista(); return; }
+  ag.f = f;
+  agPintarFicha();
+  if (!refrescar) content.scrollTop = 0;
+}
+function agVolver() {
+  ag.vista = "lista"; ag.id = null; ag.f = null; ag.tab = "contrato";
+  agPintarLista();
+  content.scrollTop = 0;
+}
+function agPestana(k) { ag.tab = k; agPintarFicha(); }
+
+function agPintarFicha() {
+  const f = ag.f, a = f.agencia, puede = agPuede();
+  const [nivelTxt, nivelIc] = AG_NIVEL[f.nivel] || ["", "point"];
+  const nPap = f.papeles.faltan.length + f.papeles.vencidos.length;
+  const tabs = [["contrato", "Contrato", "file-certificate", ""],
+                ["papeles", "Papeles", "files", nPap ? `<em>${nPap}</em>` : ""],
+                ["historial", "Historial", "history", `<small>${f.versiones.length}</small>`]];
+  document.getElementById("ag-raiz").innerHTML = `
+    <button class="pv-link ag-volver" onclick="agVolver()"><i class="ti ti-arrow-left"></i> Todas las agencias</button>
+    <div class="ag-fcab n-${f.nivel}">
+      <div class="ag-fcab-t">
+        <span class="ag-nivel n-${f.nivel}"><i class="ti ti-${nivelIc}"></i>${nivelTxt}</span>
+        <h2>${agEsc(a.nombre)}</h2>
+        <p>${[a.razon_social, a.ruc ? "RUC " + a.ruc : "", a.ciudad].filter(Boolean).map(agEsc).join(" · ") || "Sin razón social ni RUC cargados"}</p>
+        ${a.estado !== "activa" ? `<p class="ag-fcab-estado"><i class="ti ti-${a.estado === "baja" ? "archive" : "player-pause"}"></i> ${a.estado === "baja" ? "Dada de baja" : "Suspendida"} el ${agFecha(a.estado_el)}${a.estado_motivo ? ": " + agEsc(a.estado_motivo) : ""}</p>` : ""}
+      </div>
+      <div class="ag-fcab-acc">
+        <a class="btn btn-ghost btn-sm" href="/api/agencias/${a.id}/pdf" target="_blank" rel="noopener"><i class="ti ti-file-type-pdf"></i> PDF</a>
+        ${puede ? `<button class="btn btn-ghost btn-sm" onclick="agFormAgencia(${a.id})"><i class="ti ti-pencil"></i> Editar datos</button>
+          <button class="icon-btn" aria-label="Más opciones de la agencia" onclick="agMasAgencia(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
+      </div>
+    </div>
+    <div class="ag-favisos">${f.avisos.length
+      ? f.avisos.map(x => `<div class="ag-faviso ${x.nivel}"><i class="ti ti-${AG_ICONO_AVISO[x.que] || "point"}"></i><span>${agEsc(x.txt)}</span></div>`).join("")
+      : `<div class="ag-faviso ok"><i class="ti ti-circle-check"></i><span>Contrato, garantía y papeles al día</span></div>`}</div>
+    <div class="ag-fgrid">
+      <aside class="ag-flado">
+        ${agUbicacionCard(a)}
+        ${agDatosCard(a)}
+      </aside>
+      <div class="ag-fmain">
+        <div class="ag-tabs" role="tablist">${tabs.map(([k, t, i, x]) => `
+          <button role="tab" aria-selected="${ag.tab === k}" class="${ag.tab === k ? "on" : ""}" onclick="agPestana('${k}')"><i class="ti ti-${i}"></i> ${t}${x}</button>`).join("")}
+        </div>
+        <div class="ag-tab-cuerpo">${ag.tab === "papeles" ? agTabPapeles(f) : ag.tab === "historial" ? agTabHistorial(f) : agTabContrato(f)}</div>
+      </div>
+    </div>`;
+}
+
+function agUbicacionCard(a) {
+  const tiene = agTieneUbic(a);
+  const exacta = a.lat != null;
+  const conLink = !exacta && /^https?:/i.test(a.ubicacion_link || "");
+  const precision = exacta ? `<i class="ti ti-target"></i> Punto exacto · ${(+a.lat).toFixed(5)}, ${(+a.lng).toFixed(5)}`
+    : conLink ? `<i class="ti ti-link"></i> Con el link de Google Maps`
+    : a.ubicacion_link ? `<i class="ti ti-search"></i> Se busca «${agEsc(a.ubicacion_link)}» en Maps`
+    : a.direccion ? `<i class="ti ti-search"></i> Se busca por la dirección: puede no ser exacto`
+    : `Pegá el link de Google Maps en los datos de la agencia`;
+  return `
+    <section class="ag-ubic ${exacta || conLink ? "exacta" : tiene ? "aprox" : "sin"}">
+      <a class="ag-ubic-mapa" ${tiene ? `href="${agEsc(agMapsVer(a))}" target="_blank" rel="noopener" aria-label="Ver ${agEsc(a.nombre)} en Google Maps"` : `aria-hidden="true"`}>
+        <span class="ag-ubic-pin"><i class="ti ti-map-pin-filled"></i></span>
+        ${tiene ? `<span class="ag-ubic-abrir"><i class="ti ti-external-link"></i> Abrir mapa</span>` : ""}
+      </a>
+      <div class="ag-ubic-txt">
+        <b>${agEsc(a.lugar || a.direccion || (tiene ? a.nombre : "Sin ubicación cargada"))}</b>
+        ${[a.lugar ? a.direccion : "", a.ciudad].filter(Boolean).length ? `<span>${agEsc([a.lugar ? a.direccion : "", a.ciudad].filter(Boolean).join(" · "))}</span>` : ""}
+        <small>${precision}</small>
+      </div>
+      ${tiene ? `
+        <div class="ag-ubic-btns">
+          <a class="btn btn-primary btn-sm" href="${agEsc(agMapsVer(a))}" target="_blank" rel="noopener"><i class="ti ti-map-2"></i> Ver en Google Maps</a>
+          <a class="btn btn-ghost btn-sm" href="${agEsc(agMapsIr(a))}" target="_blank" rel="noopener"><i class="ti ti-navigation"></i> Cómo llegar</a>
+          <a class="btn btn-ghost btn-sm" href="https://wa.me/?text=${encodeURIComponent(agTextoCompartir(a))}" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> Compartir</a>
+          <button class="btn btn-ghost btn-sm" onclick="agCopiar(${a.id})"><i class="ti ti-copy"></i> Copiar link</button>
+        </div>
+        ${!exacta && !conLink && agPuede() ? `<button class="pv-link ag-ubic-mejorar" onclick="agFormAgencia(${a.id}, 'ubicacion')"><i class="ti ti-map-pin-plus"></i> Pegar el link exacto de Google Maps</button>` : ""}`
+      : agPuede() ? `<div class="ag-ubic-btns"><button class="btn btn-primary btn-sm" onclick="agFormAgencia(${a.id}, 'ubicacion')"><i class="ti ti-map-pin-plus"></i> Cargar ubicación</button></div>` : ""}
+    </section>`;
+}
+
+function agDatosCard(a) {
+  const filas = [
+    ["user", "Representante", a.representante ? agEsc(a.representante) + (a.ci_representante ? ` <small>CI ${agEsc(a.ci_representante)}</small>` : "") : ""],
+    ["phone", "Teléfono", a.telefono ? `<a href="tel:${agEsc(String(a.telefono).replace(/[^\d+]/g, ""))}">${agEsc(a.telefono)}</a>` : ""],
+    ["brand-whatsapp", "WhatsApp", a.whatsapp ? `<a href="https://wa.me/${agWa(a.whatsapp)}" target="_blank" rel="noopener">${agEsc(a.whatsapp)}</a>` : ""],
+    ["mail", "Correo", a.email ? `<a href="mailto:${agEsc(a.email)}">${agEsc(a.email)}</a>` : ""],
+    ["building", "Dirección", agEsc(a.direccion || "")],
+    ["note", "Nota", agEsc(a.nota || "")],
+  ];
+  return `
+    <section class="ag-datos">
+      <h4>Contacto</h4>
+      <dl>${filas.map(([i, t, v]) => `<div class="${v ? "" : "vacio"}"><dt><i class="ti ti-${i}"></i> ${t}</dt><dd>${v || "—"}</dd></div>`).join("")}</dl>
+    </section>`;
+}
+
+function agLineaVigencia(c, hoy) {
+  if (!c.hasta) return `<div class="ag-linea ok"><div class="ag-linea-num"><b><i class="ti ti-infinity"></i></b><span>sin fecha de fin</span></div>
+    <div class="ag-linea-barra"><div class="ag-linea-fechas"><span>Desde el ${agFecha(c.desde)}</span></div></div></div>`;
+  const ini = new Date(c.desde + "T00:00"), fin = new Date(c.hasta + "T00:00"), h = new Date(hoy + "T00:00");
+  const tot = Math.max(1, fin - ini);
+  const pct = Math.max(0, Math.min(100, (h - ini) / tot * 100));
+  const lim = c.limite_preaviso ? Math.max(0, Math.min(100, (new Date(c.limite_preaviso + "T00:00") - ini) / tot * 100)) : null;
+  const d = c.dias;
+  const cls = c.renov_auto ? "auto" : d < 0 ? "mal" : d <= 60 ? "ojo" : "ok";
+  return `
+    <div class="ag-linea ${cls}">
+      <div class="ag-linea-num"><b>${Math.abs(d)}</b><span>${d < 0 ? (d === -1 ? "día vencido" : "días vencido") : d === 1 ? "día queda" : "días quedan"}</span></div>
+      <div class="ag-linea-barra">
+        <div class="ag-linea-track">
+          <span style="width:${pct}%"></span>
+          ${lim != null && c.renov_auto && c.limite_preaviso ? `<i class="ag-linea-lim" style="left:${lim}%" title="Límite para avisar que no se renueva: ${agFecha(c.limite_preaviso)}"></i>` : ""}
+          <i class="ag-linea-hoy" style="left:${pct}%" title="Hoy"></i>
+        </div>
+        <div class="ag-linea-fechas"><span>${agFecha(c.desde)}</span><span>${c.renov_auto ? `<i class="ti ti-repeat"></i> se renueva solo el ` : "vence el "}${agFecha(c.hasta)}</span></div>
+        ${c.renov_auto && c.limite_preaviso ? `<p>Si no se quiere renovar, hay que avisar antes del <b>${agFecha(c.limite_preaviso)}</b>.</p>` : ""}
+        ${c.renovado_auto ? `<p><i class="ti ti-info-circle"></i> El período firmado terminaba el ${agFecha(c.hasta_firmado)}: se renovó solo.</p>` : ""}
+      </div>
+    </div>`;
+}
+
+function agDato(titulo, valor, icono, extra = "") {
+  return `<div class="ag-dato ${valor ? "" : "vacio"} ${extra}"><small><i class="ti ti-${icono}"></i> ${titulo}</small><p>${valor ? agEsc(valor) : "—"}</p></div>`;
+}
+function agGarantiaHtml(f, x) {
+  if (!x.garantia_tipo) return agDato("Garantía", "", "shield");
+  const g = f.garantia && f.vigente && f.vigente.id === x.id ? f.garantia : null;
+  const partes = [x.garantia_txt, x.garantia_monto ? agGs(x.garantia_monto) : "", x.garantia_vence ? `vence el ${agFecha(x.garantia_vence)}` : "", x.garantia_detalle].filter(Boolean);
+  return `<div class="ag-dato ${g ? "g-" + g.nivel : ""}"><small><i class="ti ti-shield-check"></i> Garantía</small><p>${agEsc(partes.join(" · "))}</p>
+    ${g && g.nivel !== "ok" ? `<span class="ag-dato-alerta ${g.nivel}">${agEsc(g.txt)}</span>` : ""}</div>`;
+}
+
+function agTabContrato(f) {
+  const v = f.vigente, c = f.contrato, puede = agPuede();
+  const prox = [...f.versiones].reverse().find(x => x.futuro);
+  if (!v && !prox) {
+    return `<div class="ag-vacio-c"><span><i class="ti ti-file-off"></i></span><b>Sin contrato cargado</b>
+      <p>Cargá las condiciones con las que vende esta agencia: vigencia, comisión, depósitos y garantía. Podés adjuntar el contrato firmado.</p>
+      ${puede ? `<button class="btn btn-primary" onclick="agFormContrato('contrato')"><i class="ti ti-file-plus"></i> Cargar contrato</button>` : ""}</div>`;
+  }
+  const x = v || prox;
+  return `
+    ${prox && v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Ya está cargada la ${agEsc(prox.tipo_txt.toLowerCase())} que rige desde el ${agFecha(prox.desde)}.</div>` : ""}
+    ${!v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Este contrato arranca el ${agFecha(prox.desde)}.</div>` : ""}
+    <div class="ag-c-cab">
+      <div>
+        <span class="ag-c-tipo">${agEsc(x.tipo_txt)}${x.numero ? " Nº " + agEsc(x.numero) : ""}</span>
+        <h3>${!v ? "Contrato que todavía no empezó" : f.estado_contrato === "vencido" ? "Último contrato (vencido)" : "Condiciones que rigen hoy"}</h3>
+      </div>
+      <div class="ag-c-acc">
+        ${x.tiene_archivo ? `<button class="btn btn-ghost btn-sm" onclick="agVerArchivo('contratos', ${x.id}, '${agEsc(x.archivo_nombre || "")}')"><i class="ti ti-file-text"></i> Contrato firmado</button>` : ""}
+        ${puede ? `
+          <button class="btn btn-ghost btn-sm" onclick="agFormContrato('renovacion')"><i class="ti ti-refresh"></i> Renovar</button>
+          <button class="btn btn-ghost btn-sm" onclick="agFormContrato('adenda')"><i class="ti ti-file-diff"></i> Adenda</button>
+          <button class="icon-btn" aria-label="Más opciones del contrato" onclick="agMasContrato(this, ${x.id})"><i class="ti ti-dots-vertical"></i></button>` : ""}
+      </div>
+    </div>
+    ${v && c ? agLineaVigencia(c, f.hoy) : `<div class="ag-linea ojo"><div class="ag-linea-barra"><div class="ag-linea-fechas"><span>Desde el ${agFecha(x.desde)}</span><span>${x.hasta ? "hasta el " + agFecha(x.hasta) : "sin fecha de fin"}</span></div></div></div>`}
+    <div class="ag-c-grid">
+      <div class="ag-c-com ${x.rutas.length > 1 ? "con-rutas" : ""}">
+        <small>Comisión</small>
+        <b>${agEsc(x.comision_txt)}</b>
+        ${x.rutas.length ? `<ul>${x.rutas.map(r => `<li><span>${agEsc(r.ruta)}</span><b>${agEsc(r.txt)}</b></li>`).join("")}</ul>` : `<span class="ag-c-nota">La misma para todas las rutas</span>`}
+      </div>
+      ${agDato("Qué puede vender", x.autorizado, "ticket")}
+      ${agDato("Exclusividad", x.exclusividad ? "Sí" + (x.zona_exclusiva ? " · " + x.zona_exclusiva : "") : "No", "lock")}
+      ${agDato("Depósitos", x.deposito_txt, "building-bank")}
+      ${agDato("Cuenta para depositar", x.cuenta_deposito, "credit-card")}
+      ${agDato("Tope sin depositar", x.tope_sin_depositar ? agGs(x.tope_sin_depositar) : "", "cash")}
+      ${agGarantiaHtml(f, x)}
+      ${agDato("Devoluciones y anulaciones", x.devoluciones, "receipt-refund")}
+      ${x.nota ? agDato("Nota", x.nota, "note") : ""}
+    </div>
+    <p class="ag-c-pie">Cargado por ${agEsc(agNombreCorto(x.creado_por) || "—")} el ${agFecha(x.creado_el)}${x.actualizado_el && x.actualizado_el !== x.creado_el ? ` · corregido por ${agEsc(agNombreCorto(x.actualizado_por))} el ${agFecha(x.actualizado_el)}` : ""}</p>`;
+}
+
+function agTabPapeles(f) {
+  const puede = agPuede();
+  const ult = {};
+  f.papeles_lista.forEach(p => { if (p.tipo !== "otro" && !p.reemplazado) ult[p.tipo] = p; });
+  const tipos = f.tipos_doc.filter(t => t.k !== "otro");
+  return `
+    <div class="ag-pap-check">${tipos.map(t => {
+      const p = ult[t.k];
+      const est = !p ? (t.obligatorio ? "falta" : "opcional") : p.nivel;
+      const ic = { falta: "circle-dashed-x", opcional: "circle-dashed", mal: "alert-triangle", ojo: "clock-exclamation", ok: "circle-check" }[est];
+      const txt = !p ? (t.obligatorio ? "Falta subirlo" : "No es obligatorio")
+        : !p.vence ? "No vence" : p.nivel === "mal" ? `Vencido el ${agFecha(p.vence)}` : p.nivel === "ojo" ? `Vence en ${p.dias} días (${agFecha(p.vence)})` : `Vence el ${agFecha(p.vence)}`;
+      return `
+        <div class="ag-pap ${est}">
+          <i class="ti ti-${ic}"></i>
+          <div><b>${agEsc(t.nombre)}</b><span>${txt}</span></div>
+          <span class="ag-pap-acc">
+            ${p && p.tiene_archivo ? `<button class="icon-btn" title="Ver" aria-label="Ver ${agEsc(t.nombre)}" onclick="agVerArchivo('documentos', ${p.id}, '${agEsc(p.archivo_nombre || "")}')"><i class="ti ti-eye"></i></button>` : ""}
+            ${puede ? `<button class="btn btn-ghost btn-sm" onclick="agFormPapel('${t.k}')"><i class="ti ti-upload"></i> ${p ? "Actualizar" : "Subir"}</button>` : ""}
+          </span>
+        </div>`;
+    }).join("")}</div>
+    <div class="ag-sub-cab"><h4>Todo lo que se subió</h4>${puede ? `<button class="btn btn-ghost btn-sm" onclick="agFormPapel('otro')"><i class="ti ti-file-upload"></i> Otro papel</button>` : ""}</div>
+    ${f.papeles_lista.length ? `<ul class="ag-pap-lista">${f.papeles_lista.map(p => `
+      <li class="${p.reemplazado ? "viejo" : ""}">
+        <i class="ti ti-${/\.pdf$/i.test(p.archivo_nombre || "") ? "file-type-pdf" : p.tiene_archivo ? "photo" : "file"}"></i>
+        <div><b>${agEsc(p.tipo_txt)}${p.descripcion ? " · " + agEsc(p.descripcion) : ""}</b>
+          <span>${p.vence ? "Vence el " + agFecha(p.vence) : "No vence"} · subido por ${agEsc(agNombreCorto(p.subido_por) || "—")} el ${agFecha(p.subido_el)}${p.reemplazado ? " · <em>reemplazado por uno más nuevo</em>" : ""}</span></div>
+        <span class="ag-pap-acc">
+          ${p.tiene_archivo ? `<button class="icon-btn" aria-label="Ver" title="Ver" onclick="agVerArchivo('documentos', ${p.id}, '${agEsc(p.archivo_nombre || "")}')"><i class="ti ti-eye"></i></button>` : ""}
+          ${puede ? `<button class="icon-btn" aria-label="Borrar" title="Borrar" onclick="agBorrarPapel(${p.id})"><i class="ti ti-trash"></i></button>` : ""}
+        </span>
+      </li>`).join("")}</ul>` : `<p class="ag-c-nota">Todavía no se subió ningún papel.</p>`}`;
+}
+
+function agTabHistorial(f) {
+  if (!f.versiones.length) return `<p class="ag-c-nota">Sin versiones todavía: cuando cargues el contrato, cada renovación o adenda queda acá con lo que cambió.</p>`;
+  const puede = agPuede();
+  return `
+    <ol class="ag-hist">${f.versiones.map(v => `
+      <li class="${v.anulado ? "anulada" : v.rige ? "rige" : v.futuro ? "futura" : ""}">
+        <span class="ag-hist-punto"></span>
+        <div class="ag-hist-cab">
+          <b>${agEsc(v.tipo_txt)}${v.numero ? " Nº " + agEsc(v.numero) : ""}</b>
+          ${v.rige ? `<em class="rige">rige hoy</em>` : v.futuro ? `<em class="futura">próxima</em>` : v.anulado ? `<em class="anulada">anulada</em>` : ""}
+          <span>${agFecha(v.desde)} → ${v.hasta ? agFecha(v.hasta) : "sin fin"}${v.renov_auto ? " · se renueva sola" : ""}</span>
+        </div>
+        <p class="ag-hist-com">Comisión ${agEsc(v.comision_txt)}${v.rutas.length ? " · " + v.rutas.map(r => agEsc(r.ruta + " " + r.txt)).join(" · ") : ""}</p>
+        ${v.anulado ? `<p class="ag-hist-anul">Anulada: ${agEsc(v.anulado_motivo || "")}</p>`
+          : v.cambios.length ? `<ul class="ag-hist-cambios">${v.cambios.map(c => `<li>${agEsc(c)}</li>`).join("")}</ul>` : ""}
+        <div class="ag-hist-pie">
+          <span>Cargado por ${agEsc(agNombreCorto(v.creado_por) || "—")} el ${agFecha(v.creado_el)}</span>
+          ${v.tiene_archivo ? `<button class="pv-link" onclick="agVerArchivo('contratos', ${v.id}, '${agEsc(v.archivo_nombre || "")}')"><i class="ti ti-file-text"></i> Ver firmado</button>` : ""}
+          ${puede && !v.anulado ? `<button class="pv-link" onclick="agFormContrato('corregir', ${v.id})"><i class="ti ti-pencil"></i> Corregir</button>` : ""}
+        </div>
+      </li>`).join("")}</ol>`;
+}
+
+function agVerArchivo(tipo, id, nombre) {
+  const url = `/api/agencias/${tipo}/${id}/archivo`;
+  if (/\.pdf$/i.test(nombre || "") || tipo === "contratos" && !/\.(png|jpe?g|webp|gif)$/i.test(nombre || "")) window.open(url, "_blank");
+  else verFotoGrande(url);
+}
+
+// ─── Menús ───
+function agMasAgencia(btn) {
+  const a = ag.f.agencia;
+  const items = [];
+  if (a.estado !== "activa") items.push({ icono: "player-play", html: "<b>Reactivar</b><span>Vuelve a la lista de activas</span>", fn: () => agCambiarEstado("activa") });
+  if (a.estado !== "suspendida") items.push({ icono: "player-pause", html: "<b>Suspender</b><span>No vende por ahora (queda el motivo)</span>", fn: () => agCambiarEstado("suspendida") });
+  if (a.estado !== "baja") items.push({ icono: "archive", html: "<b>Dar de baja</b><span>Ya no trabaja con la empresa; el historial se conserva</span>", peligro: true, fn: () => agCambiarEstado("baja") });
+  if (window.USUARIO_ROL === "admin" && !ag.f.versiones.length && !ag.f.papeles_lista.length)
+    items.push({ icono: "trash", html: "<b>Borrar la agencia</b><span>Solo si se cargó por error</span>", peligro: true, fn: agBorrarAgencia });
+  trMenu(btn, items);
+}
+function agMasContrato(btn, cid) {
+  trMenu(btn, [
+    { icono: "pencil", html: "<b>Corregir esta versión</b><span>Para arreglar un error de carga (no deja versión nueva)</span>", fn: () => agFormContrato("corregir", cid) },
+    { icono: "file-plus", html: "<b>Contrato nuevo</b><span>Otro contrato, distinto del actual</span>", fn: () => agFormContrato("contrato") },
+    { icono: "ban", html: "<b>Anular esta versión</b><span>Se cargó por error: queda en el historial como anulada</span>", peligro: true, fn: () => agAnularContrato(cid) },
+  ]);
+}
+function agPedirMotivo(titulo, sub, boton, peligro) {
+  return new Promise(resolve => {
+    const o = rvModal({
+      titulo, icono: peligro ? "alert-triangle" : "message-2", ancho: 460, sub,
+      cuerpo: `<label class="rv-f"><span>Motivo</span><textarea id="ag-motivo" rows="3" maxlength="200" autofocus></textarea></label>`,
+      pie: `<button class="btn btn-ghost" id="ag-mot-no">Cancelar</button><button class="btn ${peligro ? "btn-danger" : "btn-primary"}" id="ag-mot-ok">${boton}</button>`,
+    });
+    const t = o.querySelector("#ag-motivo");
+    o.querySelector("#ag-mot-no").onclick = () => { o.remove(); resolve(null); };
+    o.querySelector("#ag-mot-ok").onclick = () => {
+      if (!t.value.trim()) { toast("Contá el motivo", "error"); t.focus(); return; }
+      o.remove(); resolve(t.value.trim());
+    };
+  });
+}
+async function agCambiarEstado(estado) {
+  const a = ag.f.agencia;
+  let motivo = "";
+  if (estado !== "activa") {
+    motivo = await agPedirMotivo(estado === "baja" ? `Dar de baja ${a.nombre}` : `Suspender ${a.nombre}`,
+      estado === "baja" ? "Deja de figurar entre las activas; sus contratos y papeles se conservan." : "Queda marcada como suspendida hasta que la reactives.",
+      estado === "baja" ? "Dar de baja" : "Suspender", estado === "baja");
+    if (!motivo) return;
+  }
+  const r = await api(`/api/agencias/${a.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ estado, motivo }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo cambiar", "error"); return; }
+  toast(estado === "activa" ? "Agencia reactivada" : estado === "baja" ? "Agencia dada de baja" : "Agencia suspendida", "success");
+  agCargar();
+}
+async function agBorrarAgencia() {
+  const a = ag.f.agencia;
+  if (!confirm(`¿Borrar «${a.nombre}»? Esto no se puede deshacer.`)) return;
+  const r = await api(`/api/agencias/${a.id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo borrar", "error"); return; }
+  toast("Agencia borrada", "success");
+  ag.vista = "lista"; ag.id = null; ag.f = null;
+  agCargar();
+}
+async function agAnularContrato(cid) {
+  const motivo = await agPedirMotivo("Anular esta versión del contrato", "Deja de contar, pero queda en el historial con el motivo.", "Anular", true);
+  if (!motivo) return;
+  const r = await api(`/api/agencias/contratos/${cid}`, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo }) });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo anular", "error"); return; }
+  toast("Versión anulada", "success");
+  agCargar();
+}
+async function agBorrarPapel(did) {
+  if (!confirm("¿Borrar este papel?")) return;
+  const r = await api(`/api/agencias/documentos/${did}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast(r?.msg || "No se pudo borrar", "error"); return; }
+  toast("Papel borrado", "success");
+  agCargar();
+}
+
+// ─── Archivos (foto o PDF) ───
+function agLeerArchivo(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve(null);
+    if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+      if (file.size > 6.5 * 1024 * 1024) return reject(new Error("El PDF es muy pesado (máximo 6 MB)"));
+      const rd = new FileReader();
+      rd.onload = () => resolve({ datos: String(rd.result).replace(/^data:[^;]*;/, "data:application/pdf;"), nombre: file.name });
+      rd.onerror = () => reject(new Error("No se pudo leer el archivo"));
+      rd.readAsDataURL(file);
+      return;
+    }
+    if (!/^image\//.test(file.type)) return reject(new Error("Tiene que ser una foto o un PDF"));
+    // Fotos de papeles: más grandes que las del taller para que se lean
+    const rd = new FileReader();
+    rd.onload = e => {
+      const img = new Image();
+      img.onload = () => {
+        const max = 1800, k = Math.min(1, max / Math.max(img.width, img.height));
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+        cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+        resolve({ datos: cv.toDataURL("image/jpeg", 0.78), nombre: (file.name || "foto").replace(/\.\w+$/, "") + ".jpg" });
+      };
+      img.onerror = () => reject(new Error("No se pudo abrir la foto"));
+      img.src = e.target.result;
+    };
+    rd.readAsDataURL(file);
+  });
+}
+function agCampoArchivo(id, actual) {
+  return `
+    <div class="ag-arch" id="${id}">
+      <input type="file" id="${id}-cam" accept="image/*" capture="environment" hidden>
+      <input type="file" id="${id}-file" accept="application/pdf,image/*" hidden>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('${id}-cam').click()"><i class="ti ti-camera"></i> Sacar foto</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('${id}-file').click()"><i class="ti ti-paperclip"></i> Elegir PDF o foto</button>
+      <span class="ag-arch-nombre">${actual ? `<i class="ti ti-file-check"></i> ${agEsc(actual)}` : `<em>Sin archivo</em>`}</span>
+    </div>`;
+}
+function agEnlazarArchivo(o, id, alCambiar) {
+  const estado = { datos: null, nombre: "" };
+  const nom = o.querySelector(`#${id} .ag-arch-nombre`);
+  const cargar = async inp => {
+    const fl = inp.files && inp.files[0];
+    inp.value = "";
+    if (!fl) return;
+    nom.innerHTML = `<span class="cargando">Preparando…</span>`;
+    try {
+      const r = await agLeerArchivo(fl);
+      estado.datos = r.datos; estado.nombre = r.nombre;
+      nom.innerHTML = `<i class="ti ti-file-check"></i> ${agEsc(r.nombre)} <small>(${Math.round(r.datos.length * 0.75 / 1024)} KB)</small>`;
+      if (alCambiar) alCambiar(estado);
+    } catch (e) { nom.innerHTML = `<em class="error">${agEsc(e.message)}</em>`; }
+  };
+  o.querySelector(`#${id}-cam`).addEventListener("change", e => cargar(e.target));
+  o.querySelector(`#${id}-file`).addEventListener("change", e => cargar(e.target));
+  return estado;
+}
+
+// ─── Formulario: datos de la agencia ───
+function agFormAgencia(id, foco) {
+  const a = id ? ((ag.f && ag.f.agencia.id === id) ? ag.f.agencia : (ag.d.agencias.find(x => x.id === id) || {})) : {};
+  const ubic0 = a.ubicacion_link || (a.lat != null ? `${a.lat}, ${a.lng}` : "");
+  const ciudades = (ag.d && ag.d.resumen.ciudades) || [];
+  const campo = (k, t, extra = "", clase = "") => `<label class="rv-f ${clase}"><span>${t}</span><input id="agf-${k}" value="${agEsc(a[k] || "")}" ${extra}></label>`;
+  const o = rvModal({
+    titulo: id ? "Datos de la agencia" : "Nueva agencia", icono: "building-store", ancho: 720, clase: "ag-modal",
+    sub: id ? agEsc(a.nombre) : "Después vas a poder cargar su contrato y sus papeles.",
+    cuerpo: `
+      <div class="ag-form">
+        ${campo("nombre", "Nombre de la agencia *", `maxlength="120" ${foco === "ubicacion" ? "" : "autofocus"}`, "ag-f-2")}
+        ${campo("razon_social", "Razón social", `maxlength="160"`)}
+        ${campo("ruc", "RUC", `maxlength="30" placeholder="80012345-6"`)}
+        ${campo("representante", "Representante", `maxlength="120"`)}
+        ${campo("ci_representante", "Cédula del representante", `maxlength="30" inputmode="numeric"`)}
+        ${campo("telefono", "Teléfono", `type="tel" maxlength="40"`)}
+        ${campo("whatsapp", "WhatsApp", `type="tel" maxlength="40" placeholder="0991 123 456"`)}
+        ${campo("email", "Correo", `type="email" maxlength="120"`, "ag-f-2")}
+        ${campo("ciudad", "Ciudad", `list="agf-ciudades" maxlength="80"`)}
+        <datalist id="agf-ciudades">${ciudades.map(c => `<option value="${agEsc(c)}">`).join("")}</datalist>
+        ${campo("lugar", "Local o terminal", `maxlength="160" placeholder="Ej: Terminal de Concepción, local 4"`)}
+        ${campo("direccion", "Dirección", `maxlength="200"`, "ag-f-2")}
+        <div class="ag-f-ubic ag-f-2">
+          <label class="rv-f"><span><i class="ti ti-map-pin"></i> Ubicación en Google Maps</span>
+            <input id="agf-ubicacion" value="${agEsc(ubic0)}" placeholder="Pegá acá el link de Google Maps (o las coordenadas)" autocomplete="off" ${foco === "ubicacion" ? "autofocus" : ""}></label>
+          <div class="ag-f-ubic-fila">
+            <div class="ag-f-ubic-estado" id="agf-ubic-estado" aria-live="polite"></div>
+            <button type="button" class="btn btn-ghost btn-sm" id="agf-buscar"><i class="ti ti-search"></i> Buscar en Google Maps</button>
+          </div>
+          <details class="ag-f-ayuda" ${foco === "ubicacion" ? "open" : ""}>
+            <summary>¿Cómo copio la ubicación?</summary>
+            <ol>
+              <li>Tocá <b>Buscar en Google Maps</b> (o abrí la app) y encontrá el local.</li>
+              <li>Tocá el lugar → <b>Compartir</b> → <b>Copiar enlace</b>. En la computadora también sirve el link de arriba del navegador.</li>
+              <li>Pegalo acá. Si el local no figura en Maps, dejá el dedo apretado sobre el punto: Maps muestra las coordenadas y también sirven.</li>
+            </ol>
+          </details>
+        </div>
+        <label class="rv-f ag-f-2"><span>Nota</span><textarea id="agf-nota" rows="2" maxlength="800">${agEsc(a.nota || "")}</textarea></label>
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="agf-ok"><i class="ti ti-check"></i> ${id ? "Guardar" : "Cargar agencia"}</button>`,
+  });
+  const inp = o.querySelector("#agf-ubicacion"), est = o.querySelector("#agf-ubic-estado");
+  let t = null, ultima = null;
+  const revisar = async () => {
+    const v = inp.value.trim();
+    if (v === ultima) return;
+    ultima = v;
+    if (!v) { est.innerHTML = `<span class="sin"><i class="ti ti-info-circle"></i> Sin link: Maps va a buscar la dirección</span>`; return; }
+    est.innerHTML = `<span class="cargando"><i class="ti ti-loader-2"></i> Revisando…</span>`;
+    const r = await api("/api/agencias/ubicacion", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ubicacion: v }) });
+    if (inp.value.trim() !== v) return;
+    if (r && r.lat != null) est.innerHTML = `<span class="ok"><i class="ti ti-target"></i> Punto exacto: ${r.lat}, ${r.lng}</span> <a href="https://www.google.com/maps/search/?api=1&query=${r.lat},${r.lng}" target="_blank" rel="noopener">Probar</a>`;
+    else if (r && /^https?:/i.test(r.link || "")) est.innerHTML = `<span class="link"><i class="ti ti-link"></i> Se guarda el link: abre el mismo lugar</span> <a href="${agEsc(r.link)}" target="_blank" rel="noopener">Probar</a>`;
+    else est.innerHTML = `<span class="sin"><i class="ti ti-search"></i> No es un link: Maps va a buscar «${agEsc(v)}»</span>`;
+  };
+  inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(revisar, 450); });
+  inp.addEventListener("paste", () => { clearTimeout(t); t = setTimeout(revisar, 60); });
+  revisar();
+  o.querySelector("#agf-buscar").onclick = () => {
+    const q = ["nombre", "direccion", "ciudad"].map(k => o.querySelector("#agf-" + k).value.trim()).filter(Boolean);
+    window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([...q, "Paraguay"].join(", "))}`, "_blank", "noopener");
+  };
+  o.querySelector("#agf-ok").onclick = async () => {
+    const d = {};
+    ["nombre", "razon_social", "ruc", "representante", "ci_representante", "telefono", "whatsapp", "email", "ciudad", "lugar",
+     "direccion", "ubicacion", "nota"].forEach(k => d[k] = o.querySelector("#agf-" + k).value);
+    if (!d.nombre.trim()) { toast("Poné el nombre de la agencia", "error"); o.querySelector("#agf-nombre").focus(); return; }
+    const b = o.querySelector("#agf-ok");
+    b.disabled = true;
+    const r = await api(id ? `/api/agencias/${id}` : "/api/agencias", { method: id ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(d) });
+    b.disabled = false;
+    if (!r || !r.ok) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+    o.remove();
+    toast(id ? "Datos guardados" : "Agencia cargada: ahora cargale el contrato", "success");
+    if (!id) { ag.vista = "ficha"; ag.id = r.id; ag.tab = "contrato"; }
+    agCargar();
+  };
+}
+
+// ─── Formulario: contrato, renovación, adenda o corrección ───
+function agFormContrato(modo, cid) {
+  const f = ag.f;
+  const vivas = f.versiones.filter(v => !v.anulado);
+  const base = cid ? f.versiones.find(v => v.id === cid) : (f.vigente || vivas[0] || null);
+  const hoy = f.hoy;
+  const x = base ? { ...base } : { comision_tipo: "porcentaje", comision: "", rutas: [], deposito_frec: "", garantia_tipo: "" };
+  let tipo = modo === "corregir" ? base.tipo : modo;
+  if (modo === "renovacion") {
+    const desde = base && base.hasta ? agMasDias(base.hasta, 1) : hoy;
+    // El período se toma del contrato o la renovación (una adenda empieza a mitad de camino)
+    const ref = base && base.tipo === "adenda" ? (vivas.find(v => v.tipo !== "adenda" && v.desde <= base.desde) || base) : base;
+    let meses = 12;
+    if (ref && ref.hasta) {
+      const fin1 = agMasDias(ref.hasta, 1), d0 = new Date(ref.desde + "T12:00"), d1 = new Date(fin1 + "T12:00");
+      const m = (d1.getFullYear() - d0.getFullYear()) * 12 + d1.getMonth() - d0.getMonth();
+      if (m >= 1 && d1.getDate() === d0.getDate()) meses = m;
+    }
+    x.desde = desde; x.hasta = agMasDias(agMasMeses(desde, meses), -1); x.numero = "";
+  } else if (modo === "adenda") {
+    x.desde = hoy; x.numero = base ? base.numero : "";
+  } else if (modo === "contrato") {
+    x.desde = base && base.hasta && base.hasta >= hoy ? agMasDias(base.hasta, 1) : hoy;
+    x.hasta = agMasDias(agMasMeses(x.desde, 12), -1); x.numero = "";
+  }
+  const titulos = { contrato: "Contrato", renovacion: "Renovación del contrato", adenda: "Adenda: cambio de condiciones", corregir: "Corregir esta versión" };
+  const subs = {
+    contrato: "Las condiciones con las que vende la agencia. Podés adjuntar el contrato firmado.",
+    renovacion: "Un período nuevo con las mismas condiciones (cambiá lo que haga falta). El anterior queda en el historial.",
+    adenda: "Las condiciones nuevas rigen desde la fecha que pongas; antes de esa fecha siguen valiendo las anteriores.",
+    corregir: "Para arreglar un error de carga. Si cambiaron las condiciones, mejor cargá una adenda.",
+  };
+  const op = (obj, sel) => Object.entries(obj).map(([k, t]) => `<option value="${k}" ${k === (sel || "") ? "selected" : ""}>${t}</option>`).join("");
+  const FREC = { "": "Sin definir", diario: "Todos los días", cada_2: "Cada 2 días", semanal: "Una vez por semana", quincenal: "Cada 15 días", mensual: "Una vez por mes", otro: "Otro" };
+  const GAR = { "": "Sin garantía", pagare: "Pagaré", deposito: "Depósito en garantía", poliza: "Póliza de caución", otra: "Otra" };
+  const num = v => v ? String(v).replace(".", ",") : "";
+  const o = rvModal({
+    titulo: titulos[modo], icono: modo === "renovacion" ? "refresh" : modo === "adenda" ? "file-diff" : modo === "corregir" ? "pencil" : "file-certificate",
+    ancho: 780, clase: "ag-modal", sub: `${agEsc(f.agencia.nombre)} · ${subs[modo]}`,
+    cuerpo: `
+      <div class="ag-form ag-form-c">
+        ${modo === "corregir" ? "" : `<input type="hidden" id="agc-tipo" value="${tipo}">`}
+        <fieldset class="ag-f-2"><legend><i class="ti ti-calendar"></i> Vigencia</legend>
+          <div class="ag-f-fila">
+            <label class="rv-f"><span>Desde *</span><input type="date" id="agc-desde" value="${x.desde || ""}"></label>
+            <label class="rv-f"><span>Hasta</span><input type="date" id="agc-hasta" value="${x.hasta || ""}"></label>
+            <label class="rv-f"><span>Número de contrato</span><input id="agc-numero" value="${agEsc(x.numero || "")}" maxlength="40" placeholder="Opcional"></label>
+          </div>
+          <div class="ag-f-fila">
+            <label class="ag-check"><input type="checkbox" id="agc-renov" ${x.renov_auto ? "checked" : ""}> Se renueva solo al terminar</label>
+            <label class="rv-f ag-f-pre" ${x.renov_auto ? "" : "hidden"}><span>Días de preaviso para no renovar</span><input id="agc-preaviso" inputmode="numeric" value="${x.preaviso_dias || ""}" placeholder="Ej: 30"></label>
+          </div>
+        </fieldset>
+        <fieldset class="ag-f-2"><legend><i class="ti ti-percentage"></i> Comisión</legend>
+          <div class="ag-f-fila">
+            <label class="rv-f"><span>Comisión general *</span><input id="agc-comision" inputmode="decimal" value="${num(x.comision)}" placeholder="Ej: 10"></label>
+            <label class="rv-f"><span>Cómo se calcula</span><select id="agc-ctipo">${op({ porcentaje: "% del pasaje", monto: "Gs. fijos por pasaje" }, x.comision_tipo)}</select></label>
+          </div>
+          <div class="ag-rutas" id="agc-rutas"></div>
+          <button type="button" class="pv-link" id="agc-mas-ruta"><i class="ti ti-plus"></i> Comisión distinta para una ruta</button>
+        </fieldset>
+        <fieldset class="ag-f-2"><legend><i class="ti ti-ticket"></i> Qué puede vender</legend>
+          <label class="rv-f"><span>Rutas, destinos o servicios autorizados</span><textarea id="agc-autorizado" rows="2" maxlength="600" placeholder="Ej: pasajes de línea Concepción – Asunción y San Pedro">${agEsc(x.autorizado || "")}</textarea></label>
+          <div class="ag-f-fila">
+            <label class="ag-check"><input type="checkbox" id="agc-excl" ${x.exclusividad ? "checked" : ""}> Tiene exclusividad</label>
+            <label class="rv-f ag-f-zona" ${x.exclusividad ? "" : "hidden"}><span>En qué zona o terminal</span><input id="agc-zona" value="${agEsc(x.zona_exclusiva || "")}" maxlength="160"></label>
+          </div>
+        </fieldset>
+        <fieldset class="ag-f-2"><legend><i class="ti ti-building-bank"></i> Plata</legend>
+          <div class="ag-f-fila">
+            <label class="rv-f"><span>Cada cuánto deposita</span><select id="agc-frec">${op(FREC, x.deposito_frec)}</select></label>
+            <label class="rv-f"><span>Detalle</span><input id="agc-depdet" value="${agEsc(x.deposito_detalle || "")}" maxlength="160" placeholder="Ej: antes de las 10 del día siguiente"></label>
+          </div>
+          <div class="ag-f-fila">
+            <label class="rv-f"><span>Cuenta donde deposita</span><input id="agc-cuenta" value="${agEsc(x.cuenta_deposito || "")}" maxlength="160" placeholder="Banco y número de cuenta"></label>
+            <label class="rv-f"><span>Tope de venta sin depositar (Gs.)</span><input id="agc-tope" inputmode="numeric" value="${x.tope_sin_depositar ? fmtNum(x.tope_sin_depositar) : ""}" placeholder="Opcional"></label>
+          </div>
+          <label class="rv-f"><span>Devoluciones y anulaciones</span><textarea id="agc-dev" rows="2" maxlength="600" placeholder="Cómo se manejan los pasajes devueltos o anulados">${agEsc(x.devoluciones || "")}</textarea></label>
+        </fieldset>
+        <fieldset class="ag-f-2"><legend><i class="ti ti-shield-check"></i> Garantía</legend>
+          <div class="ag-f-fila">
+            <label class="rv-f"><span>Tipo</span><select id="agc-gtipo">${op(GAR, x.garantia_tipo)}</select></label>
+            <label class="rv-f ag-f-gar"><span>Monto (Gs.)</span><input id="agc-gmonto" inputmode="numeric" value="${x.garantia_monto ? fmtNum(x.garantia_monto) : ""}"></label>
+            <label class="rv-f ag-f-gar"><span>Vence</span><input type="date" id="agc-gvence" value="${x.garantia_vence || ""}"></label>
+          </div>
+          <label class="rv-f ag-f-gar"><span>Detalle</span><input id="agc-gdet" value="${agEsc(x.garantia_detalle || "")}" maxlength="200" placeholder="Ej: pagaré firmado por el representante, en caja fuerte"></label>
+        </fieldset>
+        <fieldset class="ag-f-2"><legend><i class="ti ti-paperclip"></i> Contrato firmado</legend>
+          ${agCampoArchivo("agc-arch", modo === "corregir" && base.tiene_archivo ? (base.archivo_nombre || "archivo cargado") : "")}
+          ${modo === "corregir" && base.tiene_archivo ? `<label class="ag-check"><input type="checkbox" id="agc-quitar"> Sacar el archivo cargado</label>` : ""}
+        </fieldset>
+        <label class="rv-f ag-f-2"><span>Nota</span><textarea id="agc-nota" rows="2" maxlength="800">${agEsc(x.nota || "")}</textarea></label>
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="agc-ok"><i class="ti ti-check"></i> ${modo === "corregir" ? "Guardar corrección" : "Guardar"}</button>`,
+  });
+  const $o = s => o.querySelector(s);
+  // Mostrar u ocultar lo que depende de una casilla o de un tipo
+  $o("#agc-renov").onchange = e => { $o(".ag-f-pre").hidden = !e.target.checked; };
+  $o("#agc-excl").onchange = e => { $o(".ag-f-zona").hidden = !e.target.checked; };
+  const gar = () => o.querySelectorAll(".ag-f-gar").forEach(el => { el.hidden = !$o("#agc-gtipo").value; });
+  $o("#agc-gtipo").onchange = gar; gar();
+  // Comisiones por ruta
+  const rutas = $o("#agc-rutas");
+  const filaRuta = r => {
+    const div = document.createElement("div");
+    div.className = "ag-ruta";
+    div.innerHTML = `
+      <input class="rv-sel ag-ruta-n" placeholder="Ruta o destino (ej: Buenos Aires)" value="${agEsc(r.ruta || "")}" maxlength="80" aria-label="Ruta">
+      <input class="rv-sel ag-ruta-v" inputmode="decimal" placeholder="Comisión" value="${r.valor ? num(r.valor) : ""}" aria-label="Comisión de la ruta">
+      <select class="rv-sel ag-ruta-t" aria-label="Cómo se calcula">${op({ porcentaje: "%", monto: "Gs. por pasaje" }, r.tipo || "porcentaje")}</select>
+      <button type="button" class="icon-btn" aria-label="Sacar esta ruta"><i class="ti ti-x"></i></button>`;
+    div.querySelector("button").onclick = () => div.remove();
+    rutas.appendChild(div);
+    return div;
+  };
+  (x.rutas || []).forEach(filaRuta);
+  $o("#agc-mas-ruta").onclick = () => filaRuta({}).querySelector(".ag-ruta-n").focus();
+  // Formatear la plata al salir del campo
+  ["#agc-tope", "#agc-gmonto"].forEach(s => $o(s).addEventListener("blur", e => {
+    const n = String(e.target.value).replace(/\D/g, ""); e.target.value = n ? fmtNum(+n) : "";
+  }));
+  const arch = agEnlazarArchivo(o, "agc-arch");
+  $o("#agc-ok").onclick = async () => {
+    const d = {
+      tipo, desde: $o("#agc-desde").value, hasta: $o("#agc-hasta").value, numero: $o("#agc-numero").value,
+      renov_auto: $o("#agc-renov").checked, preaviso_dias: $o("#agc-preaviso").value,
+      comision: $o("#agc-comision").value, comision_tipo: $o("#agc-ctipo").value,
+      rutas: [...rutas.querySelectorAll(".ag-ruta")].map(r => ({ ruta: r.querySelector(".ag-ruta-n").value, valor: r.querySelector(".ag-ruta-v").value, tipo: r.querySelector(".ag-ruta-t").value })).filter(r => r.ruta.trim()),
+      autorizado: $o("#agc-autorizado").value, exclusividad: $o("#agc-excl").checked, zona_exclusiva: $o("#agc-zona").value,
+      deposito_frec: $o("#agc-frec").value, deposito_detalle: $o("#agc-depdet").value, cuenta_deposito: $o("#agc-cuenta").value,
+      tope_sin_depositar: $o("#agc-tope").value, devoluciones: $o("#agc-dev").value,
+      garantia_tipo: $o("#agc-gtipo").value, garantia_monto: $o("#agc-gmonto").value, garantia_vence: $o("#agc-gvence").value,
+      garantia_detalle: $o("#agc-gdet").value, nota: $o("#agc-nota").value,
+    };
+    if (!d.desde) { toast("Poné desde cuándo rige", "error"); $o("#agc-desde").focus(); return; }
+    if (String(d.comision).trim() === "") { toast("Poné la comisión", "error"); $o("#agc-comision").focus(); return; }
+    if (arch.datos) { d.archivo = arch.datos; d.archivo_nombre = arch.nombre; }
+    if (modo === "corregir" && $o("#agc-quitar")?.checked) d.quitar_archivo = true;
+    const b = $o("#agc-ok");
+    b.disabled = true;
+    const r = await api(modo === "corregir" ? `/api/agencias/contratos/${cid}` : `/api/agencias/${f.agencia.id}/contratos`,
+      { method: modo === "corregir" ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(d) });
+    b.disabled = false;
+    if (!r || !r.ok) { toast(r?.msg || "No se pudo guardar", "error"); return; }
+    o.remove();
+    toast({ contrato: "Contrato cargado", renovacion: "Renovación cargada", adenda: "Adenda cargada", corregir: "Corrección guardada" }[modo], "success");
+    ag.tab = "contrato";
+    agCargar();
+  };
+}
+
+// ─── Formulario: un papel ───
+function agFormPapel(tipo) {
+  const f = ag.f;
+  const o = rvModal({
+    titulo: "Subir un papel", icono: "file-upload", ancho: 520, clase: "ag-modal", sub: agEsc(f.agencia.nombre),
+    cuerpo: `
+      <div class="ag-form">
+        <label class="rv-f ag-f-2"><span>Qué papel es</span><select id="agp-tipo">${f.tipos_doc.map(t => `<option value="${t.k}" ${t.k === tipo ? "selected" : ""}>${agEsc(t.nombre)}${t.obligatorio ? " (obligatorio)" : ""}</option>`).join("")}</select></label>
+        <label class="rv-f ag-f-2 agp-desc" ${tipo === "otro" ? "" : "hidden"}><span>Cuál</span><input id="agp-desc" maxlength="120" placeholder="Ej: certificado de cumplimiento tributario"></label>
+        <div class="ag-f-fila ag-f-2">
+          <label class="rv-f"><span>Vence</span><input type="date" id="agp-vence"></label>
+          <label class="ag-check"><input type="checkbox" id="agp-novence" ${tipo === "ruc" ? "checked" : ""}> No vence</label>
+        </div>
+        <div class="ag-f-2">${agCampoArchivo("agp-arch", "")}</div>
+      </div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="agp-ok"><i class="ti ti-upload"></i> Subir</button>`,
+  });
+  const $o = s => o.querySelector(s);
+  $o("#agp-tipo").onchange = e => { $o(".agp-desc").hidden = e.target.value !== "otro"; };
+  const nv = () => { $o("#agp-vence").disabled = $o("#agp-novence").checked; if ($o("#agp-novence").checked) $o("#agp-vence").value = ""; };
+  $o("#agp-novence").onchange = nv; nv();
+  const arch = agEnlazarArchivo(o, "agp-arch");
+  $o("#agp-ok").onclick = async () => {
+    if (!arch.datos) { toast("Sacale una foto o elegí el PDF del papel", "error"); return; }
+    if (!$o("#agp-novence").checked && !$o("#agp-vence").value) { toast("Poné cuándo vence (o marcá que no vence)", "error"); $o("#agp-vence").focus(); return; }
+    const b = $o("#agp-ok");
+    b.disabled = true;
+    const r = await api(`/api/agencias/${f.agencia.id}/documentos`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo: $o("#agp-tipo").value, descripcion: $o("#agp-desc").value, vence: $o("#agp-vence").value, archivo: arch.datos, archivo_nombre: arch.nombre }) });
+    b.disabled = false;
+    if (!r || !r.ok) { toast(r?.msg || "No se pudo subir", "error"); return; }
+    o.remove();
+    toast("Papel subido", "success");
+    ag.tab = "papeles";
+    agCargar();
+  };
+}
+
+// Desde el dashboard: ir directo a la ficha de una agencia
+function agIrA(id) {
+  ag.pendiente = id;
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.sec === "agencias"));
+  irA("agencias");
 }
