@@ -190,6 +190,10 @@ app.register_blueprint(bp_ot_pend)
 from ot_afuera import bp_ot_afuera, init_ot_afuera
 init_ot_afuera()
 app.register_blueprint(bp_ot_afuera)
+# Lo que reportan los choferes queda como pedido: los encargados deciden y priorizan
+from ot_pedidos import bp_ot_pedidos, init_ot_pedidos
+init_ot_pedidos()
+app.register_blueprint(bp_ot_pedidos)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -1518,47 +1522,16 @@ def api_chofer_reportar():
                       "tipo": _detectar_tipo_reporte(descripcion),
                       "estado": "pendiente"}]
 
-        fecha_hoy = hoy()
         chofer = session.get("nombre") or session.get("usuario") or "Chofer"
-        import ot_unica
-        from db_compat import get_connection as _gc
-        conn = _gc()
-        try:
-            abierta = ot_unica.ot_abierta_de(conn, vehiculo_id)
-        finally:
-            conn.close()
-        if abierta:
-            # El coche ya está con su OT abierta en el taller: el reporte se
-            # suma ahí, con la fecha de hoy y el nombre del chofer
-            ot_id = abierta
-            ot_unica.agregar_items(ot_id, items, origen="chofer", reportado_por=chofer, fecha=fecha_hoy)
-            conn = _gc()
-            try:
-                ot_unica.subir_km(conn, ot_id, km)
-                conn.commit()
-            finally:
-                conn.close()
-        else:
-            ot_id = crear_ot(
-                vehiculo_id, fecha_hoy, km=km,
-                conductor=chofer, procedencia="WhatsApp/Chofer",
-                observaciones=f"Reporte cargado por el chofer.",
-                items=items
-            )
-
-        # Guardar fotos si el chofer adjuntó (vienen comprimidas en base64)
-        fotos = d.get("fotos", [])
-        if fotos:
-            for i, foto in enumerate(fotos[:3]):  # máximo 3 fotos por reporte
-                if foto and len(foto) < 800000:  # límite de seguridad (~600KB c/u)
-                    agregar_foto_ot(ot_id, foto, f"foto_{i+1}.jpg")
-
-        ref_foto = f"chofer_ot:{ot_id}" if fotos else ""
-        auditar(f"Chofer reportó (OT #{ot_id})", "Reportes de chofer",
-                f"{len(items)} problema(s), km {int(km):,}".replace(",", ".") + (f", {len(fotos)} foto(s)" if fotos else ""),
-                referencia=ref_foto)
-        return jsonify({"ok": True, "ot_id": ot_id, "items": len(items),
-                        "fotos": len(fotos), "msg": "¡Reporte enviado al taller!"})
+        # No entra directo a la OT: queda como pedido para que los encargados
+        # lo revisen, decidan si se hace y con qué prioridad
+        import ot_pedidos
+        fotos = [f for f in (d.get("fotos") or [])[:3] if f and len(f) < 800000]
+        rid = ot_pedidos.crear_reporte(vehiculo_id, items, chofer, km=km, fotos=fotos)
+        auditar(f"Chofer mandó un pedido de OT (#{rid})", "Reportes de chofer",
+                f"{len(items)} problema(s), km {int(km):,}".replace(",", ".") + (f", {len(fotos)} foto(s)" if fotos else ""))
+        return jsonify({"ok": True, "pedido": rid, "items": len(items), "fotos": len(fotos),
+                        "msg": "¡Reporte enviado! El taller lo va a revisar."})
     except (KeyError, ValueError) as e:
         return jsonify({"ok": False, "msg": "Faltan datos: " + str(e)}), 400
 
@@ -1571,6 +1544,17 @@ def api_chofer_mis_reportes():
     puede haber quedado sumado a una OT que ya estaba."""
     from db_compat import get_connection as _gc
     chofer = session.get("nombre") or session.get("usuario") or "Chofer"
+    # Los reportes nuevos son pedidos: cada problema con lo que decidió el taller
+    import ot_pedidos
+    pedidos = []
+    for r in ot_pedidos.reportes_del_chofer(chofer):
+        est = [p["estado"] for p in r["problemas"]]
+        r["estado"] = ("en_revision" if "en_revision" in est else "en_taller" if "en_taller" in est
+                       else "mas_adelante" if "mas_adelante" in est else "resuelto" if "resuelto" in est
+                       else "no_se_hace")
+        r["trabajos"] = len(est)
+        r["orden"] = r.get("creado_el") or r["fecha"]
+        pedidos.append(r)
     conn = _gc()
     try:
         filas = conn.execute("""
@@ -1578,6 +1562,7 @@ def api_chofer_mis_reportes():
             FROM ot_items i JOIN ordenes_trabajo o ON o.id = i.ot_id
             JOIN vehiculos v ON v.id = o.vehiculo_id
             WHERE i.origen = 'chofer' AND i.reportado_por = ?
+              AND i.id NOT IN (SELECT item_id FROM ot_pedidos WHERE item_id IS NOT NULL)
             ORDER BY i.fecha DESC, i.id DESC
         """, (chofer,)).fetchall()
     finally:
@@ -1600,8 +1585,12 @@ def api_chofer_mis_reportes():
             g["estado"] = "abierta"
         g["trabajos"] = len(est)
         g.pop("estado_ot", None)
+        g["orden"] = g["fecha"] or ""
         mias.append(g)
-    return jsonify(mias[:20])
+    todos = sorted(pedidos + mias, key=lambda x: str(x.get("orden") or ""), reverse=True)
+    for x in todos:
+        x.pop("orden", None)
+    return jsonify(todos[:20])
 
 
 @app.route("/api/ots/<int:ot_id>", methods=["PATCH"])

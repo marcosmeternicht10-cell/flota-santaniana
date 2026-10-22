@@ -55,7 +55,8 @@ GRUPOS = {
     "ots": {
         "nombre": "Órdenes de trabajo y compras",
         "detalle": "OTs con sus ítems, fotos, presupuestos y entregas de compras",
-        "tablas": ["ot_fotos", "compras_evidencia", "ot_materiales", "ot_fusiones", "ot_facturas", "ot_items", "ordenes_trabajo"],
+        "tablas": ["ot_fotos", "compras_evidencia", "ot_materiales", "ot_fusiones", "ot_facturas",
+                   "ot_pedido_fotos", "ot_pedidos", "ot_pedido_reportes", "ot_items", "ordenes_trabajo"],
         "conteo": "ordenes_trabajo",
     },
     "correctivos": {
@@ -146,7 +147,8 @@ def reinicio_total(usuario_admin=""):
         # Servicios corporativos
         "rendiciones_corp",
         # Taller y compras
-        "ot_fotos", "compras_evidencia", "ot_materiales", "ot_fusiones", "ot_facturas", "ot_items", "ordenes_trabajo",
+        "ot_fotos", "compras_evidencia", "ot_materiales", "ot_fusiones", "ot_facturas",
+        "ot_pedido_fotos", "ot_pedidos", "ot_pedido_reportes", "ot_items", "ordenes_trabajo",
         "correctivos", "mantenimientos_realizados", "servicios",
         # Neumáticos
         "truckies", "instalaciones_neumaticos", "neumaticos",
