@@ -18,6 +18,10 @@ cada tramo de los clientes corporativos y con qué coche:
   · Asignado contra rendido: con las rendiciones de ese día se ve quién rindió
     lo suyo, quién con otro coche, qué tramo lo rindió otro chofer, quién no
     rindió y quién rindió algo sin estar asignado.
+  · El horario de un tramo se puede cambiar SOLO para un día (corp_asig_horarios):
+    ese día se ve, se ordena, se controla y sale en el PDF con el horario nuevo,
+    y al publicar figura como cambio. Los demás días siguen con el de siempre
+    (el que dice el nombre del tramo), y copiar un día no copia estos cambios.
 
 Enganche en app.py:
     from corp_asignacion import bp_corp_asig, init_corp_asignacion
@@ -96,6 +100,17 @@ def init_corp_asignacion():
             publicado_por TEXT DEFAULT '',
             datos TEXT DEFAULT '',
             cambios TEXT DEFAULT '')""",
+        # El horario de un tramo cambiado solo para ese día
+        f"""CREATE TABLE IF NOT EXISTS corp_asig_horarios (
+            id {PK},
+            dia_id INTEGER NOT NULL,
+            cliente TEXT NOT NULL,
+            tramo TEXT NOT NULL,
+            hora TEXT DEFAULT '',
+            hora_fin TEXT DEFAULT '',
+            cambiado_el TEXT DEFAULT '',
+            cambiado_por TEXT DEFAULT '')""",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_corpasigh ON corp_asig_horarios (dia_id, cliente, tramo)",
         "CREATE INDEX IF NOT EXISTS ix_corpasig_dia ON corp_asig (dia_id)",
         "CREATE INDEX IF NOT EXISTS ix_corpasigv_dia ON corp_asig_versiones (dia_id)",
         "CREATE INDEX IF NOT EXISTS ix_rendcorp_fecha ON rendiciones_corp (fecha_servicio)",
@@ -139,20 +154,40 @@ def _hhmm(h):
     return f"{hh:02d}:{mm:02d}"
 
 
-def info_tramo(tramo):
-    horas = C._horas_del_tramo(tramo)
+def _con_horario(tramo, h):
+    """El tramo con el horario cambiado para ese día, para calcular con él
+    (la clave sigue siendo el nombre real del tramo). Sin cambio, el mismo."""
+    if not h or not h.get("hora"):
+        return tramo
+    return f"{tramo_corto(tramo)} {h['hora']}" + (f"/{h['hora_fin']}" if h.get("hora_fin") else "")
+
+
+def info_tramo(tramo, h=None):
+    """Horario del tramo: el de siempre (el que dice su nombre) o, si se pasa
+    h, el cambiado para ese día."""
+    efectivo = _con_horario(tramo, h)
+    horas = C._horas_del_tramo(efectivo)
     ini = horas[0] if horas else None
     fin = horas[1] if len(horas) > 1 else None
     dur = None
     if ini is not None and fin is not None:
         dur = fin - ini if fin > ini else 24 - ini + fin
-    return {"corto": tramo_corto(tramo), "ini": ini, "fin": fin,
-            "hora": _hhmm(ini), "hora_fin": _hhmm(fin),
-            "jornada": bool(dur is not None and dur >= C.HORAS_JORNADA_COMPLETA)}
+    out = {"corto": tramo_corto(tramo), "ini": ini, "fin": fin,
+           "hora": _hhmm(ini), "hora_fin": _hhmm(fin),
+           "jornada": bool(dur is not None and dur >= C.HORAS_JORNADA_COMPLETA),
+           "horario_cambiado": efectivo != tramo}
+    if efectivo != tramo:
+        normal = info_tramo(tramo)
+        out["hora_normal"], out["hora_fin_normal"] = normal["hora"], normal["hora_fin"]
+    return out
 
 
-def _orden_tramo(tramo, idx):
-    i = info_tramo(tramo)
+def _txt_horario(hora, fin):
+    return (f"{hora} a {fin}" if fin else hora) if hora else "sin horario"
+
+
+def _orden_tramo(tramo, idx, h=None):
+    i = info_tramo(tramo, h)
     if i["ini"] is not None:
         return (i["ini"], idx)
     t = tramo.upper()
@@ -163,12 +198,13 @@ def _orden_tramo(tramo, idx):
 ESTADO_DE_LADO = {"completo": "completado", "entrante": "entrante", "saliente": "saliente"}
 
 
-def rango(fila, info=None):
-    """El horario que ocupa una asignación (como lo controla la rendición)."""
+def rango(fila, h=None):
+    """El horario que ocupa una asignación (como lo controla la rendición),
+    con el horario de ese día si se cambió."""
     if fila["lado"] == "variable":
         hs = C._horas_del_tramo(fila.get("hora") or "")
         return (hs[0], hs[0] + 1.0) if hs else None
-    return C.rango_horario(fila["tramo"], estado=ESTADO_DE_LADO.get(fila["lado"], "completado"))
+    return C.rango_horario(_con_horario(fila["tramo"], h), estado=ESTADO_DE_LADO.get(fila["lado"], "completado"))
 
 
 def nombre_lindo(n):
@@ -265,6 +301,21 @@ def _filas(conn, dia_id):
     return [dict(r) for r in conn.execute("SELECT * FROM corp_asig WHERE dia_id=? ORDER BY id", (dia_id,)).fetchall()]
 
 
+def _horarios(conn, dia_id):
+    """{(cliente, tramo): {"hora", "hora_fin"}} de los tramos con el horario
+    cambiado ese día."""
+    if not dia_id:
+        return {}
+    try:
+        rows = conn.execute("SELECT cliente, tramo, hora, hora_fin FROM corp_asig_horarios WHERE dia_id=?",
+                            (dia_id,)).fetchall()
+    except Exception:
+        _rollback(conn)
+        return {}
+    return {(r["cliente"], r["tramo"]): {"hora": r["hora"] or "", "hora_fin": r["hora_fin"] or ""}
+            for r in rows if r["hora"]}
+
+
 def choferes():
     return [{"usuario": c["usuario"], "nombre": c["nombre"]} for c in C.choferes_corp_registrados()]
 
@@ -279,16 +330,18 @@ def armar_dia(fecha, con_control=True):
     try:
         dia = _dia(conn, fecha)
         filas = _filas(conn, dia["id"] if dia else None)
+        horarios = _horarios(conn, dia["id"] if dia else None)
         act = _actividad(conn, fecha)
         rends = _rendiciones(conn, fecha) if con_control and fecha <= _hoy() else None
     finally:
         conn.close()
-    return _armar(fecha, dia, filas, act, rends)
+    return _armar(fecha, dia, filas, act, rends, horarios)
 
 
-def _armar(fecha, dia, filas, act, rends):
+def _armar(fecha, dia, filas, act, rends, horarios=None):
     """El día armado a partir de lo leído (sin tocar la base)."""
     act, con_hist = act
+    horarios = horarios or {}
     w = date.fromisoformat(fecha).weekday()
     por_tramo = {}
     for f in filas:
@@ -299,13 +352,14 @@ def _armar(fecha, dia, filas, act, rends):
         opera = not (cliente in C.CLIENTES_SOLO_HABILES and w >= 5)
         tramos, otros = [], []
         fijos = C.tramos_fijos(cliente)
-        for idx, t in sorted(enumerate(fijos), key=lambda x: _orden_tramo(x[1], x[0])):
+        for idx, t in sorted(enumerate(fijos), key=lambda x: _orden_tramo(x[1], x[0], horarios.get((cliente, x[1])))):
             mis = [f for f in por_tramo.get((cliente, t), []) if f["lado"] != "variable"]
             esperado = corre(cliente, t, w, act, con_hist)
-            if not esperado and not mis:
+            h = horarios.get((cliente, t))
+            if not esperado and not mis and not h:
                 otros.append({"tramo": t, **info_tramo(t)})
                 continue
-            tr = _armar_tramo(cliente, t, mis, esperado)
+            tr = _armar_tramo(cliente, t, mis, esperado, h)
             tramos.append(tr)
             todos_slots += tr["slots"]
         variables = []
@@ -350,15 +404,15 @@ def _tipos_variable(cliente):
     return [t for t in C.CLIENTES_TRAMOS.get(cliente, []) if C._es_variable(t)] or [C.TRAMO_VARIABLE]
 
 
-def _slot(f):
+def _slot(f, h=None):
     return {"id": f["id"], "lado": f["lado"], "cliente": f["cliente"], "tramo": f["tramo"],
             "chofer_usuario": f.get("chofer_usuario") or "", "chofer_nombre": f.get("chofer_nombre") or "",
             "coche": f.get("coche") or "", "hora": f.get("hora") or "", "detalle": f.get("detalle") or "",
-            "nota": f.get("nota") or "", "rango": rango(f)}
+            "nota": f.get("nota") or "", "rango": rango(f, h)}
 
 
-def _armar_tramo(cliente, tramo, filas, esperado):
-    info = info_tramo(tramo)
+def _armar_tramo(cliente, tramo, filas, esperado, h=None):
+    info = info_tramo(tramo, h)
     no_corre = next((f for f in filas if f["lado"] == "no_corre"), None)
     base = {"cliente": cliente, "tramo": tramo, **info, "esperado": esperado}
     if no_corre:
@@ -370,11 +424,11 @@ def _armar_tramo(cliente, tramo, filas, esperado):
         slots = []
         for lado in ("entrante", "saliente"):
             f = por_lado.get(lado) or {"id": None, "lado": lado, "cliente": cliente, "tramo": tramo}
-            slots.append(_slot(f))
+            slots.append(_slot(f, h))
     else:
         f = por_lado.get("completo") or {"id": None, "lado": "completo", "cliente": cliente, "tramo": tramo}
         modo = "completo" if f.get("id") else "vacio"
-        slots = [_slot(f)]
+        slots = [_slot(f, h)]
     falta = []
     for s in slots:
         if not s["chofer_usuario"]:
@@ -734,6 +788,39 @@ def guardar_slot(fecha, d, quien=""):
         conn.close()
 
 
+def poner_horario(fecha, d, quien=""):
+    """Cambia el horario de un tramo SOLO para ese día (o lo vuelve al de
+    siempre con normal=True, o poniendo el mismo horario de siempre)."""
+    cli, tr = _tramo_ok(d.get("cliente"), d.get("tramo"))
+    normal = info_tramo(tr)
+    if d.get("normal"):
+        hora = fin = ""
+    else:
+        hora, fin = _hora_ok(d.get("hora")), _hora_ok(d.get("hora_fin"))
+        if not hora:
+            raise Error("Poné al menos la hora de salida (ej: 06:30)")
+        if fin and fin == hora:
+            raise Error("La hora de fin no puede ser igual a la de salida")
+        if hora == normal["hora"] and fin == normal["hora_fin"]:
+            hora = fin = ""           # es el de siempre: no queda como cambio
+    conn = get_connection()
+    try:
+        dia_id = _crear_dia(conn, fecha, quien)
+        antes = _horarios(conn, dia_id).get((cli, tr))
+        conn.execute("DELETE FROM corp_asig_horarios WHERE dia_id=? AND cliente=? AND tramo=?", (dia_id, cli, tr))
+        if hora:
+            conn.execute("""INSERT INTO corp_asig_horarios (dia_id, cliente, tramo, hora, hora_fin, cambiado_el, cambiado_por)
+                            VALUES (?,?,?,?,?,?,?)""", (dia_id, cli, tr, hora, fin, ahora_iso(), quien[:80]))
+        _marcar(conn, dia_id)
+        conn.commit()
+    finally:
+        conn.close()
+    era = _txt_horario(antes["hora"], antes["hora_fin"]) if antes else _txt_horario(normal["hora"], normal["hora_fin"])
+    queda = _txt_horario(hora, fin) if hora else _txt_horario(normal["hora"], normal["hora_fin"])
+    return {"cliente": cli, "tramo": tr, "corto": _con_cliente(cli, tramo_corto(tr)),
+            "era": era, "queda": queda, "de_siempre": not hora}
+
+
 def dividir(fecha, d, quien="", unir=False):
     cli, tr = _tramo_ok(d.get("cliente"), d.get("tramo"))
     conn = get_connection()
@@ -915,6 +1002,10 @@ def vaciar(fecha):
             return 0
         n = conn.execute("SELECT COUNT(*) AS n FROM corp_asig WHERE dia_id=?", (d["id"],)).fetchone()["n"]
         conn.execute("DELETE FROM corp_asig WHERE dia_id=?", (d["id"],))
+        try:
+            conn.execute("DELETE FROM corp_asig_horarios WHERE dia_id=?", (d["id"],))
+        except Exception:
+            pass
         if not d["version"]:
             conn.execute("DELETE FROM corp_asig_dias WHERE id=?", (d["id"],))
         else:
@@ -950,16 +1041,18 @@ def foto(d):
         for s in c["variables"]:
             filas.append({"k": _clave(s), **{k: s.get(k, "") for k in (
                 "cliente", "tramo", "lado", "chofer_usuario", "chofer_nombre", "coche", "hora", "detalle", "nota")}})
-    return {"fecha": d["fecha"], "filas": filas}
+    horarios = {f"{t['cliente']}|{t['tramo']}": {"hora": t["hora"], "hora_fin": t["hora_fin"]}
+                for c in d["clientes"] for t in c["tramos"] if t.get("horario_cambiado")}
+    return {"fecha": d["fecha"], "filas": filas, "horarios": horarios}
 
 
 NOMBRE_MITAD = {"entrante": "entrada", "saliente": "salida"}
 
 
-def _desc_k(f, con_lado=True):
+def _desc_k(f, con_lado=True, horarios=None):
     if f["lado"] == "variable":
         return f"{f['cliente']} variable {f.get('hora') or ''} {f.get('detalle') or ''}".replace("  ", " ").strip()
-    i = info_tramo(f["tramo"])
+    i = info_tramo(f["tramo"], (horarios or {}).get(f"{f['cliente']}|{f['tramo']}"))
     hora = (i["hora_fin"] or i["hora"]) if f["lado"] == "saliente" and con_lado else i["hora"]
     lado = f" ({NOMBRE_MITAD[f['lado']]})" if con_lado and f["lado"] in NOMBRE_MITAD else ""
     return f"{_con_cliente(f['cliente'], tramo_corto(f['tramo']))}{(' ' + hora) if hora else ''}{lado}"
@@ -1000,9 +1093,31 @@ def _partes(v, f):
     return partes
 
 
+def _cambios_de_horario(antes, ahora):
+    """Los tramos a los que se les cambió (o se les devolvió) el horario del día."""
+    ha, hn = antes.get("horarios") or {}, ahora.get("horarios") or {}
+    out = []
+    for k in sorted(set(ha) | set(hn)):
+        a, n = ha.get(k), hn.get(k)
+        if (a or {}) == (n or {}):
+            continue
+        cliente, tramo = k.split("|", 1)
+        normal = info_tramo(tramo)
+        txt_a = _txt_horario(a["hora"], a["hora_fin"]) if a else _txt_horario(normal["hora"], normal["hora_fin"])
+        nombre = _con_cliente(cliente, tramo_corto(tramo))
+        if n:
+            txt = f"{nombre}: cambia el horario, {txt_a} → {_txt_horario(n['hora'], n['hora_fin'])}"
+        else:
+            txt = f"{nombre}: vuelve al horario de siempre ({_txt_horario(normal['hora'], normal['hora_fin'])})"
+        out.append({"k": k, "cliente": cliente, "txt": txt})
+    return out
+
+
 def comparar(antes, ahora):
     if not antes:
         return []
+    hn = ahora.get("horarios") or {}
+    ha = antes.get("horarios") or {}
     va = _por_mitad(antes["filas"])
     vn = _por_mitad(ahora["filas"])
     tramo_k = lambda f: f"{f['cliente']}|{f['tramo']}" if f["lado"] != "variable" else f["k"]
@@ -1039,18 +1154,18 @@ def comparar(antes, ahora):
         f = x[1]
         base = {"k": tramo_k(f), "cliente": f["cliente"]}
         if x[0] == "no_corre":
-            cambios.append({**base, "txt": f"{_desc_k(f, False)}: no corre" + (f" ({f['nota']})" if f.get("nota") else "")})
+            cambios.append({**base, "txt": f"{_desc_k(f, False, hn if f in vn.values() else ha)}: no corre" + (f" ({f['nota']})" if f.get("nota") else "")})
         elif x[0] == "vuelve":
-            cambios.append({**base, "txt": f"{_desc_k(f, False)}: vuelve a correr"})
+            cambios.append({**base, "txt": f"{_desc_k(f, False, hn if f in vn.values() else ha)}: vuelve a correr"})
         elif x[0] == "nuevo_var":
             partes = []
             if f.get("chofer_nombre"):
                 partes.append(f"va {nombre_lindo(f['chofer_nombre'])}")
             if f.get("coche"):
                 partes.append(f"con el {f['coche']}")
-            cambios.append({**base, "txt": f"{_desc_k(f)}: " + (" ".join(partes) or "se agregó")})
+            cambios.append({**base, "txt": f"{_desc_k(f, horarios=hn if f in vn.values() else ha)}: " + (" ".join(partes) or "se agregó")})
         elif x[0] == "quitado_var":
-            cambios.append({**base, "txt": f"Se quitó el {_desc_k(f)}"})
+            cambios.append({**base, "txt": f"Se quitó el {_desc_k(f, horarios=hn if f in vn.values() else ha)}"})
         else:
             partes = x[2]
             # Si la entrada y la salida cambiaron igual, va en un solo renglón
@@ -1059,10 +1174,10 @@ def comparar(antes, ahora):
                 y = por_k.get(otra)
                 if y and y[0] == "cambio" and y[2] == partes:
                     hechos.add(otra)
-                    cambios.append({**base, "txt": f"{_desc_k(f, False)}: " + "; ".join(partes)})
+                    cambios.append({**base, "txt": f"{_desc_k(f, False, hn if f in vn.values() else ha)}: " + "; ".join(partes)})
                     continue
-            cambios.append({**base, "txt": f"{_desc_k(f)}: " + "; ".join(partes)})
-    return cambios
+            cambios.append({**base, "txt": f"{_desc_k(f, horarios=hn if f in vn.values() else ha)}: " + "; ".join(partes)})
+    return _cambios_de_horario(antes, ahora) + cambios
 
 
 def publicar(fecha, quien=""):
@@ -1111,6 +1226,7 @@ def _dia_desde_foto(foto_d, fecha):
     por_cli = {}
     for f in foto_d["filas"]:
         por_cli.setdefault(f["cliente"], []).append(f)
+    hs = foto_d.get("horarios") or {}
     clientes = []
     for cliente in clientes_activos():
         filas = por_cli.get(cliente, [])
@@ -1120,9 +1236,9 @@ def _dia_desde_foto(foto_d, fecha):
             if f["lado"] != "variable":
                 por_tramo.setdefault(f["tramo"], []).append({**f, "id": f["k"]})
         fijos = C.tramos_fijos(cliente)
-        orden = {t: _orden_tramo(t, i) for i, t in enumerate(fijos)}
+        orden = {t: _orden_tramo(t, i, hs.get(f"{cliente}|{t}")) for i, t in enumerate(fijos)}
         for t in sorted(por_tramo, key=lambda x: orden.get(x, (99, 999))):
-            tramos.append(_armar_tramo(cliente, t, por_tramo[t], True))
+            tramos.append(_armar_tramo(cliente, t, por_tramo[t], True, hs.get(f"{cliente}|{t}")))
         variables = [{**_slot({**f, "id": f["k"]}), "tramo_corto": tramo_corto(f["tramo"])}
                      for f in filas if f["lado"] == "variable"]
         clientes.append({"cliente": cliente, "opera": not (cliente in C.CLIENTES_SOLO_HABILES and w >= 5),
@@ -1325,6 +1441,15 @@ def api_listas():
 def api_slot(fecha):
     guardar_slot(fecha, request.get_json(silent=True) or {}, _quien())
     return _respuesta(fecha)
+
+
+@bp_corp_asig.route("/api/corp/asig/dia/<fecha>/horario", methods=["POST"])
+@_cambio
+def api_horario(fecha):
+    r = poner_horario(fecha, request.get_json(silent=True) or {}, _quien())
+    _auditar(f"Cambió el horario de un tramo de corporativos solo para el {fecha}",
+             f"{r['corto']}: {r['era']} → {r['queda']}")
+    return _respuesta(fecha, horario=r)
 
 
 @bp_corp_asig.route("/api/corp/asig/dia/<fecha>/dividir", methods=["POST"])
