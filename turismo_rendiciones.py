@@ -259,17 +259,23 @@ def viajes_agenda(q="", dias_atras=75, dias_adelante=30):
         filas, ya = [], []
     finally:
         conn.close()
+    # Un servicio con coches adicionales: cada coche es un viaje aparte (rinde
+    # por separado, con su tripulación)
+    from turismo_agenda import por_coche, fecha_fin_de
+    filas = [c for f in filas for c in por_coche(f)]
     norm_ot = lambda x: "".join(ch for ch in str(x or "").upper() if ch.isalnum())
     con_rend_ot = {(norm_ot(r["agenda_ot"]), str(r["coche"] or "").strip().upper()): r["id"] for r in ya if r["agenda_ot"]}
     con_rend_id = {}
     for r in ya:
         for x in str(r["agenda_ids"] or "").split(","):
             if x.strip().isdigit():
-                con_rend_id[int(x)] = r["id"]
+                con_rend_id[(int(x), str(r["coche"] or "").strip().upper())] = r["id"]
+                con_rend_id.setdefault((int(x), None), r["id"])
+    varios = {f["id"] for f in filas if f.get("coche_n", 1) > 1}
     grupos = {}
     for f in filas:
-        clave = (("OT", f["ot_nr"], (f.get("coche_interno") or "").strip().upper())
-                 if (f.get("ot_nr") or "").strip() else ("ID", f["id"], ""))
+        clave = (("OT", f["ot_nr"], (f.get("coche_interno") or "").strip().upper() or f"#{f.get('coche_n', 1)}")
+                 if (f.get("ot_nr") or "").strip() else ("ID", f["id"], f.get("coche_n", 1)))
         g = grupos.setdefault(clave, {"ot_nr": f.get("ot_nr") or "", "ids": [], "servicios": []})
         g["ids"].append(f["id"])
         g["servicios"].append(f)
@@ -280,12 +286,16 @@ def viajes_agenda(q="", dias_atras=75, dias_adelante=30):
         coche = next((s["coche_interno"] for s in sv if (s.get("coche_interno") or "").strip()), "")
         trip = next((s["tripulacion"] for s in sv if (s.get("tripulacion") or "").strip()), "")
         rend = con_rend_ot.get((norm_ot(g["ot_nr"]), coche.strip().upper())) if g["ot_nr"] else None
-        rend = rend or next((con_rend_id[i] for i in g["ids"] if i in con_rend_id), None)
+        rend = rend or next((con_rend_id[(i, coche.strip().upper())] for i in g["ids"]
+                             if (i, coche.strip().upper()) in con_rend_id), None)
+        # Un servicio de un solo coche: cualquier rendición que lo nombre
+        rend = rend or next((con_rend_id[(i, None)] for i in g["ids"] if i not in varios and (i, None) in con_rend_id), None)
         v = {
             "ot_nr": g["ot_nr"], "ids": g["ids"], "cliente": primero.get("cliente") or "",
             "salida": primero.get("salida") or "", "destino": primero.get("destino") or "",
-            "fecha_salida": min(s["fecha"] for s in sv), "fecha_regreso": max(s["fecha"] for s in sv),
+            "fecha_salida": min(s["fecha"] for s in sv), "fecha_regreso": max(fecha_fin_de(s) for s in sv),
             "coche": coche, "tripulacion": trip, "chofer": _primer_nombre(trip),
+            "coche_n": primero.get("coche_n", 1), "cant_coches": max(int(s.get("cant_coches") or 1) for s in sv),
             "pasajeros": max(int(s.get("pasajeros") or 0) for s in sv),
             "servicios": len(sv), "rendicion_id": rend,
         }
@@ -621,10 +631,22 @@ def crear(datos, usuario):
         finally:
             conn.close()
         if sv:
+            # Si el servicio lleva varios coches, el de esta rendición (el que
+            # se eligió en la lista; si no, el principal)
+            from turismo_agenda import por_coche, fecha_fin_de
+            quiero = str(datos.get("agenda_coche") or "").strip().upper()
+            n_quiero = int(datos.get("agenda_coche_n") or 0) if str(datos.get("agenda_coche_n") or "").isdigit() else 0
+            elegidos = []
+            for s0 in sv:
+                cs = por_coche(s0)
+                c = next((x for x in cs if n_quiero and x["coche_n"] == n_quiero), None) or \
+                    next((x for x in cs if quiero and x["coche_interno"].upper() == quiero), None) or cs[0]
+                elegidos.append(c)
+            sv = elegidos
             trip = next((s["tripulacion"] for s in sv if (s.get("tripulacion") or "").strip()), "")
             viaje = {"agenda_ot": sv[0].get("ot_nr") or "", "cliente": sv[0].get("cliente") or "",
                      "salida": sv[0].get("salida") or "", "destino": sv[0].get("destino") or "",
-                     "fecha_salida": min(s["fecha"] for s in sv), "fecha_regreso": max(s["fecha"] for s in sv),
+                     "fecha_salida": min(s["fecha"] for s in sv), "fecha_regreso": max(fecha_fin_de(s) for s in sv),
                      "coche": next((s["coche_interno"] for s in sv if (s.get("coche_interno") or "").strip()), ""),
                      "tripulacion": trip, "chofer": _primer_nombre(trip), "chofer2": _segundo_nombre(trip),
                      "pasajeros": max(int(s.get("pasajeros") or 0) for s in sv)}
