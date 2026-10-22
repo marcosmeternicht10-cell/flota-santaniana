@@ -12397,13 +12397,15 @@ function tarjetaDia(d, idx, hoyStr) {
         </div>
         <div class="ag-dia-info">
           <div class="ag-dia-nombre">${d.dia_servicio}${esHoy ? '<span class="ag-hoy-badge">HOY</span>' : ""}</div>
-          <div class="ag-dia-sub">${d.servicios.length} servicio${d.servicios.length === 1 ? "" : "s"}${
+          <div class="ag-dia-sub">${d.servicios.length ? `${d.servicios.length} servicio${d.servicios.length === 1 ? "" : "s"}` : "Sin salidas"}${
+            (d.en_viaje || []).length ? ` · <span class="ag-sub-viaje">${d.en_viaje.length} en viaje</span>` : ""}${
             d.sin_asignar ? ` · <span style="color:var(--danger);font-weight:600">${d.sin_asignar} sin asignar</span>` : ""}</div>
         </div>
       </div>
 
       <div class="ag-linea">
         ${d.servicios.map(s => tarjetaServicio(s)).join("")}
+        ${(d.en_viaje || []).map(s => tarjetaEnViaje(s)).join("")}
       </div>
     </div>`;
 }
@@ -12425,6 +12427,7 @@ function tarjetaServicio(s) {
           ${cancelado ? '<span class="ag-estado cancelado">cancelado</span>' : ""}
           ${completado ? '<span class="ag-estado completado">completado</span>' : ""}
           ${s.pasajeros ? `<span class="ag-pax"><i class="ti ti-users"></i> ${s.pasajeros}</span>` : ""}
+          ${s.dias > 1 ? `<span class="ag-dias-chip" title="Del ${agFecha(s.fecha)} al ${agFecha(s.fecha_fin)}"><i class="ti ti-calendar-event"></i> ${s.dias} días · hasta el ${agFecha(s.fecha_fin, true)}</span>` : ""}
         </div>
 
         <div class="ag-ruta">
@@ -12435,14 +12438,7 @@ function tarjetaServicio(s) {
           <span class="ag-lugar">${s.destino || "—"}</span>
         </div>
 
-        <div class="ag-asignacion">
-          ${s.coche_interno
-            ? `<span class="ag-tag"><i class="ti ti-bus"></i> #${s.coche_interno}</span>`
-            : `<span class="ag-tag falta"><i class="ti ti-bus"></i> a definir</span>`}
-          ${s.tripulacion
-            ? `<span class="ag-tag"><i class="ti ti-user"></i> ${s.tripulacion}</span>`
-            : `<span class="ag-tag falta"><i class="ti ti-user"></i> a definir</span>`}
-        </div>
+        ${agAsignacion(s)}
       </div>
 
       <div class="ag-serv-acciones">
@@ -12462,6 +12458,51 @@ function tarjetaServicio(s) {
                   onclick="event.stopPropagation();marcarCumplido(${s.id}, null)">
             <i class="ti ti-circle-x"></i><span>No</span>
           </button>` : ""}` : ""}
+      </div>
+    </div>`;
+}
+
+// Los coches del servicio, cada uno con su tripulación
+function agAsignacion(s) {
+  const cs = s.coches && s.coches.length ? s.coches : [{ n: 1, coche_interno: s.coche_interno, tripulacion: s.tripulacion }];
+  const par = c => `
+      ${c.coche_interno
+        ? `<span class="ag-tag"><i class="ti ti-bus"></i> #${trEsc(c.coche_interno)}</span>`
+        : `<span class="ag-tag falta"><i class="ti ti-bus"></i> a definir</span>`}
+      ${c.tripulacion
+        ? `<span class="ag-tag"><i class="ti ti-user"></i> ${trEsc(c.tripulacion)}</span>`
+        : `<span class="ag-tag falta"><i class="ti ti-user"></i> a definir</span>`}`;
+  if (cs.length === 1) return `<div class="ag-asignacion">${par(cs[0])}</div>`;
+  return `<div class="ag-asignacion varios">${cs.map(c => `
+      <div class="ag-asig-coche"><span class="ag-asig-n" title="${c.n === 1 ? "Coche principal" : "Coche adicional"}">${c.n}</span>${par(c)}</div>`).join("")}
+    </div>`;
+}
+const AG_DIAS_CORTO = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+function agFecha(f, conDia) {
+  if (!f) return "";
+  const d = new Date(f + "T12:00:00");
+  return `${conDia ? AG_DIAS_CORTO[d.getDay()] + " " : ""}${f.slice(8, 10)}/${f.slice(5, 7)}`;
+}
+// Un viaje de varios días, los días después de la salida: el coche y el
+// chofer están afuera
+function tarjetaEnViaje(s) {
+  const ultimo = s.dia_n === s.dias;
+  return `
+    <div class="ag-serv en-viaje" onclick="verServicioTurismo(${s.id})" title="Salió el ${agFecha(s.fecha, true)}">
+      <div class="ag-hora"><i class="ti ti-route"></i></div>
+      <div class="ag-serv-cuerpo">
+        <div class="ag-serv-top">
+          <span class="ag-cliente">${trEsc(s.cliente)}</span>
+          ${s.ot_nr ? `<span class="ag-ot">${trEsc(s.ot_nr)}</span>` : ""}
+          <span class="ag-viaje-chip"><i class="ti ti-road"></i> En viaje · día ${s.dia_n} de ${s.dias}</span>
+          <span class="ag-viaje-vuelve">${ultimo ? "Último día" : `Termina el ${agFecha(s.fecha_fin, true)}`}</span>
+        </div>
+        <div class="ag-ruta">
+          <span class="ag-punto salida"></span><span class="ag-lugar">${trEsc(s.salida || "—")}</span>
+          <i class="ti ti-arrow-narrow-right ag-flecha"></i>
+          <span class="ag-punto destino"></span><span class="ag-lugar">${trEsc(s.destino || "—")}</span>
+        </div>
+        ${agAsignacion(s)}
       </div>
     </div>`;
 }
@@ -12489,13 +12530,11 @@ async function nuevoServicioTurismo(id) {
 
       <div class="ag-form">
         <div class="ag-form-fila">
-          <div class="field"><label>Fecha *</label><input id="as-fecha" type="date" value="${s ? s.fecha : hoy}" onchange="asDia()"></div>
+          <div class="field"><label>Fecha de inicio *</label><input id="as-fecha" type="date" value="${s ? s.fecha : hoy}" onchange="asDia(true)"></div>
+          <div class="field"><label>Fecha de fin</label><input id="as-fin" type="date" value="${s ? s.fecha_fin || s.fecha : hoy}" min="${s ? s.fecha : hoy}" onchange="asDia()"></div>
           <div class="field"><label>Hora</label><input id="as-hora" type="time" value="${s ? s.hora || "" : ""}" style="width:120px"></div>
-          <div class="field" style="flex:1">
-            <label>Día</label>
-            <div id="as-dia" class="ag-dia-calc">—</div>
-          </div>
         </div>
+        <div id="as-dia" class="ag-dia-calc as-dia-linea">—</div>
 
         <div class="ag-form-fila">
           <div class="field" style="flex:1">
@@ -12507,6 +12546,10 @@ async function nuevoServicioTurismo(id) {
           <div class="field">
             <label>OT Nº</label>
             <input id="as-ot" value="${s ? s.ot_nr || "" : ""}" placeholder="se sugiere solo" style="width:130px">
+          </div>
+          <div class="field">
+            <label>Pasajeros</label>
+            <input id="as-pax" inputmode="numeric" value="${s ? s.pasajeros || "" : ""}" placeholder="—" style="width:90px">
           </div>
         </div>
 
@@ -12522,28 +12565,9 @@ async function nuevoServicioTurismo(id) {
           </div>
         </div>
 
-        <div class="ag-form-fila">
-          <div class="field" style="flex:1">
-            <label>Coche</label>
-            ${buscadorCoche("as-veh", vehiculos, {
-              seleccionado: s ? s.vehiculo_id || "" : "",
-              placeholder: "Dejalo vacío si todavía no se define"
-            })}
-          </div>
-          <div class="field">
-            <label>Pasajeros</label>
-            <input id="as-pax" inputmode="numeric" value="${s ? s.pasajeros || "" : ""}" placeholder="—" style="width:90px">
-          </div>
-        </div>
-
-        <div class="ag-form-fila">
-          <div class="field" style="flex:1">
-            <label>Tripulación</label>
-            <input id="as-tripu" list="as-choferes" value="${s ? s.tripulacion || "" : ""}"
-                   placeholder="Dejalo vacío si todavía no se define">
-            <datalist id="as-choferes">${choferes.map(c => `<option value="${c}">`).join("")}</datalist>
-          </div>
-        </div>
+        <div class="as-coches-tit"><i class="ti ti-bus"></i> Coches y tripulación <small>hasta ${AG_MAX_COCHES} por servicio · podés dejarlos para después</small></div>
+        <div id="as-coches" class="as-coches"></div>
+        <datalist id="as-choferes">${choferes.map(c => `<option value="${trEsc(c)}">`).join("")}</datalist>
 
         <div class="field">
           <label>Observaciones</label>
@@ -12563,17 +12587,108 @@ async function nuevoServicioTurismo(id) {
     </div>`;
   o.onclick = e => { if (e.target === o) o.remove(); };
   document.body.appendChild(o);
+  asCochesPintar("as", vehiculos, s ? agCochesDe(s) : [{}]);
   asDia();
   if (!s) asSugerirOT();
 }
 
-function asDia() {
+// ─── Los coches del servicio en el formulario (principal + adicionales) ───
+const AG_MAX_COCHES = 3;
+function agCochesDe(s) {
+  return (s.coches && s.coches.length ? s.coches : [{ vehiculo_id: s.vehiculo_id, coche_interno: s.coche_interno, tripulacion: s.tripulacion }])
+    .map(c => ({ vehiculo_id: c.vehiculo_id || "", coche_interno: c.coche_interno || "", tripulacion: c.tripulacion || "" }));
+}
+function asCocheId(pre, n, que) { return `${pre}-${que}${n > 1 ? "-" + n : ""}`; }
+function asCochesPintar(pre, vehiculos, lista) {
+  const caja = document.getElementById(`${pre}-coches`);
+  if (!caja) return;
+  caja._vehiculos = vehiculos;
+  caja.innerHTML = lista.map((c, i) => {
+    const n = i + 1;
+    return `
+      <div class="as-coche ${n > 1 ? "adicional" : ""}" data-n="${n}">
+        <div class="as-coche-cab">
+          <span class="as-coche-n">${n}</span>
+          <b>${n === 1 ? "Coche principal" : "Coche adicional"}</b>
+          ${n > 1 ? `<button type="button" class="as-coche-x" onclick="asCocheQuitar('${pre}', ${n})" title="Sacar este coche del servicio"><i class="ti ti-x"></i> Sacar</button>` : ""}
+        </div>
+        <div class="as-coche-campos">
+          <div class="field"><label>Coche</label>
+            ${buscadorCoche(asCocheId(pre, n, "veh"), vehiculos, { seleccionado: c.vehiculo_id || "", placeholder: "A definir: dejalo vacío" })}
+            ${!c.vehiculo_id && c.coche_interno ? `<small class="as-coche-viejo">Anotado: #${trEsc(c.coche_interno)}</small>` : ""}
+          </div>
+          <div class="field"><label>Tripulación</label>
+            <input id="${asCocheId(pre, n, "tripu")}" list="${pre}-choferes" value="${trEsc(c.tripulacion || "")}" placeholder="A definir: dejalo vacío" autocomplete="off">
+          </div>
+        </div>
+      </div>`;
+  }).join("") + (lista.length < AG_MAX_COCHES
+    ? `<button type="button" class="as-coche-mas" onclick="asCocheMas('${pre}')"><i class="ti ti-plus"></i> Agregar coche adicional <small>${lista.length} de ${AG_MAX_COCHES}</small></button>`
+    : `<div class="as-coche-tope"><i class="ti ti-info-circle"></i> Máximo ${AG_MAX_COCHES} coches por servicio</div>`);
+  caja._viejos = lista;
+}
+function asCochesLeer(pre) {
+  const caja = document.getElementById(`${pre}-coches`);
+  if (!caja) return [];
+  return [...caja.querySelectorAll(".as-coche")].map(el => {
+    const n = +el.dataset.n;
+    const vid = document.getElementById(asCocheId(pre, n, "veh"))?.value || "";
+    const viejo = (caja._viejos || [])[n - 1] || {};
+    return {
+      vehiculo_id: vid || null,
+      // Si no se eligió del buscador pero ya estaba anotado a mano, se mantiene
+      coche_interno: vid ? cocheInternoDe(vid, asCocheId(pre, n, "veh")) : (viejo.vehiculo_id ? "" : viejo.coche_interno || ""),
+      tripulacion: (document.getElementById(asCocheId(pre, n, "tripu"))?.value || "").trim(),
+    };
+  });
+}
+function asCocheRepetido(lista) {
+  const vistos = new Set();
+  for (const c of lista) {
+    const k = c.vehiculo_id ? "v" + c.vehiculo_id : (c.coche_interno ? "c" + c.coche_interno.toUpperCase() : "");
+    if (!k) continue;
+    if (vistos.has(k)) return c.coche_interno || "elegido";
+    vistos.add(k);
+  }
+  return "";
+}
+function asCocheMas(pre) {
+  const caja = document.getElementById(`${pre}-coches`);
+  const lista = asCochesLeer(pre);
+  if (lista.length >= AG_MAX_COCHES) return;
+  lista.push({});
+  asCochesPintar(pre, caja._vehiculos, lista);
+  setTimeout(() => document.getElementById(asCocheId(pre, lista.length, "veh") + "-txt")?.focus(), 50);
+}
+function asCocheQuitar(pre, n) {
+  const caja = document.getElementById(`${pre}-coches`);
+  const lista = asCochesLeer(pre);
+  lista.splice(n - 1, 1);
+  asCochesPintar(pre, caja._vehiculos, lista.length ? lista : [{}]);
+}
+
+function asDia(cambioInicio) {
   const DIAS = ["LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES", "SÁBADO", "DOMINGO"];
   const v = document.getElementById("as-fecha").value;
+  const fin = document.getElementById("as-fin");
   const el = document.getElementById("as-dia");
   if (!v || !el) return;
+  if (fin) {
+    // Al mover el inicio, el fin acompaña (mantiene los días que dura)
+    if (cambioInicio && fin.dataset.ini && fin.value) {
+      const dur = Math.round((new Date(fin.value + "T12:00:00") - new Date(fin.dataset.ini + "T12:00:00")) / 864e5);
+      if (dur >= 0) fin.value = new Date(new Date(v + "T12:00:00").getTime() + dur * 864e5).toISOString().slice(0, 10);
+    }
+    if (!fin.value || fin.value < v) fin.value = v;
+    fin.min = v;
+    fin.dataset.ini = v;
+  }
   const d = new Date(v + "T12:00:00");
-  el.textContent = DIAS[(d.getDay() + 6) % 7];
+  const f = fin && fin.value > v ? fin.value : v;
+  const dias = Math.round((new Date(f + "T12:00:00") - d) / 864e5) + 1;
+  el.innerHTML = dias > 1
+    ? `${DIAS[(d.getDay() + 6) % 7]} <i class="ti ti-arrow-narrow-right"></i> ${DIAS[(new Date(f + "T12:00:00").getDay() + 6) % 7]} <span>· ${dias} días</span>`
+    : `${DIAS[(d.getDay() + 6) % 7]} <span>· 1 día</span>`;
 }
 
 let asOtTimer = null;
@@ -12599,13 +12714,15 @@ async function guardarServicioTurismo(id, btn) {
     ot_nr: $("#as-ot").value.trim(),
     salida: $("#as-salida").value.trim(),
     destino: $("#as-destino").value.trim(),
-    vehiculo_id: $("#as-veh").value || null,
-    coche_interno: cocheInternoDe($("#as-veh").value),
-    tripulacion: $("#as-tripu").value.trim(),
+    fecha_fin: $("#as-fin").value,
+    coches: asCochesLeer("as"),
     pasajeros: $("#as-pax").value || 0,
     observaciones: $("#as-obs").value.trim(),
   };
   if (!cuerpo.fecha) { toast("Falta la fecha", "error"); return; }
+  if (cuerpo.fecha_fin && cuerpo.fecha_fin < cuerpo.fecha) { toast("La fecha de fin es antes de la de inicio", "error"); $("#as-fin").focus(); return; }
+  const rep = asCocheRepetido(cuerpo.coches);
+  if (rep) { toast(`El coche ${rep} está dos veces en el servicio`, "error"); return; }
   if (!cuerpo.cliente) { toast("Falta el cliente", "error"); $("#as-cliente").focus(); return; }
 
   btn.disabled = true;
@@ -12624,9 +12741,10 @@ async function guardarServicioTurismo(id, btn) {
   }
 }
 
-function cocheInternoDe(vid) {
+function cocheInternoDe(vid, idBuscador) {
   if (!vid) return "";
-  const v = (window["_coches_as-veh"] || window["_coches_asig-veh"] || []).find(x => String(x.id) === String(vid));
+  const lista = (idBuscador && window["_coches_" + idBuscador]) || window["_coches_as-veh"] || window["_coches_asig-veh"] || [];
+  const v = lista.find(x => String(x.id) === String(vid));
   return v ? (v.n_interno || v.patente || "") : "";
 }
 
@@ -12647,11 +12765,11 @@ async function abrirAsignar(id) {
   const o = document.createElement("div");
   o.className = "modal-overlay firma-overlay";
   o.innerHTML = `
-    <div class="firma-modal" style="max-width:480px">
+    <div class="firma-modal" style="max-width:560px">
       <div class="firma-head">
         <div>
           <h2><i class="ti ti-user-plus"></i> Asignar coche y tripulación</h2>
-          <p>${s.cliente} · ${s.fecha}${s.hora ? " a las " + s.hora : ""}</p>
+          <p>${trEsc(s.cliente)} · ${agFecha(s.fecha, true)}${s.dias > 1 ? ` al ${agFecha(s.fecha_fin, true)}` : ""}${s.hora ? " a las " + s.hora : ""}</p>
         </div>
         <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
       </div>
@@ -12661,15 +12779,8 @@ async function abrirAsignar(id) {
           <i class="ti ti-arrow-narrow-right"></i>
           <span class="ag-punto destino"></span> ${s.destino || "—"}
         </div>
-        <div class="field" style="margin-top:14px">
-          <label>Coche</label>
-          ${buscadorCoche("asig-veh", vehiculos, { seleccionado: s.vehiculo_id || "" })}
-        </div>
-        <div class="field" style="margin-top:12px">
-          <label>Tripulación</label>
-          <input id="asig-tripu" list="asig-choferes" value="${s.tripulacion || ""}" placeholder="Nombre del chofer">
-          <datalist id="asig-choferes">${choferes.map(c => `<option value="${c}">`).join("")}</datalist>
-        </div>
+        <div id="asig-coches" class="as-coches" style="margin-top:14px"></div>
+        <datalist id="asig-choferes">${choferes.map(c => `<option value="${trEsc(c)}">`).join("")}</datalist>
       </div>
       <div class="firma-acciones">
         <span style="flex:1"></span>
@@ -12679,20 +12790,25 @@ async function abrirAsignar(id) {
     </div>`;
   o.onclick = e => { if (e.target === o) o.remove(); };
   document.body.appendChild(o);
-  setTimeout(() => { const t = document.getElementById("asig-veh-txt"); if (t) t.focus(); }, 120);
+  asCochesPintar("asig", vehiculos, agCochesDe(s));
+  // El foco va al primer coche o chofer que falta
+  setTimeout(() => {
+    const vacio = [...o.querySelectorAll(".as-coche")].map(el => +el.dataset.n).find(n =>
+      !document.getElementById(asCocheId("asig", n, "veh"))?.value);
+    const t = document.getElementById(asCocheId("asig", vacio || 1, "veh") + "-txt");
+    if (t) t.focus();
+  }, 120);
 }
 
 async function guardarAsignacion(id, btn) {
-  const vid = $("#asig-veh").value;
-  const tripu = $("#asig-tripu").value.trim();
-  if (!vid && !tripu) { toast("Elegí al menos el coche o la tripulación", "error"); return; }
+  const coches = asCochesLeer("asig");
+  if (!coches.some(c => c.vehiculo_id || c.coche_interno || c.tripulacion)) { toast("Elegí al menos un coche o una tripulación", "error"); return; }
+  const rep = asCocheRepetido(coches);
+  if (rep) { toast(`El coche ${rep} está dos veces en el servicio`, "error"); return; }
   btn.disabled = true;
   const r = await api(`/api/turismo/agenda/${id}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      asignar: true, vehiculo_id: vid || null,
-      coche_interno: cocheInternoDe(vid), tripulacion: tripu
-    })
+    body: JSON.stringify({ asignar: true, coches })
   });
   if (r && r.ok) {
     toast(r.msg || "Asignado", "success");
@@ -14913,7 +15029,8 @@ function rvNuevoListar() {
         <b>${rvEsc(v.salida || "—")} <i class="ti ti-arrow-narrow-right"></i> ${rvEsc(v.destino || "—")} ${cuando}</b>
         <small>${rvEsc(v.cliente)}${v.ot_nr ? ` · OT ${rvEsc(v.ot_nr)}` : ""} · ${rvF(v.fecha_salida)}${v.fecha_regreso !== v.fecha_salida ? ` al ${rvF(v.fecha_regreso)}` : ""} · ${rvPl(dias, "día")}</small>
       </span>
-      <span class="rv-v-der">${v.coche ? `<b>Coche ${rvEsc(v.coche)}</b>` : `<b class="sin">Sin coche</b>`}<small>${rvEsc(rvNombre(v.tripulacion) || "Sin tripulación")}</small></span>`;
+      <span class="rv-v-der">${v.coche ? `<b>Coche ${rvEsc(v.coche)}</b>` : `<b class="sin">Sin coche</b>`}<small>${rvEsc(rvNombre(v.tripulacion) || "Sin tripulación")}</small>${v.cant_coches > 1
+        ? `<small class="rv-v-adic">${v.coche_n === 1 ? "Coche principal" : "Adicional"} · ${v.coche_n} de ${v.cant_coches}</small>` : ""}</span>`;
     if (v.rendicion_id) {
       return `<div class="rv-viaje tiene">${cab}
         <span class="rv-v-ya">Ya tiene la rendición #${v.rendicion_id}
@@ -14989,6 +15106,9 @@ async function rvCrear(btn) {
     const v = rv.viajes[rv.nuevo.sel];
     if (!v) { toast("Elegí el viaje de la lista (o cargalo a mano)", "error"); return; }
     body.agenda_ids = v.ids;
+    // Si el servicio lleva varios coches, esta rendición es la de este coche
+    if (v.coche) body.agenda_coche = v.coche;
+    if (v.coche_n) body.agenda_coche_n = v.coche_n;
   } else {
     body = {
       cliente: $("#rv-n-cliente").value, salida: $("#rv-n-salida").value, destino: $("#rv-n-destino").value,
