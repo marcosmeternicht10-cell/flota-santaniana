@@ -454,23 +454,27 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
             "SELECT * FROM trafico_salidas WHERE dia_id=? ORDER BY id", (dia["id"],)).fetchall()]
         numeros = {limpiar(s["coche"]) for s in salidas if limpiar(s["coche"]).isdigit()}
         estado = _estado_coches(conn, fecha, numeros, flota)
-        reglas = rotaciones(conn) if tipo == "nacional" else []
-        idas_rot = (_idas_recientes(conn, (date.fromisoformat(fecha) - timedelta(days=3)).isoformat(), fecha)
+        reglas = rotaciones(conn, tipo=tipo)
+        idas_rot = (_idas_recientes(conn, (date.fromisoformat(fecha) - timedelta(days=3)).isoformat(), fecha, tipo)
                     if reglas else [])
     finally:
         if propia:
             conn.close()
 
     por_bloque = {b["id"]: {"ida": [], "regreso": []} for b in bloques}
+    nombres_bloque = {b["id"]: b["nombre"] for b in bloques}
+    for s in salidas:
+        s["corredor"] = nombres_bloque.get(s["bloque_id"], "")
+        s["origen"], s["llega"] = tramo(s["destino"], s["lado"], s["corredor"], tipo)
+        s["fecha"] = fecha
+    regresos_dia = [s for s in salidas if s["lado"] == "regreso"]
     for s in salidas:
         if s["bloque_id"] in por_bloque:
             por_bloque[s["bloque_id"]][s["lado"] if s["lado"] in LADOS else "ida"].append(s)
-    nombres_bloque = {b["id"]: b["nombre"] for b in bloques}
 
     for s in salidas:
         avisos = []
         coche = limpiar(s["coche"])
-        s["origen"], s["llega"] = tramo(s["destino"], s["lado"], nombres_bloque.get(s["bloque_id"], ""), tipo)
         s["destino_base"], s["destino_extras"] = partes_destino(s["destino"])
         if not coche or not coche.isdigit():
             avisos.append({"nivel": "falta", "txt": "Falta el coche" if not coche
@@ -496,13 +500,13 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
             if s["lado"] == "ida":
                 r = regla_de_ida(reglas, corr, s, s["llega"])
                 if r:
-                    s["rotacion"] = {"txt": _vuelta_txt(r)}
+                    s["rotacion"] = {"txt": _vuelta_txt(r, fecha)}
             else:
-                r, ida = ida_de_regreso(reglas, idas_rot, fecha, corr, s, s["origen"])
+                r, ida = ida_de_regreso(reglas, idas_rot, fecha, corr, s, s["origen"], s["llega"], regresos_dia)
                 if r:
                     hoy_mismo = int(r["vuelta_dias"] or 0) == 0
                     cuando = _dia_txt((date.fromisoformat(fecha) - timedelta(days=int(r["vuelta_dias"] or 0))).isoformat(), fecha)
-                    hora_ida = ida["hora"] if ida else r["ida_hora"]
+                    hora_ida = ida["hora"] if ida else (r["ida_hora"] or (f"de {r['ida_desde']}" if r.get("ida_desde") else ""))
                     c_ida = limpiar(ida["coche"]) if ida else ""
                     if c_ida.isdigit() and coche.isdigit() and c_ida != coche:
                         s["rotacion"] = {"txt": f"Por rotación iba el {c_ida} (salió {cuando} {hora_ida})",
@@ -589,6 +593,13 @@ def _ubicaciones_para_panel(inicio, salidas_dia, flota, tipo="nacional"):
 # mismo día a las 22:00 de Loreto, etc. Con esto, al completar los regresos
 # va el coche que corresponde (con su tripulación) y no el primero que llegó.
 # La tabla se puede cambiar desde Tráfico → ⋯ → Rotaciones.
+#
+# Cada regla puede valer solo algunos días de la semana (los de la IDA) y,
+# además de la hora, reconocer la ida por dónde sale (ida_desde) y el regreso
+# por a dónde vuelve (vuelta_a). Así se arma el internacional: las salidas de
+# Villarrica de los martes vuelven el miércoles y las de los viernes el
+# domingo, en los regresos a Villarrica (sin hora fija: la primera ida con el
+# primer regreso, la segunda con el segundo).
 
 ROTACIONES_INICIALES = [
     # corredor, sale (ida), va a (si hace falta distinguir), vuelve, días después, vuelve desde, nota
@@ -610,6 +621,15 @@ ROTACIONES_INICIALES = [
     ("TACUATI", "04:15", "", "03:15", 1, "", ""),
     ("SAN VICENTE", "06:30", "", "03:00", 1, "", ""),
 ]
+# Internacional (lo que contó Marcos, oct 2026): de Villarrica salen los
+# martes y los viernes; vuelven el miércoles y el domingo.
+ROTACIONES_INICIALES_INT = [
+    # corredor, sale de, días de la ida (1=lunes … 7=domingo), días después, vuelve a, nota
+    ("BUENOS AIRES", "VILLARRICA", "2", 1, "VILLARRICA", "Las de Villarrica del martes vuelven el miércoles"),
+    ("BUENOS AIRES", "VILLARRICA", "5", 2, "VILLARRICA", "Las de Villarrica del viernes vuelven el domingo"),
+]
+DIAS_CORTOS_ROT = {1: "lun", 2: "mar", 3: "mié", 4: "jue", 5: "vie", 6: "sáb", 7: "dom"}
+DIAS_LARGOS_ROT = {1: "lunes", 2: "martes", 3: "miércoles", 4: "jueves", 5: "viernes", 6: "sábado", 7: "domingo"}
 TOL_IDA = 10          # minutos de diferencia que se aceptan al reconocer la ida…
 TOL_VUELTA = 20       # …y el regreso (ej. 03:15 en la tabla y 03:30 en la planilla)
 
@@ -644,6 +664,28 @@ def init_rotaciones():
                                                                vuelta_desde, nota, activo, actualizado_el, actualizado_por)
                                 VALUES (?,?,?,?,?,?,?,1,?,?)""", (c, ih, ia, vh, vd, vde, nota, _ahora(), "lista inicial"))
             conn.commit()
+        # Tráfico (nacional / internacional), días de la semana, de dónde sale
+        # la ida y a dónde vuelve el regreso
+        from db_compat import columnas_de_tabla
+        ya = set(columnas_de_tabla(conn, "trafico_rotaciones"))
+        for col, tipo_col in (("tipo", "TEXT DEFAULT 'nacional'"), ("dias", "TEXT DEFAULT ''"),
+                              ("ida_desde", "TEXT DEFAULT ''"), ("vuelta_a", "TEXT DEFAULT ''")):
+            if col not in ya:
+                conn.execute(f"ALTER TABLE trafico_rotaciones ADD COLUMN {col} {tipo_col}")
+                conn.commit()
+        # Las del internacional entran una sola vez (si después se borran, no vuelven)
+        conn.execute("""CREATE TABLE IF NOT EXISTS trafico_semillas (
+            clave TEXT PRIMARY KEY, aplicada_el TEXT DEFAULT '')""")
+        conn.commit()
+        if not conn.execute("SELECT 1 FROM trafico_semillas WHERE clave='rotaciones_int_villarrica'").fetchone():
+            for c, desde, dias, vd, va, nota in ROTACIONES_INICIALES_INT:
+                conn.execute("""INSERT INTO trafico_rotaciones (corredor, tipo, dias, ida_desde, ida_hora, ida_a,
+                                    vuelta_hora, vuelta_dias, vuelta_desde, vuelta_a, nota, activo, actualizado_el, actualizado_por)
+                                VALUES (?,'internacional',?,?,'','','',?,'',?,?,1,?,?)""",
+                             (c, dias, desde, vd, va, nota, _ahora(), "lista inicial"))
+            conn.execute("INSERT INTO trafico_semillas (clave, aplicada_el) VALUES (?, ?) ON CONFLICT (clave) DO NOTHING",
+                         ("rotaciones_int_villarrica", _ahora()))
+            conn.commit()
     except Exception:
         try:
             conn.rollback()
@@ -653,12 +695,17 @@ def init_rotaciones():
         conn.close()
 
 
-def rotaciones(conn=None, todas=False):
+def rotaciones(conn=None, todas=False, tipo="nacional"):
+    """Las reglas de un tráfico (tipo=None: las de los dos)."""
     propia = conn is None
     conn = conn or get_connection()
     try:
-        q = "SELECT * FROM trafico_rotaciones" + ("" if todas else " WHERE COALESCE(activo,1)=1")
-        return [dict(r) for r in conn.execute(q + " ORDER BY corredor, ida_hora, id").fetchall()]
+        q = "SELECT * FROM trafico_rotaciones WHERE 1=1" + ("" if todas else " AND COALESCE(activo,1)=1")
+        params = []
+        if tipo:
+            q += " AND COALESCE(NULLIF(tipo,''),'nacional')=?"
+            params.append(tipo_ok(tipo))
+        return [dict(r) for r in conn.execute(q + " ORDER BY corredor, ida_hora, id", params).fetchall()]
     except Exception:
         try:
             conn.rollback()
@@ -690,68 +737,125 @@ def _es_refuerzo(destino):
     return "REFUERZO" in partes_destino(destino)[1]
 
 
-def regla_de_ida(reglas, corredor, s, llega):
+def _dias_regla(r):
+    """Los días de la semana (1=lunes … 7=domingo) en que vale la regla, según
+    el día de la IDA. Vacío = todos."""
+    return {int(x) for x in str(r.get("dias") or "").replace(" ", "").split(",") if x.isdigit() and 1 <= int(x) <= 7}
+
+
+def _vale_el_dia(r, fecha_ida):
+    dias = _dias_regla(r)
+    if not dias or not fecha_ida:
+        return True
+    try:
+        return date.fromisoformat(str(fecha_ida)[:10]).isoweekday() in dias
+    except ValueError:
+        return True
+
+
+def _mismo_corredor(r, corredor):
+    # El internacional es un solo corredor (Buenos Aires): no se mira el nombre
+    if (r.get("tipo") or "nacional") == "internacional":
+        return True
+    return _clave(r["corredor"]) == _clave(corredor)
+
+
+def regla_de_ida(reglas, corredor, s, llega, origen=None, fecha=None):
     """La regla de rotación de una ida (o None). Si dos reglas tienen la misma
-    hora, gana la que dice a dónde va (ej. 19:30 SAN PEDRO/CDE)."""
+    hora, gana la que dice a dónde va (ej. 19:30 SAN PEDRO/CDE) o de dónde
+    sale (VILLARRICA). Una regla de algunos días de la semana solo vale esos
+    días."""
     if s.get("lado", "ida") != "ida" or _es_refuerzo(s.get("destino")):
         return None
+    fecha = fecha or s.get("fecha")
+    origen = origen if origen is not None else s.get("origen")
     cands = []
     for k, r in enumerate(reglas):
-        if _clave(r["corredor"]) != _clave(corredor):
+        if not _mismo_corredor(r, corredor):
             continue
-        d = _cerca(r["ida_hora"], s.get("hora"), TOL_IDA)
-        if d is None:
+        if not _vale_el_dia(r, fecha):
             continue
+        if r.get("ida_hora"):
+            d = _cerca(r["ida_hora"], s.get("hora"), TOL_IDA)
+            if d is None:
+                continue
+        else:
+            d = TOL_IDA + 1            # sin hora: vale cualquiera, pero pierde contra una con hora
         if r.get("ida_a") and _clave(r["ida_a"]) != _clave(llega):
             continue
-        cands.append((0 if r.get("ida_a") else 1, d, k))
+        if r.get("ida_desde") and _clave(_lugar(r["ida_desde"])) != _clave(origen):
+            continue
+        cands.append((0 if (r.get("ida_a") or r.get("ida_desde")) else 1, d, k))
     if not cands:
         return None
     return reglas[min(cands)[2]]
 
 
-def reglas_de_regreso(reglas, corredor, s, origen):
+def reglas_de_regreso(reglas, corredor, s, origen, llega=None, fecha=None):
     """Las reglas cuyo regreso es esta salida (la más justa primero)."""
     if s.get("lado") != "regreso" or _es_refuerzo(s.get("destino")):
         return []
+    llega = llega if llega is not None else s.get("llega")
     out = []
     for r in reglas:
-        if _clave(r["corredor"]) != _clave(corredor):
+        if not _mismo_corredor(r, corredor):
             continue
-        d = _cerca(r["vuelta_hora"], s.get("hora"), TOL_VUELTA)
-        if d is None:
-            continue
+        if r.get("vuelta_hora"):
+            d = _cerca(r["vuelta_hora"], s.get("hora"), TOL_VUELTA)
+            if d is None:
+                continue
+        else:
+            d = TOL_VUELTA + 1
         if r.get("vuelta_desde") and _clave(r["vuelta_desde"]) != _clave(origen):
             continue
+        if r.get("vuelta_a") and _clave(_lugar(r["vuelta_a"])) != _clave(llega):
+            continue
+        if fecha and _dias_regla(r):
+            f_ida = (date.fromisoformat(fecha) - timedelta(days=int(r["vuelta_dias"] or 0))).isoformat()
+            if not _vale_el_dia(r, f_ida):
+                continue
         out.append((d, r))
     out.sort(key=lambda x: x[0])
     return [r for _, r in out]
 
 
-def _idas_recientes(conn, desde, hasta):
-    """Las idas del nacional de esos días (con o sin coche)."""
+def _idas_recientes(conn, desde, hasta, tipo="nacional"):
+    """Las idas de un tráfico de esos días (con o sin coche)."""
+    tipo = tipo_ok(tipo)
     out = []
     for f in conn.execute("""
         SELECT s.id, s.hora, s.destino, s.coche, s.trip1, s.trip2, b.nombre AS corredor, d.fecha
         FROM trafico_salidas s
         JOIN trafico_bloques b ON b.id = s.bloque_id
         JOIN trafico_dias d ON d.id = s.dia_id
-        WHERE d.fecha >= ? AND d.fecha <= ? AND COALESCE(d.tipo,'nacional')='nacional' AND s.lado='ida'
-        """, (desde, hasta)).fetchall():
+        WHERE d.fecha >= ? AND d.fecha <= ? AND COALESCE(d.tipo,'nacional')=? AND s.lado='ida'
+        """, (desde, hasta, tipo)).fetchall():
         f = dict(f)
         f["lado"] = "ida"
-        f["origen"], f["llega"] = tramo(f["destino"], "ida", f["corredor"], "nacional")
+        f["origen"], f["llega"] = tramo(f["destino"], "ida", f["corredor"], tipo)
         out.append(f)
     return out
 
 
-def ida_de_regreso(reglas, idas, fecha, corredor, s, origen):
-    """Según la rotación, qué ida vuelve con este regreso: (regla, ida o None)."""
-    for r in reglas_de_regreso(reglas, corredor, s, origen):
+def ida_de_regreso(reglas, idas, fecha, corredor, s, origen, llega=None, regresos=None):
+    """Según la rotación, qué ida vuelve con este regreso: (regla, ida o None).
+    Si la regla abarca varias idas (las dos de Villarrica), la primera ida va
+    con el primer regreso que le corresponde ese día, la segunda con el
+    segundo (regresos = todos los regresos del día, para contar el lugar)."""
+    for r in reglas_de_regreso(reglas, corredor, s, origen, llega, fecha):
         f_ida = (date.fromisoformat(fecha) - timedelta(days=int(r["vuelta_dias"] or 0))).isoformat()
-        cands = [i for i in idas if i["fecha"] == f_ida and _clave(i["corredor"]) == _clave(corredor)
+        cands = [i for i in idas if i["fecha"] == f_ida and _mismo_corredor(r, i["corredor"])
                  and regla_de_ida([r], i["corredor"], i, i["llega"]) is not None]
-        cands.sort(key=lambda i: (_cerca(r["ida_hora"], i["hora"], TOL_IDA) or 0, i["id"]))
+        if not r.get("ida_hora") or not r.get("vuelta_hora"):
+            cands.sort(key=lambda i: (_orden_hora(i["hora"]), i["id"]))
+            if regresos:
+                propios = sorted([x for x in regresos if r in reglas_de_regreso([r], x.get("corredor") or corredor, x,
+                                                                                    x.get("origen"), x.get("llega"), fecha)],
+                                 key=lambda x: (_orden_hora(x.get("hora")), x.get("id") or 0))
+                pos = next((k for k, x in enumerate(propios) if x.get("id") == s.get("id")), 0)
+                return r, (cands[pos] if pos < len(cands) else None)
+        else:
+            cands.sort(key=lambda i: (_cerca(r["ida_hora"], i["hora"], TOL_IDA) or 0, i["id"]))
         return r, (cands[0] if cands else None)
     return None, None
 
@@ -759,8 +863,13 @@ def ida_de_regreso(reglas, idas, fecha, corredor, s, origen):
 def _vuelta_txt(r, ida_fecha=None, fecha=None):
     n = int(r["vuelta_dias"] or 0)
     cuando = "hoy" if n == 0 else "mañana" if n == 1 else f"en {n} días"
+    if ida_fecha and n >= 2:
+        f = date.fromisoformat(ida_fecha) + timedelta(days=n)
+        cuando = f"el {DIAS_LARGOS_ROT[f.isoweekday()]}"
     desde = f" de {r['vuelta_desde']}" if r.get("vuelta_desde") else ""
-    return f"Vuelve {cuando} {r['vuelta_hora']}{desde}"
+    hora = f" {r['vuelta_hora']}" if r.get("vuelta_hora") else ""
+    a = f" a {r['vuelta_a']}" if r.get("vuelta_a") and not r.get("vuelta_hora") else ""
+    return f"Vuelve {cuando}{hora}{desde}{a}".replace("  ", " ")
 
 
 def _dia_txt(f, fecha):
@@ -779,7 +888,8 @@ def vueltas_pendientes(reglas, idas, tramos_coche_ultimo):
         if not r:
             continue
         f = (date.fromisoformat(i["fecha"]) + timedelta(days=int(r["vuelta_dias"] or 0))).isoformat()
-        out[(i["fecha"], i["hora"] or "00:00", c)] = (f, normalizar_hora(r["vuelta_hora"]) or r["vuelta_hora"])
+        # Sin hora fija (vuelve "en el regreso a Villarrica"): queda guardado todo ese día
+        out[(i["fecha"], i["hora"] or "00:00", c)] = (f, normalizar_hora(r["vuelta_hora"]) or r["vuelta_hora"] or "23:59")
     return out
 
 
@@ -865,12 +975,20 @@ def sugerencias(salida_id):
         tramos = _tramos_recientes(conn, s["fecha"])
         hoy_salidas = conn.execute("SELECT coche, hora FROM trafico_salidas WHERE dia_id=? AND id<>?",
                                    (s["dia_id"], salida_id)).fetchall()
-        reglas = rotaciones(conn) if s["tipo"] == "nacional" else []
-        idas_rot = (_idas_recientes(conn, (date.fromisoformat(s["fecha"]) - timedelta(days=3)).isoformat(), s["fecha"])
+        reglas = rotaciones(conn, tipo=s["tipo"])
+        idas_rot = (_idas_recientes(conn, (date.fromisoformat(s["fecha"]) - timedelta(days=3)).isoformat(), s["fecha"], s["tipo"])
                     if reglas else [])
+        regresos_dia = []
+        if reglas and s["lado"] == "regreso":
+            for x in conn.execute("""SELECT s.*, b.nombre AS corredor FROM trafico_salidas s
+                                     JOIN trafico_bloques b ON b.id=s.bloque_id
+                                     WHERE s.dia_id=? AND s.lado='regreso'""", (s["dia_id"],)).fetchall():
+                x = dict(x)
+                x["origen"], x["llega"] = tramo(x["destino"], "regreso", x["corredor"], s["tipo"])
+                regresos_dia.append(x)
     finally:
         conn.close()
-    origen, _ = tramo(s["destino"], s["lado"], s["corredor"], s["tipo"])
+    origen, llega = tramo(s["destino"], s["lado"], s["corredor"], s["tipo"])
     donde = ubicaciones(tramos, s["fecha"], s["hora"] or "23:59", excluir_id=salida_id)
     ya_hoy = {}
     for r in hoy_salidas:
@@ -885,7 +1003,7 @@ def sugerencias(salida_id):
             if v:
                 c["rango"] += 3
                 c["reservado"] = f"vuelve {'hoy' if v[0] == s['fecha'] else 'mañana' if v[0] > s['fecha'] else 'el ' + v[0][8:10] + '/' + v[0][5:7]} {v[1]}"
-        r, ida = ida_de_regreso(reglas, idas_rot, s["fecha"], s["corredor"], s, origen)
+        r, ida = ida_de_regreso(reglas, idas_rot, s["fecha"], s["corredor"], s, origen, llega, regresos_dia)
         if ida and limpiar(ida["coche"]).isdigit():
             c_ida = limpiar(ida["coche"])
             cuando = _dia_txt(ida["fecha"], s["fecha"])
@@ -939,16 +1057,23 @@ def completar_con_ubicacion(fecha, simular=False, tipo="nacional"):
         vacias.sort(key=lambda x: x[0])
         tomados = set()
         llenadas = 0
-        reglas = rotaciones(conn) if tipo == "nacional" else []
-        idas_rot = (_idas_recientes(conn, (date.fromisoformat(fecha) - timedelta(days=3)).isoformat(), fecha)
+        reglas = rotaciones(conn, tipo=tipo)
+        idas_rot = (_idas_recientes(conn, (date.fromisoformat(fecha) - timedelta(days=3)).isoformat(), fecha, tipo)
                     if reglas else [])
         vueltas = vueltas_pendientes(reglas, idas_rot, None) if reglas else {}
+        regresos_dia = []
+        for x in filas:
+            if x["lado"] == "regreso":
+                x = dict(x)
+                x["origen"], x["llega"] = tramo(x["destino"], "regreso", x["corredor"], tipo)
+                regresos_dia.append(x)
         # 1) La rotación: en cada regreso, el coche de la ida que vuelve en él
         hechas = set()
         for hora, f, origen in vacias:
             if not reglas or f["lado"] != "regreso":
                 continue
-            r, ida = ida_de_regreso(reglas, idas_rot, fecha, f["corredor"], f, origen)
+            _, llega_f = tramo(f["destino"], f["lado"], f["corredor"], tipo)
+            r, ida = ida_de_regreso(reglas, idas_rot, fecha, f["corredor"], f, origen, llega_f, regresos_dia)
             c_ida = limpiar(ida["coche"]) if ida else ""
             if r and int(r["vuelta_dias"] or 0) == 0 and not c_ida.isdigit():
                 # Vuelve el que sale hoy y esa ida todavía no tiene coche: se
@@ -1965,6 +2090,18 @@ def dia_completo(fecha, tipo="nacional"):
                             AND EXISTS (SELECT 1 FROM trafico_salidas s WHERE s.dia_id = d.id)
                             ORDER BY d.fecha DESC LIMIT 1""", (fecha, tipo)).fetchone()
         d["dia_anterior"] = r["fecha"] if r else None
+        # El mismo día de la semana pasada (o el último con ese día): el
+        # internacional no es igual todos los días, ahí están sus salidas
+        dow = date.fromisoformat(fecha).isoweekday()
+        d["dia_semana_pasada"] = None
+        for x in conn.execute("""SELECT d.fecha FROM trafico_dias d WHERE d.fecha < ? AND d.fecha >= ?
+                                 AND COALESCE(d.tipo,'nacional')=?
+                                 AND EXISTS (SELECT 1 FROM trafico_salidas s WHERE s.dia_id = d.id)
+                                 ORDER BY d.fecha DESC""",
+                              (fecha, (date.fromisoformat(fecha) - timedelta(days=35)).isoformat(), tipo)).fetchall():
+            if date.fromisoformat(x["fecha"]).isoweekday() == dow:
+                d["dia_semana_pasada"] = x["fecha"]
+                break
         d["cambios_pendientes"] = []
         if d.get("existe") and d["dia"]["version"] and d["dia"]["modificado"]:
             u = conn.execute("SELECT datos FROM trafico_versiones WHERE dia_id=? AND version=?",
@@ -1976,6 +2113,14 @@ def dia_completo(fecha, tipo="nacional"):
     d["puede_editar"] = _puede_editar()
     d["completables"] = (completar_con_ubicacion(fecha, simular=True, tipo=tipo)
                          if d.get("existe") and d["puede_editar"] else 0)
+    # Cuántas salidas lleva este día de la semana y cuántas hay cargadas
+    try:
+        import trafico_patron
+        d["patron"] = (trafico_patron.control_del_dia(fecha, tipo, d.get("bloques"))
+                       if d.get("existe") else None)
+        d["esperado"] = trafico_patron.esperado_del_dia(fecha, tipo)
+    except Exception:
+        d["patron"], d["esperado"] = None, None
     return d
 
 
@@ -2020,6 +2165,8 @@ def api_listas():
 
 def _datos_rotacion(d, parcial=False):
     out = {}
+    if not parcial or "tipo" in d:
+        out["tipo"] = tipo_ok(d.get("tipo"))
     if not parcial or "corredor" in d:
         c = limpiar(d.get("corredor"))
         if not c:
@@ -2027,10 +2174,20 @@ def _datos_rotacion(d, parcial=False):
         out["corredor"] = c
     for k, nombre in (("ida_hora", "la hora de salida"), ("vuelta_hora", "la hora de vuelta")):
         if not parcial or k in d:
-            h = normalizar_hora(d.get(k))
-            if not h:
+            v = str(d.get(k) or "").strip()
+            h = normalizar_hora(v) if v else ""
+            if v and not h:
                 raise ValueError(f"Revisá {nombre} (ej: 09:00)")
             out[k] = h
+    if not parcial or "dias" in d:
+        v = d.get("dias")
+        lista = v if isinstance(v, list) else str(v or "").replace(" ", "").split(",")
+        dias = sorted({int(x) for x in lista if str(x).isdigit() and 1 <= int(x) <= 7})
+        out["dias"] = "" if len(dias) in (0, 7) else ",".join(str(x) for x in dias)
+    for k in ("ida_desde", "vuelta_a"):
+        if not parcial or k in d:
+            v = limpiar(d.get(k))
+            out[k] = _lugar(v) if v else ""
     if not parcial or "vuelta_dias" in d:
         try:
             n = int(d.get("vuelta_dias") or 0)
@@ -2050,19 +2207,32 @@ def _datos_rotacion(d, parcial=False):
     return out
 
 
+def _regla_completa(r):
+    """Una regla tiene que poder reconocer la ida y el regreso: por la hora o
+    por el lugar."""
+    if not (r.get("ida_hora") or r.get("ida_desde") or r.get("ida_a")):
+        raise ValueError("Poné la hora de la ida o de dónde sale")
+    if not (r.get("vuelta_hora") or r.get("vuelta_desde") or r.get("vuelta_a")):
+        raise ValueError("Poné la hora del regreso o a dónde vuelve")
+
+
 @bp_trafico.route("/api/trafico/rotaciones", methods=["GET"])
 def api_rotaciones():
     if not _puede_ver():
         return jsonify({"error": "Sin permiso"}), 403
+    tipo = _tipo()
     conn = get_connection()
     try:
         corr = [r["nombre"] for r in conn.execute(
             """SELECT DISTINCT b.nombre FROM trafico_bloques b JOIN trafico_dias d ON d.id = b.dia_id
-               WHERE COALESCE(d.tipo,'nacional')='nacional' AND d.fecha >= ? ORDER BY b.nombre""",
-            ((date.today() - timedelta(days=60)).isoformat(),)).fetchall()]
+               WHERE COALESCE(d.tipo,'nacional')=? AND d.fecha >= ? ORDER BY b.nombre""",
+            (tipo, (date.today() - timedelta(days=60)).isoformat())).fetchall()]
     finally:
         conn.close()
-    reglas = rotaciones(todas=True)
+    reglas = rotaciones(todas=True, tipo=tipo)
+    if tipo == "internacional":
+        # Un solo corredor: todas las reglas van juntas
+        corr = corr[:1] or ["BUENOS AIRES"]
     for r in reglas:
         corr.append(r["corredor"])
     vistos, corredores = set(), []
@@ -2070,7 +2240,11 @@ def api_rotaciones():
         if _clave(c) not in vistos:
             vistos.add(_clave(c))
             corredores.append(c)
-    return jsonify({"reglas": reglas, "corredores": corredores, "puede_editar": _puede_editar()})
+    if tipo == "internacional":
+        corredores = corredores[:1]
+        for r in reglas:
+            r["corredor_ver"] = corredores[0]
+    return jsonify({"reglas": reglas, "corredores": corredores, "puede_editar": _puede_editar(), "tipo": tipo})
 
 
 @bp_trafico.route("/api/trafico/rotaciones", methods=["POST"])
@@ -2079,20 +2253,23 @@ def api_rotacion_nueva():
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
     try:
         d = _datos_rotacion(request.get_json(silent=True) or {})
+        _regla_completa(d)
     except ValueError as e:
         return jsonify({"ok": False, "msg": str(e)}), 400
     conn = get_connection()
     try:
-        conn.execute("""INSERT INTO trafico_rotaciones (corredor, ida_hora, ida_a, vuelta_hora, vuelta_dias, vuelta_desde,
-                                                        nota, activo, actualizado_el, actualizado_por)
-                        VALUES (?,?,?,?,?,?,?,1,?,?)""",
-                     (d["corredor"], d["ida_hora"], d["ida_a"], d["vuelta_hora"], d["vuelta_dias"], d["vuelta_desde"],
-                      d["nota"], _ahora(), _quien()))
+        conn.execute("""INSERT INTO trafico_rotaciones (corredor, tipo, dias, ida_desde, ida_hora, ida_a, vuelta_hora,
+                                                        vuelta_dias, vuelta_desde, vuelta_a, nota, activo,
+                                                        actualizado_el, actualizado_por)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,1,?,?)""",
+                     (d["corredor"], d["tipo"], d["dias"], d["ida_desde"], d["ida_hora"], d["ida_a"], d["vuelta_hora"],
+                      d["vuelta_dias"], d["vuelta_desde"], d["vuelta_a"], d["nota"], _ahora(), _quien()))
         conn.commit()
     finally:
         conn.close()
-    _auditar(f"Agregó una rotación del tráfico: {d['corredor']} {d['ida_hora']} → {d['vuelta_hora']} (+{d['vuelta_dias']})")
-    return jsonify({"ok": True, "reglas": rotaciones(todas=True)})
+    _auditar(f"Agregó una rotación del tráfico{_etq(d['tipo'])}: {d['corredor']} {d['ida_hora'] or d['ida_desde']} → "
+             f"{d['vuelta_hora'] or d['vuelta_a']} (+{d['vuelta_dias']})")
+    return jsonify({"ok": True, "reglas": rotaciones(todas=True, tipo=d["tipo"])})
 
 
 @bp_trafico.route("/api/trafico/rotaciones/<int:rid>", methods=["PATCH", "DELETE"])
@@ -2110,18 +2287,21 @@ def api_rotacion(rid):
         else:
             try:
                 d = _datos_rotacion(request.get_json(silent=True) or {}, parcial=True)
+                d.pop("tipo", None)              # una regla no cambia de tráfico
+                _regla_completa({**dict(r), **d})
             except ValueError as e:
                 return jsonify({"ok": False, "msg": str(e)}), 400
             if d:
                 d["actualizado_el"], d["actualizado_por"] = _ahora(), _quien()
                 conn.execute(f"UPDATE trafico_rotaciones SET {', '.join(k + '=?' for k in d)} WHERE id=?",
                              tuple(d.values()) + (rid,))
-            accion = f"Cambió la rotación {r['corredor']} {r['ida_hora']}"
+            accion = f"Cambió la rotación {r['corredor']} {r['ida_hora'] or r['ida_desde'] or ''}"
         conn.commit()
+        tipo_r = tipo_ok(dict(r).get("tipo"))
     finally:
         conn.close()
     _auditar(accion)
-    return jsonify({"ok": True, "reglas": rotaciones(todas=True)})
+    return jsonify({"ok": True, "reglas": rotaciones(todas=True, tipo=tipo_r)})
 
 
 @bp_trafico.route("/api/trafico/dia/<fecha>/bloque", methods=["POST"])

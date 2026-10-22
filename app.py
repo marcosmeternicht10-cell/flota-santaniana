@@ -164,6 +164,10 @@ app.register_blueprint(bp_rend_comb)
 from trafico import bp_trafico, init_trafico
 init_trafico()
 app.register_blueprint(bp_trafico)
+# Cuántas salidas lleva cada día de la semana (el internacional cambia según el día)
+from trafico_patron import bp_patron, init_trafico_patron
+init_trafico_patron()
+app.register_blueprint(bp_patron)
 
 # ─── Servicios ───────────────────────────────────────────────────────────────
 # Cada salida del tráfico es un servicio: los indicadores salen de ahí, sin
