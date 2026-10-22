@@ -11,6 +11,10 @@ Cada línea del reporte es un pedido (un problema). Para cada uno el encargado:
   - lo deja para más adelante (en espera, con fecha para volver a mirarlo)
   - lo descarta, con el motivo (repetido, ya está hecho, no es falla…)
 
+Antes de decidir, el encargado puede corregir el pedido: el texto (si el
+chofer escribió dos cosas juntas, una por línea y se separan), el tipo, el
+coche (si eligió mal) y una nota. Queda guardado lo que escribió el chofer.
+
 Para decidir tiene a mano: la prioridad que sugiere el sistema por lo que
 dice el texto (frenos, dirección, humo… urgente; cortina, radio… baja), si ese
 problema ya se reportó o se trabajó en el coche hace poco, la OT abierta del
@@ -148,6 +152,9 @@ def init_ot_pedidos():
                 _rollback(conn)
         # La prioridad que se le dio al pasar a la OT (para verla en la OT)
         _agregar_columna(conn, "ot_items", "prioridad", "TEXT DEFAULT ''")
+        # Lo que escribió el chofer, si el encargado lo corrigió
+        for col in ("descripcion_original", "editado_por", "editado_el"):
+            _agregar_columna(conn, "ot_pedidos", col, "TEXT DEFAULT ''")
     finally:
         conn.close()
 
@@ -467,6 +474,77 @@ def decidir(ids, accion, prioridad="", motivo="", revisar_el="", nota=""):
     return True, msg, res
 
 
+TIPOS = ("correctivo", "preventivo", "neumaticos", "control", "otro")
+
+
+def editar(pid, descripcion=None, tipo=None, vehiculo_id=None):
+    """Corrige un pedido antes de decidir. Si el texto trae varias líneas, la
+    primera queda en este pedido y cada una de las otras es un pedido nuevo
+    del mismo reporte. Devuelve (ok, msg, ids de los pedidos nuevos)."""
+    conn = get_connection()
+    try:
+        p = conn.execute("SELECT * FROM ot_pedidos WHERE id=?", (pid,)).fetchone()
+        if not p:
+            return False, "Ese pedido no existe", []
+        p = dict(p)
+        if p["estado"] not in ("nuevo", "espera"):
+            return False, "Ya se decidió: lo que está en la OT se cambia desde la OT", []
+        cambios, nuevos = {}, []
+        if descripcion is not None:
+            lineas = [re.sub(r"^[-*•·\d\.\)]+\s*", "", " ".join(l.split())).strip()
+                      for l in str(descripcion).split("\n")]
+            lineas = [l[:300] for l in lineas if l]
+            if not lineas:
+                return False, "El pedido no puede quedar vacío", []
+            if lineas[0] != p["descripcion"]:
+                cambios["descripcion"] = lineas[0]
+                if not p.get("descripcion_original"):
+                    cambios["descripcion_original"] = p["descripcion"]
+                # La sugerencia sigue al texto nuevo (la prioridad elegida a mano, no se toca)
+                cambios["sugerida"], cambios["sugerida_por"] = sugerir_prioridad(lineas[0])
+            nuevos = lineas[1:]
+        if tipo is not None:
+            if tipo not in TIPOS:
+                return False, "Ese tipo no existe", []
+            cambios["tipo"] = tipo
+        if vehiculo_id is not None:
+            try:
+                vid = int(vehiculo_id)
+            except (TypeError, ValueError):
+                return False, "Elegí el coche", []
+            if not conn.execute("SELECT 1 FROM vehiculos WHERE id=?", (vid,)).fetchone():
+                return False, "Ese coche no existe", []
+            if vid != p["vehiculo_id"]:
+                cambios["vehiculo_id"] = vid
+        if cambios or nuevos:
+            cambios["editado_por"], cambios["editado_el"] = _quien()[:80], ahora_iso()
+            conn.execute(f"UPDATE ot_pedidos SET {', '.join(k + '=?' for k in cambios)} WHERE id=?",
+                         list(cambios.values()) + [pid])
+        ids = []
+        for txt in nuevos:
+            sug, por = sugerir_prioridad(txt)
+            cur = conn.execute("""INSERT INTO ot_pedidos (reporte_id, vehiculo_id, descripcion, tipo, sugerida, sugerida_por,
+                                     estado, revisar_el, nota, descripcion_original, editado_por, editado_el)
+                                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               (p["reporte_id"], cambios.get("vehiculo_id", p["vehiculo_id"]), txt,
+                                cambios.get("tipo", p["tipo"]), sug, por, p["estado"], p.get("revisar_el") or "", "",
+                                f"(separado de: {p.get('descripcion_original') or p['descripcion']})"[:300],
+                                _quien()[:80], ahora_iso()))
+            ids.append(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+    if cambios or ids:
+        try:
+            from database import registrar_auditoria
+            registrar_auditoria(usuario=_quien() or "?", rol=session.get("rol") or "",
+                                accion=f"Corrigió un pedido de chofer (#{pid})" + (f" y lo separó en {len(ids) + 1}" if ids else ""),
+                                categoria="Órdenes de Trabajo", detalle=(cambios.get("descripcion") or "")[:200])
+        except Exception:
+            pass
+    return True, ("Separado en " + str(len(ids) + 1) + " pedidos" if ids else "Pedido corregido"), ids
+
+
 def poner(pid, prioridad=None, nota=None):
     conn = get_connection()
     try:
@@ -585,10 +663,19 @@ def api_poner(pid):
     if not _puede_ver():
         return _no()
     d = request.get_json(silent=True) or {}
-    ok, msg = poner(pid, d.get("prioridad") if "prioridad" in d else None, d.get("nota") if "nota" in d else None)
-    if not ok:
-        return _no(msg, 400)
-    return jsonify({"ok": True, "msg": msg})
+    nuevos = []
+    if any(k in d for k in ("descripcion", "tipo", "vehiculo_id")):
+        ok, msg, nuevos = editar(pid, d.get("descripcion"), d.get("tipo"), d.get("vehiculo_id"))
+        if not ok:
+            return _no(msg, 400)
+    msg = "Guardado"
+    if "prioridad" in d or "nota" in d:
+        ok, msg2 = poner(pid, d.get("prioridad") if "prioridad" in d else None, d.get("nota") if "nota" in d else None)
+        if not ok:
+            return _no(msg2, 400)
+    if any(k in d for k in ("descripcion", "tipo", "vehiculo_id")):
+        msg = "Separado en " + str(len(nuevos) + 1) + " pedidos" if nuevos else "Pedido corregido"
+    return jsonify({"ok": True, "msg": msg, "nuevos": nuevos})
 
 
 @bp_ot_pedidos.route("/api/ot_pedidos/foto/<int:fid>", methods=["GET"])
