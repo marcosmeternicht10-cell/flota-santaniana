@@ -19235,16 +19235,25 @@ function caMitades(t) {
 }
 function caHoraMitad(t, lado) { return lado === "saliente" ? (t.hora_fin || t.hora || "") : (t.hora || ""); }
 
+// El horario de siempre de un tramo (el que dice su nombre), en texto
+function caSiempre(t) {
+  const h = t.horario_cambiado ? t.hora_normal : t.hora, f = t.horario_cambiado ? t.hora_fin_normal : t.hora_fin;
+  return h ? `${h}${f ? " a " + f : ""}` : "sin horario";
+}
 function caFila(t) {
   const horas = t.hora ? `<b>${t.hora}</b>${t.hora_fin ? `<small>a ${t.hora_fin}</small>` : ""}` : `<b class="sin">--:--</b>`;
   const clases = ["ca-fila", `e-${t.estado}`, t.modo === "dividido" ? "dividido" : "", caClaseControl(t)].join(" ");
   const puede = caPuede();
+  const ayudaHora = t.horario_cambiado ? `Horario cambiado solo este día (de siempre: ${caSiempre(t)}). Tocá para cambiarlo` : "Cambiar el horario solo este día";
   return `
     <div class="${clases}" data-busca="${caEsc(caTexto(t))}" data-estado="${t.estado}" data-cli="${caEsc(t.cliente)}" data-tramo="${caEsc(t.tramo)}" data-modo="${t.modo}">
-      <div class="ca-hora">${horas}</div>
+      <div class="ca-hora ${t.horario_cambiado ? "cambiada" : ""}">${puede
+        ? `<button type="button" class="ca-hora-btn" onclick="caHorario(this)" title="${caEsc(ayudaHora)}" aria-label="${caEsc(ayudaHora)}">${horas}</button>`
+        : horas}</div>
       <div class="ca-tramo">
         <b title="${caEsc(t.tramo)}">${caEsc(t.corto)}</b>
         ${!t.esperado ? `<span class="ca-tag">no suele correr este día</span>` : ""}
+        ${t.horario_cambiado ? `<span class="ca-tag cambio" title="Los demás días sigue con el de siempre"><i class="ti ti-clock-edit"></i> Solo este día · siempre ${caEsc(caSiempre(t).replace(" a ", "–"))}</span>` : ""}
       </div>
       <div class="ca-slots mitades">${caMitades(t).map(s => caSlot(t, s)).join("")}</div>
       <div class="ca-acc">
@@ -19499,10 +19508,51 @@ function caPicker(btn, o) {
 // ─── Acciones de un tramo ───
 function caMasTramo(btn) {
   const { cliente, tramo, modo } = caFilaDe(btn);
-  const items = [];
+  const items = [{ icono: "clock-edit", html: "<b>Cambiar el horario de este día</b><span>Los demás días sigue el de siempre</span>", fn: () => caHorarioDe(cliente, tramo) }];
   if (modo === "dividido") items.push({ icono: "arrows-join", html: "<b>La salida igual que la entrada</b><span>El mismo chofer y coche hacen las dos</span>", fn: () => caDividir(cliente, tramo, true) });
   items.push({ icono: "player-pause", html: "<b>No corre este día</b><span>No cuenta como faltante</span>", fn: () => caNoCorre(cliente, tramo, true) });
   trMenu(btn, items);
+}
+// ─── Horario de un tramo, solo para este día ───
+function caHorario(btn) { const { cliente, tramo } = caFilaDe(btn); caHorarioDe(cliente, tramo); }
+function caHorarioDe(cliente, tramo) {
+  const c = ca.d.clientes.find(x => x.cliente === cliente);
+  const t = c && c.tramos.find(x => x.tramo === tramo);
+  if (!t) return;
+  const dia = trLargo(ca.fecha);
+  const o = rvModal({
+    titulo: "Horario de este día", icono: "clock-edit", ancho: 440,
+    sub: `${caEsc(cliente)} · ${caEsc(t.corto)} · ${caEsc(dia)}`,
+    cuerpo: `
+      <div class="ca-hor-campos">
+        <label class="rv-f"><span>Sale</span><input id="ca-hor-i" value="${caEsc(t.hora || "")}" placeholder="--:--" inputmode="numeric" autocomplete="off" autofocus></label>
+        <label class="rv-f"><span>Termina <em>(si tiene)</em></span><input id="ca-hor-f" value="${caEsc(t.hora_fin || "")}" placeholder="--:--" inputmode="numeric" autocomplete="off"></label>
+      </div>
+      <p class="ca-hor-nota"><i class="ti ti-info-circle"></i> Cambia solo el ${caEsc(dia.toLowerCase())}: en la asignación, el PDF y lo que se publica. Los demás días sigue con el de siempre, <b>${caEsc(caSiempre(t))}</b>.</p>`,
+    pie: `${t.horario_cambiado ? `<button class="btn btn-ghost" id="ca-hor-normal"><i class="ti ti-arrow-back-up"></i> Volver al de siempre</button><span style="flex:1"></span>` : ""}
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="ca-hor-ok"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+  const ini = o.querySelector("#ca-hor-i"), fin = o.querySelector("#ca-hor-f");
+  const mandar = async (cuerpo, msg) => {
+    o.remove();
+    const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/horario`, { cliente, tramo, ...cuerpo });
+    caAplicar(r, r && r.horario ? msg(r.horario) : "");
+  };
+  const guardar = () => {
+    ini.value = trHora(ini.value); fin.value = trHora(fin.value);
+    if (!ini.value) { toast("Poné la hora de salida (ej: 06:30)", "error"); ini.focus(); return; }
+    mandar({ hora: ini.value, hora_fin: fin.value },
+           h => h.de_siempre ? "Quedó con el horario de siempre" : `Solo este día: ${h.queda}`);
+  };
+  [ini, fin].forEach(i => {
+    i.addEventListener("blur", () => { i.value = trHora(i.value); });
+    i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); guardar(); } });
+  });
+  setTimeout(() => ini.select(), 60);
+  o.querySelector("#ca-hor-ok").onclick = guardar;
+  const nb = o.querySelector("#ca-hor-normal");
+  if (nb) nb.onclick = () => mandar({ normal: true }, h => `Volvió al horario de siempre (${h.queda})`);
 }
 async function caDividir(cliente, tramo, unir) {
   const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/dividir`, { cliente, tramo, unir });

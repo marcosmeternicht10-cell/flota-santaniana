@@ -7168,3 +7168,18 @@ tr.ot-lista-bloque span { margin-left: 6px; padding: 1px 8px; border-radius: 10p
 .pd-ed-fila { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 10px; }
 .pd-ed-btns { display: flex; justify-content: flex-end; gap: 6px; }
 @media (max-width: 760px) { .pd-ed-fila { grid-template-columns: minmax(0, 1fr); } }
+
+/* ── Asignación del día: horario de un tramo cambiado solo para ese día ── */
+.ca-hora-btn { display: flex; flex-direction: column; align-items: flex-start; gap: 0; margin: -5px -7px; padding: 5px 7px; border: 0; border-radius: 9px; background: none; font: inherit; line-height: 1.05; text-align: left; cursor: pointer; transition: background .15s; }
+.ca-hora-btn:hover { background: var(--info-bg, #EAF2FB); }
+.ca-hora-btn:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 1px; }
+.ca-hora.cambiada b, .ca-hora.cambiada small { color: #A0570A; }
+.ca-hora.cambiada .ca-hora-btn { background: #FEF3E2; box-shadow: inset 0 0 0 1px #F2D3A2; }
+.ca-tag.cambio { display: inline-flex; align-items: center; gap: 4px; background: #FEF3E2; color: #8A4C08; }
+.ca-tag.cambio .ti { font-size: 12px; }
+.ca-hor-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.ca-hor-campos input { height: 52px; font: 700 24px var(--display); text-align: center; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.ca-hor-campos em { font-style: normal; font-weight: 500; color: var(--muted); }
+.ca-hor-nota { margin: 14px 0 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.ca-hor-nota .ti { color: var(--brand-blue); vertical-align: -2px; margin-right: 2px; }
+.ca-hor-nota b { color: var(--text); }
