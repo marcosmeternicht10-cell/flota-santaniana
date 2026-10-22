@@ -186,6 +186,10 @@ init_ot_unica()
 from ot_pendientes import bp_ot_pend, init_ot_pendientes
 init_ot_pendientes()
 app.register_blueprint(bp_ot_pend)
+# Trabajos hechos fuera del taller: para completarlos hace falta la foto de la factura
+from ot_afuera import bp_ot_afuera, init_ot_afuera
+init_ot_afuera()
+app.register_blueprint(bp_ot_afuera)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -1265,6 +1269,12 @@ def api_ot(ot_id):
     ot["puede_corregir_chofer"] = ot["puede_verificar_km"]
     # El día de hoy (Paraguay): lo de días anteriores sin hacer va resaltado
     ot["hoy"] = hoy()
+    # Los trabajos hechos afuera, con su factura
+    try:
+        from ot_afuera import marcar_items
+        marcar_items(ot.get("items"))
+    except Exception:
+        pass
     return jsonify(ot)
 
 
@@ -1682,6 +1692,15 @@ def api_actualizar_item(item_id):
         except Exception:
             d["tecnico"] = texto
     d.pop("tecnico_otro", None)
+    # Un trabajo hecho afuera no se completa sin la foto de la factura
+    if d.get("estado") == "completado":
+        try:
+            from ot_afuera import falta_factura
+            falta = falta_factura(item_id)
+        except Exception:
+            falta = None
+        if falta:
+            return jsonify({"ok": False, "msg": falta, "error": falta, "falta_factura": True}), 400
     if d:
         actualizar_item_ot(item_id, **d)
     return jsonify({"ok": True})
@@ -1690,6 +1709,11 @@ def api_actualizar_item(item_id):
 @app.route("/api/ot_items/<int:item_id>", methods=["DELETE"])
 def api_eliminar_item(item_id):
     eliminar_item_ot(item_id)
+    try:
+        from ot_afuera import al_borrar_item
+        al_borrar_item(item_id)
+    except Exception:
+        pass
     return jsonify({"ok": True})
 
 
