@@ -138,14 +138,18 @@ function cerrarSidebar() {
 function tieneSeccionesLimitadas() {
   return window.USUARIO_ROL === "taller" && (window.USUARIO_SECCIONES || []).length > 0;
 }
+// Secciones que van con otra: quien ve las OTs ve los pedidos de los choferes
+const SECCION_CON = { pedidos_ot: "ots" };
+function tieneSeccion(secs, sec) { return secs.includes(sec) || (SECCION_CON[sec] && secs.includes(SECCION_CON[sec])); }
 function puedeVerSeccion(sec) {
-  return !tieneSeccionesLimitadas() || window.USUARIO_SECCIONES.includes(sec);
+  if (sec === "pedidos_ot" && !["admin", "taller"].includes(window.USUARIO_ROL)) return false;
+  return !tieneSeccionesLimitadas() || tieneSeccion(window.USUARIO_SECCIONES, sec);
 }
 // Esconde del menú lo que no tiene, y los títulos que quedan vacíos
 function aplicarSecciones() {
   const secs = window.USUARIO_SECCIONES;
   document.querySelectorAll(".nav-item[data-sec]").forEach(b => {
-    if (!secs.includes(b.dataset.sec)) b.style.display = "none";
+    if (!tieneSeccion(secs, b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(t => {
     let n = t.nextElementSibling, alguno = false;
@@ -197,6 +201,7 @@ function irA(sec) {
     neumaticos: renderNeumaticos,
     inventario_neu: renderInventarioNeu,
     ots: renderOts,
+    pedidos_ot: renderPedidosOT,
     compras: renderCompras,
     repuestos: renderRepuestos,
     proveedores: renderProveedores,
@@ -4583,6 +4588,12 @@ function svContar() {
 
 // ─── Arranque ───────────────────────────────────────────────────────────
 setCoche(null);
+if (["admin", "taller"].includes(window.USUARIO_ROL)) {
+  setTimeout(() => pdActualizarBadge(), 1200);
+  setInterval(() => { if (!document.hidden) pdActualizarBadge(); }, 120000);
+} else {
+  document.querySelector('.nav-item[data-sec="pedidos_ot"]')?.style.setProperty("display", "none");
+}
 if (window.USUARIO_ROL === "compras") {
   // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
   const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal"];
@@ -5931,6 +5942,7 @@ async function renderOts() {
         </label>
       </div>
       <div class="ot-buscar-res" id="ot-q-res" hidden></div>
+      <div id="ot-aviso-pedidos"></div>
       ${otFiltroEstado === "cerrada" ? "" : otResumenAtrasados(ots)}
 
       ${ots.length === 0 ? `<div class="empty"><i class="ti ti-clipboard-off"></i>Sin OTs ${otFiltroEstado ? 'en este filtro' : 'todavía'}.<br>Tocá <b>Nueva OT</b> para cargar la primera.</div>` : `
@@ -5985,6 +5997,7 @@ async function renderOts() {
       `}
     </div>`;
   otFiltrarLista();
+  pdAvisoEnOTs();
 }
 
 // Lo que una OT arrastra de días anteriores, en su fila de la lista
@@ -6667,7 +6680,7 @@ function otFilaItem(ot, it, idx, modo) {
   const mot = (modo === "atr" || (modo === "hoy" && it.estado !== "completado")) ? otMotivoCaja(it, modo === "atr") : "";
   return `<tr class="pv-ot-tr${modo === "atr" ? " ot-tr-atr" : ""}${it.estado === "completado" && modo === "atr" ? " ot-tr-hecho" : ""}${cls}" data-iid="${it.id}" data-modo="${modo}"${oculto}>
       <td class="center" style="color:var(--muted)">${idx + 1}</td>
-      <td><div class="pv-it-desc">${trEsc(it.descripcion || "")}</div>${desde}${mot}${otAfueraCaja(it)}</td>
+      <td><div class="pv-it-desc">${it.prioridad && it.prioridad !== "normal" && it.estado !== "completado" ? `<span class="pd-prio-chip ${it.prioridad}">${PD_PRIO[it.prioridad]?.[0] || it.prioridad}</span>` : ""}${trEsc(it.descripcion || "")}</div>${/^Pedido de /.test(it.observaciones || "") ? `<div class="pd-de"><i class="ti ti-inbox"></i> ${trEsc(it.observaciones)}</div>` : ""}${desde}${mot}${otAfueraCaja(it)}</td>
       <td class="center">
         <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
           ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo === t ? 'selected' : ''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
@@ -6796,6 +6809,252 @@ function otItemEstadoCambio(itemId, estado) {
   }
   otAfueraRepintar(it);
   otRefrescarCabeceras();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PEDIDOS DE LOS CHOFERES: lo que reportan queda acá hasta que el encargado
+// decide si pasa a la OT (y con qué prioridad), si espera o si no se hace
+// ════════════════════════════════════════════════════════════════════════════
+const PD_PRIO = { urgente: ["Urgente", "flame"], alta: ["Alta", "arrow-up"], normal: ["Normal", "minus"], baja: ["Baja", "arrow-down"] };
+const PD_TABS = [["nuevo", "Nuevos", "inbox"], ["espera", "En espera", "clock-pause"], ["aceptado", "Pasados a OT", "clipboard-check"], ["descartado", "Descartados", "circle-x"]];
+const PD_TIPO = { correctivo: "Correctivo", preventivo: "Preventivo", neumaticos: "Neumáticos", control: "Control", otro: "Otro" };
+const pd = { estado: "nuevo", q: "", d: null, sel: new Set() };
+
+async function pdActualizarBadge(datos) {
+  const b = document.getElementById("nav-pedidos-n");
+  if (!b || !["admin", "taller"].includes(window.USUARIO_ROL)) return;
+  const r = datos || await api("/api/ot_pedidos/pendientes");
+  if (!r) return;
+  const n = (r.nuevos || 0) + (r.a_revisar || 0);
+  b.hidden = !n;
+  b.textContent = n;
+  b.title = `${r.nuevos || 0} nuevo${r.nuevos === 1 ? "" : "s"}${r.urgentes ? ` · ${r.urgentes} urgente${r.urgentes === 1 ? "" : "s"}` : ""}${r.a_revisar ? ` · ${r.a_revisar} en espera para revisar` : ""}`;
+  b.classList.toggle("tranqui", !r.urgentes);
+}
+async function pdAvisoEnOTs() {
+  const caja = document.getElementById("ot-aviso-pedidos");
+  if (!caja || !["admin", "taller"].includes(window.USUARIO_ROL) || !puedeVerSeccion("pedidos_ot")) return;
+  const r = await api("/api/ot_pedidos/pendientes");
+  if (!r || !(r.nuevos || r.a_revisar)) { caja.innerHTML = ""; return; }
+  caja.innerHTML = `<button class="pd-aviso ${r.urgentes ? "urg" : ""}" onclick="irA('pedidos_ot')">
+      <i class="ti ti-inbox"></i>
+      <span><b>${r.nuevos} pedido${r.nuevos === 1 ? "" : "s"} de choferes sin revisar</b>${r.urgentes ? ` · <em>${r.urgentes} urgente${r.urgentes === 1 ? "" : "s"}</em>` : ""}${r.a_revisar ? ` · ${r.a_revisar} en espera para volver a mirar` : ""}</span>
+      <span class="pd-aviso-ir">Revisar <i class="ti ti-arrow-right"></i></span>
+    </button>`;
+}
+
+async function renderPedidosOT() {
+  status("Pedidos de choferes");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-inbox"></i> Pedidos de choferes</h1>
+      <p>Lo que reportan los choferes de viaje queda acá: decidí qué pasa a la OT y con qué prioridad, qué espera y qué no se hace.</p>
+    </div>
+    <div class="section pd">
+      <div class="pd-barra">
+        <div class="pd-tabs" id="pd-tabs" role="tablist"></div>
+        <label class="rv-buscar pd-buscar"><i class="ti ti-search"></i>
+          <input id="pd-q" value="${trEsc(pd.q)}" placeholder="Coche, chofer o problema" autocomplete="off"
+                 oninput="pd.q=this.value;clearTimeout(pd._t);pd._t=setTimeout(pdCargar,250)"></label>
+      </div>
+      <div id="pd-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      <div class="pd-lote" id="pd-lote" hidden></div>
+    </div>`;
+  await pdCargar();
+}
+async function pdCargar() {
+  const d = await api(`/api/ot_pedidos?estado=${pd.estado}&q=${encodeURIComponent(pd.q || "")}`);
+  if (!d || !d.ok) { $("#pd-cuerpo").innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>${trEsc((d && d.msg) || "No se pudieron traer los pedidos")}</div>`; return; }
+  pd.d = d;
+  pd.sel = new Set([...pd.sel].filter(id => d.coches.some(c => c.pedidos.some(p => p.id === id))));
+  pdPintar();
+  pdActualizarBadge({ nuevos: d.conteos.nuevo, urgentes: d.urgentes, a_revisar: 0 });
+  pdActualizarBadge();
+}
+function pdPintar() {
+  const d = pd.d;
+  $("#pd-tabs").innerHTML = PD_TABS.map(([k, t, ic]) => `
+    <button class="pd-tab ${pd.estado === k ? "on" : ""}" role="tab" aria-selected="${pd.estado === k}" onclick="pd.estado='${k}';pd.sel.clear();pdCargar()">
+      <i class="ti ti-${ic}"></i><span>${t}</span>${d.conteos[k] ? `<small class="${k === "nuevo" && d.urgentes ? "urg" : ""}">${d.conteos[k]}</small>` : ""}</button>`).join("");
+  const abiertos = pd.estado === "nuevo" || pd.estado === "espera";
+  if (!d.coches.length) {
+    $("#pd-cuerpo").innerHTML = `<div class="pd-vacio"><i class="ti ti-${pd.estado === "nuevo" ? "mood-check" : "inbox-off"}"></i>
+      <b>${pd.q ? "Nada con esa búsqueda" : pd.estado === "nuevo" ? "No hay pedidos para revisar" : pd.estado === "espera" ? "No hay nada en espera" : "Nada en los últimos 45 días"}</b>
+      <span>${pd.estado === "nuevo" && !pd.q ? "Cuando un chofer reporte algo desde el celular, aparece acá." : ""}</span></div>`;
+    pdLote();
+    return;
+  }
+  const total = d.coches.reduce((s, c) => s + c.pedidos.length, 0);
+  const urg = d.coches.reduce((s, c) => s + c.pedidos.filter(p => p.prioridad_final === "urgente").length, 0);
+  const salen = d.coches.filter(c => c.sale_pronto).length;
+  $("#pd-cuerpo").innerHTML = `
+    ${abiertos ? `<div class="pd-resumen">
+      <span><b>${total}</b> problema${total === 1 ? "" : "s"} en <b>${d.coches.length}</b> coche${d.coches.length === 1 ? "" : "s"}</span>
+      ${urg ? `<span class="urg"><i class="ti ti-flame"></i><b>${urg}</b> urgente${urg === 1 ? "" : "s"}</span>` : ""}
+      ${salen ? `<span class="sale"><i class="ti ti-route"></i><b>${salen}</b> coche${salen === 1 ? "" : "s"} sale${salen === 1 ? "" : "n"} hoy o mañana</span>` : ""}
+      <span class="pd-res-ayuda">Primero los urgentes y los que salen pronto. La prioridad marcada es la que sugiere el sistema por lo que dice el chofer: cambiala si hace falta.</span>
+    </div>` : ""}
+    ${d.coches.map(pdCoche).join("")}`;
+  pdLote();
+}
+function pdCuando(p) {
+  if (!p.dias) return "hoy";
+  if (p.dias === 1) return "ayer";
+  return `hace ${p.dias} días`;
+}
+function pdSalidasTxt(c) {
+  return (c.salidas || []).map(s => `${s.fecha === pd.d.hoy ? "hoy" : "mañana"} ${s.hora} ${trEsc(s.destino)}${s.tipo === "internacional" ? " (int.)" : ""}`).join(" · ");
+}
+function pdCoche(c) {
+  const abiertos = pd.estado === "nuevo" || pd.estado === "espera";
+  const ids = c.pedidos.map(p => p.id);
+  const todos = ids.every(id => pd.sel.has(id));
+  const o = c.ot_abierta;
+  return `
+    <section class="pd-coche ${c.peor === 0 && abiertos ? "urg" : ""}" data-vid="${c.vehiculo_id}">
+      <header class="pd-coche-cab">
+        ${abiertos ? `<input type="checkbox" class="pd-check" ${todos ? "checked" : ""} aria-label="Elegir todo el coche" onchange="pdElegirCoche(${c.vehiculo_id}, this.checked)">` : ""}
+        <span class="sv-chapa">${trEsc(c.n_interno || c.patente)}</span>
+        <span class="pd-coche-info"><b>${trEsc(c.patente || "")}</b><small>${trEsc(c.modelo || "")}</small></span>
+        <span class="pd-coche-chips">
+          ${abiertos ? (o ? `<button class="pd-chip ot" onclick="abrirOT(${o.id})" title="Abrir la OT del coche"><i class="ti ti-clipboard-check"></i> OT #${o.numero} · ${o.pendientes} pendiente${o.pendientes === 1 ? "" : "s"}${o.urgentes ? ` · <b>${o.urgentes} urgente${o.urgentes === 1 ? "" : "s"}</b>` : ""}</button>`
+                          : `<span class="pd-chip libre"><i class="ti ti-clipboard-off"></i> Sin OT abierta</span>`) : ""}
+          ${abiertos && c.salidas.length ? `<span class="pd-chip sale" title="${pdSalidasTxt(c)}"><i class="ti ti-route"></i> Sale ${pdSalidasTxt(c)}</span>` : ""}
+        </span>
+        ${abiertos && c.pedidos.length > 1 ? `<button class="btn btn-ghost btn-sm pd-todo" onclick="pdDecidir(${JSON.stringify(ids)}, 'aceptar')"><i class="ti ti-clipboard-plus"></i> Todo a la OT</button>` : ""}
+      </header>
+      <div class="pd-lista">${c.pedidos.map(pdFila).join("")}</div>
+    </section>`;
+}
+function pdFila(p) {
+  const abiertos = pd.estado === "nuevo" || pd.estado === "espera";
+  const pr = p.prioridad_final;
+  const prios = Object.entries(PD_PRIO).map(([k, [t, ic]]) => `
+    <button type="button" class="pd-p ${k} ${pr === k ? "on" : ""} ${p.sugerida === k && !p.prioridad ? "sug" : ""}" title="${t}${p.sugerida === k ? " (la sugiere el sistema)" : ""}"
+            onclick="pdPrioridad(${p.id}, '${k}')"><i class="ti ti-${ic}"></i><span>${t}</span></button>`).join("");
+  const fotos = (p.fotos || []).map(f => `<button type="button" class="pd-foto" onclick="verFotoGrande('/api/ot_pedidos/foto/${f}')" aria-label="Ver la foto"><img src="/api/ot_pedidos/foto/${f}" alt="" loading="lazy"></button>`).join("");
+  const rep = (p.repetido || []).length ? `<div class="pd-rep"><i class="ti ti-repeat"></i><span><b>Ya ${p.repetido.length === 1 ? "hubo algo parecido" : `hubo ${p.repetido.length} cosas parecidas`}:</b> ${p.repetido.map(r =>
+      `${r.fecha ? r.fecha.slice(8, 10) + "/" + r.fecha.slice(5, 7) : ""} «${trEsc(r.txt)}» ${r.fuente === "ot" ? `(OT${r.ot_id ? " #" + r.ot_id : ""}, ${r.estado === "completado" ? "hecho" : "pendiente"})` : `(pedido${r.estado === "descartado" ? ", descartado" : r.estado === "espera" ? ", en espera" : r.estado === "aceptado" ? ", pasado a OT" : ""})`}`).join(" · ")}</span></div>` : "";
+  const estadoTxt = pd.estado === "aceptado"
+    ? `<div class="pd-dec ok"><i class="ti ti-clipboard-check"></i> En la <button class="pv-link" onclick="abrirOT(${p.ot_id})">OT #${p.ot_id}</button> con prioridad <b>${PD_PRIO[pr]?.[0] || pr}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
+    : pd.estado === "descartado"
+    ? `<div class="pd-dec no"><i class="ti ti-circle-x"></i> No se hace: <b>${trEsc(p.motivo)}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
+    : pd.estado === "espera"
+    ? `<div class="pd-dec espera"><i class="ti ti-clock-pause"></i> En espera${p.revisar_el ? ` · volver a mirar el <b>${p.revisar_el.slice(8, 10)}/${p.revisar_el.slice(5, 7)}</b>${p.revisar_el <= pd.d.hoy ? " <em>(ya es hora)</em>" : ""}` : ""}${p.nota ? ` · ${trEsc(p.nota)}` : ""}</div>` : "";
+  return `
+    <article class="pd-fila ${abiertos ? "p-" + pr : ""} ${pd.sel.has(p.id) ? "sel" : ""}" data-id="${p.id}">
+      ${abiertos ? `<input type="checkbox" class="pd-check" ${pd.sel.has(p.id) ? "checked" : ""} aria-label="Elegir" onchange="pdElegir(${p.id}, this.checked)">` : ""}
+      <div class="pd-txt">
+        <p>${trEsc(p.descripcion)}</p>
+        <div class="pd-meta">
+          <span class="pd-tipo">${PD_TIPO[p.tipo] || trEsc(p.tipo || "")}</span>
+          <span><i class="ti ti-user"></i> ${trEsc(caNombre(p.chofer || "") || "—")}</span>
+          <span><i class="ti ti-clock"></i> ${pdCuando(p)}</span>
+          ${p.km ? `<span><i class="ti ti-gauge"></i> ${fmtNum(p.km)} km</span>` : ""}
+          ${abiertos && p.sugerida_por ? `<span class="pd-sug">sugerida: ${PD_PRIO[p.sugerida]?.[0].toLowerCase()} · ${trEsc(p.sugerida_por)}</span>` : ""}
+        </div>
+        ${rep}${estadoTxt}
+        ${fotos ? `<div class="pd-fotos">${fotos}</div>` : ""}
+      </div>
+      ${abiertos ? `
+      <div class="pd-acc">
+        <div class="pd-prios" role="group" aria-label="Prioridad">${prios}</div>
+        <div class="pd-botones">
+          <button class="btn btn-primary btn-sm" onclick="pdDecidir([${p.id}], 'aceptar')"><i class="ti ti-clipboard-plus"></i> A la OT</button>
+          ${pd.estado === "nuevo" ? `<button class="btn btn-ghost btn-sm" onclick="pdEsperar([${p.id}])"><i class="ti ti-clock-pause"></i> Esperar</button>`
+                                  : `<button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> A nuevos</button>`}
+          <button class="btn btn-ghost btn-sm pd-no" onclick="pdDescartar([${p.id}])"><i class="ti ti-circle-x"></i> No se hace</button>
+        </div>
+      </div>` : pd.estado === "descartado" ? `<div class="pd-acc"><button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> Volver a nuevos</button></div>` : ""}
+    </article>`;
+}
+function pdBuscar(id) {
+  for (const c of pd.d.coches) { const p = c.pedidos.find(x => x.id === id); if (p) return p; }
+  return null;
+}
+async function pdPrioridad(id, prio) {
+  const p = pdBuscar(id);
+  if (!p) return;
+  const r = await api(`/api/ot_pedidos/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prioridad: prio }) });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  p.prioridad = prio; p.prioridad_final = prio;
+  const f = document.querySelector(`.pd-fila[data-id="${id}"]`);
+  if (f) f.outerHTML = pdFila(p);
+}
+function pdElegir(id, on) {
+  on ? pd.sel.add(id) : pd.sel.delete(id);
+  document.querySelector(`.pd-fila[data-id="${id}"]`)?.classList.toggle("sel", on);
+  pdLote();
+}
+function pdElegirCoche(vid, on) {
+  const c = pd.d.coches.find(x => x.vehiculo_id === vid);
+  (c ? c.pedidos : []).forEach(p => on ? pd.sel.add(p.id) : pd.sel.delete(p.id));
+  pdPintar();
+}
+function pdLote() {
+  const b = $("#pd-lote");
+  if (!b) return;
+  const n = pd.sel.size;
+  b.hidden = !n || !(pd.estado === "nuevo" || pd.estado === "espera");
+  if (b.hidden) return;
+  const ids = JSON.stringify([...pd.sel]);
+  b.innerHTML = `<span><b>${n}</b> elegido${n === 1 ? "" : "s"}</span>
+    <button class="btn btn-primary btn-sm" onclick='pdDecidir(${ids}, "aceptar")'><i class="ti ti-clipboard-plus"></i> A la OT</button>
+    ${pd.estado === "nuevo" ? `<button class="btn btn-ghost btn-sm" onclick='pdEsperar(${ids})'><i class="ti ti-clock-pause"></i> Esperar</button>` : ""}
+    <button class="btn btn-ghost btn-sm" onclick='pdDescartar(${ids})'><i class="ti ti-circle-x"></i> No se hace</button>
+    <button class="pv-link" onclick="pd.sel.clear();pdPintar()">Soltar</button>`;
+}
+async function pdDecidir(ids, accion, extra = {}) {
+  const r = await api("/api/ot_pedidos/decidir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids, accion, ...extra }) });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return false; }
+  ids.forEach(id => pd.sel.delete(id));
+  toast(r.msg, "success");
+  // Que se vea a dónde fue: el pedido sale de la lista con un desvanecido
+  ids.forEach(id => document.querySelector(`.pd-fila[data-id="${id}"]`)?.classList.add("sale"));
+  setTimeout(pdCargar, trQuieto() ? 0 : 280);
+  return true;
+}
+function pdEsperar(ids) {
+  const h = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+  const mas = n => new Date(h.getTime() + n * 864e5).toISOString().slice(0, 10);
+  const o = rvModal({
+    titulo: ids.length === 1 ? "Dejar para más adelante" : `Dejar ${ids.length} para más adelante`, icono: "clock-pause", ancho: 440,
+    sub: "Queda en «En espera». Si le ponés fecha, ese día vuelve a avisar.",
+    cuerpo: `<div class="pd-fechas">
+        ${[["Mañana", 1], ["En 3 días", 3], ["En una semana", 7], ["En 15 días", 15]].map(([t, n]) => `<button type="button" class="pd-fch" data-f="${mas(n)}">${t}<small>${mas(n).slice(8, 10)}/${mas(n).slice(5, 7)}</small></button>`).join("")}
+        <button type="button" class="pd-fch on" data-f="">Sin fecha</button>
+      </div>
+      <label class="rv-f"><span>Otra fecha</span><input type="date" id="pd-f-otra" min="${mas(1)}"></label>
+      <label class="rv-f"><span>Nota <i>(opcional)</i></span><input id="pd-f-nota" maxlength="200" placeholder="Ej: esperar al próximo service, ver con el ingeniero"></label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="pd-f-ok"><i class="ti ti-check"></i> Dejar en espera</button>`,
+  });
+  let f = "";
+  o.querySelectorAll(".pd-fch").forEach(b => b.onclick = () => { o.querySelectorAll(".pd-fch").forEach(x => x.classList.toggle("on", x === b)); f = b.dataset.f; o.querySelector("#pd-f-otra").value = ""; });
+  o.querySelector("#pd-f-otra").onchange = e => { f = e.target.value; o.querySelectorAll(".pd-fch").forEach(x => x.classList.remove("on")); };
+  o.querySelector("#pd-f-ok").onclick = async () => {
+    if (await pdDecidir(ids, "esperar", { revisar_el: f, nota: o.querySelector("#pd-f-nota").value.trim() })) o.remove();
+  };
+}
+function pdDescartar(ids) {
+  const motivos = (pd.d && pd.d.motivos) || [];
+  const o = rvModal({
+    titulo: ids.length === 1 ? "No se hace" : `${ids.length} que no se hacen`, icono: "circle-x", ancho: 440,
+    sub: "El chofer ve en su celular que no se hace y por qué.",
+    cuerpo: `<div class="pd-motivos">${motivos.map(m => `<button type="button" class="pd-mot">${trEsc(m)}</button>`).join("")}</div>
+      <label class="rv-f"><span>Por qué</span><input id="pd-mot-in" maxlength="120" placeholder="Elegí uno o escribilo"></label>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="pd-mot-ok"><i class="ti ti-check"></i> Confirmar</button>`,
+  });
+  const inp = o.querySelector("#pd-mot-in");
+  o.querySelectorAll(".pd-mot").forEach(b => b.onclick = () => { inp.value = b.textContent; o.querySelectorAll(".pd-mot").forEach(x => x.classList.toggle("on", x === b)); });
+  const ok = async () => {
+    if (!inp.value.trim()) { toast("Poné por qué no se hace", "error"); inp.focus(); return; }
+    if (await pdDecidir(ids, "descartar", { motivo: inp.value.trim() })) o.remove();
+  };
+  o.querySelector("#pd-mot-ok").onclick = ok;
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ok(); } });
+  setTimeout(() => inp.focus(), 60);
 }
 
 // ─── Trabajos hechos fuera del taller: la foto de la factura es el aval ───
