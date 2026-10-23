@@ -1735,21 +1735,6 @@ def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
     conn = get_connection()
     try:
         rows = [dict(r) for r in conn.execute(q, params).fetchall()]
-        if modo != "pago" and rows:
-            # Cada pago entero: lo que se liquidó junto con lo que cae en el rango
-            claves = {(r["chofer_usuario"], r["fecha_liquidacion"]) for r in rows}
-            fechas = sorted({c[1] for c in claves})
-            todas = []
-            for i in range(0, len(fechas), 200):
-                parte = fechas[i:i + 200]
-                m = ",".join("?" * len(parte))
-                qq = base + f" AND fecha_liquidacion IN ({m})"
-                pp = list(parte)
-                if chofer_usuario:
-                    qq += " AND chofer_usuario=?"; pp.append(chofer_usuario)
-                todas += [dict(r) for r in conn.execute(qq, pp).fetchall()]
-            rows = [r for r in todas if (r["chofer_usuario"], r["fecha_liquidacion"]) in claves]
-            rows.sort(key=lambda r: str(r["fecha_liquidacion"]), reverse=True)
         # El plus pagado de todas las semanas de una vez. Antes se buscaba una
         # consulta (y una conexión nueva) por cada semana de cada pago: con un
         # año de pagos eran cientos de idas y vueltas a la base y la pantalla
@@ -1777,8 +1762,13 @@ def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
     cfg = config_plus()
     pagos = {}
     for r in rows:
-        # Un pago = mismo chofer, mismo momento de liquidación
-        clave = (r["chofer_usuario"], r["fecha_liquidacion"])
+        # Buscando por servicios, cada semana (de lunes a domingo) es una línea:
+        # si un día se liquidaron varias semanas juntas, cada una sale aparte y
+        # solo las del rango pedido. Buscando por pago, va el pago entero.
+        if modo == "pago":
+            clave = (r["chofer_usuario"], r["fecha_liquidacion"])
+        else:
+            clave = (r["chofer_usuario"], r["fecha_liquidacion"], _semana_de(r["fecha_servicio"]))
         p = pagos.setdefault(clave, {
             "chofer_usuario": r["chofer_usuario"],
             "chofer_nombre": r["chofer_nombre"],
