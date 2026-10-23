@@ -21600,7 +21600,7 @@ function alPintar(animar) {
   <div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
     <header class="al-cab">
       <div class="al-marca">
-        <svg aria-hidden="true" width="34" height="30" viewBox="0 0 34 30"><path d="M11 0h7.5L7.5 30H0z" fill="#E83040"></path><path d="M24 0h10L23 30H13z" fill="#F3F4F6"></path></svg>
+        <svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>
         <span class="al-d al-marca-t">Alpha</span>
         <span class="al-maqueta">Maqueta</span>
       </div>
