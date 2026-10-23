@@ -7141,6 +7141,14 @@ tr.ot-lista-bloque span { margin-left: 6px; padding: 1px 8px; border-radius: 10p
 .pd-prio-chip.baja { background: var(--surface3); color: var(--muted); }
 .pd-de { margin-top: 2px; font-size: 11.5px; color: var(--muted); }
 .pd-de .ti { font-size: 12.5px; vertical-align: -2px; }
+/* Pedido con varias cosas juntas: se ofrece separarlo, mostrando en qué queda */
+.ot-sep { margin-top: 6px; padding: 8px 10px; border-radius: 10px; border: 1px dashed #F0B35B; background: #FFF8EC; max-width: 520px; }
+.ot-sep-btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 0; border-radius: 7px; background: #B45309; color: #FFFFFF;
+  font: 600 12.5px 'Inter', sans-serif; cursor: pointer; }
+.ot-sep-btn:hover { background: #92400E; }
+.ot-sep-btn:disabled { opacity: .6; cursor: wait; }
+.ot-sep-km { display: inline-flex; align-items: center; gap: 5px; margin-right: 10px; font-size: 13px; font-weight: 600; color: #92400E; }
+.ot-sep-lista { margin: 6px 0 0; padding-left: 20px; font-size: 12.5px; line-height: 1.45; color: var(--text, #1F2227); }
 @media (max-width: 760px) {
   .pd-fila { grid-template-columns: auto minmax(0, 1fr); }
   .pd-acc { grid-column: 1 / -1; align-items: stretch; }

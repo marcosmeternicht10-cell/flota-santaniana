@@ -6992,6 +6992,8 @@ function pdFila(p) {
       ${abiertos ? `<input type="checkbox" class="pd-check" ${pd.sel.has(p.id) ? "checked" : ""} aria-label="Elegir" onchange="pdElegir(${p.id}, this.checked)">` : ""}
       <div class="pd-txt">
         <p>${trEsc(p.descripcion)}${abiertos ? `<button type="button" class="pd-editar" onclick="pdEditar(${p.id})" title="Corregir el pedido" aria-label="Corregir el pedido"><i class="ti ti-pencil"></i></button>` : ""}</p>
+        ${abiertos && p.solo_km ? `<div class="ot-sep"><span class="ot-sep-km"><i class="ti ti-gauge"></i> Esto es el kilometraje, no un trabajo.</span>
+          <button type="button" class="ot-sep-btn" onclick="pdEraKm(${p.id}, this)">Sacarlo de los pedidos</button></div>` : ""}
         ${abiertos && (p.partes || []).length ? `<div class="ot-sep"><button type="button" class="ot-sep-btn" onclick="pdSeparar(${p.id}, this)">
           <i class="ti ti-arrows-split-2"></i> Son ${p.partes.length} trabajos: separar</button>
           <ol class="ot-sep-lista">${p.partes.map(t => `<li>${trEsc(t)}</li>`).join("")}</ol></div>` : ""}
@@ -7066,6 +7068,14 @@ async function pdEditar(id) {
     const f = document.querySelector(`.pd-fila[data-id="${id}"]`);
     if (f && !trQuieto()) { f.classList.remove("ilumina"); void f.offsetWidth; f.classList.add("ilumina"); }
   };
+}
+async function pdEraKm(id, btn) {
+  btn.disabled = true;
+  const r = await api("/api/ot_pedidos/decidir", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: [id], accion: "descartar", motivo: "Era el kilometraje, no un trabajo" }) });
+  if (!r || !r.ok) { btn.disabled = false; toast((r && r.msg) || "No se pudo", "error"); return; }
+  toast("Listo: no era un trabajo", "success");
+  await pdCargar();
 }
 async function pdSeparar(id, btn) {
   btn.disabled = true;
