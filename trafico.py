@@ -434,6 +434,71 @@ def _estado_coches(conn, fecha, numeros, flota):
     return estado
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# TOPE DE VIAJES DE LOS CHOFERES DE INTERNACIONAL
+# ════════════════════════════════════════════════════════════════════════════
+# Un chofer de internacional no puede hacer más de 8 viajes en el mes. Un viaje
+# es la ida y la vuelta: se cuentan las salidas de ida y las de regreso que
+# tiene cargadas en el tráfico internacional, y vale la mayor de las dos (ocho
+# idas con sus ocho regresos son ocho viajes). El mes es el de la fecha de la
+# salida. Avisa, no bloquea: decide quien arma el tráfico.
+TOPE_VIAJES_INT = 8
+MESES_TXT = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre",
+             "octubre", "noviembre", "diciembre"]
+
+
+def _clave_trip(nombre):
+    return " ".join(_sin_tildes(nombre).upper().replace(".", " ").replace(",", " ").split())
+
+
+def viajes_del_mes(conn, mes):
+    """{clave del chofer: {nombre, salidas:[(fecha, lado)]}} del tráfico internacional de ese mes (YYYY-MM)."""
+    desde = mes + "-01"
+    a, m = int(mes[:4]), int(mes[5:7])
+    hasta = (date(a + (m == 12), m % 12 + 1, 1) - timedelta(days=1)).isoformat()
+    filas = conn.execute("""SELECT d.fecha, s.lado, s.trip1, s.trip2, s.destino, s.hora
+                            FROM trafico_salidas s JOIN trafico_dias d ON d.id = s.dia_id
+                            WHERE COALESCE(d.tipo, 'nacional') = 'internacional' AND d.fecha >= ? AND d.fecha <= ?
+                            ORDER BY d.fecha, s.hora""", (desde, hasta)).fetchall()
+    out = {}
+    for f in filas:
+        for t in (f["trip1"], f["trip2"]):
+            k = _clave_trip(t)
+            if not k or k in ("A CONF", "A CONFIRMAR"):
+                continue
+            c = out.setdefault(k, {"nombre": limpiar(t), "salidas": []})
+            c["salidas"].append({"fecha": f["fecha"], "lado": f["lado"] if f["lado"] in LADOS else "ida",
+                                 "destino": f["destino"] or "", "hora": f["hora"] or ""})
+    return out
+
+
+def _cuenta(salidas, hasta=None):
+    idas = sum(1 for x in salidas if x["lado"] == "ida" and (hasta is None or x["fecha"] <= hasta))
+    regresos = sum(1 for x in salidas if x["lado"] == "regreso" and (hasta is None or x["fecha"] <= hasta))
+    return max(idas, regresos), idas, regresos
+
+
+def resumen_viajes(mes, hoy=None):
+    """La tabla del mes: cuántos viajes lleva cada chofer de internacional."""
+    hoy = hoy or date.today().isoformat()
+    conn = get_connection()
+    try:
+        datos = viajes_del_mes(conn, mes)
+    finally:
+        conn.close()
+    lista = []
+    for k, c in datos.items():
+        total, idas, regresos = _cuenta(c["salidas"])
+        hechos = _cuenta(c["salidas"], hoy)[0]
+        lista.append({"chofer": c["nombre"], "viajes": total, "idas": idas, "regresos": regresos,
+                      "hechos": min(hechos, total), "programados": max(0, total - hechos),
+                      "pasado": max(0, total - TOPE_VIAJES_INT), "salidas": c["salidas"]})
+    lista.sort(key=lambda x: (-x["viajes"], x["chofer"]))
+    a, m = int(mes[:4]), int(mes[5:7])
+    return {"mes": mes, "mes_txt": f"{MESES_TXT[m - 1]} {a}", "tope": TOPE_VIAJES_INT, "choferes": lista,
+            "pasados": sum(1 for x in lista if x["pasado"]), "en_tope": sum(1 for x in lista if x["viajes"] == TOPE_VIAJES_INT)}
+
+
 def armar_dia(fecha, conn=None, tipo="nacional"):
     """El día completo con lo que necesita la pantalla y el PDF: corredores,
     salidas, avisos, resumen y dónde están los coches al empezar el día."""
@@ -457,6 +522,7 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
         reglas = rotaciones(conn, tipo=tipo)
         idas_rot = (_idas_recientes(conn, (date.fromisoformat(fecha) - timedelta(days=3)).isoformat(), fecha, tipo)
                     if reglas else [])
+        viajes_mes = viajes_del_mes(conn, fecha[:7]) if tipo == "internacional" else {}
     finally:
         if propia:
             conn.close()
@@ -522,6 +588,14 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
         trips = [t for t in (s["trip1"], s["trip2"]) if t]
         if not trips:
             avisos.append({"nivel": "falta", "txt": "Faltan los tripulantes"})
+        # Internacional: ¿este viaje lo pasa del tope del mes?
+        for t in trips:
+            c = viajes_mes.get(_clave_trip(t))
+            if c:
+                n = _cuenta(c["salidas"], fecha)[0]
+                if n > TOPE_VIAJES_INT:
+                    avisos.append({"nivel": "error", "tope": True,
+                                   "txt": f"{limpiar(t)}: con este lleva {n} viajes en {MESES_TXT[int(fecha[5:7]) - 1]} (el tope es {TOPE_VIAJES_INT})"})
         if not s["hora"]:
             avisos.append({"nivel": "falta", "txt": "Falta la hora"})
         s["avisos"] = avisos
@@ -537,13 +611,14 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
     con_aviso = sum(1 for s in salidas if any(a["nivel"] in ("error", "aviso") for a in s["avisos"]))
     papeles = len({limpiar(s["coche"]) for s in salidas if any(a["nivel"] == "doc" for a in s["avisos"])})
     refuerzos = sum(1 for s in salidas if "REFUERZO" in (s.get("destino_extras") or []))
+    pasados_tope = len({a["txt"].split(":")[0] for s in salidas for a in s["avisos"] if a.get("tope")})
 
     return {
         "existe": True, "fecha": fecha, "tipo": tipo, "nombre_dia": nombre_dia(fecha), "dia": dia,
         "bloques": bloques,
         "resumen": {"salidas": len(salidas), "coches": len(con_coche), "tripulantes": len(trip_dia),
                     "a_confirmar": a_confirmar, "con_aviso": con_aviso, "papeles": papeles,
-                    "refuerzos": refuerzos},
+                    "refuerzos": refuerzos, "pasados_tope": pasados_tope},
         "ubicaciones": _ubicaciones_para_panel(inicio, salidas, flota, tipo),
     }
 
@@ -2144,6 +2219,17 @@ def api_dias():
         return jsonify({"error": "Sin permiso"}), 403
     hasta = _fecha_ok(request.args.get("hasta")) or _ahora()[:10]
     return jsonify(dias_recientes(hasta, tipo=_tipo()))
+
+
+@bp_trafico.route("/api/trafico/viajes_mes", methods=["GET"])
+def api_viajes_mes():
+    if not _puede_ver():
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    mes = str(request.args.get("mes") or "")[:7]
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", mes):
+        mes = date.today().isoformat()[:7]
+    from hora_local import hoy as _hoy
+    return jsonify({"ok": True, **resumen_viajes(mes, _hoy())})
 
 
 @bp_trafico.route("/api/trafico/listas", methods=["GET"])

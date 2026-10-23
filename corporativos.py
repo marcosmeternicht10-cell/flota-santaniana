@@ -1183,6 +1183,19 @@ def inicializar_pagos_plus():
         )
     """)
     conn.commit()
+    # Para el histórico de pagos: buscar rápido el plus de cada semana y los
+    # pagos por fecha de liquidación
+    for sql in ("CREATE INDEX IF NOT EXISTS ix_pagos_plus_sem ON pagos_plus (chofer_usuario, anio, semana_iso)",
+                "CREATE INDEX IF NOT EXISTS ix_rendcorp_liq ON rendiciones_corp (fecha_liquidacion)"):
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            if USE_POSTGRES:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
     conn.close()
 
 
@@ -1693,8 +1706,31 @@ def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
     q += " ORDER BY fecha_liquidacion DESC"
 
     conn = get_connection()
-    rows = [dict(r) for r in conn.execute(q, params).fetchall()]
-    conn.close()
+    try:
+        rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+        # El plus pagado de todas las semanas de una vez. Antes se buscaba una
+        # consulta (y una conexión nueva) por cada semana de cada pago: con un
+        # año de pagos eran cientos de idas y vueltas a la base y la pantalla
+        # no terminaba de cargar.
+        plus_reg = {}
+        choferes = sorted({r["chofer_usuario"] for r in rows if r.get("chofer_usuario")})
+        if choferes:
+            try:
+                for i in range(0, len(choferes), 200):
+                    parte = choferes[i:i + 200]
+                    m = ",".join("?" * len(parte))
+                    for pr in conn.execute(f"""SELECT chofer_usuario, anio, semana_iso, monto FROM pagos_plus
+                                               WHERE chofer_usuario IN ({m})""", parte).fetchall():
+                        plus_reg[(pr["chofer_usuario"], int(pr["anio"]), int(pr["semana_iso"]))] = float(pr["monto"] or 0)
+            except Exception:
+                if USE_POSTGRES:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                plus_reg = {}
+    finally:
+        conn.close()
 
     cfg = config_plus()
     pagos = {}
@@ -1724,7 +1760,7 @@ def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
         # anterior al registro se estima con la configuración actual.
         plus = 0
         for (an, sem) in p["semanas"]:
-            pagado = plus_pagado(p["chofer_usuario"], an, sem)
+            pagado = plus_reg.get((p["chofer_usuario"], int(an), int(sem)))
             plus += pagado if pagado is not None else monto_plus_de(p["chofer_nombre"], cfg)
         fechas = sorted(p["fechas"])
         salida.append({
