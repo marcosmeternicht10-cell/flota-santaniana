@@ -199,6 +199,179 @@ def _parecidos(texto, candidatos):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# SEPARAR: cuando el chofer escribe varias cosas en una sola tirada
+# ("cambio de aceite urgente cubierta delante revisar la parte eléctrica y el
+# audio") se arma un pedido por cada cosa. Es una regla de palabras, no magia:
+# corta donde empieza otro trabajo (un verbo como revisar o cambiar, o una pieza
+# de otro rubro) y deja junto lo que es del mismo rubro ("luces y faros").
+# ════════════════════════════════════════════════════════════════════════════
+SEP_RUBROS = [   # el orden importa: lo más largo primero
+    ("aire_ac", r"aire acondicionado|a/?a|climatiz\w*|calefacc\w*|enfria\w*"),
+    ("aceite", r"aceite|filtros?|lubric\w*|engrase|service|servicio"),
+    ("neumaticos", r"cubiertas?|neumatic\w*|gomas?|pinchad\w*|ruedas?|llantas?|auxilio"),
+    ("frenos", r"fren\w*|pastillas?|discos?"),
+    ("aire", r"aire"),
+    ("electrico", r"electric\w*|baterias?|alternador|arranque|fusibles?|cables?|tablero|crucero|sensor\w*"),
+    ("luces", r"luz|luces|faros?|giros?|guinos?|balizas?|lamparas?|focos?|led"),
+    ("audio", r"audio|microfonos?|radio|parlantes?|estereo|tv|tele|televisor|pantallas?|wifi|usb|enchufes?|sonido|dvd"),
+    ("carroceria", r"puertas?|vidrios?|parabrisas|espejos?|ventanillas?|chapa|tapas?|paragolpes?|limpiaparabrisas|escobillas?|bodega"),
+    ("interior", r"asientos?|butacas?|cortinas?|tapizad\w*|apoyabrazos?|portaequipajes?|bandejas?|alfombras?|bano|banos|cinturon\w*"),
+    ("motor", r"motor|correas?|radiador|temperatura|recalient\w*|humo|turbo|inyector\w*|bomba"),
+    ("caja", r"embrague|caja|marchas?"),
+    ("suspension", r"suspension|amortiguador\w*|elasticos?|muelles?|bujes?|fuelles?|pulmon\w*"),
+    ("direccion", r"direccion|volante"),
+    ("combustible", r"combustible|gasoil|diesel|tanque"),
+    ("tacografo", r"tacografo|cronotac\w*"),
+    ("transmision", r"diferencial|cardan|palier\w*|crucetas?"),
+]
+SEP_VERBOS = r"revis\w*|cambi(?:ar|en|o|a)|arregl\w*|repar\w*|control\w*|verific\w*|cheque\w*|coloc\w*|poner|pongan|repon\w*|ajust\w*|sold\w*|limpi\w*|complet\w*|falta|faltan|sacar|saquen|instal\w*|calibr\w*|engras\w*"
+SEP_UNEN = set("de del la las el los al a en con sin para por su sus un una unos unas que se lo le mas muy".split())
+SEP_CABEZAS = set("parte partes sistema sector zona lado tema".split())
+SEP_Y = set("y e tambien ademas".split())
+SEP_RELLENO = r"^(?:se\s+)?(?:precisa|precisan|necesita|necesitan|requiere|pide|piden|solicita)\s+|^hay que\s+|^favor(?: de)?\s+|^por favor\s+|^pedido(?: de)?:?\s+"
+SEP_URGENTE = r"\b(?:de\s+)?(?:suma\s+|maxima\s+|extrema\s+)?urgencia\b|\b(?:con\s+)?urgente\b|\blo antes posible\b|\bcuanto antes\b|\bya mismo\b|\bde inmediato\b"
+
+
+def _rubro(palabra_norm):
+    for r, pat in SEP_RUBROS:
+        if re.fullmatch(pat, palabra_norm):
+            return r
+    return None
+
+
+def _es_verbo(palabra_norm):
+    return bool(re.fullmatch(SEP_VERBOS, palabra_norm))
+
+
+def _rubros_de(texto_norm):
+    t = " " + texto_norm + " "
+    out = set()
+    for r, pat in SEP_RUBROS:
+        if re.search(r"(?<![a-z0-9])(?:" + pat + r")(?![a-z0-9])", t):
+            out.add(r)
+    if "aire_ac" in out:
+        out.discard("aire")
+    return out
+
+
+def _limpiar(trozo):
+    t = " ".join(trozo.split()).strip(" ,.;:-–—/+")
+    t = re.sub(r"^(?:y|e|tambien|también|ademas|además)\s+", "", t, flags=re.I)
+    n = _norm(t)
+    m = re.match(SEP_RELLENO, n)
+    if m:
+        # se sacan tantas palabras como tiene el relleno ("se precisa")
+        k = len(n[:m.end()].split())
+        t = " ".join(t.split()[k:])
+    # "cubierta delante" → "cubierta delantera"
+    t = re.sub(r"\b(cubierta|goma|rueda|llanta)(s?)\s+(?:de\s+)?(?:a?delante)\b", r"\1\2 delantera\2", t, flags=re.I)
+    t = re.sub(r"\b(cubierta|goma|rueda|llanta)(s?)\s+(?:de\s+)?(?:atr[aá]s|detr[aá]s)\b", r"\1\2 trasera\2", t, flags=re.I)
+    t = t.strip(" ,.;:-–—/+")
+    return t[:1].upper() + t[1:] if t else ""
+
+
+def separar(texto):
+    """Lista de trabajos [{descripcion, rubros, urgente}] que hay en el texto.
+    Si es uno solo, devuelve una lista de uno."""
+    original = " ".join(str(texto or "").split())
+    if not original:
+        return []
+    # ¿"Urgente" al principio de todo? Vale para todos los trabajos
+    n0 = _norm(original)
+    urgente_todo = bool(re.match(r"^(?:" + SEP_URGENTE + r")", n0))
+    trozos = []
+    for duro in re.split(r"\s*(?:[;\n]|\.(?=\s|$)|\s-\s|\+)\s*", original):
+        palabras = duro.split()
+        if not palabras:
+            continue
+        actual, rubros_act, verbo_act = [], set(), False
+        i = 0
+        while i < len(palabras):
+            w = palabras[i]
+            wn = _norm(w).strip(",.:")
+            coma_antes = bool(actual) and actual[-1].endswith(",")
+            prev = _norm(actual[-1]).strip(",.:") if actual else ""
+            cortar = False
+            saltar = 0
+            if actual:
+                if wn in SEP_Y or coma_antes:
+                    # Después de "y" o de una coma: ¿empieza otro trabajo?
+                    j = i + 1 if wn in SEP_Y else i
+                    mira = [_norm(x).strip(",.:") for x in palabras[j:j + 4]]
+                    verbo = bool(mira) and _es_verbo(mira[0])
+                    r_sig = None
+                    for x in mira:
+                        r_sig = _rubro(x)
+                        if r_sig:
+                            break
+                    if verbo or (r_sig and r_sig not in rubros_act):
+                        cortar = True
+                        saltar = 1 if wn in SEP_Y else 0
+                elif prev not in SEP_UNEN and prev not in SEP_Y and prev not in SEP_CABEZAS and not _es_verbo(prev):
+                    r = _rubro(wn)
+                    if _es_verbo(wn) and (rubros_act or verbo_act) and len(actual) >= 2:
+                        cortar = True
+                    elif r and rubros_act and r not in rubros_act:
+                        cortar = True
+            if cortar:
+                trozos.append(" ".join(actual))
+                actual, rubros_act, verbo_act = [], set(), False
+                i += saltar
+                continue
+            actual.append(w)
+            r = _rubro(wn)
+            if r:
+                rubros_act.add(r)
+            if _es_verbo(wn):
+                verbo_act = True
+            i += 1
+        if actual:
+            trozos.append(" ".join(actual))
+    out = []
+    for t in trozos:
+        n = _norm(t)
+        urg = urgente_todo or bool(re.search(SEP_URGENTE, n))
+        limpio = re.sub(r"\s*(?:,\s*)?\b(?:de\s+)?(?:suma\s+|maxima\s+|máxima\s+|extrema\s+)?urgencia\b|\s*\b(?:con\s+)?urgente\b:?|\s*\blo antes posible\b|\s*\bcuanto antes\b|\s*\bya mismo\b|\s*\bde inmediato\b", "", t, flags=re.I)
+        d = _limpiar(limpio)
+        if not d:
+            if out and urg:
+                out[-1]["urgente"] = True
+            continue
+        # Un pedazo suelto de una o dos palabras sin pieza ni verbo va con el anterior
+        dn = _norm(d)
+        if out and len(dn.split()) <= 2 and not _rubros_de(dn):
+            out[-1]["descripcion"] += " " + d[:1].lower() + d[1:]
+            out[-1]["urgente"] = out[-1]["urgente"] or urg
+            continue
+        out.append({"descripcion": d[:300], "rubros": sorted(_rubros_de(dn)), "urgente": urg})
+    return out or [{"descripcion": _limpiar(original)[:300], "rubros": [], "urgente": urgente_todo}]
+
+
+def _tipo_para(texto, rubros, base="correctivo"):
+    """El tipo de trabajo de cada parte: el cambio de aceite es preventivo, lo de
+    cubiertas es neumáticos, y lo demás queda como lo eligió el chofer."""
+    n = _norm(texto)
+    if "neumaticos" in rubros:
+        return "neumaticos"
+    if "aceite" in rubros and re.search(r"cambi|service|servicio|engras", n) and not re.search(r"pierd|perdid|fuga|gotea|tira", n):
+        return "preventivo"
+    return base if base not in ("neumaticos", "preventivo") else "correctivo"
+
+
+def _prioridad_de_parte(parte):
+    sug, por = sugerir_prioridad(parte["descripcion"])
+    if parte.get("urgente") and sug != "urgente":
+        sug, por = "urgente", "el chofer pidió que sea urgente"
+    return sug, por
+
+
+def partes_de(texto):
+    """Las descripciones en que se separa el texto (vacío si es un solo trabajo)."""
+    ps = separar(texto)
+    return [x["descripcion"] for x in ps] if len(ps) > 1 else []
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # CREAR (desde el celular del chofer)
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -214,9 +387,17 @@ def crear_reporte(vehiculo_id, items, chofer, km=0, fotos=None):
             desc = " ".join(str(it.get("descripcion") or "").split())[:300]
             if not desc:
                 continue
-            sug, por = sugerir_prioridad(desc)
-            conn.execute("""INSERT INTO ot_pedidos (reporte_id, vehiculo_id, descripcion, tipo, sugerida, sugerida_por, estado)
-                            VALUES (?,?,?,?,?,?, 'nuevo')""", (rid, int(vehiculo_id), desc, it.get("tipo") or "otro", sug, por))
+            # Si el chofer escribió varias cosas juntas, queda un pedido por cada una
+            partes = separar(desc)
+            base = it.get("tipo") or "otro"
+            for parte in partes:
+                sug, por = _prioridad_de_parte(parte)
+                tipo = _tipo_para(parte["descripcion"], parte["rubros"], base) if len(partes) > 1 else base
+                conn.execute("""INSERT INTO ot_pedidos (reporte_id, vehiculo_id, descripcion, tipo, sugerida, sugerida_por, estado,
+                                                       descripcion_original)
+                                VALUES (?,?,?,?,?,?, 'nuevo', ?)""",
+                             (rid, int(vehiculo_id), parte["descripcion"] if len(partes) > 1 else desc, tipo, sug, por,
+                              f"(separado de: {desc})"[:300] if len(partes) > 1 else ""))
         for i, f in enumerate((fotos or [])[:3]):
             if f and str(f).startswith("data:image/") and len(f) < 800000:
                 conn.execute("INSERT INTO ot_pedido_fotos (reporte_id, datos, nombre) VALUES (?,?,?)",
@@ -342,6 +523,8 @@ def bandeja(estado="nuevo", q=""):
                          sorted(par, key=lambda x: str(x["fecha"]), reverse=True)][:4]
         for k in ("creado_el",):
             f[k] = f[k] or ""
+        # ¿Son varias cosas en una? Se ofrece separarlas
+        f["partes"] = partes_de(f["descripcion"]) if estado in ("nuevo", "espera") else []
         c["pedidos"].append(f)
     lista = list(coches.values())
     for c in lista:
@@ -545,6 +728,116 @@ def editar(pid, descripcion=None, tipo=None, vehiculo_id=None):
     return True, ("Separado en " + str(len(ids) + 1) + " pedidos" if ids else "Pedido corregido"), ids
 
 
+def separar_pedido(pid):
+    """Separa un pedido que trae varias cosas en un pedido por cada una."""
+    conn = get_connection()
+    try:
+        p = conn.execute("SELECT * FROM ot_pedidos WHERE id=?", (pid,)).fetchone()
+        if not p:
+            return False, "Ese pedido no existe", []
+        p = dict(p)
+        if p["estado"] not in ("nuevo", "espera"):
+            return False, "Ya se decidió: lo que está en la OT se separa desde la OT", []
+        partes = separar(p["descripcion"])
+        if len(partes) < 2:
+            return False, "No se ve más de un trabajo en el texto", []
+        original = p.get("descripcion_original") or ""
+        if not original.startswith("(separado de: "):
+            original = f"(separado de: {original or p['descripcion']})"[:300]
+        primero = partes[0]
+        sug, por = _prioridad_de_parte(primero)
+        conn.execute("""UPDATE ot_pedidos SET descripcion=?, tipo=?, sugerida=?, sugerida_por=?, descripcion_original=?,
+                        editado_por=?, editado_el=? WHERE id=?""",
+                     (primero["descripcion"], _tipo_para(primero["descripcion"], primero["rubros"], p["tipo"]), sug, por,
+                      original, _quien()[:80], ahora_iso(), pid))
+        ids = []
+        for parte in partes[1:]:
+            sug, por = _prioridad_de_parte(parte)
+            cur = conn.execute("""INSERT INTO ot_pedidos (reporte_id, vehiculo_id, descripcion, tipo, sugerida, sugerida_por,
+                                     estado, revisar_el, nota, descripcion_original, editado_por, editado_el)
+                                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               (p["reporte_id"], p["vehiculo_id"], parte["descripcion"],
+                                _tipo_para(parte["descripcion"], parte["rubros"], p["tipo"]), sug, por, p["estado"],
+                                p.get("revisar_el") or "", "", original, _quien()[:80], ahora_iso()))
+            ids.append(cur.lastrowid)
+        conn.commit()
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+    return True, f"Separado en {len(ids) + 1} pedidos", ids
+
+
+def separar_item(iid):
+    """Separa un trabajo de la OT que trae varias cosas (pasó así del pedido del
+    chofer): el primero queda en su lugar y los otros se suman a la misma OT,
+    con la misma fecha, el mismo chofer y la misma nota de dónde vino."""
+    conn = get_connection()
+    try:
+        it = conn.execute("SELECT * FROM ot_items WHERE id=?", (iid,)).fetchone()
+        if not it:
+            return False, "Ese trabajo no existe", []
+        it = dict(it)
+        if it.get("estado") == "completado":
+            return False, "Ya está hecho: no se separa", []
+        partes = separar(it["descripcion"])
+        if len(partes) < 2:
+            return False, "No se ve más de un trabajo en el texto", []
+        tipo_base = it.get("tipo") or "correctivo"
+        prio_base = it.get("prioridad") or ""
+        primero = partes[0]
+        conn.execute("UPDATE ot_items SET descripcion=?, tipo=?, prioridad=? WHERE id=?",
+                     (primero["descripcion"], _tipo_para(primero["descripcion"], primero["rubros"], tipo_base),
+                      "urgente" if primero.get("urgente") else prio_base, iid))
+        ids = []
+        for parte in partes[1:]:
+            cur = conn.execute("""INSERT INTO ot_items (ot_id, descripcion, tipo, estado, costo, fecha, origen, reportado_por)
+                                  VALUES (?,?,?,?,?,?,?,?)""",
+                               (it["ot_id"], parte["descripcion"], _tipo_para(parte["descripcion"], parte["rubros"], tipo_base),
+                                "pendiente", 0, it.get("fecha"), it.get("origen") or "chofer", it.get("reportado_por") or ""))
+            nid = cur.lastrowid
+            conn.execute("UPDATE ot_items SET prioridad=?, observaciones=? WHERE id=?",
+                         ("urgente" if parte.get("urgente") else _prioridad_de_parte(parte)[0] if not prio_base else prio_base,
+                          it.get("observaciones") or "", nid))
+            ids.append(nid)
+        conn.commit()
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=_quien() or "?", rol=session.get("rol") or "",
+                            accion=f"Separó un trabajo de la OT en {len(ids) + 1}", categoria="Órdenes de Trabajo",
+                            detalle=it["descripcion"][:200])
+    except Exception:
+        pass
+    return True, f"Separado en {len(ids) + 1} trabajos", ids
+
+
+def separables(ids):
+    """De estos trabajos de OT, los que traen varias cosas y en qué se separan."""
+    ids = [int(i) for i in ids if str(i).isdigit()][:300]
+    if not ids:
+        return {}
+    conn = get_connection()
+    try:
+        m = ",".join("?" * len(ids))
+        filas = conn.execute(f"SELECT id, descripcion, estado FROM ot_items WHERE id IN ({m})", ids).fetchall()
+    finally:
+        conn.close()
+    out = {}
+    for f in filas:
+        if f["estado"] == "completado":
+            continue
+        ps = partes_de(f["descripcion"])
+        if ps:
+            out[str(f["id"])] = ps
+    return out
+
+
 def poner(pid, prioridad=None, nota=None):
     conn = get_connection()
     try:
@@ -676,6 +969,33 @@ def api_poner(pid):
     if any(k in d for k in ("descripcion", "tipo", "vehiculo_id")):
         msg = "Separado en " + str(len(nuevos) + 1) + " pedidos" if nuevos else "Pedido corregido"
     return jsonify({"ok": True, "msg": msg, "nuevos": nuevos})
+
+
+@bp_ot_pedidos.route("/api/ot_pedidos/<int:pid>/separar", methods=["POST"])
+def api_separar_pedido(pid):
+    if not _puede_ver():
+        return _no()
+    ok, msg, ids = separar_pedido(pid)
+    if not ok:
+        return _no(msg, 400)
+    return jsonify({"ok": True, "msg": msg, "nuevos": ids})
+
+
+@bp_ot_pedidos.route("/api/ot_pedidos/separables", methods=["GET"])
+def api_separables():
+    if not _puede_ver():
+        return jsonify({})
+    return jsonify(separables(str(request.args.get("ids") or "").split(",")))
+
+
+@bp_ot_pedidos.route("/api/ot_pedidos/separar_item/<int:iid>", methods=["POST"])
+def api_separar_item(iid):
+    if not _puede_ver():
+        return _no()
+    ok, msg, ids = separar_item(iid)
+    if not ok:
+        return _no(msg, 400)
+    return jsonify({"ok": True, "msg": msg, "nuevos": ids})
 
 
 @bp_ot_pedidos.route("/api/ot_pedidos/foto/<int:fid>", methods=["GET"])
