@@ -11741,22 +11741,34 @@ async function renderCorpHistorial() {
           <div class="form-row" style="align-items:flex-end">
             <div class="field" style="flex:1;min-width:200px">
               <label>Chofer</label>
-              <select id="hist-chofer" onchange="cargarHistorial()">
+              <select id="hist-chofer" onchange="histProgramar(0)">
                 <option value="">Todos los choferes</option>
                 ${(choferes || []).map(c => `<option value="${c.usuario}">${c.nombre}</option>`).join("")}
               </select>
             </div>
             <div class="field">
               <label>Buscar por</label>
-              <select id="hist-modo" onchange="cargarHistorial()" style="width:210px">
+              <select id="hist-modo" onchange="histProgramar(0)" style="width:210px">
                 <option value="servicio">Fecha de los servicios</option>
                 <option value="pago">Fecha en que se liquidó</option>
               </select>
             </div>
-            <div class="field"><label>Desde</label><input id="hist-desde" type="date" value="${fmt(haceUnAnio)}" onchange="cargarHistorial()"></div>
-            <div class="field"><label>Hasta</label><input id="hist-hasta" type="date" value="${fmt(hoy)}" onchange="cargarHistorial()"></div>
+            <div class="field"><label>Desde</label><input id="hist-desde" type="date" value="${fmt(haceUnAnio)}" onchange="histMarcarChip(null);histProgramar()"></div>
+            <div class="field"><label>Hasta</label><input id="hist-hasta" type="date" value="${fmt(hoy)}" onchange="histMarcarChip(null);histProgramar()"></div>
             <button class="btn btn-primary" onclick="cargarHistorial()"><i class="ti ti-search"></i> Buscar</button>
             <button class="btn btn-pdf" onclick="descargarHistorialPDF()"><i class="ti ti-file-type-pdf"></i> PDF</button>
+          </div>
+          <div class="hist-rapidos" role="group" aria-label="Período">
+            <span>Período:</span>
+            <button type="button" class="chip" data-p="semana_pasada" onclick="histPeriodo('semana_pasada')">Semana pasada</button>
+            <button type="button" class="chip" data-p="semana" onclick="histPeriodo('semana')">Esta semana</button>
+            <button type="button" class="chip" data-p="mes" onclick="histPeriodo('mes')">Este mes</button>
+            <button type="button" class="chip" data-p="mes_pasado" onclick="histPeriodo('mes_pasado')">Mes pasado</button>
+            <button type="button" class="chip" data-p="anio" onclick="histPeriodo('anio')">Últimos 12 meses</button>
+            <span class="hist-flechas">
+              <button type="button" class="btn btn-ghost btn-sm" onclick="histMover(-7)" title="Una semana antes"><i class="ti ti-chevron-left"></i> Semana</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="histMover(7)" title="Una semana después">Semana <i class="ti ti-chevron-right"></i></button>
+            </span>
           </div>
           <p class="hint" style="margin-top:12px" id="hist-aclaracion"></p>
         </div>
@@ -11764,7 +11776,47 @@ async function renderCorpHistorial() {
       <div id="hist-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
     </div>`;
 
-  cargarHistorial();
+  histPeriodo("mes");
+}
+
+// Períodos rápidos: las liquidaciones van de lunes a domingo
+const histISO = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+function histLunes(d) { const x = new Date(d); x.setHours(12, 0, 0, 0); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; }
+function histMarcarChip(p) { document.querySelectorAll(".hist-rapidos .chip").forEach(b => b.classList.toggle("activo", b.dataset.p === p)); }
+function histPeriodo(p) {
+  const hoy = new Date(); hoy.setHours(12, 0, 0, 0);
+  let d, h;
+  if (p === "semana" || p === "semana_pasada") {
+    d = histLunes(hoy); if (p === "semana_pasada") d.setDate(d.getDate() - 7);
+    h = new Date(d); h.setDate(h.getDate() + 6);
+  } else if (p === "mes" || p === "mes_pasado") {
+    d = new Date(hoy.getFullYear(), hoy.getMonth() - (p === "mes_pasado" ? 1 : 0), 1, 12);
+    h = new Date(d.getFullYear(), d.getMonth() + 1, 0, 12);
+  } else {
+    d = new Date(hoy.getFullYear() - 1, hoy.getMonth(), hoy.getDate(), 12); h = hoy;
+  }
+  $("#hist-desde").value = histISO(d);
+  $("#hist-hasta").value = histISO(h);
+  histMarcarChip(p);
+  histProgramar(0);
+}
+function histMover(dias) {
+  // Corre el período de a una semana entera (de lunes a domingo)
+  const d0 = $("#hist-desde").value ? new Date($("#hist-desde").value + "T12:00:00") : new Date();
+  const d = histLunes(d0); d.setDate(d.getDate() + dias);
+  const h = new Date(d); h.setDate(h.getDate() + 6);
+  $("#hist-desde").value = histISO(d);
+  $("#hist-hasta").value = histISO(h);
+  histMarcarChip(null);
+  histProgramar(0);
+}
+// Mientras se escribe una fecha el navegador avisa cada número: se espera a que esté completa
+let _histTimer = null;
+function histProgramar(espera = 600) {
+  clearTimeout(_histTimer);
+  const ok = v => !v || (/^\d{4}-\d{2}-\d{2}$/.test(v) && +v.slice(0, 4) >= 2020 && +v.slice(0, 4) <= 2100);
+  if (!ok($("#hist-desde").value) || !ok($("#hist-hasta").value)) return;
+  _histTimer = setTimeout(cargarHistorial, espera);
 }
 
 async function cargarHistorial() {
@@ -13509,12 +13561,13 @@ async function abrirAsignar(id) {
   o.onclick = e => { if (e.target === o) o.remove(); };
   document.body.appendChild(o);
   asCochesPintar("asig", vehiculos, agCochesDe(s));
-  // El foco va al primer coche o chofer que falta
+  // El foco va al primer coche que falta; si los coches ya están, a la primera tripulación vacía
   setTimeout(() => {
-    const vacio = [...o.querySelectorAll(".as-coche")].map(el => +el.dataset.n).find(n =>
-      !document.getElementById(asCocheId("asig", n, "veh"))?.value);
-    const t = document.getElementById(asCocheId("asig", vacio || 1, "veh") + "-txt");
-    if (t) t.focus();
+    const ns = [...o.querySelectorAll(".as-coche")].map(el => +el.dataset.n);
+    const sinCoche = ns.find(n => !document.getElementById(asCocheId("asig", n, "veh"))?.value);
+    if (sinCoche) { document.getElementById(asCocheId("asig", sinCoche, "veh") + "-txt")?.focus(); return; }
+    const sinTrip = ns.find(n => !document.getElementById(asCocheId("asig", n, "tripu"))?.value.trim());
+    document.getElementById(asCocheId("asig", sinTrip || 1, "tripu"))?.focus();
   }, 120);
 }
 
@@ -20552,7 +20605,7 @@ const agPuede = () => ["admin", "taller"].includes(window.USUARIO_ROL);
 const agEsc = s => trEsc(s);
 const agPuedeVer = () => ["admin", "taller", "auditor"].includes(window.USUARIO_ROL) && puedeVerSeccion("agencias");
 
-function agFecha(f) {
+function agFechaLarga(f) {
   if (!f) return "—";
   const [y, m, d] = String(f).slice(0, 10).split("-");
   return d ? `${d}/${m}/${y}` : "—";
@@ -20650,7 +20703,7 @@ async function agCargar() {
   const d = await api("/api/agencias");
   const raiz = document.getElementById("ag-raiz");
   if (!raiz) return;
-  if (!d || !d.agencias) { raiz.innerHTML = `<div class="ag-vacio"><i class="ti ti-plug-x"></i><b>No se pudo cargar</b></div>`; return; }
+  if (!d || !d.agencias) { raiz.innerHTML = `<div class="agc-vacio"><i class="ti ti-plug-x"></i><b>No se pudo cargar</b></div>`; return; }
   ag.d = d;
   agActualizarBadge();
   if (ag.vista === "ficha" && ag.id) return agAbrir(ag.id, true);
@@ -20674,7 +20727,7 @@ function agPintarLista() {
       <button class="ag-tile ${c} ${ag.filtro === k ? "on" : ""}" onclick="agFiltro('${k}')" aria-pressed="${ag.filtro === k}">
         <span class="ag-tile-ic"><i class="ti ti-${i}"></i></span><b>${n}</b><span class="ag-tile-t">${t}</span></button>`).join("")}
     </div>
-    <div class="ag-barra">
+    <div class="agc-barra">
       <label class="rv-buscar ag-buscar"><i class="ti ti-search"></i>
         <input id="ag-q" value="${agEsc(ag.q)}" placeholder="Agencia, ciudad, RUC o responsable" autocomplete="off" oninput="ag.q=this.value;agPintarTarjetas()"></label>
       ${r.ciudades.length > 1 ? `<select class="ag-ciudad" aria-label="Ciudad" onchange="ag.ciudad=this.value;agPintarTarjetas()">
@@ -20711,11 +20764,11 @@ function agPintarTarjetas(animar) {
   caja.classList.toggle("quieta", !animar);
   const vis = agVisibles();
   if (!ag.d.agencias.length) {
-    caja.innerHTML = `<div class="ag-vacio grande"><i class="ti ti-building-store"></i><b>Todavía no hay agencias cargadas</b>
+    caja.innerHTML = `<div class="agc-vacio grande"><i class="ti ti-building-store"></i><b>Todavía no hay agencias cargadas</b>
       <p>Cargá cada agencia con sus datos y la ubicación del local; después, su contrato y sus papeles.</p>
       ${agPuede() ? `<button class="btn btn-primary" onclick="agFormAgencia()"><i class="ti ti-plus"></i> Cargar la primera</button>` : ""}</div>`;
   } else if (!vis.length) {
-    caja.innerHTML = `<div class="ag-vacio"><i class="ti ti-filter-off"></i><b>Ninguna agencia con ese filtro</b>
+    caja.innerHTML = `<div class="agc-vacio"><i class="ti ti-filter-off"></i><b>Ninguna agencia con ese filtro</b>
       <button class="pv-link" onclick="ag.filtro='todas';ag.q='';ag.ciudad='';agPintarLista()">Ver todas</button></div>`;
   } else {
     caja.innerHTML = vis.map((a, i) => agTarjeta(a, i)).join("");
@@ -20724,14 +20777,14 @@ function agPintarTarjetas(animar) {
 }
 
 function agBarraVigencia(c, hoy) {
-  if (c.por_empezar) return `<div class="ag-vig-txt">Arranca el ${agFecha(c.desde)}</div>`;
-  if (!c.hasta) return `<div class="ag-vig-txt">Desde el ${agFecha(c.desde)} · sin fecha de fin</div>`;
+  if (c.por_empezar) return `<div class="ag-vig-txt">Arranca el ${agFechaLarga(c.desde)}</div>`;
+  if (!c.hasta) return `<div class="ag-vig-txt">Desde el ${agFechaLarga(c.desde)} · sin fecha de fin</div>`;
   const ini = new Date(c.desde + "T00:00"), fin = new Date(c.hasta + "T00:00"), h = new Date((hoy || trHoy()) + "T00:00");
   const pct = Math.max(2, Math.min(100, (h - ini) / Math.max(1, fin - ini) * 100));
   const d = c.dias;
   const cls = c.renov_auto ? "auto" : d < 0 ? "mal" : d <= 60 ? "ojo" : "ok";
-  const txt = c.renov_auto ? `<i class="ti ti-repeat"></i> Se renueva solo el ${agFecha(c.hasta)}`
-    : d < 0 ? `Venció el ${agFecha(c.hasta)}` : d === 0 ? "Vence hoy" : `Vence en <b>${d}</b> día${d === 1 ? "" : "s"} · ${agFecha(c.hasta)}`;
+  const txt = c.renov_auto ? `<i class="ti ti-repeat"></i> Se renueva solo el ${agFechaLarga(c.hasta)}`
+    : d < 0 ? `Venció el ${agFechaLarga(c.hasta)}` : d === 0 ? "Vence hoy" : `Vence en <b>${d}</b> día${d === 1 ? "" : "s"} · ${agFechaLarga(c.hasta)}`;
   return `<div class="ag-vig-barra ${cls}" aria-hidden="true"><span style="width:${pct}%"></span></div><div class="ag-vig-txt ${cls}">${txt}</div>`;
 }
 
@@ -20840,7 +20893,7 @@ function agPintarFicha() {
         <span class="ag-nivel n-${f.nivel}"><i class="ti ti-${nivelIc}"></i>${nivelTxt}</span>
         <h2>${agEsc(a.nombre)}</h2>
         <p>${[a.razon_social, a.ruc ? "RUC " + a.ruc : "", a.ciudad].filter(Boolean).map(agEsc).join(" · ") || "Sin razón social ni RUC cargados"}</p>
-        ${a.estado !== "activa" ? `<p class="ag-fcab-estado"><i class="ti ti-${a.estado === "baja" ? "archive" : "player-pause"}"></i> ${a.estado === "baja" ? "Dada de baja" : "Suspendida"} el ${agFecha(a.estado_el)}${a.estado_motivo ? ": " + agEsc(a.estado_motivo) : ""}</p>` : ""}
+        ${a.estado !== "activa" ? `<p class="ag-fcab-estado"><i class="ti ti-${a.estado === "baja" ? "archive" : "player-pause"}"></i> ${a.estado === "baja" ? "Dada de baja" : "Suspendida"} el ${agFechaLarga(a.estado_el)}${a.estado_motivo ? ": " + agEsc(a.estado_motivo) : ""}</p>` : ""}
       </div>
       <div class="ag-fcab-acc">
         <a class="btn btn-ghost btn-sm" href="/api/agencias/${a.id}/pdf" target="_blank" rel="noopener"><i class="ti ti-file-type-pdf"></i> PDF</a>
@@ -20914,8 +20967,8 @@ function agDatosCard(a) {
 }
 
 function agLineaVigencia(c, hoy) {
-  if (!c.hasta) return `<div class="ag-linea ok"><div class="ag-linea-num"><b><i class="ti ti-infinity"></i></b><span>sin fecha de fin</span></div>
-    <div class="ag-linea-barra"><div class="ag-linea-fechas"><span>Desde el ${agFecha(c.desde)}</span></div></div></div>`;
+  if (!c.hasta) return `<div class="agc-linea ok"><div class="ag-linea-num"><b><i class="ti ti-infinity"></i></b><span>sin fecha de fin</span></div>
+    <div class="ag-linea-barra"><div class="ag-linea-fechas"><span>Desde el ${agFechaLarga(c.desde)}</span></div></div></div>`;
   const ini = new Date(c.desde + "T00:00"), fin = new Date(c.hasta + "T00:00"), h = new Date(hoy + "T00:00");
   const tot = Math.max(1, fin - ini);
   const pct = Math.max(0, Math.min(100, (h - ini) / tot * 100));
@@ -20923,17 +20976,17 @@ function agLineaVigencia(c, hoy) {
   const d = c.dias;
   const cls = c.renov_auto ? "auto" : d < 0 ? "mal" : d <= 60 ? "ojo" : "ok";
   return `
-    <div class="ag-linea ${cls}">
+    <div class="agc-linea ${cls}">
       <div class="ag-linea-num"><b>${Math.abs(d)}</b><span>${d < 0 ? (d === -1 ? "día vencido" : "días vencido") : d === 1 ? "día queda" : "días quedan"}</span></div>
       <div class="ag-linea-barra">
         <div class="ag-linea-track">
           <span style="width:${pct}%"></span>
-          ${lim != null && c.renov_auto && c.limite_preaviso ? `<i class="ag-linea-lim" style="left:${lim}%" title="Límite para avisar que no se renueva: ${agFecha(c.limite_preaviso)}"></i>` : ""}
+          ${lim != null && c.renov_auto && c.limite_preaviso ? `<i class="ag-linea-lim" style="left:${lim}%" title="Límite para avisar que no se renueva: ${agFechaLarga(c.limite_preaviso)}"></i>` : ""}
           <i class="ag-linea-hoy" style="left:${pct}%" title="Hoy"></i>
         </div>
-        <div class="ag-linea-fechas"><span>${agFecha(c.desde)}</span><span>${c.renov_auto ? `<i class="ti ti-repeat"></i> se renueva solo el ` : "vence el "}${agFecha(c.hasta)}</span></div>
-        ${c.renov_auto && c.limite_preaviso ? `<p>Si no se quiere renovar, hay que avisar antes del <b>${agFecha(c.limite_preaviso)}</b>.</p>` : ""}
-        ${c.renovado_auto ? `<p><i class="ti ti-info-circle"></i> El período firmado terminaba el ${agFecha(c.hasta_firmado)}: se renovó solo.</p>` : ""}
+        <div class="ag-linea-fechas"><span>${agFechaLarga(c.desde)}</span><span>${c.renov_auto ? `<i class="ti ti-repeat"></i> se renueva solo el ` : "vence el "}${agFechaLarga(c.hasta)}</span></div>
+        ${c.renov_auto && c.limite_preaviso ? `<p>Si no se quiere renovar, hay que avisar antes del <b>${agFechaLarga(c.limite_preaviso)}</b>.</p>` : ""}
+        ${c.renovado_auto ? `<p><i class="ti ti-info-circle"></i> El período firmado terminaba el ${agFechaLarga(c.hasta_firmado)}: se renovó solo.</p>` : ""}
       </div>
     </div>`;
 }
@@ -20944,7 +20997,7 @@ function agDato(titulo, valor, icono, extra = "") {
 function agGarantiaHtml(f, x) {
   if (!x.garantia_tipo) return agDato("Garantía", "", "shield");
   const g = f.garantia && f.vigente && f.vigente.id === x.id ? f.garantia : null;
-  const partes = [x.garantia_txt, x.garantia_monto ? agGs(x.garantia_monto) : "", x.garantia_vence ? `vence el ${agFecha(x.garantia_vence)}` : "", x.garantia_detalle].filter(Boolean);
+  const partes = [x.garantia_txt, x.garantia_monto ? agGs(x.garantia_monto) : "", x.garantia_vence ? `vence el ${agFechaLarga(x.garantia_vence)}` : "", x.garantia_detalle].filter(Boolean);
   return `<div class="ag-dato ${g ? "g-" + g.nivel : ""}"><small><i class="ti ti-shield-check"></i> Garantía</small><p>${agEsc(partes.join(" · "))}</p>
     ${g && g.nivel !== "ok" ? `<span class="ag-dato-alerta ${g.nivel}">${agEsc(g.txt)}</span>` : ""}</div>`;
 }
@@ -20959,8 +21012,8 @@ function agTabContrato(f) {
   }
   const x = v || prox;
   return `
-    ${prox && v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Ya está cargada la ${agEsc(prox.tipo_txt.toLowerCase())} que rige desde el ${agFecha(prox.desde)}.</div>` : ""}
-    ${!v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Este contrato arranca el ${agFecha(prox.desde)}.</div>` : ""}
+    ${prox && v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Ya está cargada la ${agEsc(prox.tipo_txt.toLowerCase())} que rige desde el ${agFechaLarga(prox.desde)}.</div>` : ""}
+    ${!v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Este contrato arranca el ${agFechaLarga(prox.desde)}.</div>` : ""}
     <div class="ag-c-cab">
       <div>
         <span class="ag-c-tipo">${agEsc(x.tipo_txt)}${x.numero ? " Nº " + agEsc(x.numero) : ""}</span>
@@ -20974,7 +21027,7 @@ function agTabContrato(f) {
           <button class="icon-btn" aria-label="Más opciones del contrato" onclick="agMasContrato(this, ${x.id})"><i class="ti ti-dots-vertical"></i></button>` : ""}
       </div>
     </div>
-    ${v && c ? agLineaVigencia(c, f.hoy) : `<div class="ag-linea ojo"><div class="ag-linea-barra"><div class="ag-linea-fechas"><span>Desde el ${agFecha(x.desde)}</span><span>${x.hasta ? "hasta el " + agFecha(x.hasta) : "sin fecha de fin"}</span></div></div></div>`}
+    ${v && c ? agLineaVigencia(c, f.hoy) : `<div class="agc-linea ojo"><div class="ag-linea-barra"><div class="ag-linea-fechas"><span>Desde el ${agFechaLarga(x.desde)}</span><span>${x.hasta ? "hasta el " + agFechaLarga(x.hasta) : "sin fecha de fin"}</span></div></div></div>`}
     <div class="ag-c-grid">
       <div class="ag-c-com ${x.rutas.length > 1 ? "con-rutas" : ""}">
         <small>Comisión</small>
@@ -20990,7 +21043,7 @@ function agTabContrato(f) {
       ${agDato("Devoluciones y anulaciones", x.devoluciones, "receipt-refund")}
       ${x.nota ? agDato("Nota", x.nota, "note") : ""}
     </div>
-    <p class="ag-c-pie">Cargado por ${agEsc(agNombreCorto(x.creado_por) || "—")} el ${agFecha(x.creado_el)}${x.actualizado_el && x.actualizado_el !== x.creado_el ? ` · corregido por ${agEsc(agNombreCorto(x.actualizado_por))} el ${agFecha(x.actualizado_el)}` : ""}</p>`;
+    <p class="ag-c-pie">Cargado por ${agEsc(agNombreCorto(x.creado_por) || "—")} el ${agFechaLarga(x.creado_el)}${x.actualizado_el && x.actualizado_el !== x.creado_el ? ` · corregido por ${agEsc(agNombreCorto(x.actualizado_por))} el ${agFechaLarga(x.actualizado_el)}` : ""}</p>`;
 }
 
 function agTabPapeles(f) {
@@ -21004,7 +21057,7 @@ function agTabPapeles(f) {
       const est = !p ? (t.obligatorio ? "falta" : "opcional") : p.nivel;
       const ic = { falta: "circle-dashed-x", opcional: "circle-dashed", mal: "alert-triangle", ojo: "clock-exclamation", ok: "circle-check" }[est];
       const txt = !p ? (t.obligatorio ? "Falta subirlo" : "No es obligatorio")
-        : !p.vence ? "No vence" : p.nivel === "mal" ? `Vencido el ${agFecha(p.vence)}` : p.nivel === "ojo" ? `Vence en ${p.dias} días (${agFecha(p.vence)})` : `Vence el ${agFecha(p.vence)}`;
+        : !p.vence ? "No vence" : p.nivel === "mal" ? `Vencido el ${agFechaLarga(p.vence)}` : p.nivel === "ojo" ? `Vence en ${p.dias} días (${agFechaLarga(p.vence)})` : `Vence el ${agFechaLarga(p.vence)}`;
       return `
         <div class="ag-pap ${est}">
           <i class="ti ti-${ic}"></i>
@@ -21020,7 +21073,7 @@ function agTabPapeles(f) {
       <li class="${p.reemplazado ? "viejo" : ""}">
         <i class="ti ti-${/\.pdf$/i.test(p.archivo_nombre || "") ? "file-type-pdf" : p.tiene_archivo ? "photo" : "file"}"></i>
         <div><b>${agEsc(p.tipo_txt)}${p.descripcion ? " · " + agEsc(p.descripcion) : ""}</b>
-          <span>${p.vence ? "Vence el " + agFecha(p.vence) : "No vence"} · subido por ${agEsc(agNombreCorto(p.subido_por) || "—")} el ${agFecha(p.subido_el)}${p.reemplazado ? " · <em>reemplazado por uno más nuevo</em>" : ""}</span></div>
+          <span>${p.vence ? "Vence el " + agFechaLarga(p.vence) : "No vence"} · subido por ${agEsc(agNombreCorto(p.subido_por) || "—")} el ${agFechaLarga(p.subido_el)}${p.reemplazado ? " · <em>reemplazado por uno más nuevo</em>" : ""}</span></div>
         <span class="ag-pap-acc">
           ${p.tiene_archivo ? `<button class="icon-btn" aria-label="Ver" title="Ver" onclick="agVerArchivo('documentos', ${p.id}, '${agEsc(p.archivo_nombre || "")}')"><i class="ti ti-eye"></i></button>` : ""}
           ${puede ? `<button class="icon-btn" aria-label="Borrar" title="Borrar" onclick="agBorrarPapel(${p.id})"><i class="ti ti-trash"></i></button>` : ""}
@@ -21038,13 +21091,13 @@ function agTabHistorial(f) {
         <div class="ag-hist-cab">
           <b>${agEsc(v.tipo_txt)}${v.numero ? " Nº " + agEsc(v.numero) : ""}</b>
           ${v.rige ? `<em class="rige">rige hoy</em>` : v.futuro ? `<em class="futura">próxima</em>` : v.anulado ? `<em class="anulada">anulada</em>` : ""}
-          <span>${agFecha(v.desde)} → ${v.hasta ? agFecha(v.hasta) : "sin fin"}${v.renov_auto ? " · se renueva sola" : ""}</span>
+          <span>${agFechaLarga(v.desde)} → ${v.hasta ? agFechaLarga(v.hasta) : "sin fin"}${v.renov_auto ? " · se renueva sola" : ""}</span>
         </div>
         <p class="ag-hist-com">Comisión ${agEsc(v.comision_txt)}${v.rutas.length ? " · " + v.rutas.map(r => agEsc(r.ruta + " " + r.txt)).join(" · ") : ""}</p>
         ${v.anulado ? `<p class="ag-hist-anul">Anulada: ${agEsc(v.anulado_motivo || "")}</p>`
           : v.cambios.length ? `<ul class="ag-hist-cambios">${v.cambios.map(c => `<li>${agEsc(c)}</li>`).join("")}</ul>` : ""}
         <div class="ag-hist-pie">
-          <span>Cargado por ${agEsc(agNombreCorto(v.creado_por) || "—")} el ${agFecha(v.creado_el)}</span>
+          <span>Cargado por ${agEsc(agNombreCorto(v.creado_por) || "—")} el ${agFechaLarga(v.creado_el)}</span>
           ${v.tiene_archivo ? `<button class="pv-link" onclick="agVerArchivo('contratos', ${v.id}, '${agEsc(v.archivo_nombre || "")}')"><i class="ti ti-file-text"></i> Ver firmado</button>` : ""}
           ${puede && !v.anulado ? `<button class="pv-link" onclick="agFormContrato('corregir', ${v.id})"><i class="ti ti-pencil"></i> Corregir</button>` : ""}
         </div>
@@ -21196,10 +21249,10 @@ function agFormAgencia(id, foco) {
   const ciudades = (ag.d && ag.d.resumen.ciudades) || [];
   const campo = (k, t, extra = "", clase = "") => `<label class="rv-f ${clase}"><span>${t}</span><input id="agf-${k}" value="${agEsc(a[k] || "")}" ${extra}></label>`;
   const o = rvModal({
-    titulo: id ? "Datos de la agencia" : "Nueva agencia", icono: "building-store", ancho: 720, clase: "ag-modal",
+    titulo: id ? "Datos de la agencia" : "Nueva agencia", icono: "building-store", ancho: 720, clase: "agc-modal",
     sub: id ? agEsc(a.nombre) : "Después vas a poder cargar su contrato y sus papeles.",
     cuerpo: `
-      <div class="ag-form">
+      <div class="agc-form">
         ${campo("nombre", "Nombre de la agencia *", `maxlength="120" ${foco === "ubicacion" ? "" : "autofocus"}`, "ag-f-2")}
         ${campo("razon_social", "Razón social", `maxlength="160"`)}
         ${campo("ruc", "RUC", `maxlength="30" placeholder="80012345-6"`)}
@@ -21309,9 +21362,9 @@ function agFormContrato(modo, cid) {
   const num = v => v ? String(v).replace(".", ",") : "";
   const o = rvModal({
     titulo: titulos[modo], icono: modo === "renovacion" ? "refresh" : modo === "adenda" ? "file-diff" : modo === "corregir" ? "pencil" : "file-certificate",
-    ancho: 780, clase: "ag-modal", sub: `${agEsc(f.agencia.nombre)} · ${subs[modo]}`,
+    ancho: 780, clase: "agc-modal", sub: `${agEsc(f.agencia.nombre)} · ${subs[modo]}`,
     cuerpo: `
-      <div class="ag-form ag-form-c">
+      <div class="agc-form ag-form-c">
         ${modo === "corregir" ? "" : `<input type="hidden" id="agc-tipo" value="${tipo}">`}
         <fieldset class="ag-f-2"><legend><i class="ti ti-calendar"></i> Vigencia</legend>
           <div class="ag-f-fila">
@@ -21320,7 +21373,7 @@ function agFormContrato(modo, cid) {
             <label class="rv-f"><span>Número de contrato</span><input id="agc-numero" value="${agEsc(x.numero || "")}" maxlength="40" placeholder="Opcional"></label>
           </div>
           <div class="ag-f-fila">
-            <label class="ag-check"><input type="checkbox" id="agc-renov" ${x.renov_auto ? "checked" : ""}> Se renueva solo al terminar</label>
+            <label class="agc-check"><input type="checkbox" id="agc-renov" ${x.renov_auto ? "checked" : ""}> Se renueva solo al terminar</label>
             <label class="rv-f ag-f-pre" ${x.renov_auto ? "" : "hidden"}><span>Días de preaviso para no renovar</span><input id="agc-preaviso" inputmode="numeric" value="${x.preaviso_dias || ""}" placeholder="Ej: 30"></label>
           </div>
         </fieldset>
@@ -21335,7 +21388,7 @@ function agFormContrato(modo, cid) {
         <fieldset class="ag-f-2"><legend><i class="ti ti-ticket"></i> Qué puede vender</legend>
           <label class="rv-f"><span>Rutas, destinos o servicios autorizados</span><textarea id="agc-autorizado" rows="2" maxlength="600" placeholder="Ej: pasajes de línea Concepción – Asunción y San Pedro">${agEsc(x.autorizado || "")}</textarea></label>
           <div class="ag-f-fila">
-            <label class="ag-check"><input type="checkbox" id="agc-excl" ${x.exclusividad ? "checked" : ""}> Tiene exclusividad</label>
+            <label class="agc-check"><input type="checkbox" id="agc-excl" ${x.exclusividad ? "checked" : ""}> Tiene exclusividad</label>
             <label class="rv-f ag-f-zona" ${x.exclusividad ? "" : "hidden"}><span>En qué zona o terminal</span><input id="agc-zona" value="${agEsc(x.zona_exclusiva || "")}" maxlength="160"></label>
           </div>
         </fieldset>
@@ -21360,7 +21413,7 @@ function agFormContrato(modo, cid) {
         </fieldset>
         <fieldset class="ag-f-2"><legend><i class="ti ti-paperclip"></i> Contrato firmado</legend>
           ${agCampoArchivo("agc-arch", modo === "corregir" && base.tiene_archivo ? (base.archivo_nombre || "archivo cargado") : "")}
-          ${modo === "corregir" && base.tiene_archivo ? `<label class="ag-check"><input type="checkbox" id="agc-quitar"> Sacar el archivo cargado</label>` : ""}
+          ${modo === "corregir" && base.tiene_archivo ? `<label class="agc-check"><input type="checkbox" id="agc-quitar"> Sacar el archivo cargado</label>` : ""}
         </fieldset>
         <label class="rv-f ag-f-2"><span>Nota</span><textarea id="agc-nota" rows="2" maxlength="800">${agEsc(x.nota || "")}</textarea></label>
       </div>`,
@@ -21377,7 +21430,7 @@ function agFormContrato(modo, cid) {
   const rutas = $o("#agc-rutas");
   const filaRuta = r => {
     const div = document.createElement("div");
-    div.className = "ag-ruta";
+    div.className = "agc-ruta";
     div.innerHTML = `
       <input class="rv-sel ag-ruta-n" placeholder="Ruta o destino (ej: Buenos Aires)" value="${agEsc(r.ruta || "")}" maxlength="80" aria-label="Ruta">
       <input class="rv-sel ag-ruta-v" inputmode="decimal" placeholder="Comisión" value="${r.valor ? num(r.valor) : ""}" aria-label="Comisión de la ruta">
@@ -21399,7 +21452,7 @@ function agFormContrato(modo, cid) {
       tipo, desde: $o("#agc-desde").value, hasta: $o("#agc-hasta").value, numero: $o("#agc-numero").value,
       renov_auto: $o("#agc-renov").checked, preaviso_dias: $o("#agc-preaviso").value,
       comision: $o("#agc-comision").value, comision_tipo: $o("#agc-ctipo").value,
-      rutas: [...rutas.querySelectorAll(".ag-ruta")].map(r => ({ ruta: r.querySelector(".ag-ruta-n").value, valor: r.querySelector(".ag-ruta-v").value, tipo: r.querySelector(".ag-ruta-t").value })).filter(r => r.ruta.trim()),
+      rutas: [...rutas.querySelectorAll(".agc-ruta")].map(r => ({ ruta: r.querySelector(".ag-ruta-n").value, valor: r.querySelector(".ag-ruta-v").value, tipo: r.querySelector(".ag-ruta-t").value })).filter(r => r.ruta.trim()),
       autorizado: $o("#agc-autorizado").value, exclusividad: $o("#agc-excl").checked, zona_exclusiva: $o("#agc-zona").value,
       deposito_frec: $o("#agc-frec").value, deposito_detalle: $o("#agc-depdet").value, cuenta_deposito: $o("#agc-cuenta").value,
       tope_sin_depositar: $o("#agc-tope").value, devoluciones: $o("#agc-dev").value,
@@ -21427,14 +21480,14 @@ function agFormContrato(modo, cid) {
 function agFormPapel(tipo) {
   const f = ag.f;
   const o = rvModal({
-    titulo: "Subir un papel", icono: "file-upload", ancho: 520, clase: "ag-modal", sub: agEsc(f.agencia.nombre),
+    titulo: "Subir un papel", icono: "file-upload", ancho: 520, clase: "agc-modal", sub: agEsc(f.agencia.nombre),
     cuerpo: `
-      <div class="ag-form">
+      <div class="agc-form">
         <label class="rv-f ag-f-2"><span>Qué papel es</span><select id="agp-tipo">${f.tipos_doc.map(t => `<option value="${t.k}" ${t.k === tipo ? "selected" : ""}>${agEsc(t.nombre)}${t.obligatorio ? " (obligatorio)" : ""}</option>`).join("")}</select></label>
         <label class="rv-f ag-f-2 agp-desc" ${tipo === "otro" ? "" : "hidden"}><span>Cuál</span><input id="agp-desc" maxlength="120" placeholder="Ej: certificado de cumplimiento tributario"></label>
         <div class="ag-f-fila ag-f-2">
           <label class="rv-f"><span>Vence</span><input type="date" id="agp-vence"></label>
-          <label class="ag-check"><input type="checkbox" id="agp-novence" ${tipo === "ruc" ? "checked" : ""}> No vence</label>
+          <label class="agc-check"><input type="checkbox" id="agp-novence" ${tipo === "ruc" ? "checked" : ""}> No vence</label>
         </div>
         <div class="ag-f-2">${agCampoArchivo("agp-arch", "")}</div>
       </div>`,
