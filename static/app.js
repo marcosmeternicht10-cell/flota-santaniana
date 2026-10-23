@@ -11786,7 +11786,7 @@ async function cargarHistorial() {
   const acl = $("#hist-aclaracion");
   if (acl) acl.innerHTML = modo === "pago"
     ? '<i class="ti ti-info-circle"></i> Buscando por <b>cuándo se apretó el botón de liquidar</b>. Sirve para cerrar caja de un mes.'
-    : `<i class="ti ti-info-circle"></i> Las liquidaciones van por semana, de lunes a domingo: se buscan las <b>semanas completas del lunes ${dm(rg.desde)} al domingo ${dm(rg.hasta)}</b>, y cada pago sale entero.`;
+    : `<i class="ti ti-info-circle"></i> Las liquidaciones van por semana, de lunes a domingo: se buscan las <b>semanas completas del lunes ${dm(rg.desde)} al domingo ${dm(rg.hasta)}</b>, una línea por semana.`;
   const pagos = (resp && resp.pagos) || [];
   const res = (resp && resp.resumen) || { por_chofer: [], total_pagado: 0, cantidad_pagos: 0 };
 
@@ -11797,7 +11797,7 @@ async function cargarHistorial() {
 
   cont.innerHTML = `
     <div class="metrics" style="margin-bottom:18px">
-      <div class="metric"><div class="metric-content"><div class="metric-label">Pagos realizados</div><div class="metric-value">${res.cantidad_pagos}</div></div></div>
+      <div class="metric"><div class="metric-content"><div class="metric-label">${modo === "pago" ? "Pagos realizados" : "Semanas pagadas"}</div><div class="metric-value">${res.cantidad_pagos}</div></div></div>
       <div class="metric"><div class="metric-content"><div class="metric-label">Choferes</div><div class="metric-value">${res.por_chofer.length}</div></div></div>
       <div class="metric"><div class="metric-content"><div class="metric-label">Total pagado</div><div class="metric-value">Gs. ${fmtNum(res.total_pagado)}</div></div></div>
     </div>
@@ -11806,7 +11806,7 @@ async function cargarHistorial() {
       <div class="card-head"><i class="ti ti-user-dollar"></i> Total pagado por chofer</div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Chofer</th><th class="center">Pagos</th><th class="center">Servicios</th><th class="center">Último pago</th><th class="num">Total</th></tr></thead>
+          <thead><tr><th>Chofer</th><th class="center">${modo === "pago" ? "Pagos" : "Semanas"}</th><th class="center">Servicios</th><th class="center">Último pago</th><th class="num">Total</th></tr></thead>
           <tbody>
             ${res.por_chofer.map(c => `<tr>
               <td><b>${c.chofer_nombre}</b></td>
@@ -11825,7 +11825,7 @@ async function cargarHistorial() {
     </div>
 
     <div class="card">
-      <div class="card-head"><i class="ti ti-history"></i> Cada pago realizado (${pagos.length})</div>
+      <div class="card-head"><i class="ti ti-history"></i> ${modo === "pago" ? `Cada pago realizado (${pagos.length})` : `Cada semana pagada (${pagos.length})`}</div>
       <div class="table-wrap">
         <table>
           <thead><tr>
