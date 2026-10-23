@@ -6559,6 +6559,33 @@ async function abrirOT(otId) {
   otDepCargar(ot);
   pvOtCargar(ot);
   ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
+  otSepBuscar(ot);
+}
+
+// ─── Trabajos del chofer que traen varias cosas juntas: se ofrece separarlos ───
+async function otSepBuscar(ot) {
+  if (!["admin", "taller"].includes(window.USUARIO_ROL)) return;
+  const ids = (ot.items || []).filter(it => it.origen === "chofer" && it.estado !== "completado").map(it => it.id);
+  if (!ids.length) return;
+  const r = await api(`/api/ot_pedidos/separables?ids=${ids.join(",")}`).catch(() => null);
+  if (!r) return;
+  Object.entries(r).forEach(([iid, partes]) => {
+    const caja = document.querySelector(`#modal-ot-detalle .ot-sep[data-iid="${iid}"]`);
+    if (!caja) return;
+    caja.hidden = false;
+    caja.innerHTML = `<button type="button" class="ot-sep-btn" onclick="otSeparar(${iid}, this)" title="${trEsc(partes.join(" · "))}">
+      <i class="ti ti-arrows-split-2"></i> Son ${partes.length} trabajos: separar</button>
+      <ol class="ot-sep-lista">${partes.map(t => `<li>${trEsc(t)}</li>`).join("")}</ol>`;
+  });
+}
+async function otSeparar(iid, btn) {
+  btn.disabled = true;
+  const r = await api(`/api/ot_pedidos/separar_item/${iid}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (!r || !r.ok) { btn.disabled = false; toast((r && r.msg) || "No se pudo separar", "error"); return; }
+  toast(r.msg, "success");
+  const otId = (window._otActual || {}).id;
+  cerrarModalOTDetalle();
+  if (otId) abrirOT(otId);
 }
 
 // Si alguien escribe el técnico y cierra el modal de una, el onblur no llega
@@ -6699,7 +6726,7 @@ function otFilaItem(ot, it, idx, modo) {
   const mot = (modo === "atr" || (modo === "hoy" && it.estado !== "completado")) ? otMotivoCaja(it, modo === "atr") : "";
   return `<tr class="pv-ot-tr${modo === "atr" ? " ot-tr-atr" : ""}${it.estado === "completado" && modo === "atr" ? " ot-tr-hecho" : ""}${cls}" data-iid="${it.id}" data-modo="${modo}"${oculto}>
       <td class="center" style="color:var(--muted)">${idx + 1}</td>
-      <td><div class="pv-it-desc">${it.prioridad && it.prioridad !== "normal" && it.estado !== "completado" ? `<span class="pd-prio-chip ${it.prioridad}">${PD_PRIO[it.prioridad]?.[0] || it.prioridad}</span>` : ""}${trEsc(it.descripcion || "")}</div>${/^Pedido de /.test(it.observaciones || "") ? `<div class="pd-de"><i class="ti ti-inbox"></i> ${trEsc(it.observaciones)}</div>` : ""}${desde}${mot}${otAfueraCaja(it)}</td>
+      <td><div class="pv-it-desc">${it.prioridad && it.prioridad !== "normal" && it.estado !== "completado" ? `<span class="pd-prio-chip ${it.prioridad}">${PD_PRIO[it.prioridad]?.[0] || it.prioridad}</span>` : ""}${trEsc(it.descripcion || "")}</div>${/^Pedido de /.test(it.observaciones || "") ? `<div class="pd-de"><i class="ti ti-inbox"></i> ${trEsc(it.observaciones)}</div>` : ""}${it.origen === "chofer" && it.estado !== "completado" ? `<div class="ot-sep" data-iid="${it.id}" hidden></div>` : ""}${desde}${mot}${otAfueraCaja(it)}</td>
       <td class="center">
         <select onchange="actualizarItem(${it.id},'tipo',this.value)" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:${COLOR_TIPO_ITEM[it.tipo]};font-weight:600">
           ${TIPOS_ITEM.map(t => `<option value="${t}" ${it.tipo === t ? 'selected' : ''}>${LABEL_TIPO_ITEM[t]}</option>`).join("")}
@@ -6965,6 +6992,9 @@ function pdFila(p) {
       ${abiertos ? `<input type="checkbox" class="pd-check" ${pd.sel.has(p.id) ? "checked" : ""} aria-label="Elegir" onchange="pdElegir(${p.id}, this.checked)">` : ""}
       <div class="pd-txt">
         <p>${trEsc(p.descripcion)}${abiertos ? `<button type="button" class="pd-editar" onclick="pdEditar(${p.id})" title="Corregir el pedido" aria-label="Corregir el pedido"><i class="ti ti-pencil"></i></button>` : ""}</p>
+        ${abiertos && (p.partes || []).length ? `<div class="ot-sep"><button type="button" class="ot-sep-btn" onclick="pdSeparar(${p.id}, this)">
+          <i class="ti ti-arrows-split-2"></i> Son ${p.partes.length} trabajos: separar</button>
+          <ol class="ot-sep-lista">${p.partes.map(t => `<li>${trEsc(t)}</li>`).join("")}</ol></div>` : ""}
         ${p.descripcion_original ? `<div class="pd-orig">${/^\(separado de: /.test(p.descripcion_original)
           ? `<i class="ti ti-arrows-split-2"></i> Separado de «${trEsc(p.descripcion_original.replace(/^\(separado de: /, "").replace(/\)$/, ""))}»`
           : `<i class="ti ti-pencil"></i> Corregido${p.editado_por ? ` por ${trEsc(p.editado_por.split(" ")[0])}` : ""} · el chofer escribió «${trEsc(p.descripcion_original)}»`}</div>` : ""}
@@ -7036,6 +7066,13 @@ async function pdEditar(id) {
     const f = document.querySelector(`.pd-fila[data-id="${id}"]`);
     if (f && !trQuieto()) { f.classList.remove("ilumina"); void f.offsetWidth; f.classList.add("ilumina"); }
   };
+}
+async function pdSeparar(id, btn) {
+  btn.disabled = true;
+  const r = await api(`/api/ot_pedidos/${id}/separar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  if (!r || !r.ok) { btn.disabled = false; toast((r && r.msg) || "No se pudo separar", "error"); return; }
+  toast(r.msg, "success");
+  await pdCargar();
 }
 function pdBuscar(id) {
   for (const c of pd.d.coches) { const p = c.pedidos.find(x => x.id === id); if (p) return p; }
