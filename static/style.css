@@ -7696,3 +7696,20 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
   .al-cuerpo { grid-template-columns: minmax(0, 1fr); }
   .al-panel { position: static; max-width: 560px; }
 }
+
+/* Tráfico internacional: viajes de cada chofer en el mes (tope 8) */
+.tr-num.viajes b .ti { font-size: 20px; }
+.trv-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13.5px; }
+.trv-mal { color: var(--brand-red-dark); }
+.trv-tabla td small { display: block; font-size: 11.5px; color: var(--muted); }
+.trv-barra { display: flex; gap: 3px; }
+.trv-barra i { width: 16px; height: 14px; border-radius: 3px; background: #E5E7EB; }
+.trv-barra i.p { background: #9DB8D9; }
+.trv-barra i.h { background: var(--brand-blue); }
+.trv-barra i.x { background: var(--brand-red); }
+.trv-barra i.x.p { background: #F2A7AE; }
+.trv-est { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #EEF2F7; color: #475467; white-space: nowrap; }
+.trv-est.casi { background: var(--warning-bg); color: #8A5A00; }
+.trv-est.tope { background: #FDE7C8; color: #8A4B00; }
+.trv-est.pasado { background: var(--danger-bg); color: var(--brand-red-dark); }
+.trv-tabla tr.pasado td { background: #FFF5F5; }

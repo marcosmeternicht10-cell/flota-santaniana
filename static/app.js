@@ -2612,6 +2612,9 @@ function trResumen() {
       ${r.con_aviso ? n(r.con_aviso, r.con_aviso === 1 ? "con aviso" : "con avisos", "aviso", "trIrAProblema('aviso')") : ""}
       ${r.refuerzos ? n(r.refuerzos, r.refuerzos === 1 ? "refuerzo" : "refuerzos", "ref") : ""}
       ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con papeles vencidos" : "coches con papeles vencidos", "doc", "trIrAProblema('doc')") : ""}
+      ${trInt() ? (r.pasados_tope
+        ? n(r.pasados_tope, r.pasados_tope === 1 ? "chofer pasa los 8 viajes del mes" : "choferes pasan los 8 viajes del mes", "aviso", "trViajesMes()")
+        : n(`<i class="ti ti-steering-wheel"></i>`, "viajes de los choferes en el mes", "viajes", "trViajesMes()")) : ""}
     </div>${trPatronControl()}`;
 }
 
@@ -3457,9 +3460,49 @@ function trMas(btn) {
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
     { icono: "repeat", html: "<b>Rotaciones de los coches</b><span>Con qué regreso vuelve el coche de cada ida</span>", fn: trRotaciones },
-    ...(trInt() ? [{ icono: "calendar-week", html: "<b>Salidas por día</b><span>Cuántas salidas y regresos lleva cada día de la semana</span>", fn: trPatron }] : []),
+    ...(trInt() ? [{ icono: "calendar-week", html: "<b>Salidas por día</b><span>Cuántas salidas y regresos lleva cada día de la semana</span>", fn: trPatron },
+                   { icono: "steering-wheel", html: "<b>Viajes de los choferes</b><span>Cuántos lleva cada uno en el mes (tope: 8)</span>", fn: () => trViajesMes() }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
   ]);
+}
+
+// ─── Tope de viajes de los choferes de internacional: 8 por mes (ida y vuelta = 1) ───
+async function trViajesMes(mes) {
+  mes = mes || String(tr.fecha || new Date().toISOString()).slice(0, 7);
+  const d = await api(`/api/trafico/viajes_mes?mes=${mes}`);
+  if (!d || !d.ok) { toast("No se pudieron traer los viajes", "error"); return; }
+  document.querySelector(".modal-overlay.tr-viajes-m")?.remove();
+  const otro = n => { const [a, m] = mes.split("-").map(Number); const f = new Date(a, m - 1 + n, 1); return f.getFullYear() + "-" + String(f.getMonth() + 1).padStart(2, "0"); };
+  const tope = d.tope;
+  const fila = c => {
+    const estado = c.viajes > tope ? "pasado" : c.viajes === tope ? "tope" : c.viajes === tope - 1 ? "casi" : "";
+    const txt = c.viajes > tope ? `Pasado por ${c.pasado}` : c.viajes === tope ? "En el tope" : c.viajes === tope - 1 ? "Le queda 1" : `Le quedan ${tope - c.viajes}`;
+    const celdas = Array.from({ length: Math.max(tope, c.viajes) }, (_, i) =>
+      `<i class="${i < c.hechos ? "h" : i < c.viajes ? "p" : ""} ${i >= tope ? "x" : ""}"></i>`).join("");
+    const det = c.salidas.map(x => `${x.fecha.slice(8, 10)}/${x.fecha.slice(5, 7)} ${x.lado === "ida" ? "ida" : "regreso"} ${x.hora} ${x.destino}`).join("\n");
+    return `<tr class="${estado}">
+      <td><b>${trEsc(c.chofer)}</b><small>${c.idas} ida${c.idas === 1 ? "" : "s"}, ${c.regresos} regreso${c.regresos === 1 ? "" : "s"}</small></td>
+      <td><div class="trv-barra" title="${trEsc(det)}">${celdas}</div></td>
+      <td class="num"><b>${c.viajes}</b></td>
+      <td><span class="trv-est ${estado}">${txt}</span></td>
+    </tr>`;
+  };
+  const o = rvModal({
+    titulo: `Viajes de los choferes · ${d.mes_txt}`, icono: "steering-wheel", ancho: 760, clase: "tr-viajes-m",
+    sub: `Internacional. El tope es ${tope} viajes por mes; un viaje es la ida y la vuelta. Se cuenta lo cargado en el tráfico de cada día, incluso lo que todavía no salió.`,
+    cuerpo: `
+      <div class="trv-nav">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="trViajesMes('${otro(-1)}')"><i class="ti ti-chevron-left"></i> Mes anterior</button>
+        <span>${d.pasados ? `<b class="trv-mal">${d.pasados} pasado${d.pasados === 1 ? "" : "s"} del tope</b>` : "Nadie pasa el tope"}${d.en_tope ? ` · ${d.en_tope} en el tope` : ""}</span>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="trViajesMes('${otro(1)}')">Mes siguiente <i class="ti ti-chevron-right"></i></button>
+      </div>
+      ${d.choferes.length ? `<div class="table-wrap"><table class="trv-tabla">
+        <thead><tr><th>Chofer</th><th>Viajes <small>(lleno: ya hecho · claro: programado)</small></th><th class="num">Total</th><th></th></tr></thead>
+        <tbody>${d.choferes.map(fila).join("")}</tbody></table></div>`
+        : `<div class="empty"><i class="ti ti-steering-wheel"></i>Todavía no hay tripulantes cargados en el tráfico internacional de ${d.mes_txt}.</div>`}`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
+  return o;
 }
 
 // ─── Rotaciones: el coche de cada ida vuelve en un regreso fijo ───
