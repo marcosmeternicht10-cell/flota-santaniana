@@ -2232,6 +2232,20 @@ def api_viajes_mes():
     return jsonify({"ok": True, **resumen_viajes(mes, _hoy())})
 
 
+@bp_trafico.route("/api/trafico/viajes_mes/pdf", methods=["GET"])
+def api_viajes_mes_pdf():
+    if not _puede_ver():
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    mes = str(request.args.get("mes") or "")[:7]
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", mes):
+        mes = date.today().isoformat()[:7]
+    from hora_local import hoy as _hoy
+    import viajes_pdf
+    pdf = viajes_pdf.generar(resumen_viajes(mes, _hoy()))
+    return send_file(io.BytesIO(pdf), mimetype="application/pdf", as_attachment=False,
+                     download_name=f"viajes_choferes_{mes}.pdf")
+
+
 @bp_trafico.route("/api/trafico/listas", methods=["GET"])
 def api_listas():
     if not _puede_ver():

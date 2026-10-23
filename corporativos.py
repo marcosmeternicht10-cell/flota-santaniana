@@ -1677,24 +1677,51 @@ def semanas_liquidables(chofer_usuario):
     return salida
 
 
+def _lunes_de(f):
+    import datetime as _dt
+    d = _dt.date.fromisoformat(str(f)[:10])
+    return (d - _dt.timedelta(days=d.weekday())).isoformat()
+
+
+def _domingo_de(f):
+    import datetime as _dt
+    d = _dt.date.fromisoformat(str(f)[:10])
+    return (d + _dt.timedelta(days=6 - d.weekday())).isoformat()
+
+
+def rango_historial(desde=None, hasta=None, modo="servicio"):
+    """Las liquidaciones son por semana, de lunes a domingo: buscando por fecha
+    de los servicios, el rango se lleva a semanas completas (del lunes de la
+    semana de "desde" al domingo de la semana de "hasta")."""
+    if modo == "pago":
+        return desde, hasta
+    try:
+        return (_lunes_de(desde) if desde else None), (_domingo_de(hasta) if hasta else None)
+    except (TypeError, ValueError):
+        return desde, hasta
+
+
 def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
                             modo="servicio"):
     """Todo lo que ya se pagó: cada liquidación con su fecha, el período que
     cubrió, cuánto fue y quién la autorizó.
 
     El filtro de fechas tiene dos modos, porque son dos preguntas distintas:
-      - "servicio" (por defecto): de qué fechas son los servicios pagados.
+      - "servicio" (por defecto): de qué semanas son los servicios pagados.
         Es lo natural — se busca "la liquidación de la semana del 27 de julio"
-        aunque se haya cargado semanas después.
+        aunque se haya cargado semanas después. Va por semanas completas de
+        lunes a domingo, y cada pago sale entero: si una liquidación tiene
+        algo dentro del rango, se muestra con todo lo que pagó.
       - "pago": cuándo se apretó el botón de liquidar. Sirve para cerrar caja
         ("todo lo que pagamos en agosto").
     """
+    desde, hasta = rango_historial(desde, hasta, modo)
     campo = "fecha_liquidacion" if modo == "pago" else "fecha_servicio"
-    q = """SELECT chofer_usuario, chofer_nombre, fecha_servicio, estado, monto,
-                  fecha_liquidacion, liquidado_por, cliente, tramo
-           FROM rendiciones_corp
-           WHERE COALESCE(liquidado,0)=1 AND fecha_liquidacion IS NOT NULL"""
-    params = []
+    base = """SELECT chofer_usuario, chofer_nombre, fecha_servicio, estado, monto,
+                     fecha_liquidacion, liquidado_por, cliente, tramo
+              FROM rendiciones_corp
+              WHERE COALESCE(liquidado,0)=1 AND fecha_liquidacion IS NOT NULL"""
+    q, params = base, []
     if chofer_usuario:
         q += " AND chofer_usuario=?"; params.append(chofer_usuario)
     if desde:
@@ -1708,6 +1735,21 @@ def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
     conn = get_connection()
     try:
         rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+        if modo != "pago" and rows:
+            # Cada pago entero: lo que se liquidó junto con lo que cae en el rango
+            claves = {(r["chofer_usuario"], r["fecha_liquidacion"]) for r in rows}
+            fechas = sorted({c[1] for c in claves})
+            todas = []
+            for i in range(0, len(fechas), 200):
+                parte = fechas[i:i + 200]
+                m = ",".join("?" * len(parte))
+                qq = base + f" AND fecha_liquidacion IN ({m})"
+                pp = list(parte)
+                if chofer_usuario:
+                    qq += " AND chofer_usuario=?"; pp.append(chofer_usuario)
+                todas += [dict(r) for r in conn.execute(qq, pp).fetchall()]
+            rows = [r for r in todas if (r["chofer_usuario"], r["fecha_liquidacion"]) in claves]
+            rows.sort(key=lambda r: str(r["fecha_liquidacion"]), reverse=True)
         # El plus pagado de todas las semanas de una vez. Antes se buscaba una
         # consulta (y una conexión nueva) por cada semana de cada pago: con un
         # año de pagos eran cientos de idas y vueltas a la base y la pantalla
@@ -1769,8 +1811,11 @@ def historial_liquidaciones(chofer_usuario=None, desde=None, hasta=None,
             "fecha_pago": p["fecha_pago"],
             "liquidado_por": p["liquidado_por"],
             "servicios": p["servicios"],
-            "periodo_desde": fechas[0] if fechas else "",
-            "periodo_hasta": fechas[-1] if fechas else "",
+            # El período pagado va por semanas completas, de lunes a domingo
+            "periodo_desde": _lunes_de(fechas[0]) if fechas else "",
+            "periodo_hasta": _domingo_de(fechas[-1]) if fechas else "",
+            "primer_servicio": fechas[0] if fechas else "",
+            "ultimo_servicio": fechas[-1] if fechas else "",
             "semanas": len(p["semanas"]),
             "monto_tramos": round(p["monto_tramos"]),
             "plus": plus,
@@ -3107,14 +3152,15 @@ def api_corp_historial():
     """Todo lo que ya se le pagó a los choferes, con fecha y responsable."""
     if _rol_efectivo() not in ("admin", "auditor", "operador_corp"):
         return jsonify({"error": "Sin permiso"}), 403
+    modo = request.args.get("modo") or "servicio"
+    desde, hasta = rango_historial(request.args.get("desde") or None, request.args.get("hasta") or None, modo)
     pagos = historial_liquidaciones(
         chofer_usuario=request.args.get("chofer") or None,
-        desde=request.args.get("desde") or None,
-        hasta=request.args.get("hasta") or None,
-        modo=request.args.get("modo") or "servicio")
+        desde=desde, hasta=hasta, modo=modo)
     # El detalle de cada pago no viaja en el listado: se pide aparte
     liviano = [{k: v for k, v in p.items() if k != "detalle"} for p in pagos]
-    return jsonify({"pagos": liviano, "resumen": resumen_historial(pagos)})
+    return jsonify({"pagos": liviano, "resumen": resumen_historial(pagos),
+                    "rango": {"desde": desde or "", "hasta": hasta or "", "modo": modo}})
 
 
 @bp_corp.route("/api/corp/historial_pdf", methods=["GET"])
@@ -3124,9 +3170,8 @@ def api_corp_historial_pdf():
         return jsonify({"error": "Sin permiso"}), 403
     from flask import send_file
     import io
-    desde = request.args.get("desde") or None
-    hasta = request.args.get("hasta") or None
     modo = request.args.get("modo") or "servicio"
+    desde, hasta = rango_historial(request.args.get("desde") or None, request.args.get("hasta") or None, modo)
     pagos = historial_liquidaciones(
         chofer_usuario=request.args.get("chofer") or None,
         desde=desde, hasta=hasta, modo=modo)
@@ -3785,7 +3830,9 @@ def generar_pdf_historial(pagos, desde, hasta, modo="servicio"):
         if modo == "pago":
             rango = f"Pagos realizados entre {desde or '...'} y {hasta or '...'}"
         else:
-            rango = f"Servicios prestados entre {desde or '...'} y {hasta or '...'}"
+            def _f(x):
+                return f"{x[8:10]}/{x[5:7]}/{x[:4]}" if x else "..."
+            rango = f"Semanas de servicios del lunes {_f(desde)} al domingo {_f(hasta)}"
     elems.append(Paragraph(rango or "Todos los pagos registrados", st_per))
 
     if not pagos:
@@ -3828,7 +3875,8 @@ def generar_pdf_historial(pagos, desde, hasta, modo="servicio"):
         d2.append([
             (p["fecha_pago"] or "").replace("T", " ")[:16],
             p["chofer_nombre"],
-            f'{p["periodo_desde"]} a {p["periodo_hasta"]}',
+            (f'lun {p["periodo_desde"][8:10]}/{p["periodo_desde"][5:7]} a dom {p["periodo_hasta"][8:10]}/{p["periodo_hasta"][5:7]}/{p["periodo_hasta"][:4]}'
+             if p["periodo_desde"] else ""),
             str(p["servicios"]),
             gs(p["monto_tramos"]),
             gs(p["plus"]) if p["plus"] else "—",
