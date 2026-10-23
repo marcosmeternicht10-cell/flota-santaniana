@@ -3500,7 +3500,8 @@ async function trViajesMes(mes) {
         <thead><tr><th>Chofer</th><th>Viajes <small>(lleno: ya hecho · claro: programado)</small></th><th class="num">Total</th><th></th></tr></thead>
         <tbody>${d.choferes.map(fila).join("")}</tbody></table></div>`
         : `<div class="empty"><i class="ti ti-steering-wheel"></i>Todavía no hay tripulantes cargados en el tráfico internacional de ${d.mes_txt}.</div>`}`,
-    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+    pie: `<a class="btn btn-pdf" href="/api/trafico/viajes_mes/pdf?mes=${mes}" target="_blank" rel="noopener"><i class="ti ti-printer"></i> Imprimir</a>
+          <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
   });
   return o;
 }
@@ -11726,7 +11727,7 @@ async function renderCorpHistorial() {
   const choferes = await api("/api/corp/choferes");
   const hoy = new Date();
   const haceUnAnio = new Date(hoy.getFullYear() - 1, hoy.getMonth(), hoy.getDate());
-  const fmt = d => d.toISOString().slice(0, 10);
+  const fmt = d => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 
   content.innerHTML = `
     <div class="page-header">
@@ -11740,7 +11741,7 @@ async function renderCorpHistorial() {
           <div class="form-row" style="align-items:flex-end">
             <div class="field" style="flex:1;min-width:200px">
               <label>Chofer</label>
-              <select id="hist-chofer">
+              <select id="hist-chofer" onchange="cargarHistorial()">
                 <option value="">Todos los choferes</option>
                 ${(choferes || []).map(c => `<option value="${c.usuario}">${c.nombre}</option>`).join("")}
               </select>
@@ -11752,8 +11753,8 @@ async function renderCorpHistorial() {
                 <option value="pago">Fecha en que se liquidó</option>
               </select>
             </div>
-            <div class="field"><label>Desde</label><input id="hist-desde" type="date" value="${fmt(haceUnAnio)}"></div>
-            <div class="field"><label>Hasta</label><input id="hist-hasta" type="date" value="${fmt(hoy)}"></div>
+            <div class="field"><label>Desde</label><input id="hist-desde" type="date" value="${fmt(haceUnAnio)}" onchange="cargarHistorial()"></div>
+            <div class="field"><label>Hasta</label><input id="hist-hasta" type="date" value="${fmt(hoy)}" onchange="cargarHistorial()"></div>
             <button class="btn btn-primary" onclick="cargarHistorial()"><i class="ti ti-search"></i> Buscar</button>
             <button class="btn btn-pdf" onclick="descargarHistorialPDF()"><i class="ti ti-file-type-pdf"></i> PDF</button>
           </div>
@@ -11777,12 +11778,15 @@ async function cargarHistorial() {
   if (h) params.set("hasta", h);
   params.set("modo", modo);
 
+  const pedido = (window._histPedido = (window._histPedido || 0) + 1);
+  const resp = await api(`/api/corp/historial_liquidaciones?${params.toString()}`);
+  if (pedido !== window._histPedido) return;        // llegó tarde: ya se pidió otra búsqueda
+  const rg = (resp && resp.rango) || {};
+  const dm = f => f ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : "…";
   const acl = $("#hist-aclaracion");
   if (acl) acl.innerHTML = modo === "pago"
     ? '<i class="ti ti-info-circle"></i> Buscando por <b>cuándo se apretó el botón de liquidar</b>. Sirve para cerrar caja de un mes.'
-    : '<i class="ti ti-info-circle"></i> Buscando por <b>la fecha de los servicios pagados</b>. Si liquidaste la semana del 27 de julio en agosto, buscá julio.';
-
-  const resp = await api(`/api/corp/historial_liquidaciones?${params.toString()}`);
+    : `<i class="ti ti-info-circle"></i> Las liquidaciones van por semana, de lunes a domingo: se buscan las <b>semanas completas del lunes ${dm(rg.desde)} al domingo ${dm(rg.hasta)}</b>, y cada pago sale entero.`;
   const pagos = (resp && resp.pagos) || [];
   const res = (resp && resp.resumen) || { por_chofer: [], total_pagado: 0, cantidad_pagos: 0 };
 
@@ -11833,7 +11837,7 @@ async function cargarHistorial() {
             ${pagos.map(p => `<tr>
               <td style="font-size:12.5px;white-space:nowrap">${(p.fecha_pago || "").replace("T", " ").slice(0, 16)}</td>
               <td>${p.chofer_nombre}</td>
-              <td style="font-size:12.5px"><b>${p.periodo_desde}</b> a <b>${p.periodo_hasta}</b></td>
+              <td style="font-size:12.5px;white-space:nowrap">lun <b>${(p.periodo_desde || "").slice(8, 10)}/${(p.periodo_desde || "").slice(5, 7)}</b> a dom <b>${(p.periodo_hasta || "").slice(8, 10)}/${(p.periodo_hasta || "").slice(5, 7)}/${(p.periodo_hasta || "").slice(0, 4)}</b></td>
               <td class="center">${p.servicios}</td>
               <td class="num">${fmtNum(p.monto_tramos)}</td>
               <td class="num">${p.plus ? fmtNum(p.plus) : "—"}</td>
