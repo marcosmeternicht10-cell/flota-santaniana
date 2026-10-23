@@ -1491,6 +1491,104 @@ def api_chofer_vehiculos():
     return jsonify(simple)
 
 
+@app.route("/api/chofer/en_taller", methods=["GET"])
+@login_requerido
+def api_chofer_en_taller():
+    """Los coches que el taller tiene en la mano: OT abierta (con lo que falta
+    hacer), esperando repuestos, fuera de servicio o con avisos que el taller
+    todavía está revisando. Sirve para que el chofer sepa qué coche está
+    parado y no vuelva a avisar algo que ya se sabe."""
+    from db_compat import get_connection as _gc
+    hoy_txt = hoy()
+    conn = _gc()
+    coches = {}
+
+    def _coche(f):
+        return coches.setdefault(f["vehiculo_id"], {
+            "vehiculo_id": f["vehiculo_id"], "n_interno": f["n_interno"] or "",
+            "patente": f["patente"] or "", "marca": f["marca"] or "",
+            "estado": "pendiente", "desde": "", "ots": [], "trabajos": [],
+            "hechos": 0, "repuestos": "", "fuera": None, "avisos": []})
+    try:
+        ots = [dict(r) for r in conn.execute("""
+            SELECT o.id, o.ot_grupo, o.vehiculo_id, o.fecha_apertura, o.estado,
+                   COALESCE(o.estado_compras, '') AS estado_compras,
+                   v.patente, v.n_interno, v.marca
+            FROM ordenes_trabajo o JOIN vehiculos v ON v.id = o.vehiculo_id
+            WHERE o.estado <> 'cerrada' AND COALESCE(v.activo, 1) = 1""").fetchall()]
+        items = {}
+        if ots:
+            marcas = ",".join("?" * len(ots))
+            for r in conn.execute(f"""SELECT ot_id, descripcion, estado FROM ot_items
+                                      WHERE ot_id IN ({marcas}) ORDER BY id""",
+                                  [o["id"] for o in ots]).fetchall():
+                items.setdefault(r["ot_id"], []).append(dict(r))
+        for o in ots:
+            c = _coche(o)
+            c["ots"].append(o.get("ot_grupo") or o["id"])
+            if not c["desde"] or (o["fecha_apertura"] or "") < c["desde"]:
+                c["desde"] = o["fecha_apertura"] or ""
+            for it in items.get(o["id"], []):
+                if it["estado"] == "completado":
+                    c["hechos"] += 1
+                    continue
+                igual = next((t for t in c["trabajos"] if t["txt"].strip().lower() == (it["descripcion"] or "").strip().lower()), None)
+                if igual:  # el mismo trabajo anotado dos veces: se muestra una
+                    if it["estado"] == "en_proceso":
+                        igual["estado"] = "en_proceso"
+                else:
+                    c["trabajos"].append({"txt": it["descripcion"], "estado": it["estado"] or "pendiente"})
+            if o["estado"] == "en_proceso" or any(it["estado"] == "en_proceso" for it in items.get(o["id"], [])):
+                c["estado"] = "trabajando"
+            if o["estado_compras"] in ("en_espera", "presupuestado", "en_camino"):
+                c["repuestos"] = o["estado_compras"]
+
+        for r in conn.execute("""
+            SELECT f.vehiculo_id, f.fecha_desde, f.fecha_hasta, f.motivo,
+                   v.patente, v.n_interno, v.marca
+            FROM fuera_servicio f JOIN vehiculos v ON v.id = f.vehiculo_id
+            WHERE f.fecha_desde <= ? AND (f.fecha_hasta IS NULL OR f.fecha_hasta = '' OR f.fecha_hasta >= ?)
+            ORDER BY f.fecha_desde""", (hoy_txt, hoy_txt)).fetchall():
+            c = _coche(dict(r))
+            c["fuera"] = {"desde": r["fecha_desde"], "hasta": r["fecha_hasta"] or "", "motivo": r["motivo"] or ""}
+
+        try:
+            for r in conn.execute("""
+                SELECT p.vehiculo_id, p.descripcion, v.patente, v.n_interno, v.marca
+                FROM ot_pedidos p JOIN vehiculos v ON v.id = p.vehiculo_id
+                WHERE p.estado = 'nuevo' ORDER BY p.id""").fetchall():
+                c = _coche(dict(r))
+                ya = {t["txt"].strip().lower() for t in c["trabajos"]} | {a.strip().lower() for a in c["avisos"]}
+                if (r["descripcion"] or "").strip().lower() not in ya:
+                    c["avisos"].append(r["descripcion"])
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    finally:
+        conn.close()
+
+    orden = {"fuera": 0, "trabajando": 1, "repuestos": 2, "pendiente": 3, "aviso": 4}
+    salida = []
+    for c in coches.values():
+        if c["fuera"]:
+            c["estado"] = "fuera"
+        elif c["estado"] != "trabajando" and c["repuestos"]:
+            c["estado"] = "repuestos"
+        elif not c["ots"]:
+            c["estado"] = "aviso"
+        elif c["estado"] == "pendiente" and not c["trabajos"] and not c["avisos"]:
+            continue  # OT abierta pero ya con todo hecho: no hay nada que contar
+        salida.append(c)
+
+    def _num(c):
+        n = str(c["n_interno"])
+        return (0, int(n), "") if n.isdigit() else (1, 0, n or c["patente"])
+    salida.sort(key=lambda c: (orden[c["estado"]], _num(c)))
+    return jsonify({"coches": salida, "hoy": hoy_txt})
+
+
 @app.route("/api/chofer/reportar", methods=["POST"])
 @login_requerido
 def api_chofer_reportar():
