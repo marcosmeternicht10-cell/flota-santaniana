@@ -218,7 +218,8 @@ SEP_RUBROS = [   # el orden importa: lo más largo primero
     ("interior", r"asientos?|butacas?|cortinas?|tapizad\w*|apoyabrazos?|portaequipajes?|bandejas?|alfombras?|bano|banos|cinturon\w*"),
     ("motor", r"motor|correas?|radiador|temperatura|recalient\w*|humo|turbo|inyector\w*|bomba"),
     ("caja", r"embrague|caja|marchas?"),
-    ("suspension", r"suspension|amortiguador\w*|elasticos?|muelles?|bujes?|fuelles?|pulmon\w*"),
+    ("suspension", r"suspension|amortiguador\w*|elasticos?|muelles?|bujes?|fuelles?|pulmon\w*|estabilizador\w*|bieletas?|rotulas?|terminal\w*"),
+    ("inspeccion", r"inspeccion|habilitacion|itv|vtv|verificacion"),
     ("direccion", r"direccion|volante"),
     ("combustible", r"combustible|gasoil|diesel|tanque"),
     ("tacografo", r"tacografo|cronotac\w*"),
@@ -327,6 +328,29 @@ def separar(texto):
             i += 1
         if actual:
             trozos.append(" ".join(actual))
+    # Un pedazo que no nombra ninguna pieza ni dice qué hacer ("ya que ahora es
+    # noviembre") no es un trabajo: va pegado al siguiente (o al anterior si es el último)
+    unidos, pegar = [], ""
+    for t in trozos:
+        n = _norm(t)
+        es_trabajo = bool(_rubros_de(n)) or any(_es_verbo(x.strip(",.:")) for x in n.split())
+        if not es_trabajo:
+            pegar = (pegar + ", " if pegar else "") + t.strip(" ,.;:")
+            continue
+        if pegar:
+            t = pegar + ", " + t[:1].lower() + t[1:]
+            pegar = ""
+        # Otra frase sobre la misma pieza ("pierde aceite. gotea mucho aceite") es el mismo trabajo
+        if unidos and _rubros_de(n) == _rubros_de(_norm(unidos[-1])) and not _es_verbo(n.split()[0].strip(",.:")):
+            unidos[-1] = unidos[-1].rstrip(" ,.;:") + ", " + t[:1].lower() + t[1:]
+            continue
+        unidos.append(t)
+    if pegar:
+        if unidos:
+            unidos[-1] = unidos[-1].rstrip(" ,.;:") + ", " + pegar[:1].lower() + pegar[1:]
+        else:
+            unidos.append(pegar)
+    trozos = unidos
     out = []
     for t in trozos:
         n = _norm(t)
@@ -365,6 +389,12 @@ def _prioridad_de_parte(parte):
     return sug, por
 
 
+def es_solo_km(texto):
+    """El chofer a veces manda el kilometraje como si fuera un problema ("Km 931093")."""
+    n = _norm(texto).strip(" .,:;")
+    return bool(re.fullmatch(r"(?:el\s+)?(?:km|kms|kilometraje|kilometros|kilom)\.?\s*:?\s*[\d.,\s]+(?:km|kms)?|[\d.,\s]+\s*(?:km|kms)", n))
+
+
 def partes_de(texto):
     """Las descripciones en que se separa el texto (vacío si es un solo trabajo)."""
     ps = separar(texto)
@@ -386,6 +416,9 @@ def crear_reporte(vehiculo_id, items, chofer, km=0, fotos=None):
         for it in items:
             desc = " ".join(str(it.get("descripcion") or "").split())[:300]
             if not desc:
+                continue
+            # Una línea que es solo el kilometraje no es un trabajo
+            if es_solo_km(desc) and any(not es_solo_km(x.get("descripcion")) for x in items):
                 continue
             # Si el chofer escribió varias cosas juntas, queda un pedido por cada una
             partes = separar(desc)
@@ -525,6 +558,7 @@ def bandeja(estado="nuevo", q=""):
             f[k] = f[k] or ""
         # ¿Son varias cosas en una? Se ofrece separarlas
         f["partes"] = partes_de(f["descripcion"]) if estado in ("nuevo", "espera") else []
+        f["solo_km"] = estado in ("nuevo", "espera") and es_solo_km(f["descripcion"])
         c["pedidos"].append(f)
     lista = list(coches.values())
     for c in lista:
