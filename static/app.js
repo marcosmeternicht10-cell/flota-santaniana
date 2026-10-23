@@ -220,6 +220,7 @@ function irA(sec) {
     personal: renderPersonal,
     corp_asignacion: renderCorpAsignacion,
     comb_rendicion: renderRendCombustible,
+    alpha: renderAlpha,
   };
   map[sec]();
 }
@@ -21373,3 +21374,430 @@ function agIrA(id) {
   document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.sec === "agencias"));
   irA("agencias");
 }
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// ALPHA: maqueta de la venta de pasajes (solo admin). Todo es de ejemplo:
+// salidas, coches, precios y ocupación salen de acá, no de la base. Las ventas
+// de prueba quedan guardadas en este navegador para poder probar el circuito
+// completo (vender, ver el asiento ocupado, imprimir las 3 copias en 80 mm).
+// ════════════════════════════════════════════════════════════════════════════
+const AL_CIUDADES = ["Concepción", "Asunción"];
+const AL_DUR = 460;                     // 7 h 40 min de viaje (ejemplo)
+const AL_SALIDAS = [
+  [ // desde Concepción
+    { h: 330, coche: "21016", anden: "2", occ: 0.40 },
+    { h: 780, coche: "21059", anden: "2", occ: 0.22 },
+    { h: 1260, coche: "21300", anden: "3", occ: 0.38 },
+    { h: 1350, coche: "21885", anden: "3", occ: 0.84 },
+    { h: 1425, coche: "21412", anden: "4", occ: 1.00 },
+  ],
+  [ // desde Asunción
+    { h: 360, coche: "21412", anden: "14", occ: 0.30 },
+    { h: 750, coche: "21885", anden: "14", occ: 0.18 },
+    { h: 1200, coche: "21016", anden: "12", occ: 0.45 },
+    { h: 1290, coche: "21300", anden: "12", occ: 0.70 },
+    { h: 1380, coche: "21059", anden: "15", occ: 0.92 },
+  ],
+];
+const AL_PRECIO = { semi: 120000, cama: 150000 };                       // ficticios
+const AL_TARIFAS = [["general", "General", 1], ["menor", "Menor de 12", 0.5], ["jubilado", "Jubilado", 0.75]];
+const AL_PAGOS = [["efectivo", "Efectivo"], ["tarjeta", "Tarjeta"], ["transferencia", "Transferencia"]];
+const AL_CONOCIDOS = { "3456789": ["ROSA GIMÉNEZ", 4], "4123987": ["DERLIS ORTIZ", 2], "2987654": ["MIRTA BENÍTEZ", 7] };
+const AL_DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+const AL_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"];
+const al = { sentido: 0, dia: 1, dep: 2, sel: null, tarifa: "general", pago: "efectivo", ci: "", nombre: "", recibe: "", aviso: "" };
+
+function alGuardado() {
+  try { const d = JSON.parse(localStorage.getItem("alpha_maqueta_v1") || "null"); if (d && Array.isArray(d.ventas)) return d; } catch (e) {}
+  return { nro: 124, ventas: [] };
+}
+function alGuardar(d) { try { localStorage.setItem("alpha_maqueta_v1", JSON.stringify(d)); } catch (e) {} }
+function alHH(m) { const x = ((m % 1440) + 1440) % 1440; return String(Math.floor(x / 60)).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0"); }
+function alFechaDe(i) { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + i); return d; }
+function alISO(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+function alDiaTxt(d) { return AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.getDay()].slice(1) + " " + d.getDate() + " de " + AL_MESES[d.getMonth()]; }
+function alRnd(seed, n) {
+  let x = (seed ^ Math.imul(n, 0x9E3779B1)) >>> 0;
+  x = (x ^ (x >>> 16)) >>> 0; x = Math.imul(x, 0x45d9f3b) >>> 0; x = (x ^ (x >>> 16)) >>> 0;
+  return (x % 10000) / 10000;
+}
+function alSemilla(fecha, s, k) { let h = 2166136261; for (const c of fecha + "|" + s + "|" + k) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0; return h; }
+function alVendidos(fecha, s, k) {
+  const sal = AL_SALIDAS[s][k], seed = alSemilla(fecha, s, k), out = new Set();
+  for (let n = 1; n <= 56; n++) if (sal.occ >= 1 || alRnd(seed, n) < sal.occ) out.add(n);
+  alGuardado().ventas.forEach(v => { if (v.fecha === fecha && v.sentido === s && v.dep === k) out.add(v.asiento); });
+  return out;
+}
+function alYaSalio(dia, k) {
+  if (dia !== 0) return false;
+  const a = new Date();
+  return AL_SALIDAS[al.sentido][k].h <= a.getHours() * 60 + a.getMinutes();
+}
+function alDescAsiento(n) {
+  if (!n) return null;
+  if (n <= 44) {
+    const r = Math.ceil(n / 4), p = (n - 1) % 4;
+    return { piso: "Piso alto", pos: (p === 0 || p === 3 ? "Ventanilla" : "Pasillo") + ", fila " + r, tipo: r === 1 ? "Semi cama, mirando al frente" : "Semi cama", clase: "semi", alto: true };
+  }
+  const k = n - 45, r = Math.floor(k / 3) + 1, p = k % 3;
+  return { piso: "Piso bajo", pos: (p === 0 ? "Individual" : p === 1 ? "Pasillo" : "Ventanilla") + ", fila " + r, tipo: "Cama", clase: "cama", alto: false };
+}
+function alPrecio(n) {
+  const d = alDescAsiento(n);
+  if (!d) return 0;
+  const f = (AL_TARIFAS.find(t => t[0] === al.tarifa) || AL_TARIFAS[0])[2];
+  return Math.round(AL_PRECIO[d.clase] * f / 1000) * 1000;
+}
+function alPasajero(ci) {
+  const dig = String(ci || "").replace(/\D/g, "");
+  if (!dig) return null;
+  const propias = alGuardado().ventas.filter(v => String(v.ci).replace(/\D/g, "") === dig);
+  const base = AL_CONOCIDOS[dig];
+  if (!base && !propias.length) return null;
+  return { nombre: propias.length ? propias[propias.length - 1].nombre : base[0], viajes: (base ? base[1] : 0) + propias.length };
+}
+
+async function renderAlpha() {
+  status("Alpha: maqueta de la venta de pasajes. Salidas, coches y precios son de ejemplo");
+  if (window.USUARIO_ROL !== "admin") {
+    content.innerHTML = `<div class="page-header"><h1>Alpha</h1><p>Esta sección la ve solo administración.</p></div>`;
+    return;
+  }
+  if (!document.getElementById("al-fuentes")) {
+    const l = document.createElement("link");
+    l.id = "al-fuentes"; l.rel = "stylesheet";
+    l.href = "https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400..800&family=Big+Shoulders:opsz,wght@10..72,600..900&display=swap";
+    document.head.appendChild(l);
+  }
+  al.sel = null; al.aviso = "";
+  alPintar(true);
+}
+
+function alPintar(animar) {
+  const s = al.sentido, fechaD = alFechaDe(al.dia), fecha = alISO(fechaD);
+  // Si la salida elegida ya salió o está completa, se pasa a la próxima que sirva
+  const sirve = k => !alYaSalio(al.dia, k) && alVendidos(fecha, s, k).size < 56;
+  if (!sirve(al.dep)) { const k = AL_SALIDAS[s].findIndex((_, i) => sirve(i)); if (k >= 0) al.dep = k; }
+  const sal = AL_SALIDAS[s][al.dep];
+  const vend = alVendidos(fecha, s, al.dep);
+  if (al.sel && vend.has(al.sel)) al.sel = null;
+  if (al.sel == null) { al.sel = !vend.has(23) ? 23 : ([...Array(56).keys()].map(i => i + 1).find(n => !vend.has(n)) || 0); }
+
+  const g = alGuardado(), hoy = alISO(new Date());
+  const caja = g.ventas.filter(v => (v.vendido_en || "").slice(0, 10) === hoy).reduce((a, v) => a + v.total, 0);
+  const dias = [0, 1, 2].map(i => {
+    const d = alFechaDe(i);
+    const t = i === 0 ? "Hoy" : i === 1 ? "Mañana, " + AL_DIAS[d.getDay()] + " " + d.getDate() : AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.getDay()].slice(1) + " " + d.getDate();
+    return `<button type="button" class="al-chip ${i === al.dia ? "on" : ""}" aria-pressed="${i === al.dia}" onclick="alDia(${i})">${t}</button>`;
+  }).join("");
+  const tabs = AL_SALIDAS[s].map((x, k) => {
+    const v = alVendidos(fecha, s, k), lib = 56 - v.size, fue = alYaSalio(al.dia, k);
+    const txt = fue ? "Ya salió" : lib === 0 ? "Completo" : lib + (lib === 1 ? " libre" : " libres");
+    return `<button type="button" class="al-tab ${k === al.dep ? "on" : ""}" ${fue || lib === 0 ? "disabled" : ""} aria-pressed="${k === al.dep}" onclick="alSalida(${k})" aria-label="${alHH(x.h)}, ${txt}">
+      <span class="al-tab-in"><b class="al-d">${alHH(x.h)}</b><span class="al-tab-t"><span>llega ${alHH(x.h + AL_DUR)}</span><span class="al-tab-l">${txt}</span></span></span></button>`;
+  }).join("");
+
+  const asiento = (n, col, row, cama) => {
+    const v = vend.has(n), on = !v && n === al.sel;
+    return `<button type="button" class="al-as ${cama ? "cama" : ""} ${v ? "vendido" : on ? "elegido" : ""}" style="grid-column:${col};grid-row:${row}"
+      ${v ? "disabled" : ""} aria-pressed="${on}" aria-label="Asiento ${n}${v ? ", vendido" : on ? ", elegido" : ", libre"}" onclick="alAsiento(${n})"><i aria-hidden="true"></i>${n}</button>`;
+  };
+  let alto = "", bajo = "";
+  for (let r = 1; r <= 11; r++) { const c = 12 - r; alto += asiento(4 * r - 3, c, 1) + asiento(4 * r - 2, c, 2) + asiento(4 * r - 1, c, 4) + asiento(4 * r, c, 5); }
+  for (let r = 1; r <= 4; r++) { const c = 6 - r; bajo += asiento(45 + 3 * (r - 1), c, 1, 1) + asiento(46 + 3 * (r - 1), c, 3, 1) + asiento(47 + 3 * (r - 1), c, 4, 1); }
+  let libA = 0, libB = 0;
+  for (let n = 1; n <= 56; n++) if (!vend.has(n)) { if (n <= 44) libA++; else libB++; }
+  const destino = AL_CIUDADES[1 - s];
+
+  content.innerHTML = `
+  <div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
+    <header class="al-cab">
+      <div class="al-marca">
+        <svg aria-hidden="true" width="34" height="30" viewBox="0 0 34 30"><path d="M11 0h7.5L7.5 30H0z" fill="#E83040"></path><path d="M24 0h10L23 30H13z" fill="#F3F4F6"></path></svg>
+        <span class="al-d al-marca-t">Alpha</span>
+        <span class="al-maqueta">Maqueta, precios de ejemplo</span>
+      </div>
+      <div class="al-viaje">
+        <span class="al-d">${AL_CIUDADES[s]}</span>
+        <button type="button" class="al-redondo" onclick="alInvertir()" aria-label="Dar vuelta: de ${destino} a ${AL_CIUDADES[s]}" title="Dar vuelta el viaje"><i class="ti ti-arrows-exchange"></i></button>
+        <span class="al-d">${destino}</span>
+      </div>
+      <div class="al-dias" role="group" aria-label="Día del viaje">${dias}</div>
+      <div class="al-caja">
+        <div><span>Caja de hoy (prueba)</span><b class="al-d">Gs. ${fmtNum(caja)}</b></div>
+        ${g.ventas.length ? `<button type="button" class="al-link" onclick="alBorrar()">Borrar ventas de prueba</button>` : ""}
+      </div>
+    </header>
+
+    <div class="al-salidas" role="group" aria-label="Salidas del ${alDiaTxt(fechaD)}">${tabs}</div>
+
+    <div class="al-cuerpo">
+      <section class="al-escena" aria-labelledby="al-coche-t">
+        <div class="al-cartel" aria-hidden="true">${trEsc(destino.toUpperCase())}</div>
+        <div class="al-contenido">
+          <div class="al-esc-cab">
+            <div><h2 id="al-coche-t" class="al-d">Coche ${sal.coche}</h2>
+              <span class="al-sub">Romoirũ doble piso, sale ${alHH(sal.h)} del andén ${sal.anden}</span></div>
+            <div class="al-ley">
+              <span><i class="al-ley-c"></i>Libre</span><span><i class="al-ley-c v"></i>Vendido</span><span><i class="al-ley-c e"></i>Elegido</span>
+            </div>
+          </div>
+          <div class="al-piso">
+            <div class="al-piso-t"><h3 class="al-d">Piso alto</h3><span class="al-sub">Semi cama, Gs. ${fmtNum(AL_PRECIO.semi)}. La fila 1 va mirando al frente.</span><b>${libA} libres</b></div>
+            <div class="al-scroll"><div class="al-coche">
+              <div class="al-grid-alto">${alto}</div><div class="al-parabrisas" aria-hidden="true"></div>
+            </div></div>
+          </div>
+          <div class="al-piso">
+            <div class="al-piso-t"><h3 class="al-d">Piso bajo</h3><span class="al-sub">Cama, Gs. ${fmtNum(AL_PRECIO.cama)}</span><b>${libB} libres</b></div>
+            <div class="al-scroll"><div class="al-coche">
+              <div class="al-grid-bajo">
+                <div class="al-cel" style="grid-column:1;grid-row:1/5">Baño</div>
+                ${bajo}
+                <div class="al-cel esc" style="grid-column:6;grid-row:1/5"><span>Escalera</span></div>
+                <div class="al-cel lleno" style="grid-column:7;grid-row:1/3"><i class="ti ti-steering-wheel"></i>Chofer</div>
+                <div class="al-cel" style="grid-column:7;grid-row:3/5">Puerta</div>
+              </div><div class="al-parabrisas" aria-hidden="true"></div>
+            </div></div>
+          </div>
+        </div>
+      </section>
+      <aside class="al-panel" id="al-panel" aria-label="Venta del asiento elegido">${alPanel()}</aside>
+    </div>
+  </div>`;
+}
+
+function alPanel() {
+  const s = al.sentido, sal = AL_SALIDAS[s][al.dep], d = alDescAsiento(al.sel), total = alPrecio(al.sel);
+  const pas = alPasajero(al.ci);
+  const chips = (lista, actual, fn, nombre) => `<div class="al-chips" role="group" aria-label="${nombre}">${lista.map(t =>
+    `<button type="button" class="al-chip ${t[0] === actual ? "on" : ""}" aria-pressed="${t[0] === actual}" onclick="${fn}('${t[0]}')">${t[1]}</button>`).join("")}</div>`;
+  return `
+    <div class="al-elegido">
+      <div class="al-num ${d ? "" : "vacio"}"><span class="al-d">${d ? al.sel : "?"}</span></div>
+      <div class="al-elegido-t">
+        <b class="al-d">${d ? d.piso : "Sin asiento"}</b>
+        <span>${d ? d.pos : "Tocá un asiento libre en el coche"}</span>
+        <small>${d ? d.tipo : ""}</small>
+      </div>
+    </div>
+    <div class="al-linea">
+      <b class="al-d">${alHH(sal.h)}</b><i aria-hidden="true"></i><b class="al-d der">${alHH(sal.h + AL_DUR)}</b>
+      <span>${AL_CIUDADES[s]}</span><span class="cen">7 h 40 min</span><span class="der">${AL_CIUDADES[1 - s]}</span>
+    </div>
+    <div class="al-fila">
+      <label class="al-campo ci"><span>Cédula</span>
+        <input id="al-ci" inputmode="numeric" autocomplete="off" value="${trEsc(al.ci)}" placeholder="Número" oninput="alCi(this.value)" onblur="alCiFormato(this)"></label>
+      <label class="al-campo"><span>Nombre y apellido</span>
+        <input id="al-nombre" autocomplete="off" value="${trEsc(al.nombre)}" placeholder="Como figura en la cédula" oninput="al.nombre=this.value.toUpperCase();this.value=al.nombre;alAvisoLimpio()"></label>
+    </div>
+    <p class="al-hint" id="al-ci-hint">${pas ? `Ya viajó ${pas.viajes} ${pas.viajes === 1 ? "vez" : "veces"} con ustedes` : "Con la cédula se completa el nombre si ya viajó"}</p>
+    ${chips(AL_TARIFAS, al.tarifa, "alTarifa", "Tarifa")}
+    ${chips(AL_PAGOS, al.pago, "alPago", "Forma de pago")}
+    ${al.pago === "efectivo" ? `
+    <div class="al-vuelto">
+      <label class="al-campo"><span>Recibe</span>
+        <input id="al-recibe" inputmode="numeric" autocomplete="off" value="${al.recibe ? fmtNum(+al.recibe) : ""}" placeholder="${fmtNum(Math.ceil((total + 1) / 50000) * 50000)}" oninput="alRecibe(this)"></label>
+      <div class="al-vuelto-t"><span id="al-vuelto-et">Vuelto</span><b class="al-d" id="al-vuelto">${alVueltoTxt(total)}</b></div>
+    </div>` : ""}
+    <div class="al-total"><span>Total</span><b class="al-d">Gs. ${fmtNum(total)}</b></div>
+    <button type="button" class="al-cobrar" onclick="alCobrar()" ${d ? "" : "disabled"}>
+      <span class="al-cobrar-in"><span class="al-d">Cobrar e imprimir</span><kbd>F9</kbd></span>
+    </button>
+    <p class="al-aviso" id="al-aviso" role="status">${trEsc(al.aviso)}</p>`;
+}
+function alVueltoTxt(total) {
+  const r = +al.recibe || 0;
+  if (!r) return "—";
+  return r >= total ? fmtNum(r - total) : "faltan " + fmtNum(total - r);
+}
+function alRepintarPanel() { const p = document.getElementById("al-panel"); if (p) p.innerHTML = alPanel(); }
+function alAvisoLimpio() { if (al.aviso) { al.aviso = ""; const a = document.getElementById("al-aviso"); if (a) a.textContent = ""; } }
+
+function alSalida(k) { al.dep = k; al.sel = null; al.aviso = ""; alPintar(true); }
+function alDia(i) { al.dia = i; al.sel = null; al.aviso = ""; alPintar(true); }
+function alInvertir() { al.sentido = 1 - al.sentido; al.sel = null; al.aviso = ""; alPintar(true); }
+function alAsiento(n) { al.sel = n; al.aviso = ""; alPintar(false); }
+function alTarifa(t) { al.tarifa = t; alRepintarPanel(); }
+function alPago(p) { al.pago = p; alRepintarPanel(); }
+function alCi(v) {
+  al.ci = v;
+  alAvisoLimpio();
+  const pas = alPasajero(v), h = document.getElementById("al-ci-hint");
+  if (pas && !al.nombre) { al.nombre = pas.nombre; const n = document.getElementById("al-nombre"); if (n) n.value = pas.nombre; }
+  if (h) h.textContent = pas ? `Ya viajó ${pas.viajes} ${pas.viajes === 1 ? "vez" : "veces"} con ustedes` : "Con la cédula se completa el nombre si ya viajó";
+}
+function alCiFormato(inp) { const d = inp.value.replace(/\D/g, ""); al.ci = d ? fmtNum(+d) : ""; inp.value = al.ci; }
+function alRecibe(inp) {
+  const d = inp.value.replace(/\D/g, "");
+  al.recibe = d;
+  inp.value = d ? fmtNum(+d) : "";
+  const v = document.getElementById("al-vuelto");
+  if (v) v.textContent = alVueltoTxt(alPrecio(al.sel));
+}
+function alBorrar() {
+  if (!confirm("¿Borrar todas las ventas de prueba de Alpha guardadas en esta computadora?")) return;
+  try { localStorage.removeItem("alpha_maqueta_v1"); } catch (e) {}
+  al.sel = null; al.aviso = "";
+  alPintar(false);
+  toast("Ventas de prueba borradas", "success");
+}
+
+function alCobrar() {
+  const d = alDescAsiento(al.sel);
+  const falta = [];
+  if (!d) falta.push("el asiento");
+  if (!String(al.ci).replace(/\D/g, "")) falta.push("la cédula");
+  if (!String(al.nombre).trim()) falta.push("el nombre");
+  const total = alPrecio(al.sel);
+  if (falta.length) { al.aviso = (falta.length > 1 ? "Faltan " : "Falta ") + falta.join(", ").replace(/, ([^,]*)$/, " y $1") + "."; alRepintarPanel(); return; }
+  if (al.pago === "efectivo" && al.recibe && +al.recibe < total) { al.aviso = "Lo que recibe no alcanza: faltan Gs. " + fmtNum(total - al.recibe) + "."; alRepintarPanel(); return; }
+  const g = alGuardado(), s = al.sentido, sal = AL_SALIDAS[s][al.dep], fechaD = alFechaDe(al.dia);
+  const ahora = new Date();
+  const v = {
+    nro: g.nro, fecha: alISO(fechaD), sentido: s, dep: al.dep, asiento: al.sel,
+    nombre: String(al.nombre).trim().toUpperCase(), ci: al.ci ? fmtNum(+String(al.ci).replace(/\D/g, "")) : "",
+    total, tarifa: al.tarifa, pago: al.pago, recibe: al.pago === "efectivo" ? (+al.recibe || total) : null,
+    vendido_en: alISO(ahora) + "T" + String(ahora.getHours()).padStart(2, "0") + ":" + String(ahora.getMinutes()).padStart(2, "0"),
+    vendedor: (document.getElementById("user-name")?.textContent || "").trim(),
+  };
+  g.ventas.push(v); g.nro += 1;
+  alGuardar(g);
+  alImprimir(v, sal, d, fechaD);
+  toast(`Boleto ${String(v.nro).padStart(7, "0")} vendido: asiento ${v.asiento}`, "success");
+  al.ci = ""; al.nombre = ""; al.recibe = ""; al.tarifa = "general"; al.pago = "efectivo"; al.sel = null; al.aviso = "";
+  alPintar(false);
+}
+
+// ─── El boleto: 3 copias en papel de 80 mm, una por hoja (la impresora corta entre una y otra) ───
+function alBoletoHTML(v, sal, d, fechaD) {
+  const e = trEsc, s = v.sentido;
+  const nro = "001-001-" + String(v.nro).padStart(7, "0");
+  const sale = alHH(sal.h), llega = alHH(sal.h + AL_DUR);
+  const orig = AL_CIUDADES[s].toUpperCase(), dest = AL_CIUDADES[1 - s].toUpperCase();
+  const tarifa = (AL_TARIFAS.find(t => t[0] === v.tarifa) || AL_TARIFAS[0])[1].toLowerCase();
+  const pago = (AL_PAGOS.find(p => p[0] === v.pago) || AL_PAGOS[0])[1].toLowerCase();
+  const [fy, fm, fdd] = v.vendido_en.slice(0, 10).split("-");
+  const emitido = `${fdd}/${fm}/${fy} ${v.vendido_en.slice(11, 16)}`;
+  const vendedor = v.vendedor ? `Vendió ${e(v.vendedor)}.` : "";
+  let mapa = "";
+  if (d.alto) {
+    for (let r = 1; r <= 11; r++) [[4 * r - 3, 1], [4 * r - 2, 2], [4 * r - 1, 4], [4 * r, 5]].forEach(p => {
+      mapa += `<i style="grid-column:${12 - r};grid-row:${p[1]}" class="${p[0] === v.asiento ? "si" : ""}"></i>`; });
+  } else {
+    for (let r = 1; r <= 4; r++) [[45 + 3 * (r - 1), 1], [46 + 3 * (r - 1), 3], [47 + 3 * (r - 1), 4]].forEach(p => {
+      mapa += `<i style="grid-column:${5 - r};grid-row:${p[1]}" class="${p[0] === v.asiento ? "si" : ""}"></i>`; });
+  }
+  const cab = `
+    <div class="cab"><img src="${location.origin}/static/logo.png" alt=""><div><b class="n">La Santaniana</b><span>RUC [RUC], timbrado [número]<br>vence [fecha]</span></div></div>
+    <div class="doc"><b>Boleto ${nro}</b><span>${emitido}</span></div>
+    <div class="dia">${alDiaTxt(fechaD)}</div>`;
+  const ruta = (larga) => `
+    <div class="ruta">
+      <i class="p"></i><b class="c">${e(orig)}</b><b class="h">${sale}</b>
+      ${larga ? `<i class="l"></i><span class="m">Sube en la terminal, andén ${e(sal.anden)}. La llegada es aproximada.</span>` : ""}
+      <i class="p o"></i><b class="c">${e(dest)}</b><b class="h">${llega}</b>
+    </div>`;
+  const asiento = (conMapa) => `
+    <div class="as">
+      <div class="nro"><span>Asiento</span><b>${v.asiento}</b></div>
+      <div class="as-t"><b>${d.piso}</b><span>${d.pos.replace(", mirando al frente", "")}</span>
+        ${conMapa ? `<div class="mapa"><div class="g ${d.alto ? "a" : "b"}">${mapa}</div><span>frente →</span></div>` : ""}
+        <small>Coche ${e(sal.coche)}${conMapa ? ", Romoirũ doble piso" : ", andén " + e(sal.anden)}</small></div>
+    </div>`;
+  const pas = `<div class="pas"><b>${e(v.nombre)}</b><span>CI ${e(v.ci)}</span></div>`;
+  const precio = (detalle) => `
+    <div class="pre">
+      <div class="r"><span>${d.clase === "cama" ? "Cama" : "Semi cama"}, tarifa ${tarifa}</span><span>${fmtNum(v.total)}</span></div>
+      <div class="t"><b>Total Gs.</b><b class="tg">${fmtNum(v.total)}</b></div>
+      <span class="p">${detalle}</span>
+    </div>`;
+  const pie = (a, b) => `<div class="pie"><b>${a}</b><span>${b}</span></div><div class="maq">Maqueta de Alpha: sin valor fiscal</div>`;
+  const efectivo = v.pago === "efectivo" && v.recibe ? ` Recibió ${fmtNum(v.recibe)}, vuelto ${fmtNum(v.recibe - v.total)}.` : "";
+  const original = `<article>${cab}${ruta(true)}${asiento(true)}${pas}${precio(`Pagó con ${pago}. ${vendedor}`)}
+    <div class="nota">Mostrá este boleto al subir. Presentate [minutos] antes de la salida. Equipaje incluido: [kg].</div>${pie("Original", "para el pasajero")}</article>`;
+  const duplicado = `<article>${cab}${ruta(false)}${asiento(false)}${pas}${precio(`Pagó con ${pago}.${efectivo} ${vendedor}`)}${pie("Duplicado", "queda en la caja")}</article>`;
+  const triplicado = `<article class="tri">
+    <div class="doc top"><b class="n">La Santaniana</b><b>Boleto ${String(v.nro).padStart(7, "0")}</b></div>
+    <div class="tri-s">${alDiaTxt(fechaD).split(" de ")[0]}, sale ${sale}<br>Coche ${e(sal.coche)}, andén ${e(sal.anden)}</div>
+    <div class="as"><div class="nro big"><span>Asiento</span><b>${v.asiento}</b><span>${d.piso.toLowerCase()}</span></div>
+      <div class="as-t mid"><span>Baja en</span><b class="baja">${e(dest)}</b><small>Sube en ${e(AL_CIUDADES[s])}</small></div></div>
+    ${pas}${pie("Triplicado", "para el guarda")}</article>`;
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Boleto ${nro}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
+<style>
+@page{size:80mm auto;margin:0}
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff;color:#000;font-family:Archivo,Arial,sans-serif}
+article{width:80mm;padding:5mm 4mm 3mm;break-after:page;page-break-after:always}
+article:last-child{break-after:auto;page-break-after:auto}
+.cab{display:flex;align-items:center;gap:10px}
+.cab img{width:46px;height:32px;object-fit:contain;filter:grayscale(1) contrast(1.8) brightness(.85)}
+.cab div{display:flex;flex-direction:column;gap:2px}
+.n{font-weight:800;font-size:18px;line-height:1;font-stretch:80%}
+.cab span{font-size:11px;line-height:1.3}
+.doc{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:10px;padding-top:8px;border-top:1.5px dashed #000}
+.doc b{font-size:13px}.doc span{font-size:11px}
+.doc.top{margin-top:0;padding-top:0;border:0}
+.dia{margin-top:6px;font-weight:800;font-size:18px;line-height:1.1;font-stretch:85%}
+.ruta{display:grid;grid-template-columns:12px minmax(0,1fr) auto;column-gap:9px;row-gap:6px;margin-top:8px}
+.ruta .p{width:12px;height:12px;border-radius:50%;background:#000;align-self:center}
+.ruta .p.o{background:#fff;border:3px solid #000}
+.ruta .c{font-weight:800;font-size:25px;line-height:1;font-stretch:68%}
+.ruta .h{font-weight:800;font-size:25px;line-height:1;font-stretch:85%;font-variant-numeric:tabular-nums}
+.ruta .l{width:3px;justify-self:center;align-self:stretch;background:#000}
+.ruta .m{grid-column:2/4;font-size:11px;line-height:1.35}
+.as{display:flex;align-items:stretch;gap:11px;margin-top:10px;padding-top:10px;border-top:1.5px dashed #000}
+.nro{width:76px;flex:0 0 76px;background:#000;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.nro span{font-size:11px;font-weight:700}
+.nro b{font-weight:900;font-size:50px;line-height:.95;font-stretch:80%;font-variant-numeric:tabular-nums}
+.nro.big{width:92px;flex-basis:92px}.nro.big b{font-size:62px}
+.as-t{display:flex;flex-direction:column;gap:4px;min-width:0}
+.as-t.mid{justify-content:center;gap:2px}
+.as-t > b{font-weight:800;font-size:19px;line-height:1;font-stretch:80%}
+.as-t > span{font-size:12px;font-weight:600}
+.as-t small{font-size:11px}
+.as-t .baja{font-weight:900;font-size:34px;line-height:.95;font-stretch:64%}
+.mapa{display:flex;align-items:center;gap:4px}
+.mapa > span{font-size:10.5px;font-weight:600}
+.g{display:grid;gap:2px;padding:3px;border:1.25px solid #000;border-radius:3px 8px 8px 3px}
+.g.a{grid-template-columns:repeat(11,6px);grid-template-rows:6px 6px 3px 6px 6px}
+.g.b{grid-template-columns:repeat(4,6px);grid-template-rows:6px 3px 6px 6px}
+.g i{width:6px;height:6px;border:1px solid #000}
+.g i.si{background:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.pas{display:flex;flex-direction:column;gap:2px;margin-top:10px;padding-top:8px;border-top:1.5px dashed #000}
+.pas b{font-weight:800;font-size:16px}.pas span{font-size:12.5px;font-weight:600}
+.pre{display:flex;flex-direction:column;gap:4px;margin-top:10px;padding-top:8px;border-top:1.5px dashed #000}
+.pre .r{display:flex;justify-content:space-between;gap:8px;font-size:12px}
+.pre .t{display:flex;justify-content:space-between;align-items:baseline}
+.pre .t b{font-weight:800;font-size:14px}.pre .t .tg{font-weight:900;font-size:27px;line-height:1;font-stretch:85%}
+.pre .p{font-size:11px;line-height:1.4}
+.nota{margin-top:10px;padding-top:8px;border-top:1.5px dashed #000;font-size:11px;line-height:1.35}
+.tri-s{margin-top:8px;padding-top:8px;border-top:1.5px dashed #000;font-weight:800;font-size:16px;line-height:1.25;font-stretch:85%}
+.pie{display:flex;justify-content:space-between;align-items:baseline;margin:12px -4mm 0;padding:8px 4mm 9px;background:#000;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.pie b{font-weight:900;font-size:18px;font-stretch:85%}.pie span{font-size:11px;font-weight:600}
+.maq{margin-top:5px;font-size:10px;text-align:center}
+</style></head><body>${original}${duplicado}${triplicado}</body></html>`;
+}
+function alImprimir(v, sal, d, fechaD) {
+  const f = document.createElement("iframe");
+  f.setAttribute("aria-hidden", "true");
+  f.style.cssText = "position:fixed;left:-10000px;top:0;width:80mm;height:20px;border:0";
+  document.body.appendChild(f);
+  const doc = f.contentDocument;
+  doc.open(); doc.write(alBoletoHTML(v, sal, d, fechaD)); doc.close();
+  const listo = () => {
+    const w = f.contentWindow;
+    const fuentes = w.document.fonts ? w.document.fonts.ready : Promise.resolve();
+    Promise.race([fuentes, new Promise(r => setTimeout(r, 2500))]).then(() => {
+      w.focus(); w.print();
+      setTimeout(() => f.remove(), 60000);
+    });
+  };
+  if (doc.readyState === "complete") setTimeout(listo, 300); else f.onload = listo;
+}
+// F9 cobra mientras se está en Alpha
+document.addEventListener("keydown", e => {
+  if (e.key === "F9" && document.getElementById("al-raiz")) { e.preventDefault(); alCobrar(); }
+});
