@@ -7771,3 +7771,12 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
 .hist-rapidos { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 14px; }
 .hist-rapidos > span:first-child { font-size: 12.5px; font-weight: 600; color: var(--muted); margin-right: 2px; }
 .hist-flechas { margin-left: auto; display: flex; gap: 6px; }
+
+/* Volver a pedidos (admin) */
+.ot-volver-todo { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text);
+  font: 600 12.5px "Inter", sans-serif; cursor: pointer; white-space: nowrap; }
+.ot-volver-todo:hover { border-color: var(--brand-blue); color: var(--brand-blue); }
+.ot-volver-todo .ti { font-size: 16px; }
+.td-action .ot-volver-btn:hover { color: var(--brand-blue); }
+.ot-items .td-action { white-space: nowrap; width: auto; }

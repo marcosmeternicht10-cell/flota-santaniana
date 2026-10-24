@@ -6716,6 +6716,8 @@ function otCuerpoItems(ot) {
     h += `<tr class="ot-sec ot-sec-atr"><td colspan="7"><div class="ot-sec-in">
         <span class="ot-sec-t"><i class="ti ti-alert-triangle"></i> Pendiente de otros días</span>
         <span class="ot-sec-q" id="ot-sec-atr-q">${otAtrCabTxt(ot)}</span>
+        ${(() => { const v = atr.filter(x => otPuedeVolver(x.it)).map(x => x.it.id);
+          return v.length ? `<button type="button" class="ot-volver-todo" onclick="otVolverPedidos([${v.join(",")}], ${ot.id})" title="Salen de la OT y quedan en Pedidos de choferes para decidir de nuevo"><i class="ti ti-arrow-back-up"></i> Volver ${v.length > 1 ? `los ${v.length} ` : ""}a pedidos</button>` : ""; })()}
       </div></td></tr>`;
     h += atr.map(x => otFilaItem(ot, x.it, x.idx, "atr")).join("");
   }
@@ -6786,6 +6788,7 @@ function otFilaItem(ot, it, idx, modo) {
       <td class="pt-td">${ptCelda(it)}</td>
       <td class="ot-mat">${otMatCelda(it)}</td>
       <td class="td-action">
+        ${otPuedeVolver(it) ? `<button class="icon-btn ot-volver-btn" title="Volver a los pedidos de los choferes" aria-label="Volver a los pedidos de los choferes" onclick="otVolverPedidos([${it.id}], ${ot.id})"><i class="ti ti-arrow-back-up"></i></button>` : ""}
         <button class="icon-btn" onclick="borrarItemOT(${it.id}, ${ot.id})"><i class="ti ti-trash"></i></button>
       </td>
     </tr>
@@ -7030,7 +7033,9 @@ function pdFila(p) {
     : pd.estado === "descartado"
     ? `<div class="pd-dec no"><i class="ti ti-circle-x"></i> No se hace: <b>${trEsc(p.motivo)}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
     : pd.estado === "espera"
-    ? `<div class="pd-dec espera"><i class="ti ti-clock-pause"></i> En espera${p.revisar_el ? ` · volver a mirar el <b>${p.revisar_el.slice(8, 10)}/${p.revisar_el.slice(5, 7)}</b>${p.revisar_el <= pd.d.hoy ? " <em>(ya es hora)</em>" : ""}` : ""}${p.nota ? ` · ${trEsc(p.nota)}` : ""}</div>` : "";
+    ? `<div class="pd-dec espera"><i class="ti ti-clock-pause"></i> En espera${p.revisar_el ? ` · volver a mirar el <b>${p.revisar_el.slice(8, 10)}/${p.revisar_el.slice(5, 7)}</b>${p.revisar_el <= pd.d.hoy ? " <em>(ya es hora)</em>" : ""}` : ""}${p.nota ? ` · ${trEsc(p.nota)}` : ""}</div>`
+    : p.nota && /^Volvió de la OT/.test(p.nota)
+    ? `<div class="pd-orig"><i class="ti ti-arrow-back-up"></i> ${trEsc(p.nota)}</div>` : "";
   return `
     <article class="pd-fila ${abiertos ? "p-" + pr : ""} ${pd.sel.has(p.id) ? "sel" : ""}" data-id="${p.id}">
       ${abiertos ? `<input type="checkbox" class="pd-check" ${pd.sel.has(p.id) ? "checked" : ""} aria-label="Elegir" onchange="pdElegir(${p.id}, this.checked)">` : ""}
@@ -7805,6 +7810,22 @@ async function agregarItemOT(otId) {
   abrirOT(otId);
 }
 
+// Admin: lo pendiente de la OT vuelve a la bandeja de pedidos de los choferes
+function otPuedeVolver(it) {
+  return window.USUARIO_ROL === "admin" && it.estado === "pendiente" && it.origen !== "preventivo";
+}
+async function otVolverPedidos(ids, otId) {
+  const n = ids.length;
+  if (!confirm(`¿Volver ${n === 1 ? "este trabajo" : `estos ${n} trabajos`} a los pedidos de los choferes?\n\nSale${n === 1 ? "" : "n"} de la OT y queda${n === 1 ? "" : "n"} en Pedidos de choferes como nuevo${n === 1 ? "" : "s"}, con su chofer y su fecha, para decidir de nuevo. Si la OT queda vacía, se borra.`)) return;
+  const r = await api("/api/ot_pedidos/volver", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items: ids }) });
+  if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo", "error"); return; }
+  toast(r.msg, "success");
+  if (r.quedan && r.quedan.length) setTimeout(() => toast(`${r.quedan.length} quedó en la OT: ${[...new Set(r.quedan.map(q => q.por))].join(", ")}`, "info"), 1800);
+  pdActualizarBadge();
+  if (r.ots_borradas && r.ots_borradas.length) { cerrarModalOTDetalle(); return; }
+  document.getElementById("modal-ot-detalle")?.remove();
+  abrirOT(otId);
+}
 async function borrarItemOT(itemId, otId) {
   if (!confirm("¿Eliminar este item?")) return;
   await api(`/api/ot_items/${itemId}`, { method: "DELETE" });
