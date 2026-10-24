@@ -1032,6 +1032,145 @@ def api_separar_item(iid):
     return jsonify({"ok": True, "msg": msg, "nuevos": ids})
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# VOLVER A PEDIDOS: lo que quedó pendiente en la OT vuelve a la bandeja
+# ════════════════════════════════════════════════════════════════════════════
+
+def volver_a_pedidos(item_ids):
+    """Saca trabajos pendientes de la OT y los deja otra vez como pedidos
+    nuevos, para decidir de nuevo (prioridad, más adelante, descartar). Si el
+    trabajo vino de un pedido, vuelve ese mismo pedido (con su reporte, su
+    chofer y su fecha); si entró directo a la OT, se arma el pedido con el
+    chofer y la fecha que tenía. No vuelve lo que ya está hecho, lo que se está
+    haciendo, lo del preventivo ni lo que ya tiene materiales o factura.
+    Si la OT queda vacía, se borra."""
+    ids = sorted({int(i) for i in item_ids or [] if str(i).strip().isdigit()})
+    if not ids:
+        return False, "Elegí al menos un trabajo", None
+    conn = get_connection()
+    m = ",".join("?" * len(ids))
+    try:
+        items = [dict(r) for r in conn.execute(f"""
+            SELECT i.*, o.vehiculo_id, o.km AS ot_km, o.conductor, o.fecha_apertura,
+                   o.ot_grupo, o.estado AS ot_estado
+            FROM ot_items i JOIN ordenes_trabajo o ON o.id = i.ot_id WHERE i.id IN ({m})""", ids).fetchall()]
+        if not items:
+            return False, "Esos trabajos ya no están en la OT", None
+        trabados = {}
+        for tabla, por in (("ot_materiales", "tiene materiales cargados"), ("ot_facturas", "tiene factura de afuera")):
+            try:
+                for r in conn.execute(f"SELECT DISTINCT item_id FROM {tabla} WHERE item_id IN ({m})", ids).fetchall():
+                    trabados.setdefault(r["item_id"], por)
+            except Exception:
+                _rollback(conn)
+        vuelven, quedan = [], []
+        for it in items:
+            por = ("ya está hecho" if it["estado"] == "completado"
+                   else "se está haciendo" if it["estado"] == "en_proceso"
+                   else "es del preventivo" if (it.get("origen") or "") == "preventivo"
+                   else trabados.get(it["id"]))
+            (quedan if por else vuelven).append(dict(it, por=por))
+        if not vuelven:
+            return False, "No vuelve ninguno: " + "; ".join(sorted({q["por"] for q in quedan})), None
+
+        vid_ids = [it["id"] for it in vuelven]
+        mv = ",".join("?" * len(vid_ids))
+        pedidos = {r["item_id"]: dict(r) for r in conn.execute(
+            f"SELECT * FROM ot_pedidos WHERE item_id IN ({mv})", vid_ids).fetchall()}
+        quien, ahora = _quien()[:80], ahora_iso()
+        reportes = {}
+        devueltos = []
+        for it in vuelven:
+            numero = it.get("ot_grupo") or it["ot_id"]
+            nota = f"Volvió de la OT #{numero}"
+            desc = " ".join(str(it["descripcion"] or "").split())[:300]
+            p = pedidos.get(it["id"])
+            if p:
+                conn.execute("""UPDATE ot_pedidos SET estado='nuevo', ot_id=NULL, item_id=NULL, descripcion=?, tipo=?,
+                                prioridad=?, motivo='', revisar_el='', decidido_por='', decidido_el='', nota=?
+                                WHERE id=?""",
+                             (desc or p["descripcion"], it.get("tipo") or p.get("tipo") or "otro",
+                              it.get("prioridad") or p.get("prioridad") or "", nota, p["id"]))
+                devueltos.append({"pedido": p["id"], "reporte": p["reporte_id"], "ot_id": it["ot_id"]})
+                continue
+            chofer = ((it.get("reportado_por") or "").strip()
+                      or ((it.get("conductor") or "").strip() if it.get("origen") == "chofer" else "")
+                      or "Cargado en el taller")[:80]
+            fecha = str(it.get("fecha") or it.get("fecha_apertura") or hoy())[:10]
+            clave = (it["vehiculo_id"], chofer, fecha)
+            if clave not in reportes:
+                cur = conn.execute("""INSERT INTO ot_pedido_reportes (vehiculo_id, chofer, km, fecha, creado_el, fotos_pasadas)
+                                      VALUES (?,?,?,?,?,1)""",
+                                   (it["vehiculo_id"], chofer, float(it.get("ot_km") or 0), fecha, ahora))
+                reportes[clave] = cur.lastrowid or conn.execute(
+                    "SELECT MAX(id) AS m FROM ot_pedido_reportes WHERE vehiculo_id=? AND fecha=?",
+                    (it["vehiculo_id"], fecha)).fetchone()["m"]
+            sug, por = sugerir_prioridad(desc)
+            cur = conn.execute("""INSERT INTO ot_pedidos (reporte_id, vehiculo_id, descripcion, tipo, sugerida, sugerida_por,
+                                                         prioridad, estado, nota)
+                                  VALUES (?,?,?,?,?,?,?, 'nuevo', ?)""",
+                               (reportes[clave], it["vehiculo_id"], desc or "(sin texto)", it.get("tipo") or "otro",
+                                sug, por, it.get("prioridad") if it.get("prioridad") in PRIORIDADES and it.get("prioridad") != "normal" else "",
+                                nota))
+            devueltos.append({"pedido": cur.lastrowid, "reporte": reportes[clave], "ot_id": it["ot_id"]})
+        conn.commit()
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+
+    # Fuera de la OT (con lo que colgaba de cada trabajo)
+    from database import eliminar_item_ot, eliminar_ot
+    for iid in vid_ids:
+        eliminar_item_ot(iid)
+    borradas = []
+    conn = get_connection()
+    try:
+        for oid in sorted({d["ot_id"] for d in devueltos}):
+            o = conn.execute("""SELECT id, estado, COALESCE(estado_compras,'') AS ec, ot_grupo,
+                                       (SELECT COUNT(*) FROM ot_items WHERE ot_id = ordenes_trabajo.id) AS n
+                                FROM ordenes_trabajo WHERE id=?""", (oid,)).fetchone()
+            if o and not int(o["n"] or 0) and o["estado"] != "cerrada" and not o["ec"]:
+                borradas.append(o["ot_grupo"] or oid)
+                # Las fotos del reporte se van con la OT: si se vuelve a aceptar, pasan de nuevo
+                rids = sorted({d["reporte"] for d in devueltos if d["ot_id"] == oid})
+                if rids:
+                    conn.execute(f"UPDATE ot_pedido_reportes SET fotos_pasadas=0 WHERE id IN ({','.join('?' * len(rids))})", rids)
+                    conn.commit()
+                conn.close()
+                eliminar_ot(oid)
+                conn = get_connection()
+    finally:
+        conn.close()
+
+    n = len(devueltos)
+    msg = f"{n} trabajo{'s' if n != 1 else ''} volvi{'eron' if n != 1 else 'ó'} a los pedidos"
+    if borradas:
+        msg += f" · la OT #{', #'.join(map(str, sorted(set(borradas))))} quedó vacía y se borró"
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=quien or "?", rol=session.get("rol") or "",
+                            accion=f"Volvió {n} trabajo{'s' if n != 1 else ''} de la OT a los pedidos de choferes",
+                            categoria="Órdenes de Trabajo",
+                            detalle=("; ".join(it["descripcion"] for it in vuelven))[:200])
+    except Exception:
+        pass
+    return True, msg, {"vuelven": n, "pedidos": [d["pedido"] for d in devueltos], "ots_borradas": borradas,
+                       "quedan": [{"id": q["id"], "descripcion": q["descripcion"], "por": q["por"]} for q in quedan]}
+
+
+@bp_ot_pedidos.route("/api/ot_pedidos/volver", methods=["POST"])
+def api_volver_a_pedidos():
+    if session.get("rol") != "admin":
+        return _no("Solo administración puede volver trabajos a los pedidos")
+    d = request.get_json(silent=True) or {}
+    ok, msg, res = volver_a_pedidos(d.get("items") or [])
+    if not ok:
+        return _no(msg, 400)
+    return jsonify({"ok": True, "msg": msg, **res})
+
+
 @bp_ot_pedidos.route("/api/ot_pedidos/foto/<int:fid>", methods=["GET"])
 def api_foto(fid):
     if not _puede_ver():
