@@ -83,7 +83,18 @@ AGREGADOS = [
     ]),
 ]
 
-CAMPOS = ("numero", "nombre", "puesto", "edad", "nacimiento", "ci", "telefono", "activo")
+CAMPOS = ("numero", "nombre", "puesto", "edad", "nacimiento", "ci", "telefono", "activo", "turno", "horario")
+
+# Turnos del taller. Cada persona puede tener el suyo con su horario, y en
+# "Trabajo" se ve la producción de un turno solo (día por día).
+TURNOS = {"manana": "Mañana", "tarde": "Tarde", "noche": "Noche"}
+HORARIO_TIPICO = {"manana": "06:00 a 14:00", "tarde": "14:00 a 22:00", "noche": "22:00 a 06:00"}
+
+# Turnos que pasó el taller. Cada tanda se aplica una sola vez y solo a quien
+# todavía no tiene turno (si después se lo cambian a mano, queda lo de mano).
+TURNOS_CARGADOS = [
+    ("turno-2026-10-23", "tarde", "14:00 a 22:00", [19, 20, 21, 22]),
+]
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -158,6 +169,8 @@ def init_personal_taller():
             _rollback(conn)
     # Lo que se escribe a mano (sin número): un taller de afuera, un nombre viejo
     _agregar_columna(conn, "ot_items", "tecnico_otro", "TEXT DEFAULT ''")
+    _agregar_columna(conn, "taller_personal", "turno", "TEXT DEFAULT ''")
+    _agregar_columna(conn, "taller_personal", "horario", "TEXT DEFAULT ''")
 
     if nueva:
         ahora = ahora_iso()
@@ -191,6 +204,16 @@ def init_personal_taller():
                 conn.commit()
             except Exception:
                 _rollback(conn)
+        for tanda, turno, horario, numeros in TURNOS_CARGADOS:
+            if tanda in hechas:
+                continue
+            marcas = ",".join("?" * len(numeros))
+            conn.execute(f"""UPDATE taller_personal SET turno=?, horario=?, actualizado_el=?
+                             WHERE numero IN ({marcas}) AND COALESCE(turno,'') = ''""",
+                         (turno, horario, ahora_iso(), *numeros))
+            conn.execute("INSERT INTO taller_personal_cargas (tanda, aplicada_el) VALUES (?,?) ON CONFLICT (tanda) DO NOTHING",
+                         (tanda, ahora_iso()))
+            conn.commit()
     except Exception:
         _rollback(conn)
     conn.close()
@@ -291,6 +314,8 @@ def _persona(r):
     p = dict(r)
     p["activo"] = 1 if p.get("activo") in (1, True, "1", None) else 0
     p["edad_actual"] = _edad(p)
+    p["turno"] = p.get("turno") or ""
+    p["horario"] = p.get("horario") or ""
     return p
 
 
@@ -417,6 +442,13 @@ def _limpiar_datos(d, conn, pid=None):
             datos[k] = re.sub(r"\s+", " ", str(d.get(k) or "")).strip()[:40]
     if "activo" in d:
         datos["activo"] = 1 if d.get("activo") in (1, True, "1", "true") else 0
+    if "turno" in d:
+        t = _norm(d.get("turno")).replace("ñ", "n")
+        if t and t not in TURNOS:
+            return None, "El turno es mañana, tarde o noche"
+        datos["turno"] = t
+    if "horario" in d:
+        datos["horario"] = re.sub(r"\s+", " ", str(d.get("horario") or "")).strip()[:40]
     return datos, None
 
 
@@ -624,6 +656,13 @@ def periodo(p, desde=None, hasta=None):
     if desde or hasta:
         return (desde or "2000-01-01"), (hasta or h.isoformat()), "rango"
     p = str(p or "30")
+    if p == "hoy":
+        return h.isoformat(), h.isoformat(), "hoy"
+    if p == "ayer":
+        a = (h - timedelta(days=1)).isoformat()
+        return a, a, "ayer"
+    if p == "semana":  # de lunes a hoy
+        return (h - timedelta(days=h.weekday())).isoformat(), h.isoformat(), "semana"
     if p == "todo":
         return "2000-01-01", h.isoformat(), "todo"
     if p == "anio":
@@ -660,14 +699,37 @@ def _coche(f):
     return str(f.get("n_interno") or f.get("patente") or f.get("vehiculo_id") or "")
 
 
-def resumen(desde, hasta, vehiculo_id=None):
+def _dias(desde, hasta, tope=62):
+    """Los días del período (para el día por día). Si es muy largo, nada."""
+    try:
+        d, h = date.fromisoformat(desde), date.fromisoformat(min(hasta, _hoy_txt()))
+    except ValueError:
+        return []
+    if (h - d).days + 1 > tope or h < d:
+        return []
+    return [(d + timedelta(days=k)).isoformat() for k in range((h - d).days + 1)]
+
+
+def resumen(desde, hasta, vehiculo_id=None, turno=""):
     conn = get_connection()
     try:
-        personas = [_persona(r) for r in conn.execute("SELECT * FROM taller_personal ORDER BY numero").fetchall()]
+        todas = [_persona(r) for r in conn.execute("SELECT * FROM taller_personal ORDER BY numero").fetchall()]
+        turnos = {}
+        for p in todas:
+            if p["activo"] and p["turno"]:
+                x = turnos.setdefault(p["turno"], {"turno": p["turno"], "nombre": TURNOS.get(p["turno"], p["turno"]),
+                                                   "personas": 0, "horarios": {}})
+                x["personas"] += 1
+                if p["horario"]:
+                    x["horarios"][p["horario"]] = x["horarios"].get(p["horario"], 0) + 1
+        for x in turnos.values():
+            x["horario"] = max(x.pop("horarios").items(), key=lambda kv: kv[1])[0] if x["horarios"] else HORARIO_TIPICO.get(x["turno"], "")
+        turno = turno if turno in TURNOS else ""
+        personas = [p for p in todas if not turno or p["turno"] == turno]
         filas = _filas_trabajo(conn, vehiculo_id)
 
         por = {p["id"]: {"hechos": set(), "en_curso": set(), "coches": {}, "ots": set(),
-                         "tipos": {}, "ultimo": "", "historico": 0} for p in personas}
+                         "tipos": {}, "ultimo": "", "historico": 0, "dia": {}} for p in personas}
         items_hechos, coches_hechos = set(), set()
         for f in filas:
             x = por.get(f["personal_id"])
@@ -679,6 +741,8 @@ def resumen(desde, hasta, vehiculo_id=None):
                 if fecha > x["ultimo"]:
                     x["ultimo"] = fecha
                 if desde <= fecha <= hasta:
+                    if f["item_id"] not in x["hechos"]:
+                        x["dia"][fecha] = x["dia"].get(fecha, 0) + 1
                     x["hechos"].add(f["item_id"])
                     x["ots"].add(f["ot_id"])
                     c = _coche(f)
@@ -698,6 +762,7 @@ def resumen(desde, hasta, vehiculo_id=None):
             ranking.append({
                 "id": p["id"], "numero": p["numero"], "nombre": p["nombre"], "puesto": p["puesto"] or "",
                 "activo": p["activo"], "edad": p["edad_actual"],
+                "turno": p["turno"], "horario": p["horario"], "por_dia": x["dia"],
                 "trabajos": len(x["hechos"]), "en_curso": len(x["en_curso"]), "ots": len(x["ots"]),
                 "coches": len(x["coches"]), "coches_top": [{"coche": c, "n": n} for c, n in top[:3]],
                 "tipos": x["tipos"], "ultimo": x["ultimo"], "historico": x["historico"],
@@ -747,10 +812,19 @@ def resumen(desde, hasta, vehiculo_id=None):
             v = conn.execute("SELECT n_interno, patente FROM vehiculos WHERE id=?", (int(vehiculo_id),)).fetchone()
             coche_txt = str((v["n_interno"] or v["patente"]) if v else vehiculo_id)
 
+        detalle = {}
+        dias = _dias(desde, hasta)
+        if turno and dias and len(dias) <= 31:
+            detalle = {d: {str(k): v for k, v in x.items()}
+                       for d, x in _trabajos_del_turno(conn, [p["id"] for p in personas], desde, hasta, vehiculo_id).items()}
+
         con = [r for r in ranking if r["activo"]]
         return {
+            "detalle": detalle,
             "desde": desde, "hasta": hasta, "hoy": _hoy_txt(),
             "vehiculo_id": int(vehiculo_id) if vehiculo_id else None, "coche": coche_txt,
+            "turno": turno, "turnos": sorted(turnos.values(), key=lambda x: list(TURNOS).index(x["turno"])),
+            "dias": dias,
             "ranking": ranking,
             "totales": {
                 "trabajos": len(items_hechos),
@@ -1010,6 +1084,185 @@ def pdf_informe(res):
                             f"({', '.join('N°' + str(r['numero']) for r in sin)}). Puede ser que no hayan trabajado en "
                             f"OT o que no se haya anotado su número.", sub)]
     doc.build(story)
+    buf.seek(0)
+    return buf
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PRODUCCIÓN DE UN TURNO (día por día, con cada trabajo) — para el jefe
+# ════════════════════════════════════════════════════════════════════════════
+
+DIAS_SEM = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+
+
+def _trabajos_del_turno(conn, pids, desde, hasta, vehiculo_id=None):
+    """{fecha: {personal_id: [trabajo, ...]}} con lo terminado en el período."""
+    quiero = set(pids)
+    out = {}
+    filas = [f for f in _filas_trabajo(conn, vehiculo_id)
+             if f["personal_id"] in quiero and f["estado"] == "completado" and desde <= (f["fecha"] or "") <= hasta]
+    gente = _personas_de_items(conn, [f["item_id"] for f in filas]) if filas else {}
+    for f in sorted(filas, key=lambda f: (f["fecha"], _coche(f), f["item_id"])):
+        con = [g["numero"] for g in gente.get(f["item_id"], []) if g["id"] != f["personal_id"]]
+        out.setdefault(f["fecha"], {}).setdefault(f["personal_id"], []).append({
+            "coche": _coche(f), "ot_id": f["ot_id"], "descripcion": f["descripcion"] or "",
+            "tipo": f["tipo"] or "", "con": con})
+    return out
+
+
+def pdf_turno(res, detalle):
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, KeepTogether
+    from pdf_export import AZUL, ROJO, GRIS, GRIS_CLARO
+
+    turno = next((t for t in res["turnos"] if t["turno"] == res["turno"]), None)
+    nombre_t = TURNOS.get(res["turno"], res["turno"])
+    horario = (turno or {}).get("horario") or HORARIO_TIPICO.get(res["turno"], "")
+    gente = [r for r in res["ranking"] if r["activo"] or r["trabajos"]]
+    gente.sort(key=lambda r: r["numero"])
+    dias = res.get("dias") or []
+    habiles = [d for d in dias if date.fromisoformat(d).weekday() < 6]
+    con_dias = 1 <= len(dias) <= 16
+    apaisado = con_dias and len(dias) > 7
+    pag = landscape(A4) if apaisado else A4
+    ancho = pag[0] - 28 * mm
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=pag, topMargin=13 * mm, bottomMargin=13 * mm,
+                            leftMargin=14 * mm, rightMargin=14 * mm,
+                            title=f"Producción del turno {nombre_t.lower()}", author="La Santaniana")
+    st = getSampleStyleSheet()
+    normal = st["Normal"]
+    tit = ParagraphStyle("TtTit", parent=st["Heading1"], fontSize=17, textColor=colors.HexColor(AZUL), spaceAfter=2)
+    sub = ParagraphStyle("TtSub", parent=normal, fontSize=9, textColor=colors.HexColor(GRIS))
+    sm = ParagraphStyle("TtSm", parent=normal, fontSize=8.5, leading=10.5)
+    smg = ParagraphStyle("TtSmg", parent=sm, textColor=colors.HexColor(GRIS))
+    h2 = ParagraphStyle("TtH2", parent=normal, fontSize=10.5, textColor=colors.HexColor(AZUL),
+                        fontName="Helvetica-Bold", spaceBefore=7, spaceAfter=3)
+    rango = (f"el {_fdm(res['desde'])}" if res["desde"] == res["hasta"]
+             else f"del {_fdm(res['desde'])} al {_fdm(res['hasta'])}")
+    total = sum(r["trabajos"] for r in gente)
+    story = [
+        Paragraph("<b>LA SANTANIANA</b>", ParagraphStyle("TtE", parent=normal, fontSize=12, textColor=colors.HexColor(ROJO))),
+        Paragraph(f"Producción del turno {nombre_t.lower()}", tit),
+        Paragraph(f"{'Coche ' + res['coche'] + ' · ' if res.get('coche') else ''}{horario + ' · ' if horario else ''}"
+                  f"{rango} · {len(gente)} persona{'s' if len(gente) != 1 else ''} · {total} trabajo{'s' if total != 1 else ''} "
+                  f"terminado{'s' if total != 1 else ''}. Sale de las OT: cada ítem terminado con el número de quién lo hizo.", sub),
+        Spacer(1, 4 * mm),
+    ]
+
+    # Resumen: una fila por persona (y los días, si entran)
+    cab = ["N°", "Nombre"]
+    if con_dias:
+        cab += [f"{DIAS_SEM[date.fromisoformat(d).weekday()][:2]}\n{d[8:10]}" for d in dias]
+    cab += ["Total", "Días con\ntrabajo", "Coches", "En curso"]
+    data = [cab]
+    for r in gente:
+        fila = [str(r["numero"]), Paragraph(r["nombre"] + ("" if r["activo"] else " (baja)"), sm)]
+        if con_dias:
+            fila += [str(r["por_dia"].get(d, 0) or ("0" if d in habiles else "·")) for d in dias]
+        dias_con = len([d for d, n in r["por_dia"].items() if n])
+        fila += [str(r["trabajos"]), f"{dias_con} de {len(habiles)}" if habiles else str(dias_con),
+                 str(r["coches"] or "—"), str(r["en_curso"] or "—")]
+        data.append(fila)
+    if con_dias:
+        data.append(["", Paragraph("<b>Turno</b>", sm)]
+                    + [str(sum(r["por_dia"].get(d, 0) for r in gente) or "·") for d in dias]
+                    + [str(total), "", "", ""])
+    fijos = [9 * mm, 0, 13 * mm, 17 * mm, 14 * mm, 15 * mm]
+    ancho_dia = 9.5 * mm
+    nom = ancho - sum(fijos) - (ancho_dia * len(dias) if con_dias else 0)
+    nom = min(nom, 70 * mm)
+    cols = [fijos[0], nom] + ([ancho_dia] * len(dias) if con_dias else []) + fijos[2:]
+    t = Table(data, colWidths=cols, repeatRows=1, hAlign="LEFT")
+    n_dias = len(dias) if con_dias else 0
+    c_tot = 2 + n_dias
+    estilo = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(AZUL)),
+              ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+              ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+              ("FONTSIZE", (2, 0), (-1, 0), 7.5), ("LEADING", (2, 0), (-1, 0), 9),
+              ("ALIGN", (2, 0), (-1, -1), "CENTER"), ("ALIGN", (0, 0), (0, -1), "CENTER"),
+              ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"), ("FONTNAME", (c_tot, 1), (c_tot, -1), "Helvetica-Bold"),
+              ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+              ("LINEBELOW", (0, 1), (-1, -1), 0.4, colors.HexColor("#D9E2EE")),
+              ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+              ("LEFTPADDING", (2, 0), (-1, -1), 2), ("RIGHTPADDING", (2, 0), (-1, -1), 2)]
+    if con_dias:
+        estilo += [("BACKGROUND", (0, len(data) - 1), (-1, len(data) - 1), colors.HexColor(GRIS_CLARO)),
+                   ("FONTNAME", (0, len(data) - 1), (-1, len(data) - 1), "Helvetica-Bold")]
+        for k, d in enumerate(dias):
+            col = 2 + k
+            if date.fromisoformat(d).weekday() == 6:
+                estilo.append(("BACKGROUND", (col, 1), (col, len(data) - 2), colors.HexColor("#F1F3F7")))
+            for j, r in enumerate(gente, 1):
+                if not r["por_dia"].get(d):
+                    estilo.append(("TEXTCOLOR", (col, j), (col, j), colors.HexColor("#C0392B" if d in habiles else "#A0A8B5")))
+    for j, r in enumerate(gente, 1):
+        if not r["trabajos"]:
+            estilo.append(("TEXTCOLOR", (0, j), (1, j), colors.HexColor(GRIS)))
+    t.setStyle(TableStyle(estilo))
+    story.append(t)
+    if con_dias:
+        story += [Spacer(1, 2 * mm), Paragraph("En rojo: día de semana (lunes a sábado) sin ningún trabajo terminado con su número. "
+                                               "Puede ser que no haya venido, que haya estado en un trabajo largo que todavía no se "
+                                               "terminó, o que no se haya anotado su número en la OT.", sub)]
+
+    # Detalle: cada día, quién hizo qué. Los días en que nadie del turno
+    # terminó nada van todos juntos en una línea (si no, son hojas vacías).
+    vacios = [d for d in habiles if not detalle.get(d)]
+    if vacios:
+        story += [Spacer(1, 3 * mm),
+                  Paragraph(f"<b>Días sin ningún trabajo del turno</b> ({len(vacios)}): "
+                            + ", ".join(_fdm(d)[:5] for d in vacios) + ".", sm)]
+    for d in dias or sorted(detalle):
+        dd = detalle.get(d, {})
+        if not dd:
+            continue
+        filas = [["N°", "Nombre", "Coche", "OT", "Trabajo"]]
+        estilo_d = []
+        for r in gente:
+            trab = dd.get(r["id"], [])
+            if not trab:
+                if not r["activo"]:
+                    continue
+                filas.append([str(r["numero"]), Paragraph(r["nombre"], smg), "", "",
+                              Paragraph("<i>Sin trabajos terminados con su número</i>", smg)])
+                estilo_d.append(("TEXTCOLOR", (0, len(filas) - 1), (-1, len(filas) - 1), colors.HexColor(GRIS)))
+                continue
+            for k, x in enumerate(trab):
+                txt = x["descripcion"] + (f" <font color='{GRIS}'>· con N°{', '.join(map(str, x['con']))}</font>" if x["con"] else "")
+                filas.append([str(r["numero"]) if k == 0 else "", Paragraph(r["nombre"], sm) if k == 0 else "",
+                              x["coche"], f"#{x['ot_id']}", Paragraph(txt, sm)])
+            if len(trab) > 1:
+                estilo_d.append(("LINEBELOW", (0, len(filas) - 1), (-1, len(filas) - 1), 0.6, colors.HexColor("#B9C6D8")))
+        n = sum(len(v) for v in dd.values())
+        ct = Table(filas, colWidths=[9 * mm, 48 * mm, 16 * mm, 14 * mm, ancho - 87 * mm], repeatRows=1, hAlign="LEFT")
+        ct.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(GRIS_CLARO)),
+                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+                                ("FONTNAME", (0, 1), (0, -1), "Helvetica-Bold"), ("FONTNAME", (2, 1), (2, -1), "Helvetica-Bold"),
+                                ("ALIGN", (0, 0), (0, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#E3E8EF")),
+                                ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3)] + estilo_d))
+        f = date.fromisoformat(d)
+        cab_d = Paragraph(f"{DIAS_SEM[f.weekday()]} {_fdm(d)} <font size=8.5 color='{GRIS}'>· {n} trabajo{'s' if n != 1 else ''}"
+                          f" de {len(dd)} persona{'s' if len(dd) != 1 else ''}</font>", h2)
+        story.append(KeepTogether([cab_d, ct]) if len(filas) <= 14 else cab_d)
+        if len(filas) > 14:
+            story.append(ct)
+    if not dias and not detalle:
+        story += [Spacer(1, 4 * mm), Paragraph("No hay trabajos terminados del turno en este período.", sub)]
+
+    impresa = _fdm(_hoy_txt())
+    def pie(c, _doc):
+        c.saveState()
+        c.setFont("Helvetica", 7.5)
+        c.setFillColor(colors.HexColor(GRIS))
+        c.drawRightString(pag[0] - 14 * mm, 8 * mm, f"Hoja {c.getPageNumber()} · impresa el {impresa}")
+        c.restoreState()
+    doc.build(story, onFirstPage=pie, onLaterPages=pie)
     buf.seek(0)
     return buf
 
@@ -1635,7 +1888,7 @@ def api_resumen():
     if not _puede_ver():
         return _no()
     desde, hasta, _ = _periodo_req()
-    return jsonify(resumen(desde, hasta, request.args.get("vehiculo_id") or None))
+    return jsonify(resumen(desde, hasta, request.args.get("vehiculo_id") or None, request.args.get("turno") or ""))
 
 
 @bp_personal.route("/api/personal/<int:pid>/trabajos", methods=["GET"])
@@ -1713,7 +1966,18 @@ def api_pdf_informe():
     if not _puede_ver():
         return _no()
     desde, hasta, _ = _periodo_req()
-    buf = pdf_informe(resumen(desde, hasta, request.args.get("vehiculo_id") or None))
+    turno = request.args.get("turno") or ""
+    res = resumen(desde, hasta, request.args.get("vehiculo_id") or None, turno)
+    if res["turno"]:
+        conn = get_connection()
+        try:
+            detalle = _trabajos_del_turno(conn, [r["id"] for r in res["ranking"]], desde, hasta,
+                                          request.args.get("vehiculo_id") or None)
+        finally:
+            conn.close()
+        return send_file(pdf_turno(res, detalle), mimetype="application/pdf", as_attachment=False,
+                         download_name=f"turno-{res['turno']}-{desde}-{hasta}.pdf")
+    buf = pdf_informe(res)
     return send_file(buf, mimetype="application/pdf", as_attachment=False,
                      download_name=f"trabajo-personal-{desde}-{hasta}.pdf")
 
