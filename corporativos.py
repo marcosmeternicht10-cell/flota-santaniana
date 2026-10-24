@@ -2302,15 +2302,38 @@ def rendiciones_sospechosas(desde=None, hasta=None):
 
 
 def eliminar_rendiciones(ids):
-    """Borra varias rendiciones de una. Saltea las ya liquidadas."""
-    borradas, saltadas = 0, 0
-    for rid in ids:
-        ok, _ = eliminar_rendicion(rid)
-        if ok:
-            borradas += 1
-        else:
-            saltadas += 1
-    msg = f"Se eliminaron {borradas} servicio(s)."
+    """Borra varias rendiciones de una (en una sola pasada a la base). Saltea
+    las ya liquidadas: esas se tocan solo después de deshacer la liquidación."""
+    ids = sorted({int(i) for i in ids or [] if str(i).strip().lstrip("-").isdigit()})
+    if not ids:
+        return 0, 0, "No seleccionaste nada."
+    conn = get_connection()
+    try:
+        filas = []
+        for k in range(0, len(ids), 500):
+            tramo = ids[k:k + 500]
+            filas += [dict(r) for r in conn.execute(
+                f"""SELECT id, chofer_nombre, fecha_servicio, COALESCE(monto, 0) AS monto, liquidado
+                    FROM rendiciones_corp WHERE id IN ({','.join('?' * len(tramo))})""", tramo).fetchall()]
+        libres = [f for f in filas if not f["liquidado"]]
+        borrar = [f["id"] for f in libres]
+        for k in range(0, len(borrar), 500):
+            tramo = borrar[k:k + 500]
+            conn.execute(f"DELETE FROM rendiciones_corp WHERE id IN ({','.join('?' * len(tramo))})", tramo)
+        conn.commit()
+    finally:
+        conn.close()
+    borradas, saltadas = len(libres), len(filas) - len(libres)
+    msg = f"Se eliminaron {borradas} servicio(s)"
+    if libres:
+        choferes = sorted({f["chofer_nombre"] or "?" for f in libres})
+        fechas = sorted(str(f["fecha_servicio"] or "")[:10] for f in libres)
+        dm = lambda f: f"{f[8:10]}/{f[5:7]}" if len(f) >= 10 else f
+        total = sum(float(f["monto"] or 0) for f in libres)
+        msg += (f" de {choferes[0]}" if len(choferes) == 1 else f" de {len(choferes)} choferes")
+        msg += f" ({dm(fechas[0])}" + (f" al {dm(fechas[-1])}" if fechas[-1] != fechas[0] else "")
+        msg += ", Gs. " + f"{total:,.0f}".replace(",", ".") + ")"
+    msg += "."
     if saltadas:
         msg += f" {saltadas} no se tocaron por estar ya liquidados."
     return borradas, saltadas, msg
