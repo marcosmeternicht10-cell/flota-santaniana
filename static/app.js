@@ -10964,6 +10964,7 @@ async function renderCorpResumen() {
             <button class="btn btn-pdf" onclick="descargarRendicionesPDF(false)" title="Una hoja por chofer con el detalle de sus servicios"><i class="ti ti-file-description"></i> PDF detallado</button>
             ${puedeOperarCorp() ? `
             <button class="btn btn-ghost" onclick="abrirDescartables()"><i class="ti ti-eraser"></i> Limpiar servicios</button>
+            <button class="btn btn-ghost" onclick="bpcAbrir()"><i class="ti ti-user-x"></i> Borrar por chofer</button>
             <button class="btn btn-ghost" onclick="abrirSospechosas()"><i class="ti ti-shield-search"></i> Revisar cargas</button>` : ""}
             ${puedeGestionarCorp() ? `
             <button class="btn btn-ghost" onclick="verAccesosChoferes()"><i class="ti ti-key"></i> Accesos</button>
@@ -11425,6 +11426,119 @@ async function borrarRendicion(id, chofer, fecha) {
   const r = await api(`/api/corp/rendicion/${id}`, { method: "DELETE" });
   toast(r.msg || (r.ok ? "Eliminado" : "No se pudo"), r.ok ? "success" : "error");
   if (r.ok) cargarRendiciones();
+}
+
+// ─── Borrar servicios de un chofer (en un rango de fechas) ───
+// Se ven todos sus servicios del período, se marcan los que van y se borran
+// de una. Los liquidados no se pueden: primero se deshace la liquidación.
+const bpc = { rends: [], sel: new Set() };
+const BPC_EST = { completado: "Completo", entrante: "Entrante", saliente: "Saliente", suspendido: "Suspendido" };
+function bpcAbrir() {
+  const opts = [...($("#corp-chofer")?.options || [])].filter(o => o.value);
+  const elegido = $("#corp-chofer")?.value || "";
+  rvModal({
+    titulo: "Borrar servicios de un chofer", icono: "user-x", ancho: 860, clase: "bpc-modal",
+    sub: "Elegí el chofer y las fechas, marcá los servicios que van y borralos de una. Los tramos quedan libres para volver a cargarlos.",
+    cuerpo: `
+      <div class="bpc-filtros">
+        <label class="rv-f bpc-f-ch"><span>Chofer</span><select class="rv-sel" id="bpc-chofer" onchange="bpcTraer()">
+          <option value="">Elegí un chofer…</option>
+          ${opts.map(o => `<option value="${trEsc(o.value)}" ${o.value === elegido ? "selected" : ""}>${trEsc(o.textContent)}</option>`).join("")}
+        </select></label>
+        <label class="rv-f"><span>Desde</span><input type="date" id="bpc-desde" value="${$("#corp-desde")?.value || ""}" onchange="bpcTraer()"></label>
+        <label class="rv-f"><span>Hasta</span><input type="date" id="bpc-hasta" value="${$("#corp-hasta")?.value || ""}" onchange="bpcTraer()"></label>
+      </div>
+      <div id="bpc-lista"><div class="bpc-vacio"><i class="ti ti-user-search"></i> Elegí un chofer para ver sus servicios.</div></div>`,
+    pie: `<span class="bpc-cuenta" id="bpc-cuenta"></span>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-danger" id="bpc-borrar" onclick="bpcBorrar(this)" disabled><i class="ti ti-trash"></i> Borrar</button>`,
+  });
+  bpc.rends = []; bpc.sel = new Set();
+  if (elegido) bpcTraer();
+}
+async function bpcTraer() {
+  const ch = $("#bpc-chofer")?.value, desde = $("#bpc-desde")?.value, hasta = $("#bpc-hasta")?.value;
+  const box = $("#bpc-lista");
+  bpc.rends = []; bpc.sel = new Set();
+  bpcContar();
+  if (!box) return;
+  if (!ch) { box.innerHTML = `<div class="bpc-vacio"><i class="ti ti-user-search"></i> Elegí un chofer para ver sus servicios.</div>`; return; }
+  if (desde && hasta && desde > hasta) { box.innerHTML = `<div class="bpc-vacio">La fecha <b>desde</b> es después de la <b>hasta</b>.</div>`; return; }
+  box.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const p = new URLSearchParams({ chofer: ch });
+  if (desde) p.set("desde", desde);
+  if (hasta) p.set("hasta", hasta);
+  const r = await api(`/api/corp/rendiciones?${p}`);
+  if ($("#bpc-chofer")?.value !== ch) return;            // cambió mientras cargaba
+  bpc.rends = ((r && r.rendiciones) || []).slice().sort((a, b) => (a.fecha_servicio || "").localeCompare(b.fecha_servicio || "") || a.id - b.id);
+  bpcPintar();
+}
+function bpcPintar() {
+  const box = $("#bpc-lista");
+  if (!box) return;
+  const rs = bpc.rends;
+  if (!rs.length) { box.innerHTML = `<div class="bpc-vacio"><i class="ti ti-clipboard-off"></i> No tiene servicios en esas fechas.</div>`; bpcContar(); return; }
+  const libres = rs.filter(r => !r.liquidado), liq = rs.length - libres.length;
+  const susp = libres.filter(r => r.estado === "suspendido").length;
+  let ant = "";
+  box.innerHTML = `
+    <div class="bpc-acc">
+      <span><b>${rs.length}</b> servicio${rs.length === 1 ? "" : "s"}${liq ? ` · <span class="bpc-lq"><i class="ti ti-lock"></i> ${liq} liquidado${liq === 1 ? "" : "s"} (no se pueden borrar)</span>` : ""}</span>
+      <span class="bpc-acc-b">
+        ${libres.length ? `<button class="pv-link" onclick="bpcMarcar('todos')">Marcar todos (${libres.length})</button>` : ""}
+        ${susp ? `<button class="pv-link" onclick="bpcMarcar('susp')">Solo suspendidos (${susp})</button>` : ""}
+        <button class="pv-link" onclick="bpcMarcar('nada')">Ninguno</button>
+      </span>
+    </div>
+    <div class="bpc-tabla" role="table">
+      ${rs.map(r => {
+        const f = (r.fecha_servicio || "").slice(0, 10);
+        const cab = f !== ant ? `<div class="bpc-dia" role="row">${otDiaTxt(f)}</div>` : "";
+        ant = f;
+        return cab + `<label class="bpc-fila ${r.liquidado ? "liq" : ""} ${bpc.sel.has(r.id) ? "on" : ""}" role="row">
+          <input type="checkbox" ${r.liquidado ? "disabled" : ""} ${bpc.sel.has(r.id) ? "checked" : ""} onchange="bpcTocar(${r.id}, this.checked, this)" aria-label="Borrar este servicio">
+          <span class="badge">${trEsc(r.cliente || "")}</span>
+          <span class="bpc-tramo">${trEsc(r.tramo || "")}</span>
+          <span class="bpc-bus">#${trEsc(r.bus_interno || "—")}</span>
+          <span class="bpc-hora">${trEsc(r.hora_inicio || "")}${r.hora_fin ? "–" + trEsc(r.hora_fin) : ""}</span>
+          <span class="badge ${r.estado === "suspendido" ? "danger" : r.estado === "completado" ? "success" : ""}">${BPC_EST[r.estado] || trEsc(r.estado || "")}</span>
+          <span class="bpc-monto">${r.liquidado ? `<i class="ti ti-lock" title="Liquidado"></i> ` : ""}${r.monto ? fmtNum(r.monto) : "—"}</span>
+        </label>`;
+      }).join("")}
+    </div>`;
+  bpcContar();
+}
+function bpcTocar(id, on, el) {
+  on ? bpc.sel.add(id) : bpc.sel.delete(id);
+  el?.closest(".bpc-fila")?.classList.toggle("on", on);
+  bpcContar();
+}
+function bpcMarcar(que) {
+  bpc.sel = new Set(bpc.rends.filter(r => !r.liquidado && (que === "todos" || (que === "susp" && r.estado === "suspendido"))).map(r => r.id));
+  bpcPintar();
+}
+function bpcContar() {
+  const n = bpc.sel.size;
+  const total = bpc.rends.filter(r => bpc.sel.has(r.id)).reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const c = $("#bpc-cuenta"), b = $("#bpc-borrar");
+  if (c) c.innerHTML = n ? `<b>${n}</b> marcado${n === 1 ? "" : "s"} · Gs. ${fmtNum(total)}` : "";
+  if (b) { b.disabled = !n; b.innerHTML = `<i class="ti ti-trash"></i> ${n ? `Borrar ${n} servicio${n === 1 ? "" : "s"}` : "Borrar"}`; }
+}
+async function bpcBorrar(btn) {
+  const ids = [...bpc.sel];
+  if (!ids.length) return;
+  const nombre = $("#bpc-chofer")?.selectedOptions[0]?.textContent || "el chofer";
+  const sel = bpc.rends.filter(r => bpc.sel.has(r.id));
+  const fechas = sel.map(r => (r.fecha_servicio || "").slice(0, 10)).sort();
+  const total = sel.reduce((s, r) => s + (Number(r.monto) || 0), 0);
+  const dm = f => `${f.slice(8, 10)}/${f.slice(5, 7)}`;
+  if (!confirm(`¿Borrar ${ids.length} servicio${ids.length === 1 ? "" : "s"} de ${nombre}?\n\n${fechas[0] === fechas[fechas.length - 1] ? "Del " + dm(fechas[0]) : `Del ${dm(fechas[0])} al ${dm(fechas[fechas.length - 1])}`} · Gs. ${fmtNum(total)}\n\nLos tramos quedan libres para volver a cargarlos. No se puede deshacer.`)) return;
+  btn.disabled = true;
+  const r = await api("/api/corp/eliminar_lote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) });
+  if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo borrar", "error"); btn.disabled = false; return; }
+  toast(r.msg || "Borrados", "success");
+  await bpcTraer();
+  if ($("#corp-resultado")) cargarRendiciones();
 }
 
 // ─── Limpieza de servicios suspendidos o cargados a medias ───

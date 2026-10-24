@@ -7780,3 +7780,38 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
 .ot-volver-todo .ti { font-size: 16px; }
 .td-action .ot-volver-btn:hover { color: var(--brand-blue); }
 .ot-items .td-action { white-space: nowrap; width: auto; }
+
+/* Borrar servicios corporativos por chofer */
+.bpc-filtros { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 10px; margin-bottom: 12px; }
+.bpc-vacio { text-align: center; color: var(--muted); padding: 34px 10px; font-size: 14px; }
+.bpc-vacio .ti { display: block; font-size: 32px; opacity: .5; margin-bottom: 6px; }
+.bpc-acc { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; font-size: 13px; padding: 4px 2px 8px; }
+.bpc-acc-b { display: flex; gap: 14px; flex-wrap: wrap; }
+.bpc-lq { color: var(--muted); }
+.bpc-tabla { max-height: 52vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 10px; }
+.bpc-dia { position: sticky; top: 0; z-index: 1; background: var(--surface2); padding: 6px 12px; font: 700 12px "Inter", sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; border-bottom: 1px solid var(--border); }
+.bpc-fila { display: grid; grid-template-columns: 22px auto minmax(0, 1fr) 54px 92px 96px 92px; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; cursor: pointer; }
+.bpc-fila:last-child { border-bottom: 0; }
+.bpc-fila:hover { background: var(--surface2); }
+.bpc-fila.on { background: #fdeaec; }
+.bpc-fila.liq { cursor: default; color: var(--muted); }
+.bpc-fila.liq:hover { background: none; }
+.bpc-fila input { width: 17px; height: 17px; accent-color: var(--danger, #c0392b); }
+.bpc-tramo { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bpc-bus { font-weight: 700; text-align: center; }
+.bpc-hora { font-size: 12px; color: var(--muted); text-align: center; }
+.bpc-fila .badge { justify-self: start; font-size: 11px; }
+.bpc-monto { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bpc-cuenta { margin-right: auto; font-size: 13.5px; }
+@media (max-width: 720px) {
+  .bpc-filtros { grid-template-columns: 1fr 1fr; }
+  .bpc-filtros .bpc-f-ch { grid-column: 1 / -1; }
+  .bpc-fila { grid-template-columns: 22px auto minmax(0, 1fr) auto; grid-template-areas: "c t t m" "c k b e"; row-gap: 4px; column-gap: 8px; }
+  .bpc-fila > input { grid-area: c; }
+  .bpc-fila > .badge:first-of-type { grid-area: k; }
+  .bpc-tramo { grid-area: t; color: var(--text); }
+  .bpc-monto { grid-area: m; }
+  .bpc-bus { grid-area: b; text-align: left; font-size: 12px; }
+  .bpc-hora { display: none; }
+  .bpc-fila > .badge:last-of-type { grid-area: e; justify-self: end; }
+}
