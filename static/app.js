@@ -18484,11 +18484,15 @@ async function pvOtAgregar() {
 // ítem, se pone el número de quién hizo el trabajo —uno o varios— y de ahí
 // sale quién trabaja más, en qué coches y lo que quedó sin número.
 const pt = {
-  lista: null, cargando: null, tab: "trabajo", p: "30", vid: "", puesto: "",
-  res: null, bajas: false, vehiculos: null, seq: 0,
+  lista: null, cargando: null, tab: "trabajo", p: "30", vid: "", puesto: "", turno: "",
+  res: null, bajas: false, vehiculos: null, seq: 0, celda: null,
 };
-const PT_PERIODOS = [["7", "7 días"], ["30", "30 días"], ["90", "90 días"], ["anio", "Este año"], ["todo", "Todo"]];
-const PT_PERIODO_TXT = { "7": "últimos 7 días", "30": "últimos 30 días", "90": "últimos 90 días", anio: "este año", todo: "desde siempre" };
+const PT_PERIODOS = [["hoy", "Hoy"], ["ayer", "Ayer"], ["semana", "Esta semana"], ["7", "7 días"], ["30", "30 días"], ["90", "90 días"], ["anio", "Este año"], ["todo", "Todo"]];
+const PT_PERIODO_TXT = { hoy: "hoy", ayer: "ayer", semana: "esta semana", "7": "últimos 7 días", "30": "últimos 30 días", "90": "últimos 90 días", anio: "este año", todo: "desde siempre" };
+const PT_TURNO = { manana: "Mañana", tarde: "Tarde", noche: "Noche" };
+const PT_HORARIO = { manana: "06:00 a 14:00", tarde: "14:00 a 22:00", noche: "22:00 a 06:00" };
+const PT_DSEM = ["Do", "Lu", "Ma", "Mi", "Ju", "Vi", "Sá"];
+const PT_DSEM_L = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const PT_TIPO = { preventivo: "Preventivo", correctivo: "Correctivo", neumaticos: "Neumáticos", control: "Control", otro: "Otro" };
 const ptEsc = s => trEsc(s);
 const ptPuede = () => ["admin", "taller", "compras"].includes(window.USUARIO_ROL);
@@ -18759,13 +18763,13 @@ function ptIr(tab) {
   if (acc) acc.innerHTML = tab === "lista"
     ? `<button class="btn btn-ghost" onclick="window.open('/api/personal/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir la lista</button>
        ${ptPuede() ? `<button class="btn btn-primary" onclick="ptEditar()"><i class="ti ti-user-plus"></i> Agregar persona</button>` : ""}`
-    : `<button class="btn btn-ghost" onclick="ptInformePdf()"><i class="ti ti-file-type-pdf"></i> Informe PDF</button>`;
+    : `<button class="btn btn-ghost" id="pt-btn-pdf" onclick="ptInformePdf()"><i class="ti ti-file-type-pdf"></i> ${pt.turno ? `Producción del turno ${(PT_TURNO[pt.turno] || "").toLowerCase()} (PDF)` : "Informe PDF"}</button>`;
   const c = $("#pt-cuerpo");
   if (c) c.innerHTML = pvCargando();
   (tab === "lista" ? ptLista : ptTrabajo)();
 }
 function ptQuery() {
-  return `p=${encodeURIComponent(pt.p)}${pt.vid ? `&vehiculo_id=${pt.vid}` : ""}`;
+  return `p=${encodeURIComponent(pt.p)}${pt.vid ? `&vehiculo_id=${pt.vid}` : ""}${pt.turno ? `&turno=${pt.turno}` : ""}`;
 }
 function ptInformePdf() { window.open(`/api/personal/informe.pdf?${ptQuery()}`, "_blank"); }
 
@@ -18775,6 +18779,7 @@ async function ptTrabajo() {
   const c = $("#pt-cuerpo");
   if (!c || pt.tab !== "trabajo") return;
   c.innerHTML = `
+    <div class="pt-seg pt-turnos" id="pt-turnos" role="tablist" aria-label="Turno" hidden></div>
     <div class="pt-filtros">
       <div class="pt-seg" role="tablist" aria-label="Período">
         ${PT_PERIODOS.map(([k, t]) => `<button role="tab" class="${pt.p === k ? "on" : ""}" data-p="${k}" onclick="ptPeriodo('${k}')">${t}</button>`).join("")}
@@ -18786,8 +18791,12 @@ async function ptTrabajo() {
   window["_cocheCB_pt-coche"] = v => { pt.vid = v ? String(v) : ""; ptTraer(); };
   ptTraer();
 }
+function ptTurno(t) {
+  pt.turno = t; pt.celda = null;
+  ptTraer();
+}
 function ptPeriodo(k) {
-  pt.p = k;
+  pt.p = k; pt.celda = null;
   document.querySelectorAll(".pt-seg button").forEach(b => b.classList.toggle("on", b.dataset.p === k));
   ptTraer();
 }
@@ -18801,6 +18810,14 @@ async function ptTraer() {
   if (!d || !d.ranking) { $("#pt-datos").innerHTML = pvError("No se pudo traer el trabajo del personal"); return; }
   pt.res = d;
   if (!pt.lista) ptCargarLista();
+  const tb = $("#pt-turnos");
+  if (tb) {
+    tb.hidden = !d.turnos.length;
+    tb.innerHTML = d.turnos.length ? [`<button role="tab" class="${!pt.turno ? "on" : ""}" onclick="ptTurno('')"><i class="ti ti-building-warehouse"></i> Todo el taller</button>`]
+      .concat(d.turnos.map(x => `<button role="tab" class="${pt.turno === x.turno ? "on" : ""}" onclick="ptTurno('${x.turno}')"><i class="ti ti-${x.turno === "noche" ? "moon" : x.turno === "tarde" ? "sunset-2" : "sun"}"></i> Turno ${x.nombre.toLowerCase()} <small>${ptEsc(x.horario)} · ${x.personas}</small></button>`)).join("") : "";
+  }
+  const bp = $("#pt-btn-pdf");
+  if (bp) bp.innerHTML = `<i class="ti ti-file-type-pdf"></i> ${pt.turno ? `Producción del turno ${(PT_TURNO[pt.turno] || "").toLowerCase()} (PDF)` : "Informe PDF"}`;
   const puestos = [...new Set(d.ranking.map(r => r.puesto).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
   if (pt.puesto && !puestos.includes(pt.puesto)) pt.puesto = "";
   const sel = $("#pt-puesto");
@@ -18819,14 +18836,15 @@ function ptPintar() {
   const max = Math.max(1, ...rk.map(r => r.trabajos));
   const top = d.ranking.find(r => r.trabajos);
   const per = PT_PERIODO_TXT[pt.p] || "";
-  const alcance = d.coche ? `Coche ${ptEsc(d.coche)} · ${per}` : per;
+  const tu = d.turno ? d.turnos.find(x => x.turno === d.turno) : null;
+  const alcance = (tu ? `Turno ${tu.nombre.toLowerCase()} · ` : "") + (d.coche ? `Coche ${ptEsc(d.coche)} · ${per}` : per);
   const pct = t.terminados ? Math.round(t.con_numero * 100 / t.terminados) : null;
   const puede = ptPuede();
   const fila = r => `
     <div class="pt-fila ${r.trabajos ? "" : "cero"} ${r.activo ? "" : "baja"}" role="row" tabindex="0"
          onclick="ptFicha(${r.id})" onkeydown="if(event.key==='Enter')ptFicha(${r.id})">
       <span class="pt-num">${r.numero}</span>
-      <span class="pt-quien"><b>${ptEsc(r.nombre)}${r.activo ? "" : ` <em class="pt-baja-tag">de baja</em>`}</b><small>${ptEsc(r.puesto || "—")}</small></span>
+      <span class="pt-quien"><b>${ptEsc(r.nombre)}${r.activo ? "" : ` <em class="pt-baja-tag">de baja</em>`}</b><small>${ptEsc(r.puesto || "—")}${r.turno && !d.turno ? ` · <span class="pt-turno-tag">${PT_TURNO[r.turno] || ""}</span>` : ""}</small></span>
       <span class="pt-t">${ptBarra(r.trabajos, max)}<b>${r.trabajos}</b></span>
       <span class="pt-c num">${r.coches || "—"}</span>
       <span class="pt-e num">${r.en_curso ? `<span class="pt-curso">${r.en_curso}</span>` : "—"}</span>
@@ -18872,6 +18890,7 @@ function ptPintar() {
         <span class="pv-kpi-ic ${t.sin_numero ? "pe-pronto" : "pe-ok"}"><i class="ti ti-${t.sin_numero ? "user-question" : "checks"}"></i></span><span class="pv-kpi-et">Terminados sin nadie</span>
         <b>${t.sin_numero}</b><span class="pv-kpi-sub">${t.sin_numero ? "falta poner quién lo hizo" : "todo lo terminado tiene a alguien"}</span></div>
     </div>
+    ${d.turno ? ptDiaPorDia(d, rk) : ""}
     <div class="pv-cu-grid pt-grid">
       <div class="pv-card">
         <div class="pv-card-cab"><h3>Quién hizo más</h3><span>${pt.puesto ? ptEsc(pt.puesto) + " · " : ""}Tocá a alguien para ver sus trabajos</span></div>
@@ -18912,6 +18931,82 @@ function ptPintar() {
     </div>`;
   // Si la lista del personal llegó después, se completan los selects
   if (d.escritos.length && !pt.lista) ptCargarLista().then(() => { if (pt.res === d) ptPintar(); });
+}
+// Producción de un turno: una fila por persona y una columna por día. Tocando
+// un número se ve qué hizo ese día; tocando el día, lo de todos.
+function ptDiaPorDia(d, rk) {
+  const gente = rk.filter(r => r.activo || r.trabajos).sort((a, b) => a.numero - b.numero);
+  const dias = d.dias || [];
+  if (!gente.length) return "";
+  const dow = f => new Date(f + "T12:00").getDay();
+  const habil = f => dow(f) !== 0;
+  const tu = d.turnos.find(x => x.turno === d.turno);
+  const cab = `<div class="pv-card-cab"><h3>${dias.length === 1 ? `Qué hizo cada uno · ${PT_DSEM_L[dow(dias[0])]} ${ptFC(dias[0])}` : "Día por día"}</h3>
+    <span>Turno ${ptEsc((tu?.nombre || "").toLowerCase())}${tu?.horario ? " · " + ptEsc(tu.horario) : ""}${dias.length > 1 ? " · tocá un número para ver qué hizo" : ""}</span></div>`;
+  // Un solo día: la lista de cada uno directamente
+  if (dias.length === 1) {
+    const dd = (d.detalle || {})[dias[0]] || {};
+    return `<div class="pv-card pt-dxd-card">${cab}<div class="pt-dxd-uno">${gente.map(r => {
+      const tr = dd[r.id] || [];
+      return `<div class="pt-dxd-p ${tr.length ? "" : "cero"}">
+        <span class="pt-num">${r.numero}</span>
+        <div><b>${ptEsc(r.nombre)}</b> <small>${tr.length ? `${tr.length} trabajo${tr.length === 1 ? "" : "s"}` : (habil(dias[0]) ? "sin trabajos terminados con su número" : "domingo")}</small>
+          ${tr.length ? `<ul>${tr.map(ptTrDia).join("")}</ul>` : ""}</div>
+      </div>`;
+    }).join("")}</div></div>`;
+  }
+  if (!dias.length) {
+    return `<div class="pv-card pt-dxd-card">${cab}<p class="pt-nota">El día por día se ve con períodos de hasta 2 meses. Elegí <b>Esta semana</b>, <b>7 días</b> o <b>30 días</b>.</p></div>`;
+  }
+  const habiles = dias.filter(habil).length;
+  const max = Math.max(1, ...gente.flatMap(r => Object.values(r.por_dia || {})));
+  const sel = pt.celda;
+  const celda = (r, f) => {
+    const n = (r.por_dia || {})[f] || 0;
+    const on = sel && sel.f === f && (sel.pid === r.id || sel.pid === 0);
+    return `<td class="${n ? "" : habil(f) ? "cero" : "dom"}${on ? " on" : ""}">${n
+      ? `<button style="--a:${(0.18 + 0.82 * n / max).toFixed(2)}" onclick="ptDiaCelda(${r.id}, '${f}')" aria-label="${ptEsc(r.nombre)}, ${ptFC(f)}: ${n} trabajos">${n}</button>`
+      : `<span>${habil(f) ? "0" : "·"}</span>`}</td>`;
+  };
+  const tot = f => gente.reduce((s, r) => s + ((r.por_dia || {})[f] || 0), 0);
+  let panel = "";
+  if (sel) {
+    const dd = (d.detalle || {})[sel.f] || {};
+    const quienes = sel.pid ? gente.filter(r => r.id === sel.pid) : gente;
+    panel = `<div class="pt-dxd-panel">
+      <div class="pt-dxd-panel-cab"><b>${PT_DSEM_L[dow(sel.f)]} ${ptFC(sel.f)}</b>${sel.pid ? ` · N°${quienes[0]?.numero} ${ptEsc(quienes[0]?.nombre || "")}` : " · todo el turno"}
+        <button class="pv-link" onclick="pt.celda=null;ptPintar()">Cerrar</button></div>
+      ${quienes.map(r => {
+        const tr = dd[r.id] || [];
+        if (!tr.length && sel.pid === 0 && !r.activo) return "";
+        return `<div class="pt-dxd-p ${tr.length ? "" : "cero"}"><span class="pt-num">${r.numero}</span>
+          <div><b>${ptEsc(r.nombre)}</b> <small>${tr.length ? `${tr.length} trabajo${tr.length === 1 ? "" : "s"}` : "sin trabajos terminados con su número"}</small>
+          ${tr.length ? `<ul>${tr.map(ptTrDia).join("")}</ul>` : ""}</div></div>`;
+      }).join("")}
+    </div>`;
+  }
+  return `<div class="pv-card pt-dxd-card">${cab}
+    <div class="pt-dxd-scroll"><table class="pt-dxd">
+      <thead><tr><th class="pt-dxd-nom">Persona</th>${dias.map(f => `<th class="${habil(f) ? "" : "dom"}${sel && sel.f === f && !sel.pid ? " on" : ""}"><button onclick="ptDiaCelda(0, '${f}')" title="Ver lo de todos ese día">${PT_DSEM[dow(f)]}<b>${f.slice(8, 10)}</b></button></th>`).join("")}<th class="pt-dxd-t">Total</th><th class="pt-dxd-t">Días</th></tr></thead>
+      <tbody>${gente.map(r => {
+        const con = Object.values(r.por_dia || {}).filter(Boolean).length;
+        return `<tr><th class="pt-dxd-nom"><span class="pt-num">${r.numero}</span>${ptEsc(r.nombre.split(" ").slice(0, 2).join(" "))}</th>${dias.map(f => celda(r, f)).join("")}
+          <td class="pt-dxd-t"><b>${r.trabajos}</b></td><td class="pt-dxd-t ${con < habiles ? "falta" : ""}">${con}<small>/${habiles}</small></td></tr>`;
+      }).join("")}</tbody>
+      <tfoot><tr><th class="pt-dxd-nom">Turno</th>${dias.map(f => `<td>${tot(f) || "·"}</td>`).join("")}<td class="pt-dxd-t"><b>${gente.reduce((s, r) => s + r.trabajos, 0)}</b></td><td></td></tr></tfoot>
+    </table></div>
+    <p class="pt-nota"><span class="pt-dxd-ley"></span> Día de lunes a sábado sin ningún trabajo terminado con su número: no vino, estuvo en un trabajo largo que todavía no se cerró, o no se anotó su número en la OT.</p>
+    ${panel}
+  </div>`;
+}
+function ptTrDia(x) {
+  return `<li><span class="pt-tr-coche">${ptEsc(x.coche || "—")}</span><span>${ptEsc(x.descripcion)}${x.con && x.con.length ? ` <small>· con N°${x.con.join(", ")}</small>` : ""}</span>
+    <button class="pv-link" onclick="abrirOT(${x.ot_id})">OT #${x.ot_id}</button></li>`;
+}
+function ptDiaCelda(pid, f) {
+  pt.celda = pt.celda && pt.celda.pid === pid && pt.celda.f === f ? null : { pid, f };
+  ptPintar();
+  if (pt.celda) document.querySelector(".pt-dxd-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 async function ptAsignarSin(inp, iid) {
   const v = inp.value.trim().replace(/^n[°º.]?\s*/i, "").replace(/^#/, "");
@@ -18966,7 +19061,7 @@ async function ptFicha(pid, periodo) {
   if (!f || !f.persona) { o.querySelector(".rv-modal-cuerpo").innerHTML = pvError("No se pudo traer la ficha"); return; }
   const p = f.persona;
   o.querySelector(".rv-modal-ic").outerHTML = `<span class="rv-modal-ic pt-ficha-num">${p.numero}</span>`;
-  o.querySelector(".rv-modal-tit").innerHTML = `<h2>${ptEsc(p.nombre)}</h2><p>${[p.puesto, p.edad_actual ? p.edad_actual + " años" : "", p.activo ? "" : "de baja"].filter(Boolean).map(ptEsc).join(" · ") || "Sin puesto"}</p>`;
+  o.querySelector(".rv-modal-tit").innerHTML = `<h2>${ptEsc(p.nombre)}</h2><p>${[p.puesto, p.turno ? `Turno ${(PT_TURNO[p.turno] || "").toLowerCase()}${p.horario ? " (" + p.horario + ")" : ""}` : "", p.edad_actual ? p.edad_actual + " años" : "", p.activo ? "" : "de baja"].filter(Boolean).map(ptEsc).join(" · ") || "Sin puesto"}</p>`;
   const maxC = Math.max(1, ...f.coches.map(c => c.n));
   const trabajo = t => `
     <div class="pt-tr">
@@ -19023,7 +19118,7 @@ async function ptLista() {
           <div class="pt-lf ${p.activo ? "" : "baja"}" role="row" ${puede ? `onclick="ptEditar(${p.id})" tabindex="0" onkeydown="if(event.key==='Enter')ptEditar(${p.id})"` : ""}>
             <span class="pt-num">${p.numero}</span>
             <span class="pt-l-nom"><b>${ptEsc(p.nombre)}</b>${p.activo ? "" : `<em class="pt-baja-tag">de baja</em>`}</span>
-            <span class="pt-l-pue">${ptEsc(p.puesto || "—")}</span>
+            <span class="pt-l-pue">${ptEsc(p.puesto || "—")}${p.turno ? `<small class="pt-turno-tag">Turno ${(PT_TURNO[p.turno] || "").toLowerCase()}${p.horario ? " · " + ptEsc(p.horario) : ""}</small>` : ""}</span>
             <span class="pt-l-edad num">${p.edad_actual != null ? `${p.edad_actual}<span class="pt-anos"> años</span>` : "—"}</span>
             <span class="pt-l-ci">${p.ci ? ptEsc(p.ci) : `<i class="pt-falta">—</i>`}</span>
             <span class="pt-l-tel">${p.telefono ? ptEsc(p.telefono) : `<i class="pt-falta">—</i>`}</span>
@@ -19054,6 +19149,11 @@ function ptEditar(pid) {
         <label class="rv-f pt-c-nac"><span>Nacimiento <i class="pt-opc">opcional</i></span><input id="pt-e-nac" type="date" value="${v("nacimiento")}"></label>
         <label class="rv-f pt-c-ci"><span>CI <i class="pt-opc">opcional</i></span><input id="pt-e-ci" value="${v("ci")}" inputmode="numeric" autocomplete="off"></label>
         <label class="rv-f pt-c-tel"><span>Teléfono <i class="pt-opc">opcional</i></span><input id="pt-e-tel" value="${v("telefono")}" inputmode="tel" autocomplete="off"></label>
+        <label class="rv-f pt-c-turno"><span>Turno</span><select class="rv-sel" id="pt-e-turno">
+          <option value="">Sin turno fijo</option>
+          ${Object.entries(PT_TURNO).map(([k, t]) => `<option value="${k}" ${p && p.turno === k ? "selected" : ""}>${t}</option>`).join("")}
+        </select></label>
+        <label class="rv-f pt-c-hor"><span>Horario</span><input id="pt-e-hor" value="${v("horario")}" placeholder="14:00 a 22:00" autocomplete="off"></label>
       </div>
       <p class="pt-nota">Con la fecha de nacimiento, la edad se actualiza sola.</p>
       ${p && !p.activo ? `<div class="pt-aviso baja"><i class="ti ti-user-off"></i><span>Está de baja: no aparece para elegir en la OT. Su número no se usa para nadie más.</span></div>` : ""}`,
@@ -19079,12 +19179,17 @@ function ptEditar(pid) {
   };
   nac.addEventListener("change", sinc);
   sinc();
+  const tur = o.querySelector("#pt-e-turno"), hor = o.querySelector("#pt-e-hor");
+  tur.addEventListener("change", () => {
+    if (!hor.value.trim() || Object.values(PT_HORARIO).includes(hor.value.trim())) hor.value = PT_HORARIO[tur.value] || "";
+  });
 }
 async function ptGuardarPersona(btn, pid) {
   const m = btn.closest(".rv-modal");
   const val = id => m.querySelector(id).value.trim();
   const d = { numero: val("#pt-e-num"), nombre: val("#pt-e-nom"), puesto: val("#pt-e-pue"),
-              edad: val("#pt-e-edad"), nacimiento: val("#pt-e-nac"), ci: val("#pt-e-ci"), telefono: val("#pt-e-tel") };
+              edad: val("#pt-e-edad"), nacimiento: val("#pt-e-nac"), ci: val("#pt-e-ci"), telefono: val("#pt-e-tel"),
+              turno: val("#pt-e-turno"), horario: val("#pt-e-hor") };
   if (!d.nombre) { toast("Falta el nombre", "error"); m.querySelector("#pt-e-nom").focus(); return; }
   btn.disabled = true;
   const r = await pvPost(pid ? `/api/personal/${pid}` : "/api/personal", d, pid ? "PATCH" : "POST");
