@@ -43,14 +43,15 @@ import unicodedata
 
 from flask import Blueprint, jsonify, request, session
 
-from db_compat import get_connection, USE_POSTGRES
+from db_compat import get_connection, columnas_de_tabla, USE_POSTGRES
 from hora_local import ahora_iso
 
 bp_alpha_ventas = Blueprint("alpha_ventas", __name__)
 
 PK = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
 PAGOS = ("efectivo", "tarjeta", "transferencia")
-MOVS_ENTRADA = ("venta", "cobro", "cambio")
+MOVS_ENTRADA = ("venta", "cobro", "cambio", "equipaje")
+MOVS_IE = ("ingreso", "egreso")       # ingresos y egresos de caja que no son de un boleto
 
 
 def init_alpha_ventas():
@@ -120,6 +121,16 @@ def init_alpha_ventas():
                 depositada_el TEXT DEFAULT '',
                 depositada_por TEXT DEFAULT '',
                 referencia TEXT DEFAULT '')""",
+            f"""CREATE TABLE IF NOT EXISTS alpha_servicios (
+                clave TEXT PRIMARY KEY,
+                fecha TEXT NOT NULL,
+                servicio TEXT NOT NULL,
+                estado TEXT DEFAULT 'abierto',
+                motivo TEXT DEFAULT '',
+                por TEXT DEFAULT '',
+                el TEXT DEFAULT '',
+                historial TEXT DEFAULT '[]')""",
+            "CREATE INDEX IF NOT EXISTS ix_alpha_servicios_f ON alpha_servicios (fecha)",
             "CREATE INDEX IF NOT EXISTS ix_alpha_ventas_serv ON alpha_ventas (fecha, servicio)",
             "CREATE INDEX IF NOT EXISTS ix_alpha_ventas_ag ON alpha_ventas (agencia_id)",
             "CREATE INDEX IF NOT EXISTS ix_alpha_movs_el ON alpha_movs (el)",
@@ -128,6 +139,13 @@ def init_alpha_ventas():
         ):
             conn.execute(sql)
         conn.commit()
+        # Ingresos y egresos de caja (sin boleto) y su total en la liquidación
+        if "concepto" not in columnas_de_tabla(conn, "alpha_movs"):
+            conn.execute("ALTER TABLE alpha_movs ADD COLUMN concepto TEXT DEFAULT ''")
+            conn.commit()
+        if "ie" not in columnas_de_tabla(conn, "alpha_liquidaciones"):
+            conn.execute("ALTER TABLE alpha_liquidaciones ADD COLUMN ie REAL DEFAULT 0")
+            conn.commit()
     except Exception:
         try:
             conn.rollback()
@@ -198,7 +216,8 @@ def _es_mia(v):
 
 
 def _viva(v, ahora):
-    return v["estado"] == "vendido" or (v["estado"] == "reserva" and (v.get("vence") or "") > ahora)
+    """Si ocupa el asiento: vendido, bloqueado por administración o reserva vigente."""
+    return v["estado"] in ("vendido", "bloqueado") or (v["estado"] == "reserva" and (v.get("vence") or "") > ahora)
 
 
 def _salida(v):
@@ -261,6 +280,111 @@ def _choca(conn, fecha, servicio, asiento, s, b, plano, ahora, salvo=None):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# CONTROLES: venta cerrada o servicio cancelado; tope de crédito de la agencia
+# ════════════════════════════════════════════════════════════════════════════
+
+ESTADOS_SERVICIO = ("abierto", "cerrado", "cancelado")
+
+
+def _estados_servicios(conn, fecha):
+    try:
+        out = {}
+        for r in conn.execute("SELECT * FROM alpha_servicios WHERE fecha=?", (fecha,)).fetchall():
+            x = dict(r)
+            x["historial"] = json.loads(x.get("historial") or "[]")
+            out[x["servicio"]] = x
+        return out
+    except Exception:
+        _rollback(conn)
+        return {}
+
+
+def _servicio_err(conn, fecha, servicio):
+    e = (_estados_servicios(conn, fecha).get(servicio) or {}).get("estado")
+    if e == "cerrado":
+        return "La venta de ese servicio está cerrada"
+    if e == "cancelado":
+        return "Ese servicio está cancelado"
+    return None
+
+
+def estado_servicio(d):
+    fecha, servicio, estado = str(d.get("fecha") or ""), str(d.get("servicio") or "")[:200], d.get("estado")
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha) or not servicio:
+        return None, "Falta el servicio"
+    if estado not in ESTADOS_SERVICIO:
+        return None, "Estado inválido"
+    motivo = " ".join(str(d.get("motivo") or "").split())[:160]
+    if estado == "cancelado" and not motivo:
+        return None, "Contá por qué se cancela (queda en el historial)"
+    ahora = ahora_iso()
+    conn = get_connection()
+    try:
+        ant = _estados_servicios(conn, fecha).get(servicio)
+        hist = (ant or {}).get("historial") or []
+        hist.append({"el": ahora, "por": _vendedor(), "estado": estado, "motivo": motivo,
+                     "hora": str(d.get("hora") or "")[:5], "tramo": str(d.get("tramo") or "")[:60]})
+        conn.execute("""INSERT INTO alpha_servicios (clave, fecha, servicio, estado, motivo, por, el, historial)
+                        VALUES (?,?,?,?,?,?,?,?)
+                        ON CONFLICT (clave) DO UPDATE SET estado=excluded.estado, motivo=excluded.motivo,
+                        por=excluded.por, el=excluded.el, historial=excluded.historial""",
+                     (f"{fecha}|{servicio}", fecha, servicio, estado, motivo, _vendedor(), ahora,
+                      json.dumps(hist, ensure_ascii=False)))
+        conn.commit()
+        return {"fecha": fecha, "servicio": servicio, "estado": estado, "motivo": motivo, "por": _vendedor(),
+                "el": ahora, "historial": hist}, None
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+
+
+def _credito(conn, agencia_id):
+    """Lo que la agencia tiene en la mano: lo vendido sin liquidar más las
+    liquidaciones sin depositar, contra el tope de su contrato."""
+    hoy = ahora_iso()[:10]
+    out = {"tope": 0.0, "sin_liquidar": 0.0, "sin_depositar": 0.0, "saldo": 0.0, "disponible": None,
+           "estado": "activa", "motivo": "", "contrato_hasta": ""}
+    try:
+        a = conn.execute("SELECT estado, estado_motivo FROM agencias WHERE id=?", (agencia_id,)).fetchone()
+        if a:
+            out["estado"], out["motivo"] = a["estado"] or "activa", a["estado_motivo"] or ""
+        c = conn.execute("""SELECT tope_sin_depositar, hasta FROM agencia_contratos
+                            WHERE agencia_id=? AND desde <= ? AND COALESCE(anulado, 0) = 0
+                            ORDER BY desde DESC, id DESC LIMIT 1""", (agencia_id, hoy)).fetchone()
+        if c:
+            out["tope"], out["contrato_hasta"] = _num(c["tope_sin_depositar"]), c["hasta"] or ""
+    except Exception:
+        _rollback(conn)
+    out["sin_liquidar"] = _num(conn.execute(
+        "SELECT COALESCE(SUM(monto), 0) AS m FROM alpha_movs WHERE agencia_id=? AND liquidacion_id IS NULL",
+        (agencia_id,)).fetchone()["m"])
+    out["sin_depositar"] = _num(conn.execute(
+        "SELECT COALESCE(SUM(saldo_neto), 0) AS m FROM alpha_liquidaciones WHERE agencia_id=? AND estado <> 'depositada'",
+        (agencia_id,)).fetchone()["m"])
+    out["saldo"] = out["sin_liquidar"] + out["sin_depositar"]
+    if out["tope"] > 0:
+        out["disponible"] = out["tope"] - out["saldo"]
+    return out
+
+
+def _tope_err(conn, monto):
+    """Si la agencia que vende no puede cobrar esto: suspendida, de baja o pasada del tope."""
+    aid = _agencia()
+    if not aid:
+        return None
+    c = _credito(conn, aid)
+    if c["estado"] in ("suspendida", "baja"):
+        return (f"Tu agencia está {'suspendida' if c['estado'] == 'suspendida' else 'dada de baja'}"
+                f"{': ' + c['motivo'] if c['motivo'] else ''}. Para vender, hablá con La Santaniana.")
+    if c["tope"] > 0 and c["saldo"] + monto > c["tope"]:
+        return (f"Llegaste al tope de venta sin depositar (Gs. {_gs(c['tope'])}): tenés Gs. {_gs(c['saldo'])} "
+                f"sin depositar. Depositá lo pendiente para seguir vendiendo.")
+    return None
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # VENDER, RESERVAR Y LO QUE SE HACE CON UN BOLETO
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -295,6 +419,27 @@ def _limpiar_pasajero(d):
     return p, None
 
 
+def _extras(d):
+    """Lo que va con el pasajero: un menor en brazos (sin asiento) y los bultos en bodega."""
+    out = {}
+    m = d.get("menor")
+    if isinstance(m, dict) and str(m.get("nombre") or "").strip():
+        edad = int(_num(m.get("edad"), -1))
+        out["menor"] = {"nombre": " ".join(str(m["nombre"]).split()).upper()[:80],
+                        "doc": str(m.get("doc") or "").strip()[:30],
+                        "edad": edad if 0 <= edad <= 17 else None}
+    b = int(_num(d.get("bultos"), 0))
+    if 0 < b <= 20:
+        out["bultos"] = b
+    return out
+
+
+def _poner_extras(datos, d):
+    for k in ("menor", "bultos"):
+        datos.pop(k, None)
+    datos.update(_extras(d))
+
+
 def vender(d, accion):
     viaje, err = _limpiar_viaje(d.get("viaje") or {})
     if err:
@@ -317,9 +462,13 @@ def vender(d, accion):
             return None, "Falta menos de una hora para la salida: ya no se reserva, se vende"
     conn = get_connection()
     try:
+        err = _servicio_err(conn, viaje["fecha"], viaje["servicio"]) or _tope_err(conn, total if accion == "vender" else 0)
+        if err:
+            return None, err
         if _choca(conn, viaje["fecha"], viaje["servicio"], viaje["asiento"], s, b, viaje["plano"], ahora):
             return None, "Ese asiento ya está tomado en ese tramo" if viaje["asiento"] != "P" else "No quedan pasajes parados"
         datos = dict(viaje, **pas, tarifa=str(d.get("tarifa") or "general")[:30])
+        datos.update(_extras(d))
         if accion == "vender":
             datos.update(pago=pago, recibe=d.get("recibe"), vendido_en=ahora)
         else:
@@ -349,6 +498,50 @@ def _completa(conn, v):
     return out
 
 
+MOTIVOS_BLOQUEO = ("Tripulación", "Guarda", "Compromiso", "Asiento roto", "Otro")
+
+
+def bloquear(d):
+    """Administración saca un asiento de la venta en todo el recorrido de la salida
+    (tripulación, un compromiso, un asiento roto)."""
+    viaje, err = _limpiar_viaje(d.get("viaje") or {})
+    if err:
+        return None, err
+    if viaje["asiento"] == "P":
+        return None, "Los parados no se bloquean"
+    motivo = " ".join(str(d.get("motivo") or "").split())[:60] or "Bloqueado"
+    ahora = ahora_iso()
+    conn = get_connection()
+    try:
+        if _choca(conn, viaje["fecha"], viaje["servicio"], viaje["asiento"], 0, 99, viaje["plano"], ahora):
+            return None, "Ese asiento ya está vendido o reservado en algún tramo de esta salida"
+        datos = dict(viaje, motivo=motivo, bloqueado_en=ahora, bloqueado_por=_vendedor())
+        cur = conn.execute("""INSERT INTO alpha_ventas (estado, fecha, servicio, asiento, sube_idx, baja_idx, vence,
+                                  agencia_id, usuario, vendedor, doc, nombre, total, datos, creado_el, actualizado_el)
+                              VALUES ('bloqueado',?,?,?,0,99,'',NULL,?,?,'',?,0,?,?,?)""",
+                           (viaje["fecha"], viaje["servicio"], viaje["asiento"], _yo(), _vendedor(), motivo.upper(),
+                            json.dumps(datos, ensure_ascii=False), ahora, ahora))
+        v = _ve(conn, cur.lastrowid)
+        conn.commit()
+        return _salida(v), None
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+
+
+def una(vid):
+    conn = get_connection()
+    try:
+        v = _ve(conn, vid)
+        if not v or not _es_mia(v):
+            return None
+        return _completa(conn, v)
+    finally:
+        conn.close()
+
+
 def accion_venta(vid, accion, d):
     conn = get_connection()
     ahora = ahora_iso()
@@ -374,7 +567,13 @@ def accion_venta(vid, accion, d):
                 return None, err
             pago = d.get("pago") if d.get("pago") in PAGOS else "efectivo"
             total = max(0.0, _num(d.get("total"), v["total"]))
+            if (_estados_servicios(conn, v["fecha"]).get(v["servicio"]) or {}).get("estado") == "cancelado":
+                return None, "Ese servicio está cancelado"
+            err = _tope_err(conn, total)
+            if err:
+                return None, err
             datos.update(pas, pago=pago, recibe=d.get("recibe"), vendido_en=ahora, tarifa=str(d.get("tarifa") or datos.get("tarifa") or "general"))
+            _poner_extras(datos, d)
             conn.execute("""UPDATE alpha_ventas SET estado='vendido', doc=?, nombre=?, total=?, datos=?, vendedor=?, usuario=?,
                             agencia_id=?, actualizado_el=? WHERE id=?""",
                          (pas["doc"], pas["nombre"], total, json.dumps(datos, ensure_ascii=False), _vendedor(), _yo(),
@@ -419,10 +618,20 @@ def accion_venta(vid, accion, d):
             if _choca(conn, viaje["fecha"], viaje["servicio"], viaje["asiento"], s, b, viaje["plano"], ahora, salvo=v["id"]):
                 return None, "Ese asiento ya está tomado en ese tramo"
             total = max(0.0, _num(d.get("total")))
+            if viaje["servicio"] != v["servicio"] or viaje["fecha"] != v["fecha"]:
+                err = _servicio_err(conn, viaje["fecha"], viaje["servicio"])
+                if err:
+                    return None, err
+            if total > v["total"]:
+                err = _tope_err(conn, total - v["total"])
+                if err:
+                    return None, err
             antes = {k: datos.get(k) for k in ("fecha", "sale", "origen", "destino", "asiento", "tramo")}
             antes["total"] = v["total"]
             datos.update(viaje, **pas, tarifa=str(d.get("tarifa") or "general"))
-            datos["cambios"] = (datos.get("cambios") or []) + [{"el": ahora, "por": _vendedor(), "antes": antes}]
+            _poner_extras(datos, d)
+            datos.pop("embarque", None)
+            datos["cambios"] =(datos.get("cambios") or []) + [{"el": ahora, "por": _vendedor(), "antes": antes}]
             conn.execute("""UPDATE alpha_ventas SET fecha=?, servicio=?, asiento=?, sube_idx=?, baja_idx=?, doc=?, nombre=?,
                             total=?, datos=?, actualizado_el=? WHERE id=?""",
                          (viaje["fecha"], viaje["servicio"], viaje["asiento"], s, b, pas["doc"], pas["nombre"], total,
@@ -431,6 +640,59 @@ def accion_venta(vid, accion, d):
             if dif:
                 pago = d.get("pago") if d.get("pago") in PAGOS and dif > 0 else "efectivo"
                 _mov(conn, v, "cambio", dif, pago, d.get("recibe") if dif > 0 else None, ahora)
+        elif accion == "reimpresion":
+            if v["estado"] != "vendido":
+                return None, "Solo se reimprime un boleto vendido"
+            copias = [c for c in (d.get("copias") or []) if c in ("original", "duplicado", "triplicado", "etiquetas", "comprobante")]
+            datos["reimpresiones"] = (datos.get("reimpresiones") or []) + [{"el": ahora, "por": _vendedor(), "copias": copias}]
+            conn.execute("UPDATE alpha_ventas SET datos=?, actualizado_el=? WHERE id=?",
+                         (json.dumps(datos, ensure_ascii=False), ahora, v["id"]))
+        elif accion == "equipaje":
+            # Bultos que se agregan después de la venta y el exceso de equipaje cobrado
+            if v["estado"] != "vendido":
+                return None, "Solo se agrega equipaje a un boleto vendido"
+            bultos, kg, monto = int(_num(d.get("bultos"), 0)), _num(d.get("kg"), 0), _num(d.get("monto"), 0)
+            if not 0 <= bultos <= 20 or not 0 <= kg <= 500 or not 0 <= monto <= 5_000_000:
+                return None, "Revisá los bultos, los kilos y el monto"
+            if not bultos and not kg and not monto:
+                return None, "Poné los bultos, los kilos o lo que se cobra"
+            pago = d.get("pago") if d.get("pago") in PAGOS else "efectivo"
+            recibe = d.get("recibe") if monto and pago == "efectivo" else None
+            err = _tope_err(conn, monto) if monto else None
+            if err:
+                return None, err
+            datos["equipaje"] = (datos.get("equipaje") or []) + [{
+                "el": ahora, "por": _vendedor(), "bultos": bultos, "kg": kg, "monto": monto,
+                "pago": pago if monto else "", "recibe": recibe,
+                "nota": " ".join(str(d.get("nota") or "").split())[:120]}]
+            conn.execute("UPDATE alpha_ventas SET datos=?, actualizado_el=? WHERE id=?",
+                         (json.dumps(datos, ensure_ascii=False), ahora, v["id"]))
+            if monto:
+                _mov(conn, v, "equipaje", monto, pago, recibe, ahora)
+        elif accion == "embarque":
+            if session.get("rol") != "admin":
+                return None, "El embarque lo marca administración"
+            if v["estado"] != "vendido":
+                return None, "Solo se embarca un boleto vendido"
+            e = d.get("estado") or ""
+            if e not in ("subio", "no_vino", ""):
+                return None, "No sé qué marcar"
+            if e:
+                datos["embarque"] = {"estado": e, "el": ahora, "por": _vendedor()}
+            else:
+                datos.pop("embarque", None)
+            conn.execute("UPDATE alpha_ventas SET datos=?, actualizado_el=? WHERE id=?",
+                         (json.dumps(datos, ensure_ascii=False), ahora, v["id"]))
+        elif accion == "desbloquear":
+            if session.get("rol") != "admin":
+                return None, "Los asientos los bloquea y desbloquea administración"
+            if v["estado"] != "bloqueado":
+                return None, "Ese asiento no está bloqueado"
+            conn.execute("DELETE FROM alpha_ventas WHERE id=?", (v["id"],))
+            conn.commit()
+            out = _salida(v)
+            out["estado"] = "desbloqueado"
+            return out, None
         else:
             return None, "No sé qué hacer con eso"
         conn.commit()
@@ -472,7 +734,15 @@ def ocupacion(fecha):
         if session.get("rol") == "agencia":
             q += " AND agencia_id=?"; args.append(_agencia())
         res = conn.execute(q, args).fetchone()["n"]
-        return {"fecha": fecha, "ventas": out, "mi_caja_hoy": caja or 0, "reservas": int(res or 0), "ahora": ahora}
+        servicios = {k: {"estado": e["estado"], "motivo": e["motivo"], "por": e["por"], "el": e["el"],
+                         "historial": e["historial"] if session.get("rol") == "admin" else []}
+                     for k, e in _estados_servicios(conn, fecha).items() if e["estado"] != "abierto" or session.get("rol") == "admin"}
+        credito = None
+        if _agencia():
+            c = _credito(conn, _agencia())
+            credito = {k: c[k] for k in ("tope", "saldo", "disponible", "estado", "motivo")}
+        return {"fecha": fecha, "ventas": out, "mi_caja_hoy": caja or 0, "reservas": int(res or 0), "ahora": ahora,
+                "servicios": servicios, "credito": credito}
     finally:
         conn.close()
 
@@ -553,24 +823,80 @@ def borrar_todo():
 # ════════════════════════════════════════════════════════════════════════════
 
 def _totales(movs):
-    t = {"pago": {}, "salidas": 0, "efectivoNeto": 0, "boletos": 0, "entradas": 0}
+    """Lo que entró por forma de pago, lo que salió (devoluciones y anulaciones),
+    los ingresos y egresos sueltos y el efectivo que tiene que haber en la caja."""
+    t = {"pago": {}, "salidas": 0, "efectivoNeto": 0, "boletos": 0, "entradas": 0, "ingresos": 0, "egresos": 0,
+         "equipaje": 0}
     for m in movs:
-        if m["monto"] >= 0:
+        if m["t"] == "ingreso":
+            t["ingresos"] += m["monto"]
+        elif m["t"] == "egreso":
+            t["egresos"] += -m["monto"]
+        elif m["monto"] >= 0:
             t["pago"][m["pago"]] = t["pago"].get(m["pago"], 0) + m["monto"]
             t["entradas"] += m["monto"]
+            if m["t"] == "equipaje":
+                t["equipaje"] += m["monto"]
         else:
             t["salidas"] += -m["monto"]
-        if m["pago"] == "efectivo" or m["monto"] < 0:
+        # Una anulación de una venta con tarjeta no saca efectivo de la caja
+        if m["pago"] == "efectivo":
             t["efectivoNeto"] += m["monto"]
         if m["t"] in ("venta", "cobro"):
             t["boletos"] += 1
     return t
 
 
+def movimiento_caja(d):
+    """Un ingreso o un egreso que no es de un boleto (I/E de la agencia)."""
+    tipo = d.get("tipo")
+    if tipo not in MOVS_IE:
+        return None, "¿Es un ingreso o un egreso?"
+    concepto = " ".join(str(d.get("concepto") or "").split())[:120]
+    if not concepto:
+        return None, "Poné el concepto"
+    monto = _num(d.get("monto"))
+    if not 0 < monto <= 50_000_000:
+        return None, "El monto no es válido"
+    pago = d.get("pago") if d.get("pago") in PAGOS else "efectivo"
+    ahora = ahora_iso()
+    conn = get_connection()
+    try:
+        cur = conn.execute("""INSERT INTO alpha_movs (venta_id, t, el, monto, pago, recibe, usuario, vendedor, agencia_id, concepto)
+                              VALUES (0,?,?,?,?,NULL,?,?,?,?)""",
+                           (tipo, ahora, monto if tipo == "ingreso" else -monto, pago, _yo(), _vendedor(), _agencia(), concepto))
+        mid = cur.lastrowid
+        conn.commit()
+        return {"id": mid, "t": tipo, "el": ahora, "monto": monto if tipo == "ingreso" else -monto, "pago": pago,
+                "concepto": concepto}, None
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+
+
+def borrar_movimiento(mid):
+    conn = get_connection()
+    try:
+        m = conn.execute("SELECT * FROM alpha_movs WHERE id=?", (int(mid),)).fetchone()
+        if not m or m["t"] not in MOVS_IE:
+            return "Ese movimiento no se puede borrar"
+        if session.get("rol") != "admin" and m["usuario"] != _yo():
+            return "Solo podés borrar tus movimientos"
+        if m["cierre_id"] or m["liquidacion_id"]:
+            return "Ya está en un cierre de caja o en una liquidación"
+        conn.execute("DELETE FROM alpha_movs WHERE id=?", (int(mid),))
+        conn.commit()
+        return None
+    finally:
+        conn.close()
+
+
 def caja(fecha, usuario=""):
     conn = get_connection()
     try:
-        sql, args = """SELECT m.*, v.nombre, v.datos FROM alpha_movs m JOIN alpha_ventas v ON v.id = m.venta_id
+        sql, args = """SELECT m.*, v.nombre, v.datos FROM alpha_movs m LEFT JOIN alpha_ventas v ON v.id = m.venta_id
                        WHERE m.el >= ? AND m.el < ?""", [fecha, fecha + "T99"]
         if session.get("rol") == "agencia":
             sql += " AND m.agencia_id=?"; args.append(_agencia())
@@ -586,13 +912,14 @@ def caja(fecha, usuario=""):
             if m["usuario"] != usuario:
                 continue
             d = json.loads(m.pop("datos") or "{}")
-            m.update(nro=m["venta_id"], origen=d.get("origen") or "", destino=d.get("destino") or "")
+            m.update(nro=m["venta_id"], origen=d.get("origen") or "", destino=d.get("destino") or "",
+                     nombre=m.get("nombre") or m.get("concepto") or "", concepto=m.get("concepto") or "")
             movs.append(m)
         cierres = [dict(r) for r in conn.execute(
             "SELECT * FROM alpha_cierres WHERE fecha=? AND usuario=? ORDER BY hasta", (fecha, usuario)).fetchall()]
         for c in cierres:
             c["tot"] = json.loads(c["tot"] or "{}")
-        return {"fecha": fecha, "usuario": usuario,
+        return {"fecha": fecha, "usuario": usuario, "yo": _yo(),
                 "vendedores": [{"usuario": u, "vendedor": n} for u, n in sorted(vendedores.items(), key=lambda kv: kv[1])],
                 "movs": movs, "cierres": cierres}
     finally:
@@ -679,25 +1006,27 @@ def _calcular(conn, agencia_id, hasta, solo_ef, ids_movs=None):
     """Lo que falta liquidar de una agencia hasta el corte."""
     if ids_movs is not None:
         if not ids_movs:
-            return {"movs": [], "venta_ef": 0, "venta_tc": 0, "venta_tr": 0, "devoluciones": 0, "comision": 0,
+            return {"movs": [], "venta_ef": 0, "venta_tc": 0, "venta_tr": 0, "devoluciones": 0, "ie": 0, "comision": 0,
                     "saldo": 0, "saldo_neto": 0, "boletos": 0, "desde": "", "hasta": hasta}
         movs = [dict(r) for r in conn.execute(
             f"""SELECT m.*, v.datos, v.estado AS estado_venta, v.nombre, v.total AS total_venta FROM alpha_movs m
-                JOIN alpha_ventas v ON v.id = m.venta_id WHERE m.id IN ({','.join('?' * len(ids_movs))}) ORDER BY m.el, m.id""",
+                LEFT JOIN alpha_ventas v ON v.id = m.venta_id WHERE m.id IN ({','.join('?' * len(ids_movs))}) ORDER BY m.el, m.id""",
             list(ids_movs)).fetchall()]
     else:
         movs = [dict(r) for r in conn.execute(
             """SELECT m.*, v.datos, v.estado AS estado_venta, v.nombre, v.total AS total_venta FROM alpha_movs m
-               JOIN alpha_ventas v ON v.id = m.venta_id
+               LEFT JOIN alpha_ventas v ON v.id = m.venta_id
                WHERE m.agencia_id=? AND m.liquidacion_id IS NULL AND m.el <= ? ORDER BY m.el, m.id""",
             (agencia_id, hasta)).fetchall()]
     cache = {}
-    tot = {"venta_ef": 0.0, "venta_tc": 0.0, "venta_tr": 0.0, "devoluciones": 0.0, "comision": 0.0, "boletos": 0}
+    tot = {"venta_ef": 0.0, "venta_tc": 0.0, "venta_tr": 0.0, "devoluciones": 0.0, "ie": 0.0, "comision": 0.0, "boletos": 0}
     det = []
     for m in movs:
         d = json.loads(m.pop("datos") or "{}")
         com, com_txt = 0.0, ""
-        if m["monto"] >= 0:
+        if m["t"] in MOVS_IE:
+            tot["ie"] += m["monto"]          # ingresos y egresos de la agencia
+        elif m["monto"] >= 0:
             tot[{"efectivo": "venta_ef", "tarjeta": "venta_tc", "transferencia": "venta_tr"}.get(m["pago"], "venta_ef")] += m["monto"]
         else:
             tot["devoluciones"] += -m["monto"]
@@ -709,10 +1038,10 @@ def _calcular(conn, agencia_id, hasta, solo_ef, ids_movs=None):
                 com, com_txt = _comision(c, d, m["monto"])
         tot["comision"] += com
         det.append({"id": m["id"], "nro": m["venta_id"], "t": m["t"], "el": m["el"], "monto": m["monto"], "pago": m["pago"],
-                    "vendedor": m["vendedor"], "nombre": m["nombre"], "comision": com, "comision_txt": com_txt,
+                    "vendedor": m["vendedor"], "nombre": m["nombre"] or m.get("concepto") or "", "comision": com, "comision_txt": com_txt,
                     "origen": d.get("origen") or "", "destino": d.get("destino") or "", "fecha": d.get("fecha") or "",
                     "sale": d.get("sale") or "", "asiento": d.get("asiento"), "estado_venta": m["estado_venta"]})
-    saldo = tot["venta_ef"] + tot["venta_tc"] + tot["venta_tr"] - tot["devoluciones"]
+    saldo = tot["venta_ef"] + tot["venta_tc"] + tot["venta_tr"] - tot["devoluciones"] + tot["ie"]
     tot.update(saldo=saldo, saldo_neto=saldo - tot["comision"], movs=det,
                desde=det[0]["el"] if det else "", hasta=hasta)
     return tot
@@ -757,11 +1086,11 @@ def generar(agencia_id, hasta, solo_ef, quien):
             if not t["movs"]:
                 continue
             cur = conn.execute("""INSERT INTO alpha_liquidaciones (agencia_id, agencia, desde, hasta, el, por, solo_ef,
-                                     venta_ef, venta_tc, venta_tr, devoluciones, comision, saldo, saldo_neto, boletos, estado)
-                                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pendiente')""",
+                                     venta_ef, venta_tc, venta_tr, devoluciones, ie, comision, saldo, saldo_neto, boletos, estado)
+                                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'pendiente')""",
                                (aid, (ags.get(aid) or {}).get("nombre") or f"Agencia {aid}", t["desde"], hasta, ahora_iso(),
                                 quien[:80], 1 if solo_ef else 0, t["venta_ef"], t["venta_tc"], t["venta_tr"],
-                                t["devoluciones"], t["comision"], t["saldo"], t["saldo_neto"], t["boletos"]))
+                                t["devoluciones"], t["ie"], t["comision"], t["saldo"], t["saldo_neto"], t["boletos"]))
             lid = cur.lastrowid
             for m in t["movs"]:
                 conn.execute("UPDATE alpha_movs SET liquidacion_id=?, comision=? WHERE id=?", (lid, m["comision"], m["id"]))
@@ -828,6 +1157,338 @@ def depositada(lid, referencia, quien):
         conn.close()
 
 
+def control_agencias():
+    """Cada agencia: lo que tiene sin liquidar, lo liquidado sin depositar, el
+    tope de su contrato y cuánto usó, la última liquidación y el contrato."""
+    hoy = ahora_iso()[:10]
+    conn = get_connection()
+    try:
+        try:
+            ags = [dict(r) for r in conn.execute(
+                "SELECT id, nombre, ciudad, estado, estado_motivo FROM agencias ORDER BY nombre").fetchall()]
+        except Exception:
+            _rollback(conn)
+            ags = []
+        sinliq = {r["agencia_id"]: dict(r) for r in conn.execute(
+            """SELECT agencia_id, COALESCE(SUM(monto), 0) AS m, MIN(el) AS desde, COUNT(*) AS n FROM alpha_movs
+               WHERE agencia_id IS NOT NULL AND liquidacion_id IS NULL GROUP BY agencia_id""").fetchall()}
+        pend = {r["agencia_id"]: dict(r) for r in conn.execute(
+            """SELECT agencia_id, COALESCE(SUM(saldo_neto), 0) AS m, MIN(el) AS desde, COUNT(*) AS n FROM alpha_liquidaciones
+               WHERE estado <> 'depositada' GROUP BY agencia_id""").fetchall()}
+        ult = {r["agencia_id"]: r["el"] for r in conn.execute(
+            "SELECT agencia_id, MAX(el) AS el FROM alpha_liquidaciones GROUP BY agencia_id").fetchall()}
+        hoy_v = {r["agencia_id"]: dict(r) for r in conn.execute(
+            """SELECT agencia_id, COALESCE(SUM(monto), 0) AS m, SUM(CASE WHEN t IN ('venta', 'cobro') THEN 1 ELSE 0 END) AS boletos
+               FROM alpha_movs WHERE agencia_id IS NOT NULL AND el >= ? AND el < ? GROUP BY agencia_id""",
+            (hoy, hoy + "T99")).fetchall()}
+        contratos = {}
+        try:
+            for r in conn.execute("""SELECT agencia_id, tope_sin_depositar, hasta, comision_tipo, comision, desde
+                                     FROM agencia_contratos WHERE desde <= ? AND COALESCE(anulado, 0) = 0
+                                     ORDER BY agencia_id, desde DESC, id DESC""", (hoy,)).fetchall():
+                contratos.setdefault(r["agencia_id"], dict(r))
+        except Exception:
+            _rollback(conn)
+        filas = []
+        for a in ags:
+            aid = a["id"]
+            if a["estado"] == "baja" and aid not in sinliq and aid not in pend:
+                continue
+            c, sl, pd = contratos.get(aid) or {}, sinliq.get(aid) or {}, pend.get(aid) or {}
+            tope = _num(c.get("tope_sin_depositar"))
+            saldo = _num(sl.get("m")) + _num(pd.get("m"))
+            filas.append({
+                "id": aid, "nombre": a["nombre"], "ciudad": a.get("ciudad") or "", "estado": a.get("estado") or "activa",
+                "motivo": a.get("estado_motivo") or "", "tope": tope, "sin_liquidar": _num(sl.get("m")),
+                "sin_liq_desde": sl.get("desde") or "", "sin_depositar": _num(pd.get("m")),
+                "liq_pendientes": int(pd.get("n") or 0), "debe_desde": pd.get("desde") or "", "saldo": saldo,
+                "porc": round(saldo * 100 / tope, 1) if tope > 0 else None,
+                "ultima_liq": ult.get(aid) or "", "contrato": bool(c), "contrato_hasta": c.get("hasta") or "",
+                "comision": (f"{_num(c.get('comision')):g} %" if (c.get("comision_tipo") or "porcentaje") == "porcentaje"
+                             else f"Gs. {_gs(c.get('comision'))} por pasaje") if c else "",
+                "hoy": _num((hoy_v.get(aid) or {}).get("m")), "boletos_hoy": int((hoy_v.get(aid) or {}).get("boletos") or 0)})
+        tot = {k: sum(f[k] for f in filas) for k in ("sin_liquidar", "sin_depositar", "saldo", "hoy")}
+        tot["depositado"] = _num(conn.execute(
+            "SELECT COALESCE(SUM(saldo_neto), 0) AS m FROM alpha_liquidaciones WHERE estado = 'depositada'").fetchone()["m"])
+        return {"agencias": filas, "totales": tot, "hoy": hoy}
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# RECAUDACIÓN (solo administración)
+#   por servicio: lo que dejó cada salida (por la fecha del viaje), con el
+#                 detalle de qué agencia vendió cuánto
+#   por agencia:  la plata que movió cada agencia y vendedor en esas fechas
+#   por día:      la plata de cada día
+# ════════════════════════════════════════════════════════════════════════════
+
+def _config(conn, clave, defecto):
+    try:
+        r = conn.execute("SELECT valor FROM alpha_config WHERE clave=?", (clave,)).fetchone()
+        return json.loads(r["valor"]) if r else defecto
+    except Exception:
+        _rollback(conn)
+        return defecto
+
+
+def _asientos_plano(planos, cod):
+    p = planos.get(cod) or {}
+    return sum(1 for piso in p.get("pisos") or [] for f in piso.get("filas") or [] for n in f if n is not None)
+
+
+def recaudacion(desde, hasta, por):
+    conn = get_connection()
+    try:
+        ags = _agencias(conn)
+
+        def nombre_ag(aid):
+            return (ags.get(aid) or {}).get("nombre") or (f"Agencia {aid}" if aid else "Administración")
+
+        if por == "servicio":
+            planos = _config(conn, "planos", {})
+            filas = [dict(r) for r in conn.execute(
+                """SELECT * FROM alpha_ventas WHERE fecha >= ? AND fecha <= ? AND estado IN ('vendido', 'devuelto')
+                   ORDER BY fecha, id""", (desde, hasta)).fetchall()]
+            svs = {}
+            for f in filas:
+                d = json.loads(f["datos"] or "{}")
+                s = svs.get((f["fecha"], f["servicio"]))
+                if not s:
+                    s = svs[(f["fecha"], f["servicio"])] = {
+                        "fecha": f["fecha"], "servicio": f["servicio"], "hora": d.get("hora") or "",
+                        "tramo": d.get("tramo") or "", "cor": d.get("cor") or "", "lado": d.get("lado") or "",
+                        "coche": d.get("coche") or "", "asientos": _asientos_plano(planos, d.get("plano")),
+                        "pasajeros": 0, "parados": 0, "menores": 0, "devueltos": 0, "boletos": 0.0,
+                        "retenido": 0.0, "equipaje": 0.0, "total": 0.0, "agencias": {}}
+                if not s["coche"] and d.get("coche"):
+                    s["coche"] = d["coche"]           # las ventas de agencias no guardan el coche
+                eq = sum(_num(e.get("monto")) for e in d.get("equipaje") or [])
+                ag = s["agencias"].setdefault(nombre_ag(f["agencia_id"]), {"pasajeros": 0, "total": 0.0})
+                s["equipaje"] += eq
+                if f["estado"] == "vendido":
+                    s["pasajeros"] += 1
+                    s["boletos"] += f["total"] or 0
+                    s["parados"] += 1 if f["asiento"] == "P" else 0
+                    s["menores"] += 1 if d.get("menor") else 0
+                    ag["pasajeros"] += 1
+                    ag["total"] += (f["total"] or 0) + eq
+                else:
+                    # Del boleto devuelto queda lo que se retuvo
+                    ret = max(0.0, (f["total"] or 0) - _num(d.get("devuelto")))
+                    s["devueltos"] += 1
+                    s["retenido"] += ret
+                    ag["total"] += ret + eq
+            for s in svs.values():
+                s["total"] = s["boletos"] + s["retenido"] + s["equipaje"]
+                s["agencias"] = sorted(({"agencia": k, **v} for k, v in s["agencias"].items()), key=lambda x: -x["total"])
+            lista = sorted(svs.values(), key=lambda s: (s["fecha"], s["hora"], s["tramo"]))
+            return {"por": por, "desde": desde, "hasta": hasta, "filas": lista}
+
+        movs = [dict(r) for r in conn.execute(
+            "SELECT * FROM alpha_movs WHERE el >= ? AND el < ? ORDER BY el, id", (desde, hasta + "T99")).fetchall()]
+        grupos = {}
+        for m in movs:
+            if por == "dia":
+                k, base = m["el"][:10], {"fecha": m["el"][:10]}
+            else:
+                k = (m["agencia_id"] or 0, m["usuario"] or "")
+                base = {"agencia": nombre_ag(m["agencia_id"]), "agencia_id": m["agencia_id"],
+                        "vendedor": m["vendedor"] or m["usuario"] or "", "usuario": m["usuario"] or ""}
+            g = grupos.setdefault(k, dict(base, boletos=0, efectivo=0.0, tarjeta=0.0, transferencia=0.0,
+                                          equipaje=0.0, salidas=0.0, ie=0.0, neto=0.0))
+            if m["t"] in MOVS_IE:
+                g["ie"] += m["monto"]
+            elif m["monto"] >= 0:
+                g[m["pago"] if m["pago"] in PAGOS else "efectivo"] += m["monto"]
+                g["equipaje"] += m["monto"] if m["t"] == "equipaje" else 0
+            else:
+                g["salidas"] += -m["monto"]
+            g["boletos"] += 1 if m["t"] in ("venta", "cobro") else 0
+            g["neto"] += m["monto"]
+        if por == "dia":
+            lista = sorted(grupos.values(), key=lambda g: g["fecha"])
+        else:
+            lista = sorted(grupos.values(), key=lambda g: (1 if g["agencia_id"] else 0, _norm(g["agencia"]), _norm(g["vendedor"])))
+        return {"por": por, "desde": desde, "hasta": hasta, "filas": lista}
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# EL BOLETO EN PDF (para mandárselo al pasajero por WhatsApp o por correo)
+# ════════════════════════════════════════════════════════════════════════════
+
+DIAS_TXT = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+MESES_TXT = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre",
+             "noviembre", "diciembre")
+BOLETO_DEF = {"presentarse_min": 15, "equipaje_kg": 20, "telefono": "", "leyenda": ""}
+
+
+def _dia_txt(f):
+    from datetime import date as _d
+    try:
+        x = _d.fromisoformat(f)
+    except ValueError:
+        return f
+    return f"{DIAS_TXT[x.weekday()].capitalize()} {x.day} de {MESES_TXT[x.month - 1]}"
+
+
+def _gs(n):
+    return f"{round(n or 0):,}".replace(",", ".")
+
+
+def pdf_boleto(v, cfg_boleto, descuentos):
+    """El original del boleto en una tira de 80 mm, como el impreso."""
+    import io
+    import os
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import simpleSplit
+    from reportlab.pdfgen import canvas
+
+    W, M = 80 * mm, 5 * mm
+    ops, y = [], [M]          # cada dibujo se guarda con su altura desde arriba; al final se sabe el alto
+
+    def txt(x, s, font="Helvetica", size=9, align="l", color=(0, 0, 0), dy=None):
+        ops.append(("t", x, y[0] + (dy if dy is not None else size), str(s), font, size, align, color))
+
+    def baja(h):
+        y[0] += h
+
+    def parrafo(s, size=8, font="Helvetica", ancho=W - 2 * M, interl=1.3):
+        for linea in simpleSplit(str(s), font, size, ancho):
+            txt(M, linea, font, size)
+            baja(size * interl)
+
+    def corte():
+        baja(2.5 * mm)
+        ops.append(("dash", y[0]))
+        baja(2.5 * mm)
+
+    d = v
+    nro = f"001-001-{int(d['nro']):07d}"
+    em = (d.get("cambios") or [{}])[-1].get("el") if d.get("cambios") else d.get("vendido_en")
+    em = em or ahora_iso()
+    sale, llega = d.get("sale") or d.get("hora") or "", d.get("llega") or ""
+    desc = next((x for x in descuentos if x.get("id") == d.get("tarifa")), None)
+    tarifa = (desc or {}).get("nombre") or "General"
+    pago = {"efectivo": "efectivo", "tarjeta": "tarjeta", "transferencia": "transferencia"}.get(d.get("pago"), "efectivo")
+    asd = d.get("asDesc") or {}
+    parado = str(d.get("asiento")) == "P"
+
+    logo = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "logo.png")
+    if os.path.exists(logo):
+        ops.append(("img", logo, M, y[0], 16 * mm, 11 * mm))
+    txt(M + 19 * mm, "La Santaniana", "Helvetica-Bold", 15, dy=(5.5 if cfg_boleto.get("telefono") else 7) * mm)
+    if cfg_boleto.get("telefono"):
+        txt(M + 19 * mm, f"Tel. {cfg_boleto['telefono']}", "Helvetica", 8, dy=9.5 * mm)
+    baja(12 * mm)
+    corte()
+    txt(M, f"Boleto {nro}", "Helvetica-Bold", 10)
+    txt(W - M, f"{em[8:10]}/{em[5:7]}/{em[:4]} {em[11:16]}", "Helvetica", 8, "r")
+    baja(5 * mm)
+    txt(M, _dia_txt(d.get("fecha") or ""), "Helvetica-Bold", 14)
+    baja(7.5 * mm)
+    for lugar, hora, lleno in ((d.get("origen") or "", sale, True), (d.get("destino") or "", llega, False)):
+        ops.append(("punto", M + 1.6 * mm, y[0] + 3 * mm, lleno))
+        txt(M + 5 * mm, lugar.upper()[:22], "Helvetica-Bold", 17)
+        txt(W - M, hora, "Helvetica-Bold", 17, "r")
+        baja(7.5 * mm)
+        if lleno:
+            serv = f"Servicio {d.get('tramo') or ''}."
+            if llega:
+                serv += f" {'Llega el ' + d['llegaDia'] + '; la hora' if d.get('llegaDia') else 'La llegada'} es aproximada."
+            for linea in simpleSplit(serv, "Helvetica", 7.5, W - 2 * M - 5 * mm):
+                txt(M + 5 * mm, linea, "Helvetica", 7.5)
+                baja(3.4 * mm)
+            baja(1.5 * mm)
+    corte()
+    ops.append(("caja", M, y[0], 22 * mm, 17 * mm))
+    if parado:
+        txt(M + 11 * mm, "Pasaje", "Helvetica-Bold", 7, "c", (1, 1, 1), dy=4.5 * mm)
+        txt(M + 11 * mm, "PARADO", "Helvetica-Bold", 12, "c", (1, 1, 1), dy=11.5 * mm)
+    else:
+        txt(M + 11 * mm, "Asiento", "Helvetica-Bold", 7, "c", (1, 1, 1), dy=4 * mm)
+        txt(M + 11 * mm, str(d.get("asiento")), "Helvetica-Bold", 26, "c", (1, 1, 1), dy=14.5 * mm)
+    x2 = M + 25 * mm
+    txt(x2, asd.get("piso") or ("Parado" if parado else ""), "Helvetica-Bold", 12, dy=5 * mm)
+    txt(x2, asd.get("pos") or "", "Helvetica", 9, dy=9.5 * mm)
+    txt(x2, asd.get("tipo") or "", "Helvetica", 8, dy=13.5 * mm)
+    baja(17 * mm)
+    corte()
+    txt(M, d.get("nombre") or "", "Helvetica-Bold", 12)
+    baja(5 * mm)
+    doc = f"{d.get('tipoDoc')} {d.get('doc')}" if d.get("mig") else f"CI {d.get('doc') or ''}"
+    txt(M, doc, "Helvetica", 9)
+    baja(4.5 * mm)
+    if d.get("menor"):
+        m = d["menor"]
+        parrafo(f"Con un menor en brazos (sin asiento): {m.get('nombre')}"
+                f"{', ' + str(m['edad']) + ' años' if m.get('edad') is not None else ''}{', doc. ' + m['doc'] if m.get('doc') else ''}", 8)
+    bultos = int(d.get("bultos") or 0) + sum(int(e.get("bultos") or 0) for e in d.get("equipaje") or [])
+    if bultos:
+        parrafo(f"Bultos en bodega: {bultos}", 8)
+    corte()
+    txt(M, f"{asd.get('tipo') or 'Pasaje'}, tarifa {tarifa.lower()}", "Helvetica", 8.5)
+    txt(W - M, _gs(d.get("total")), "Helvetica", 8.5, "r")
+    baja(6 * mm)
+    txt(M, "Total Gs.", "Helvetica-Bold", 10, dy=7 * mm)
+    txt(W - M, _gs(d.get("total")), "Helvetica-Bold", 20, "r", dy=7 * mm)
+    baja(9 * mm)
+    parrafo(f"Pagó con {pago}. Vendió {d.get('vendedor') or ''}.", 7.5)
+    corte()
+    nota = (f"Mostrá este boleto al subir. Presentate {cfg_boleto.get('presentarse_min') or 15} minutos antes de la salida. "
+            f"Equipaje incluido: {cfg_boleto.get('equipaje_kg') or 20} kg.")
+    if d.get("mig"):
+        nota += " Viajá con el mismo documento que figura acá."
+    if cfg_boleto.get("leyenda"):
+        nota += " " + cfg_boleto["leyenda"]
+    parrafo(nota, 7.5)
+    baja(2 * mm)
+    ops.append(("barra", y[0], 10 * mm))
+    txt(M, "Original", "Helvetica-Bold", 13, "l", (1, 1, 1), dy=6.8 * mm)
+    txt(W - M, "para el pasajero", "Helvetica", 8, "r", (1, 1, 1), dy=6.5 * mm)
+    baja(13 * mm)
+    txt(W / 2, "Copia digital · Maqueta de Alpha: sin valor fiscal", "Helvetica", 6.5, "c")
+    baja(5 * mm)
+
+    H = y[0] + M
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(W, H))
+    c.setTitle(f"Boleto {nro}")
+    for op in ops:
+        k = op[0]
+        if k == "t":
+            _, x, yt, s, font, size, align, color = op
+            c.setFillColorRGB(*color)
+            c.setFont(font, size)
+            (c.drawRightString if align == "r" else c.drawCentredString if align == "c" else c.drawString)(x, H - yt, s)
+        elif k == "dash":
+            c.setDash(2, 2); c.setLineWidth(0.8); c.setStrokeColorRGB(0, 0, 0)
+            c.line(M, H - op[1], W - M, H - op[1]); c.setDash()
+        elif k == "img":
+            try:
+                c.drawImage(op[1], op[2], H - op[3] - op[5], op[4], op[5], preserveAspectRatio=True, mask="auto")
+            except Exception:
+                pass
+        elif k == "punto":
+            _, x, yc, lleno = op
+            c.setFillColorRGB(0, 0, 0); c.setLineWidth(1.6)
+            c.circle(x, H - yc, 1.5 * mm, stroke=1, fill=1 if lleno else 0)
+        elif k == "caja":
+            _, x, yt, w, h = op
+            c.setFillColorRGB(0, 0, 0)
+            c.rect(x, H - yt - h, w, h, stroke=0, fill=1)
+        elif k == "barra":
+            _, yt, h = op
+            c.setFillColorRGB(0, 0, 0)
+            c.rect(0, H - yt - h, W, h, stroke=0, fill=1)
+    c.showPage()
+    c.save()
+    buf.seek(0)
+    return buf, nro
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # RUTAS
 # ════════════════════════════════════════════════════════════════════════════
@@ -889,14 +1550,64 @@ def api_borrar_todo():
 def api_accion(vid, accion):
     if not _rol():
         return _no()
-    if accion not in ("cobrar", "liberar", "anular", "devolver", "cambiar"):
+    if accion not in ("cobrar", "liberar", "anular", "devolver", "cambiar", "reimpresion", "equipaje", "embarque",
+                      "desbloquear"):
         return _no("No sé qué hacer con eso", 400)
-    v, err = accion_venta(vid, accion, request.get_json(silent=True) or {})
+    d = request.get_json(silent=True) or {}
+    v, err = accion_venta(vid, accion, d)
     if err:
         return _no(err, 409 if "tomado" in err else 400)
-    nombres = {"cobrar": "cobró la reserva", "liberar": "liberó la reserva", "anular": "anuló", "devolver": "devolvió",
-               "cambiar": "cambió"}
-    _auditar(f"Alpha: {nombres[accion]} {vid:07d}", v.get("nombre"))
+    if accion != "embarque":     # el embarque se marca uno por uno: no llena la auditoría
+        nombres = {"cobrar": "cobró la reserva", "liberar": "liberó la reserva", "anular": "anuló", "devolver": "devolvió",
+                   "cambiar": "cambió", "reimpresion": "reimprimió el boleto", "equipaje": "agregó equipaje al boleto"}
+        if accion == "desbloquear":
+            _auditar(f"Alpha: desbloqueó el asiento {v.get('asiento')}", f"{v.get('fecha')} {v.get('sale') or v.get('hora')} {v.get('tramo')}")
+        else:
+            extra = ""
+            if accion == "reimpresion":
+                extra = f" (vez {len(v.get('reimpresiones') or [])})"
+            elif accion == "equipaje":
+                extra = f" (Gs. {_gs(_num(d.get('monto')))})"
+            _auditar(f"Alpha: {nombres[accion]} {vid:07d}{extra}", v.get("nombre"))
+    return jsonify({"ok": True, "venta": v})
+
+
+@bp_alpha_ventas.route("/api/alpha/ventas/<int:vid>", methods=["GET"])
+def api_una(vid):
+    if not _rol():
+        return _no()
+    v = una(vid)
+    return jsonify({"ok": True, "venta": v}) if v else _no("Ese boleto no existe o es de otra agencia", 404)
+
+
+@bp_alpha_ventas.route("/api/alpha/ventas/<int:vid>/pdf", methods=["GET"])
+def api_pdf(vid):
+    if not _rol():
+        return _no()
+    v = una(vid)
+    if not v or v.get("estado") != "vendido":
+        return _no("Ese boleto no existe, no está vendido o es de otra agencia", 404)
+    from flask import send_file
+    conn = get_connection()
+    try:
+        cfg = dict(BOLETO_DEF, **(_config(conn, "boleto", {}) or {}))
+        descuentos = _config(conn, "descuentos", []) or []
+    finally:
+        conn.close()
+    buf, nro = pdf_boleto(v, cfg, descuentos)
+    return send_file(buf, mimetype="application/pdf", as_attachment=request.args.get("descargar") == "1",
+                     download_name=f"boleto-{nro}.pdf")
+
+
+@bp_alpha_ventas.route("/api/alpha/bloqueos", methods=["POST"])
+def api_bloquear():
+    if session.get("rol") != "admin":
+        return _no("Los asientos los bloquea administración")
+    d = request.get_json(silent=True) or {}
+    v, err = bloquear(d)
+    if err:
+        return _no(err, 409)
+    _auditar(f"Alpha: bloqueó el asiento {v.get('asiento')}", f"{v.get('fecha')} {v.get('sale') or v.get('hora')} {v.get('tramo')}: {v.get('motivo')}")
     return jsonify({"ok": True, "venta": v})
 
 
@@ -929,6 +1640,65 @@ def api_cerrar_caja():
         return _no(err, 400)
     _auditar(f"Alpha: cerró la caja de {c['vendedor']}", f"{c['tot'].get('boletos')} boletos")
     return jsonify({"ok": True, "cierre": c})
+
+
+@bp_alpha_ventas.route("/api/alpha/caja/movimiento", methods=["POST"])
+def api_movimiento():
+    if not _rol():
+        return _no()
+    if session.get("rol") == "agencia" and not _agencia():
+        return _no("Tu usuario no tiene una agencia asignada")
+    m, err = movimiento_caja(request.get_json(silent=True) or {})
+    if err:
+        return _no(err, 400)
+    _auditar(f"Alpha: registró un {m['t']} de caja", f"{m['concepto']}: Gs. {_gs(abs(m['monto']))}")
+    return jsonify({"ok": True, "mov": m})
+
+
+@bp_alpha_ventas.route("/api/alpha/caja/movimiento/<int:mid>", methods=["DELETE"])
+def api_borrar_movimiento(mid):
+    if not _rol():
+        return _no()
+    err = borrar_movimiento(mid)
+    if err:
+        return _no(err, 400)
+    _auditar(f"Alpha: borró el movimiento de caja {mid}")
+    return jsonify({"ok": True})
+
+
+@bp_alpha_ventas.route("/api/alpha/servicios/estado", methods=["POST"])
+def api_estado_servicio():
+    if session.get("rol") != "admin":
+        return _no("El estado de los servicios lo maneja administración")
+    e, err = estado_servicio(request.get_json(silent=True) or {})
+    if err:
+        return _no(err, 400)
+    txt = {"abierto": "abrió la venta de", "cerrado": "cerró la venta de", "cancelado": "canceló"}[e["estado"]]
+    ult = e["historial"][-1]
+    _auditar(f"Alpha: {txt} {ult.get('tramo') or 'un servicio'} {ult.get('hora')}", f"{e['fecha']} {e['motivo']}")
+    return jsonify({"ok": True, "servicio": e})
+
+
+@bp_alpha_ventas.route("/api/alpha/control/agencias", methods=["GET"])
+def api_control_agencias():
+    if session.get("rol") != "admin":
+        return _no("El control de agencias lo ve solo administración")
+    return jsonify(control_agencias())
+
+
+@bp_alpha_ventas.route("/api/alpha/recaudacion", methods=["GET"])
+def api_recaudacion():
+    if session.get("rol") != "admin":
+        return _no("La recaudación la ve solo administración")
+    a = request.args
+    hoy = ahora_iso()[:10]
+    desde, hasta = a.get("desde") or hoy, a.get("hasta") or a.get("desde") or hoy
+    if not (re.fullmatch(r"\d{4}-\d{2}-\d{2}", desde) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", hasta)):
+        return _no("Fechas inválidas", 400)
+    if hasta < desde:
+        desde, hasta = hasta, desde
+    por = a.get("por") if a.get("por") in ("servicio", "agencia", "dia") else "servicio"
+    return jsonify(recaudacion(desde, hasta, por))
 
 
 @bp_alpha_ventas.route("/api/alpha/liquidaciones", methods=["GET"])
