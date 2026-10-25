@@ -124,6 +124,11 @@
         <button class="nav-item" data-sec="oee">
           <i class="ti ti-gauge"></i> OEE de flota
         </button>
+        {% if rol == 'admin' %}
+        <button class="nav-item" onclick="window.open('/gerencia','_blank')" title="La pantalla que ve el gerente (se abre en otra pestaña)">
+          <i class="ti ti-crown"></i> Panel del gerente
+        </button>
+        {% endif %}
 
         <div class="nav-section">Corporativos</div>
         <button class="nav-item" data-sec="corp_asignacion">

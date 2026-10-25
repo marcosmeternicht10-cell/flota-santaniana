@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#14263D">
+  <title>Panel del gerente — La Santaniana</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/gerencia.css?v={{ v }}">
+</head>
+<body>
+  <header class="g-top">
+    <div class="g-barra">
+      <div class="g-marca">
+        <img src="/static/logo.png" alt="">
+        <div><b>La Santaniana</b><span>Panel del gerente</span></div>
+      </div>
+      <div class="g-barra-der">
+        <span class="g-act" id="gAct"><i class="ti ti-refresh"></i> Cargando…</span>
+        <button class="g-icono" type="button" onclick="gCargar(true)" title="Actualizar" aria-label="Actualizar"><i class="ti ti-reload"></i></button>
+        {% if rol == 'admin' %}
+        <a class="g-icono" href="/" title="Volver al sistema" aria-label="Volver al sistema"><i class="ti ti-layout-dashboard"></i></a>
+        {% else %}
+        <button class="g-icono" type="button" onclick="gSalir()" title="Salir" aria-label="Salir"><i class="ti ti-logout"></i></button>
+        {% endif %}
+      </div>
+    </div>
+    <div class="g-hero">
+      <div class="g-saludo" id="gSaludo">{{ usuario }}</div>
+      <h1 id="gFecha">&nbsp;</h1>
+      <p id="gResumen">&nbsp;</p>
+    </div>
+  </header>
+
+  <main class="g-main">
+    <section class="g-card g-op" aria-labelledby="gOpTit">
+      <div class="g-card-cab">
+        <div>
+          <div class="g-eyebrow">Operación</div>
+          <h2 id="gOpTit">El día</h2>
+        </div>
+        <div class="g-dia-nav">
+          <button type="button" onclick="gMoverDia(-1)" aria-label="Día anterior"><i class="ti ti-chevron-left"></i></button>
+          <button type="button" class="g-hoy" id="gBtnHoy" onclick="gIrHoy()">Hoy</button>
+          <button type="button" onclick="gMoverDia(1)" aria-label="Día siguiente"><i class="ti ti-chevron-right"></i></button>
+        </div>
+      </div>
+      <div id="gOperacion" class="g-cargando"><div class="g-esq"></div><div class="g-esq"></div><div class="g-esq g-esq-alta"></div></div>
+    </section>
+
+    <section class="g-card g-plata" aria-labelledby="gPlataTit">
+      <div class="g-card-cab">
+        <div>
+          <div class="g-eyebrow">Plata</div>
+          <h2 id="gPlataTit">El mes</h2>
+        </div>
+        <div class="g-seg" id="gMeses"></div>
+      </div>
+      <div id="gPlata" class="g-cargando"><div class="g-esq"></div><div class="g-esq g-esq-alta"></div><div class="g-esq"></div></div>
+    </section>
+  </main>
+
+  <footer class="g-pie">Solo lectura · se actualiza solo cada 5 minutos · los datos salen de lo que se carga en el sistema</footer>
+
+  <div class="g-tip" id="gTip" role="tooltip"></div>
+  <script>window.G_ROL = "{{ rol }}";</script>
+  <script src="/static/gerencia.js?v={{ v }}"></script>
+</body>
+</html>
