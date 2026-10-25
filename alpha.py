@@ -88,17 +88,20 @@ def _con_salidas(conn, dia_id):
 
 def _referencia(conn, fecha, tipo):
     """Un tráfico ya armado para tomar los horarios: el último del mismo día
-    de la semana; si no hay, el último que haya antes de esa fecha."""
+    de la semana; si no hay, el último que haya antes de esa fecha. Una sola
+    consulta (con la base lejos, cada ida y vuelta cuesta)."""
     f = date.fromisoformat(fecha)
-    for k in range(1, SEMANAS_ATRAS + 1):
-        d = tr._dia_por_fecha(conn, (f - timedelta(days=7 * k)).isoformat(), tipo)
-        if d and _con_salidas(conn, d["id"]):
-            return d
-    for r in conn.execute("""SELECT * FROM trafico_dias WHERE fecha < ? AND COALESCE(tipo,'nacional') = ?
-                             ORDER BY fecha DESC LIMIT 15""", (fecha, tipo)).fetchall():
-        if _con_salidas(conn, r["id"]):
-            return dict(r)
-    return None
+    desde = (f - timedelta(days=7 * SEMANAS_ATRAS + 30)).isoformat()
+    filas = [dict(r) for r in conn.execute("""
+        SELECT d.*, (SELECT COUNT(*) FROM trafico_salidas s WHERE s.dia_id = d.id) AS n
+        FROM trafico_dias d WHERE COALESCE(d.tipo,'nacional') = ? AND d.fecha < ? AND d.fecha >= ?
+        ORDER BY d.fecha DESC""", (tipo, fecha, desde)).fetchall()]
+    con = [x for x in filas if int(x.get("n") or 0) > 0]
+    for x in con:
+        k = (f - date.fromisoformat(x["fecha"])).days
+        if k % 7 == 0 and k // 7 <= SEMANAS_ATRAS:
+            return x
+    return con[0] if con else None
 
 
 def _habituales(conn, fecha, tipo):

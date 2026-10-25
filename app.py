@@ -169,6 +169,10 @@ app.register_blueprint(bp_trafico)
 from alpha import bp_alpha, init_alpha
 init_alpha()
 app.register_blueprint(bp_alpha)
+# Las ventas de Alpha (todas las agencias), la caja y las liquidaciones
+from alpha_ventas import bp_alpha_ventas, init_alpha_ventas
+init_alpha_ventas()
+app.register_blueprint(bp_alpha_ventas)
 # Cuántas salidas lleva cada día de la semana (el internacional cambia según el día)
 from trafico_patron import bp_patron, init_trafico_patron
 init_trafico_patron()
@@ -388,8 +392,7 @@ def proteger_rutas():
     if session.get("rol") == "agencia":
         permitido = (
             p in ("/", "/boleteria", "/api/logout") or
-            p in ("/api/alpha/config",) and request.method == "GET" or
-            p.startswith("/api/alpha/dia/")
+            p.startswith("/api/alpha/")       # cada ruta de Alpha controla qué puede la agencia
         )
         if not permitido:
             if p.startswith("/api/"):
