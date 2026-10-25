@@ -11,7 +11,9 @@
 // (/api/alpha/ventas, ocupación, caja y liquidaciones). Las ventas siguen
 // siendo de prueba, sin valor fiscal (falta lo fiscal).
 //
-// Pantallas: Vender · Pasajes · Manifiesto · Caja · Tarifas · Planos.
+// Pantallas: Vender · Pasajes · Manifiesto · Caja · Tarifas · Planos. Lo de
+// control (servicios, transbordos, agencias, liquidaciones, recaudación) está
+// en su propio módulo: static/controles.js.
 // Las AGENCIAS (rol agencia, entran por /boleteria) ven solo Vender, sus
 // Pasajes y su Caja: sin tarifario, sin planos, sin manifiesto y sin datos
 // internos del tráfico (tripulación, coche, notas). El servidor tampoco se
@@ -39,8 +41,7 @@ const AL_DUR = { "COP|09:00": 485, "COP|11:30": 485, "COP|17:00": 320, "COP|23:0
 const AL_RESERVA_MIN = 60;            // la reserva vence una hora antes de la salida
 const AL_RETENCION = 0.1;             // devolución: se retiene el 10 % (de ejemplo)
 const AL_VISTAS = [["vender", "ticket", "Vender"], ["pasajes", "receipt", "Pasajes"], ["manifiesto", "list-details", "Manifiesto"],
-                   ["caja", "cash-register", "Caja"], ["liquidaciones", "report-money", "Liquidaciones"],
-                   ["recaudacion", "chart-bar", "Recaudación"], ["control", "adjustments-horizontal", "Controles"],
+                   ["caja", "cash-register", "Caja"],
                    ["tarifas", "currency-dollar", "Tarifas"], ["planos", "armchair", "Planos"]];
 const AL_PVACIO = () => ({ tipoDoc: "CI", doc: "", nombre: "", apellidos: "", nombres: "", sexo: "", nac: "", nacionalidad: "", residencia: "" });
 const AL_LOGO = `<svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>`;
@@ -306,10 +307,10 @@ function alYaSalio(dia, k) {
   const a = new Date();
   return alServ(k).h <= a.getHours() * 60 + a.getMinutes();
 }
-function alDescAsiento(n) {
+function alDescAsiento(n, plano) {
   if (n == null) return null;
-  const sv = alServ(); if (!sv) return null;
-  const pl = alPlano(sv);
+  let pl = plano;
+  if (!pl) { const sv = alServ(); if (!sv) return null; pl = alPlano(sv); }
   if (n === "P") return { piso: "Parado", pos: "Sin asiento asignado", tipo: AL_CLASES.CO, clase: "CO", parado: true, pisoIdx: null };
   const a = alAsientos(pl).find(x => x.n === n);
   if (!a) return null;
@@ -445,9 +446,6 @@ function alRender(animar) {
   if (v === "pasajes") return alVistaPasajes(animar);
   if (v === "manifiesto") return alVistaManifiesto(animar);
   if (v === "caja") return alVistaCaja(animar);
-  if (v === "liquidaciones") return alVistaLiquidaciones(animar);
-  if (v === "recaudacion") return alVistaRecaudacion(animar);
-  if (v === "control") return alVistaControl(animar);
   if (v === "tarifas") return alVistaTarifas(animar);
   if (v === "planos") return alVistaPlanos(animar);
   return alPintar(animar);
@@ -607,7 +605,7 @@ function alPintar(animar) {
           <div class="al-esc-cab">
             ${alEsAgencia() ? `<div><h2 id="al-coche-t" class="al-d">Servicio de las ${alHH(sv.h)}</h2>
               <span class="al-sub">${trEsc(sv.cod)}${sv.dur ? `, ${alDur(sv.dur)} de viaje` : ""} · ${trEsc(alPlano(sv).tipo || "")}</span></div>` : `
-            <div><h2 id="al-coche-t" class="al-d">${sv.coche ? "Coche " + trEsc(sv.coche) : "Coche a confirmar"}</h2>
+            <div><h2 id="al-coche-t" class="al-d">${sv.coche ? "Coche " + trEsc(sv.coche) : "Coche a confirmar"}</h2>${sv.reemplazo ? `<span class="al-reemp" title="${trEsc(sv.reemplazo.motivo || "")}"><i class="ti ti-arrows-shuffle"></i> reemplaza al ${trEsc(sv.reemplazo.de)}</span>` : ""}
               <span class="al-sub">${trEsc(sv.coche ? sv.modelo : sv.habitual ? `Suele ir el ${sv.habitual}${sv.habitual_modelo ? " (" + sv.habitual_modelo + ")" : ""}` : "Todavía sin coche")} · ${trEsc(sv.cod)}, sale ${alHH(sv.h)}${sv.dur ? `, ${alDur(sv.dur)} de viaje` : ""}</span>
               ${sv.tripulacion.length ? `<span class="al-trip"><i class="ti ti-steering-wheel"></i> ${sv.tripulacion.map(trEsc).join(" y ")}</span>` : ""}
               ${sv.coche || sv.habitual ? `<label class="al-plano-sel"><span>Plano</span><select onchange="alCambiarPlano(this.value)" aria-label="Plano de asientos de este coche">${Object.entries(alPlanos()).map(([k, p]) => `<option value="${k}" ${k === sv.plano ? "selected" : ""}>${trEsc(p.nombre || k)} (${k})</option>`).join("")}</select></label>` : ""}
@@ -1505,7 +1503,6 @@ async function alTrasAccion() {
   al.ocup = {};
   if (al.vista === "pasajes") return alVistaPasajes(false);
   if (al.vista === "manifiesto") { al.manClave = ""; return alVistaManifiesto(false); }
-  if (al.vista === "control") return alVistaControl(false);
   if (al.vista === "vender") { await alTraerOcup(null, true); return alPintar(false); }
   return alRender(false);
 }
@@ -1605,6 +1602,7 @@ async function alHistorial(nro) {
   });
   (v.reimpresiones || []).forEach((r, i) => add(r.el, "printer", `Reimpresión N.º ${i + 1}${r.copias && r.copias.length ? ": " + r.copias.join(", ") : ""}`, r.por));
   (v.equipaje || []).forEach(q => add(q.el, "luggage", `Equipaje: ${[q.bultos ? `${q.bultos} ${q.bultos === 1 ? "bulto" : "bultos"}` : "", q.kg ? `${fmtNum(q.kg)} kg` : "", q.monto ? `cobró ${alGs(q.monto)}` : "sin cargo"].filter(Boolean).join(", ")}${q.nota ? ` (${q.nota})` : ""}`, q.por));
+  (v.transbordos || []).forEach(t => add(t.el, "arrows-shuffle", `Transbordo (${t.motivo}). Antes: ${alDM(t.antes.fecha)} ${t.antes.sale || t.antes.hora || ""}${t.antes.coche ? ", coche " + t.antes.coche : ""}, ${t.antes.asiento === "P" ? "parado" : "asiento " + t.antes.asiento}`, t.por));
   if (v.embarque) add(v.embarque.el, v.embarque.estado === "subio" ? "bus" : "user-x", v.embarque.estado === "subio" ? "Subió al coche" : "No se presentó", v.embarque.por);
   add(v.liberada_en, "lock-open", "Reserva liberada", v.liberada_por);
   ev.sort((a, b) => a.el.localeCompare(b.el));
@@ -1824,7 +1822,7 @@ async function alVistaManifiesto(animar) {
           <button type="button" class="al-sec" onclick="alManCSV()"><i class="ti ti-file-spreadsheet"></i> CSV</button>
           ${adm && vendSv.some(v => !v.embarque) ? `<button type="button" class="al-sec" onclick="alEmbarqueTodos()"><i class="ti ti-checks"></i> Los que faltan: subieron</button>` : ""}` : ""}
       </div>
-      ${sv ? `<p class="al-nota">${alDiaTxt(alFechaDe(al.dia))} · ${sv.coche ? "Coche " + trEsc(sv.coche) + (sv.modelo ? ", " + trEsc(sv.modelo) : "") : "Coche a confirmar"}${sv.tripulacion.length ? " · Tripulación: " + sv.tripulacion.map(trEsc).join(" y ") : ""}${est !== "abierto" ? ` · <b class="al-rojo-t">${est === "cancelado" ? "Servicio cancelado" : "Venta cerrada"}</b>` : ""}</p>` : ""}
+      ${sv ? `<p class="al-nota">${alDiaTxt(alFechaDe(al.dia))} · ${sv.coche ? "Coche " + trEsc(sv.coche) + (sv.modelo ? ", " + trEsc(sv.modelo) : "") + (sv.reemplazo ? ` (reemplaza al ${trEsc(sv.reemplazo.de)})` : "") : "Coche a confirmar"}${sv.tripulacion.length ? " · Tripulación: " + sv.tripulacion.map(trEsc).join(" y ") : ""}${est !== "abierto" ? ` · <b class="al-rojo-t">${est === "cancelado" ? "Servicio cancelado" : "Venta cerrada"}</b>` : ""}</p>` : ""}
       ${cuerpo}
     </div>`, animar);
 }
@@ -2047,448 +2045,6 @@ ${fl("Efectivo en caja", fmtNum(t.efectivoNeto), "f")}
 <div class="m">${movs.map(m => `<div><span>${m.el.slice(11, 16)} ${AL_MOV_TXT[m.t] || m.t} ${m.nro ? alNro(m.nro) : trEsc(m.concepto || "")}</span><span>${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</span></div>`).join("")}</div>
 <div class="fi">Firma del vendedor</div><div class="fi">Recibió</div><div class="maq">Maqueta de Alpha: sin valor fiscal</div></article></body></html>`;
   alMandarImprimir(html, "Cierre de caja");
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// LIQUIDACIONES DE LAS AGENCIAS (solo administración)
-// Lo que vendió cada agencia hasta un corte: efectivo, tarjeta, transferencia,
-// devoluciones, la comisión de su contrato y lo que tiene que depositar.
-// ════════════════════════════════════════════════════════════════════════════
-const AL_LIQ_COLS = [["venta_ef", "Venta EF"], ["venta_tc", "Venta TC"], ["venta_tr", "Transf."], ["devoluciones", "Devol."], ["ie", "I/E"], ["comision", "Comisión"], ["saldo", "Saldo"], ["saldo_neto", "Saldo neto"]];
-async function alVistaLiquidaciones(animar) {
-  if (window.USUARIO_ROL !== "admin") { al.vista = "vender"; return alRender(animar); }
-  if (!document.querySelector(".al-liq")) alShellCargando(animar);
-  const d = await api("/api/alpha/liquidaciones");
-  if (al.vista !== "liquidaciones" || !d || !d.liquidaciones) return;
-  al.liqDatos = d;
-  if (!al.liq.hasta) al.liq.hasta = (d.ahora || alAhoraISO()).slice(0, 16);
-  const pend = d.agencias.filter(a => a.pendiente_movs);
-  const filtro = al.liq.filtro || "";
-  const liqs = d.liquidaciones.filter(l => !filtro || String(l.agencia_id) === filtro);
-  const fila = l => `<tr class="${l.estado}">
-      <td class="al-t-n"><b>${l.id}</b></td><td><b>${trEsc(l.agencia)}</b><small>${l.desde ? alDM(l.desde.slice(0, 10)) + " " + l.desde.slice(11, 16) + " → " : ""}${alDM(l.hasta.slice(0, 10))} ${l.hasta.slice(11, 16)}</small></td>
-      ${AL_LIQ_COLS.map(([k]) => `<td class="al-t-m ${k === "saldo_neto" ? "fuerte" : ""}">${fmtNum(l[k])}</td>`).join("")}
-      <td class="al-t-c">${l.boletos}</td>
-      <td><span class="al-est ${l.estado === "depositada" ? "vendido" : "reserva"}">${l.estado === "depositada" ? "Depositada" : "Pendiente"}</span>${l.estado === "depositada" ? `<small>${alDM(l.depositada_el.slice(0, 10))}${l.referencia ? " · " + trEsc(l.referencia) : ""}</small>` : ""}</td>
-      <td class="al-t-a">
-        <button type="button" class="al-ic" title="Ver el detalle" aria-label="Detalle" onclick="alLiqDetalle(${l.id})"><i class="ti ti-list-details"></i></button>
-        <button type="button" class="al-ic" title="Imprimir" aria-label="Imprimir" onclick="alLiqImprimir(${l.id})"><i class="ti ti-printer"></i></button>
-        ${l.estado !== "depositada" ? `<button type="button" class="al-ic" title="Marcar como depositada" aria-label="Depositada" onclick="alLiqDepositada(${l.id})"><i class="ti ti-building-bank"></i></button>` : ""}
-        ${l.estado !== "depositada" && l.ultima ? `<button type="button" class="al-ic rojo" title="Deshacer (vuelve a quedar pendiente)" aria-label="Deshacer" onclick="alLiqDeshacer(${l.id})"><i class="ti ti-arrow-back-up"></i></button>` : ""}
-      </td></tr>`;
-  const tot = k => liqs.reduce((a, l) => a + (l[k] || 0), 0);
-  content.innerHTML = alShell(`
-    <div class="al-vista al-liq">
-      <div class="al-v-cab"><h1 class="al-d">Liquidaciones</h1><span>Lo que vendió cada agencia hasta un corte, con la comisión de su contrato y lo que tiene que depositar.</span></div>
-      <section class="al-card">
-        <div class="al-card-cab"><h2 class="al-d">Generar</h2><span>${pend.length ? `${pend.length} agencia${pend.length === 1 ? "" : "s"} con ventas sin liquidar.` : "No hay ventas de agencias sin liquidar."} La comisión sale del contrato que regía el día de cada venta (Comercial → Agencias).</span></div>
-        <div class="al-liq-gen">
-          <label class="al-campo"><span>Agencia</span><select id="al-liq-ag" onchange="al.liq.agencia=this.value">
-            <option value="todas">Todas las que tienen pendiente</option>
-            ${d.agencias.map(a => `<option value="${a.id}" ${String(a.id) === al.liq.agencia ? "selected" : ""}>${trEsc(a.nombre)}${a.pendiente_movs ? ` · ${a.pendiente_movs} mov. · ${alGs(a.pendiente_monto)}` : " · nada pendiente"}</option>`).join("")}
-          </select></label>
-          <label class="al-campo"><span>Corte (hasta)</span><input type="datetime-local" id="al-liq-hasta" value="${al.liq.hasta}" onchange="al.liq.hasta=this.value"></label>
-          <label class="al-check"><input type="checkbox" ${al.liq.soloEf ? "checked" : ""} onchange="al.liq.soloEf=this.checked"> Comisión solo sobre lo cobrado en efectivo</label>
-          <button type="button" class="al-sec" onclick="alLiqPrevia()"><i class="ti ti-eye"></i> Ver lo pendiente</button>
-          <button type="button" class="al-btn-r" onclick="alLiqGenerar()"><i class="ti ti-file-dollar"></i> Generar liquidación</button>
-        </div>
-        ${pend.length ? `<div class="al-liq-pend">${pend.map(a => `<button type="button" class="al-liq-p" onclick="al.liq.agencia='${a.id}';alLiqPrevia()"><b>${trEsc(a.nombre)}</b><span>${a.pendiente_movs} movimiento${a.pendiente_movs === 1 ? "" : "s"} desde el ${alDM(a.pendiente_desde.slice(0, 10))}</span><em>${alGs(a.pendiente_monto)}</em></button>`).join("")}</div>` : ""}
-      </section>
-      <div class="al-man-sel">
-        <label class="al-campo"><span>Ver liquidaciones de</span><select onchange="al.liq.filtro=this.value;alVistaLiquidaciones(false)"><option value="">Todas las agencias</option>${d.agencias.map(a => `<option value="${a.id}" ${String(a.id) === filtro ? "selected" : ""}>${trEsc(a.nombre)}</option>`).join("")}</select></label>
-        ${liqs.length ? `<button type="button" class="al-sec" onclick="alLiqCSV()"><i class="ti ti-file-spreadsheet"></i> CSV</button>` : ""}
-      </div>
-      ${liqs.length ? `<div class="al-tabla-w"><table class="al-tabla al-liq-t">
-        <thead><tr><th>Nro</th><th>Agencia · período</th>${AL_LIQ_COLS.map(([, t]) => `<th class="al-t-m">${t}</th>`).join("")}<th class="al-t-c">Boletos</th><th>Estado</th><th></th></tr></thead>
-        <tbody>${liqs.map(fila).join("")}</tbody>
-        <tfoot><tr><th></th><th>Total</th>${AL_LIQ_COLS.map(([k]) => `<th class="al-t-m">${fmtNum(tot(k))}</th>`).join("")}<th class="al-t-c">${tot("boletos")}</th><th></th><th></th></tr></tfoot></table></div>`
-        : `<div class="al-vacio"><i class="ti ti-report-money"></i><b>Todavía no hay liquidaciones</b><span>Se generan arriba, con el corte que elijas.</span></div>`}
-    </div>`, animar);
-}
-function alLiqTablaMovs(movs) {
-  return `<div class="al-tabla-w"><table class="al-tabla">
-    <thead><tr><th>Fecha</th><th>Boleto</th><th>Pasajero</th><th>Viaje</th><th>Movimiento</th><th>Pago</th><th class="al-t-m">Gs.</th><th class="al-t-m">Comisión</th></tr></thead>
-    <tbody>${movs.map(m => `<tr><td>${alDM(m.el.slice(0, 10))} ${m.el.slice(11, 16)}</td><td>${m.nro ? alNro(m.nro) : "—"}</td><td>${trEsc(m.nombre)}<small>${trEsc(m.vendedor)}</small></td>
-      <td>${m.nro ? `${trEsc(m.origen)} → ${trEsc(m.destino)}<small>${alDM(m.fecha)} ${m.sale}${m.asiento != null ? " · asiento " + m.asiento : ""}</small>` : ""}</td>
-      <td>${AL_MOV_TXT[m.t] || m.t}${m.estado_venta && m.estado_venta !== "vendido" && (m.t === "venta" || m.t === "cobro") ? `<small>(${AL_ESTADOS[m.estado_venta] || m.estado_venta})</small>` : ""}</td>
-      <td>${(AL_PAGOS.find(p => p[0] === m.pago) || ["", m.pago || ""])[1]}</td>
-      <td class="al-t-m ${m.monto < 0 ? "neg" : ""}">${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</td>
-      <td class="al-t-m">${m.comision ? fmtNum(m.comision) : "—"}${m.comision_txt ? `<small>${trEsc(m.comision_txt)}</small>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
-}
-function alLiqResumen(t) {
-  return `<div class="al-man-res">${AL_LIQ_COLS.map(([k, n]) => `<div class="${k === "saldo_neto" ? "fuerte" : ""}"><span>${k === "saldo_neto" ? "Saldo neto (a depositar)" : n}</span><b class="al-d">${alGs(t[k])}</b></div>`).join("")}<div><span>Boletos</span><b class="al-d">${t.boletos}</b></div></div>`;
-}
-async function alLiqPrevia() {
-  const ag = al.liq.agencia && al.liq.agencia !== "todas" ? al.liq.agencia : "";
-  if (!ag) { toast("Elegí una agencia para ver lo pendiente", "error"); return; }
-  const hasta = (document.getElementById("al-liq-hasta")?.value || al.liq.hasta);
-  const t = await api(`/api/alpha/liquidaciones/pendiente?agencia_id=${ag}&hasta=${encodeURIComponent(hasta)}&solo_ef=${al.liq.soloEf ? 1 : 0}`);
-  if (!t || !t.movs) return;
-  const nombre = ((al.liqDatos?.agencias || []).find(a => String(a.id) === ag) || {}).nombre || "";
-  alModal({ titulo: `Pendiente de ${nombre}`, ancho: 1100, cuerpo: t.movs.length
-      ? `<p class="al-m-txt">Hasta el ${alDM(hasta.slice(0, 10))} a las ${hasta.slice(11, 16)}.</p>${alLiqResumen(t)}${alLiqTablaMovs(t.movs)}`
-      : `<p class="al-m-txt">No tiene nada sin liquidar hasta ese corte.</p>`,
-    pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cerrar</button>${t.movs.length ? `<button type="button" class="al-btn-r" onclick="alModalCerrar();alLiqGenerar()"><i class="ti ti-file-dollar"></i> Generar esta liquidación</button>` : ""}` });
-}
-async function alLiqGenerar() {
-  const ag = document.getElementById("al-liq-ag")?.value || al.liq.agencia || "todas";
-  const hasta = document.getElementById("al-liq-hasta")?.value || al.liq.hasta;
-  const nombre = ag === "todas" ? "todas las agencias con ventas pendientes" : ((al.liqDatos?.agencias || []).find(a => String(a.id) === ag) || {}).nombre;
-  if (!confirm(`¿Generar la liquidación de ${nombre} hasta el ${alDM(hasta.slice(0, 10))} a las ${hasta.slice(11, 16)}?`)) return;
-  const r = await alPost("/api/alpha/liquidaciones", { agencia_id: ag, hasta, solo_ef: al.liq.soloEf });
-  if (!r) return;
-  toast(`${r.ids.length} liquidación${r.ids.length === 1 ? "" : "es"} generada${r.ids.length === 1 ? "" : "s"}`, "success");
-  alVistaLiquidaciones(false);
-}
-async function alLiqDetalle(id) {
-  const l = await api(`/api/alpha/liquidaciones/${id}`);
-  if (!l || !l.movs) return;
-  alModal({ titulo: `Liquidación ${l.id} · ${l.agencia}`, ancho: 1100,
-    cuerpo: `<p class="al-m-txt">${l.desde ? `Del ${alDM(l.desde.slice(0, 10))} ${l.desde.slice(11, 16)} ` : ""}al ${alDM(l.hasta.slice(0, 10))} ${l.hasta.slice(11, 16)} · generada el ${alDM(l.el.slice(0, 10))} por ${trEsc(l.por)}${l.solo_ef ? " · comisión solo sobre efectivo" : ""}.</p>${alLiqResumen(l)}${alLiqTablaMovs(l.movs)}`,
-    pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cerrar</button><button type="button" class="al-btn-r" onclick="alLiqImprimir(${l.id})"><i class="ti ti-printer"></i> Imprimir</button>` });
-}
-async function alLiqImprimir(id) {
-  const l = await api(`/api/alpha/liquidaciones/${id}`);
-  if (!l || !l.movs) return;
-  const e = trEsc;
-  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Liquidación ${l.id}</title>
-<style>@page{size:A4;margin:12mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#000;font-size:11px}
-.cab{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:8px}h1{font-size:18px;margin:0}
-.res{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:8px 0 12px}.res div{border:1px solid #999;padding:6px}.res span{display:block;font-size:9.5px;text-transform:uppercase;color:#444}.res b{font-size:14px}
-.res .f{background:#000;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}.res .f span{color:#ddd}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:3px 5px;text-align:left}th{background:#eee;font-size:9.5px;text-transform:uppercase}.n{text-align:right;white-space:nowrap}
-.firmas{display:flex;gap:40px;margin-top:40px}.firmas div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}.maq{margin-top:12px;font-size:9.5px;color:#555;text-align:center}</style></head><body>
-<div class="cab"><div><b>LA SANTANIANA</b><h1>Liquidación ${l.id} · ${e(l.agencia)}</h1></div><span>${l.desde ? "Del " + alDM(l.desde.slice(0, 10)) + "/" + l.desde.slice(0, 4) + " " + l.desde.slice(11, 16) + " " : ""}al ${alDM(l.hasta.slice(0, 10))}/${l.hasta.slice(0, 4)} ${l.hasta.slice(11, 16)}</span></div>
-<div class="res">${AL_LIQ_COLS.map(([k, n]) => `<div class="${k === "saldo_neto" ? "f" : ""}"><span>${k === "saldo_neto" ? "Saldo neto a depositar" : n}</span><b>Gs. ${fmtNum(l[k])}</b></div>`).join("")}<div><span>Boletos</span><b>${l.boletos}</b></div></div>
-<table><thead><tr><th>Fecha</th><th>Boleto</th><th>Pasajero</th><th>Viaje</th><th>Movimiento</th><th>Pago</th><th class="n">Gs.</th><th class="n">Comisión</th></tr></thead><tbody>
-${l.movs.map(m => `<tr><td>${alDM(m.el.slice(0, 10))} ${m.el.slice(11, 16)}</td><td>${m.nro ? alNro(m.nro) : "—"}</td><td>${e(m.nombre)}</td><td>${m.nro ? `${e(m.origen)} → ${e(m.destino)}, ${alDM(m.fecha)} ${m.sale}` : ""}</td><td>${AL_MOV_TXT[m.t] || m.t}</td><td>${(AL_PAGOS.find(p => p[0] === m.pago) || ["", m.pago || ""])[1]}</td><td class="n">${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</td><td class="n">${m.comision ? fmtNum(m.comision) : "—"}</td></tr>`).join("")}
-</tbody></table>
-<div class="firmas"><div>Por la agencia</div><div>Por La Santaniana</div></div>
-<div class="maq">Generada el ${alDM(l.el.slice(0, 10))}/${l.el.slice(0, 4)} por ${e(l.por)}${l.estado === "depositada" ? ` · Depositada el ${alDM(l.depositada_el.slice(0, 10))}${l.referencia ? " (" + e(l.referencia) + ")" : ""}` : ""} · Maqueta de Alpha: sin valor fiscal</div></body></html>`;
-  alImprimir(html, "210mm");
-}
-async function alLiqDepositada(id) {
-  const ref = prompt("¿Con qué se depositó? (número de depósito o transferencia, opcional)", "");
-  if (ref === null) return;
-  const r = await alPost(`/api/alpha/liquidaciones/${id}/depositada`, { referencia: ref });
-  if (!r) return;
-  toast("Liquidación marcada como depositada", "success");
-  alVistaLiquidaciones(false);
-}
-async function alLiqDeshacer(id) {
-  if (!confirm(`¿Deshacer la liquidación ${id}? Sus ventas vuelven a quedar pendientes.`)) return;
-  const r = await api(`/api/alpha/liquidaciones/${id}`, { method: "DELETE" });
-  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
-  toast("Liquidación deshecha", "success");
-  alVistaLiquidaciones(false);
-}
-function alLiqCSV() {
-  const d = al.liqDatos; if (!d) return;
-  const filtro = al.liq.filtro || "";
-  const liqs = d.liquidaciones.filter(l => !filtro || String(l.agencia_id) === filtro);
-  const q = x => `"${String(x ?? "").replace(/"/g, '""')}"`;
-  const filas = [["Nro", "Agencia", "Desde", "Corte", ...AL_LIQ_COLS.map(c => c[1]), "Boletos", "Estado", "Depositada", "Referencia"]]
-    .concat(liqs.map(l => [l.id, l.agencia, l.desde, l.hasta, ...AL_LIQ_COLS.map(([k]) => Math.round(l[k])), l.boletos, l.estado, l.depositada_el, l.referencia]));
-  const blob = new Blob(["﻿" + filas.map(f => f.map(q).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = `liquidaciones-${alISO(new Date())}.csv`;
-  document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// RECAUDACIÓN (solo administración): por servicio (fecha del viaje, con lo que
-// vendió cada agencia), por agencia y vendedor, o por día (fecha del cobro)
-// ════════════════════════════════════════════════════════════════════════════
-const AL_REC_POR = [["servicio", "Por servicio"], ["agencia", "Por agencia y vendedor"], ["dia", "Por día"]];
-const AL_REC_PLATA = [["boletos", "Boletos", "n"], ["efectivo", "Efectivo", "g"], ["tarjeta", "Tarjeta", "g"], ["transferencia", "Transf.", "g"], ["salidas", "Devol. y anul.", "-"], ["ie", "I/E", "g"], ["neto", "Neto", "g"]];
-const AL_REC_COLS = {
-  servicio: [["pasajeros", "Pasajeros", "n"], ["parados", "Parados", "n"], ["menores", "Menores", "n"], ["devueltos", "Devueltos", "n"], ["boletos", "Boletos", "g"], ["equipaje", "Equipaje", "g"], ["retenido", "Retenido", "g"], ["total", "Total", "g"]],
-  agencia: AL_REC_PLATA, dia: AL_REC_PLATA,
-};
-function alRecRango(k) {
-  const h = new Date(), d = x => { const y = new Date(h); y.setDate(y.getDate() + x); return alISO(y); };
-  if (k === "hoy") return [d(0), d(0)];
-  if (k === "ayer") return [d(-1), d(-1)];
-  if (k === "7") return [d(-6), d(0)];
-  if (k === "mes") return [alISO(new Date(h.getFullYear(), h.getMonth(), 1)), d(0)];
-  if (k === "prox") return [d(0), d(7)];
-  return [al.rec.desde, al.rec.hasta];
-}
-function alRecPoner(k) { [al.rec.desde, al.rec.hasta] = alRecRango(k); alVistaRecaudacion(false); }
-async function alVistaRecaudacion(animar) {
-  if (window.USUARIO_ROL !== "admin" || al.comoAgencia) { al.vista = "vender"; return alRender(animar); }
-  if (!al.rec.desde) [al.rec.desde, al.rec.hasta] = alRecRango("hoy");
-  if (!document.querySelector(".al-recv")) alShellCargando(animar);
-  if (!al.cfg) await alCfgTraer();
-  const d = await api(`/api/alpha/recaudacion?desde=${al.rec.desde}&hasta=${al.rec.hasta}&por=${al.rec.por}`);
-  if (al.vista !== "recaudacion" || !d || !d.filas) return;
-  al.recDatos = d;
-  const por = d.por, cols = AL_REC_COLS[por], filas = d.filas;
-  const cor = k => ((al.cfg.corredores || []).find(c => c.clave === k) || {}).titulo || String(k || "").split("|").pop();
-  const val = (f, [k, , t]) => t === "n" ? (f[k] || "") : t === "-" ? (f[k] ? "− " + fmtNum(f[k]) : "") : fmtNum(f[k] || 0);
-  const tot = Object.fromEntries(cols.map(([k]) => [k, filas.reduce((a, f) => a + (f[k] || 0), 0)]));
-  const lead = f => por === "servicio"
-    ? `<td><b>${alDM(f.fecha)}</b> ${f.hora}</td><td><b>${trEsc(f.tramo)}</b><small>${trEsc(cor(f.cor))} · ${f.lado === "regreso" ? "regreso" : "ida"}${f.coche ? " · coche " + trEsc(f.coche) : ""}</small>${f.agencias.length > 1 || (f.agencias[0] && f.agencias[0].agencia !== "Administración") ? `<small>${f.agencias.map(a => `${trEsc(a.agencia)} ${a.pasajeros}`).join(" · ")}</small>` : ""}</td>`
-    : por === "dia" ? `<td><b>${alDiaTxt(alDeISO(f.fecha))}</b></td>` : `<td><b>${trEsc(f.agencia)}</b></td><td>${trEsc(f.vendedor)}</td>`;
-  const leadTh = por === "servicio" ? "<th>Salida</th><th>Servicio</th>" : por === "dia" ? "<th>Día</th>" : "<th>Agencia</th><th>Vendedor</th>";
-  const pctTxt = f => { const sent = f.pasajeros - f.parados; return f.asientos ? `<small>${Math.round(sent * 100 / f.asientos)} % de ${f.asientos}</small>` : ""; };
-  const resumen = por === "servicio"
-    ? [["Servicios con ventas", filas.length], ["Pasajeros", tot.pasajeros], ["Boletos", alGs(tot.boletos)], ["Equipaje y retenido", alGs(tot.equipaje + tot.retenido)], ["Total", alGs(tot.total), 1]]
-    : [["Boletos vendidos", tot.boletos], ["Efectivo", alGs(tot.efectivo)], ["Tarjeta y transf.", alGs(tot.tarjeta + tot.transferencia)], ["Devol. y anul.", "− " + alGs(tot.salidas)], ["Neto", alGs(tot.neto), 1]];
-  content.innerHTML = alShell(`
-    <div class="al-vista al-recv">
-      <div class="al-v-cab"><h1 class="al-d">Recaudación</h1><span>${por === "servicio" ? "Lo que dejó cada salida, por la fecha del viaje, y qué agencia vendió." : "La plata que entró y salió, por la fecha en que se cobró."}</span></div>
-      <div class="al-chips">${AL_REC_POR.map(([k, t]) => `<button type="button" class="al-chip ${k === por ? "on" : ""}" aria-pressed="${k === por}" onclick="al.rec.por='${k}';alVistaRecaudacion(false)">${t}</button>`).join("")}</div>
-      <div class="al-man-sel">
-        <label class="al-campo"><span>Desde</span><input type="date" value="${al.rec.desde}" onchange="al.rec.desde=this.value;alVistaRecaudacion(false)"></label>
-        <label class="al-campo"><span>Hasta</span><input type="date" value="${al.rec.hasta}" onchange="al.rec.hasta=this.value;alVistaRecaudacion(false)"></label>
-        <div class="al-chips al-rec-r">${[["hoy", "Hoy"], ["ayer", "Ayer"], ["7", "Últimos 7 días"], ["mes", "Este mes"], ...(por === "servicio" ? [["prox", "Próximos 7 días"]] : [])].map(([k, t]) => { const [a, b] = alRecRango(k); return `<button type="button" class="al-chip ${a === al.rec.desde && b === al.rec.hasta ? "on" : ""}" onclick="alRecPoner('${k}')">${t}</button>`; }).join("")}</div>
-        ${filas.length ? `<button type="button" class="al-btn-r" onclick="alRecImprimir()"><i class="ti ti-printer"></i> Imprimir</button><button type="button" class="al-sec" onclick="alRecCSV()"><i class="ti ti-file-spreadsheet"></i> CSV</button>` : ""}
-      </div>
-      <div class="al-man-res">${resumen.map(([t, v, f]) => `<div class="${f ? "fuerte" : ""}"><span>${t}</span><b class="al-d">${v}</b></div>`).join("")}</div>
-      ${filas.length ? `<div class="al-tabla-w"><table class="al-tabla">
-        <thead><tr>${leadTh}${cols.map(([, t]) => `<th class="al-t-m">${t}</th>`).join("")}</tr></thead>
-        <tbody>${filas.map(f => `<tr>${lead(f)}${cols.map(c => `<td class="al-t-m ${c[0] === "total" || c[0] === "neto" ? "fuerte" : ""} ${c[2] === "-" && f[c[0]] ? "neg" : ""}">${val(f, c)}${por === "servicio" && c[0] === "pasajeros" ? pctTxt(f) : ""}</td>`).join("")}</tr>`).join("")}</tbody>
-        <tfoot><tr><th${por === "dia" ? "" : ' colspan="2"'}>Total</th>${cols.map(c => `<th class="al-t-m">${val(tot, c)}</th>`).join("")}</tr></tfoot></table></div>`
-        : `<div class="al-vacio"><i class="ti ti-chart-bar-off"></i><b>No hay ${por === "servicio" ? "ventas para viajes" : "movimientos"} en esas fechas</b></div>`}
-    </div>`, animar);
-}
-function alRecFilasPlanas() {
-  const d = al.recDatos; if (!d) return [];
-  const cols = AL_REC_COLS[d.por];
-  const cab = d.por === "servicio" ? ["Fecha", "Hora", "Servicio", "Corredor", "Sentido", "Coche", "Asientos", "Agencias"] : d.por === "dia" ? ["Día"] : ["Agencia", "Vendedor"];
-  const cor = k => (((al.cfg || {}).corredores || []).find(c => c.clave === k) || {}).titulo || String(k || "").split("|").pop();
-  return [cab.concat(cols.map(c => c[1]))].concat(d.filas.map(f => (d.por === "servicio"
-    ? [f.fecha, f.hora, f.tramo, cor(f.cor), f.lado, f.coche, f.asientos, f.agencias.map(a => `${a.agencia} ${a.pasajeros}`).join(" / ")]
-    : d.por === "dia" ? [f.fecha] : [f.agencia, f.vendedor]).concat(cols.map(([k, , t]) => t === "-" ? -Math.round(f[k] || 0) : Math.round(f[k] || 0)))));
-}
-function alRecCSV() { const d = al.recDatos; if (d) alCSV(`recaudacion-${d.por}-${d.desde}-a-${d.hasta}.csv`, alRecFilasPlanas()); }
-function alRecImprimir() {
-  const d = al.recDatos; if (!d) return;
-  const filas = alRecFilasPlanas(), cab = filas.shift(), e = trEsc, nCols = AL_REC_COLS[d.por].length;
-  const tot = cab.map((_, i) => i < cab.length - nCols ? "" : fmtNum(filas.reduce((a, f) => a + (+f[i] || 0), 0)));
-  tot[0] = "Total";
-  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Recaudación ${d.desde} a ${d.hasta}</title>
-<style>@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#000;font-size:10.5px}
-.cab{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:8px}h1{font-size:18px;margin:0}
-table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:3px 5px;text-align:left}th{background:#eee;font-size:9.5px;text-transform:uppercase}.n{text-align:right;white-space:nowrap}
-tfoot td{font-weight:800;background:#f3f3f3}.maq{margin-top:12px;font-size:9.5px;color:#555;text-align:center}</style></head><body>
-<div class="cab"><div><b>LA SANTANIANA</b><h1>Recaudación ${(AL_REC_POR.find(x => x[0] === d.por) || [, ""])[1].toLowerCase()}</h1></div><span>Del ${alDM(d.desde)}/${d.desde.slice(0, 4)} al ${alDM(d.hasta)}/${d.hasta.slice(0, 4)} · impresa ${alAhoraISO().replace("T", " ")}</span></div>
-<table><thead><tr>${cab.map((c, i) => `<th class="${i >= cab.length - nCols ? "n" : ""}">${e(c)}</th>`).join("")}</tr></thead>
-<tbody>${filas.map(f => `<tr>${f.map((x, i) => `<td class="${i >= cab.length - nCols ? "n" : ""}">${i >= cab.length - nCols ? (x ? fmtNum(x) : "") : e(String(x ?? ""))}</td>`).join("")}</tr>`).join("")}</tbody>
-<tfoot><tr>${tot.map((x, i) => `<td class="${i >= cab.length - nCols ? "n" : ""}">${x}</td>`).join("")}</tr></tfoot></table>
-<div class="maq">Maqueta de Alpha: sin valor fiscal</div></body></html>`;
-  alImprimir(html, "hoja");
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// CONTROLES (solo administración)
-//   Servicios: todas las salidas del día con su ocupación (resalta las que
-//   pasan el % elegido), el recorrido con los que suben y bajan en cada parada,
-//   y cerrar la venta, reabrirla o cancelar el servicio.
-//   Agencias: lo que cada una tiene sin liquidar y sin depositar contra el tope
-//   de su contrato, la última liquidación y el vencimiento del contrato.
-// ════════════════════════════════════════════════════════════════════════════
-const AL_EST_SERV = { abierto: ["Abierto", "vendido"], cerrado: ["Venta cerrada", "reserva"], cancelado: ["Cancelado", "anulado"] };
-async function alVistaControl(animar) {
-  if (window.USUARIO_ROL !== "admin" || al.comoAgencia) { al.vista = "vender"; return alRender(animar); }
-  if (al.ctl.vista === "agencias") return alControlAgencias(animar);
-  if (!al.cfg) await alCfgTraer();
-  const fecha = alISO(alFechaDe(al.dia));
-  if (!al.datos[fecha] || !al.ocup[fecha] || Date.now() - ((al.ocupEl || {})[fecha] || 0) > AL_OCUP_FRESCO) {
-    if (!document.querySelector(".al-ctl")) alShellCargando(animar);
-    await Promise.all([alTraer(), alTraerOcup(fecha, true)]);
-    if (al.vista !== "control") return;
-  }
-  const filas = alControlServicios(fecha), um = +al.ctl.umbral || 0;
-  const q = alNorm(al.ctl.q || "");
-  const vis = filas.filter(f => !q || alNorm([f.sv.hora, f.sv.cod, f.sv.origen_nombre, f.sv.llega_nombre, f.sv.coche, f.titulo].join(" ")).includes(q));
-  if (!filas.some(f => f.sv.clave === al.ctl.clave)) al.ctl.clave = (filas[0] || { sv: {} }).sv.clave || "";
-  const sel = filas.find(f => f.sv.clave === al.ctl.clave);
-  const tot = k => filas.reduce((a, f) => a + f[k], 0);
-  const fila = f => `<tr class="${f.sv.clave === al.ctl.clave ? "on" : ""} ${f.est === "cancelado" ? "anulado" : ""}" onclick="alCtlElegir('${f.sv.clave.replace(/'/g, "\\'")}')" tabindex="0" onkeydown="if(event.key==='Enter')this.click()">
-      <td><b>${f.sv.hora}</b></td><td><b>${trEsc(f.sv.origen_nombre)} → ${trEsc(f.sv.llega_nombre)}</b><small>${trEsc(f.sv.cod)} · ${f.sv.lado === "regreso" ? "regreso" : "ida"}</small></td>
-      <td>${f.sv.coche ? trEsc(f.sv.coche) : `<i class="al-conf">${f.sv.habitual ? "a conf. (" + trEsc(f.sv.habitual) + ")" : "a confirmar"}</i>`}</td>
-      <td class="al-t-c">${f.libres}<small>de ${f.asientos}${f.bloqueados ? ` · ${f.bloqueados} bloq.` : ""}</small></td>
-      <td class="al-t-c">${f.pax}${f.parados ? `<small>${f.parados} parados</small>` : ""}</td><td class="al-t-c">${f.reservas || ""}</td>
-      <td class="al-t-c"><span class="al-pct ${f.pct >= um && um ? "alto" : ""}">${f.pct} %</span></td><td class="al-t-m">${fmtNum(f.recaudado)}</td>
-      <td><span class="al-est ${AL_EST_SERV[f.est][1]}">${AL_EST_SERV[f.est][0]}</span></td></tr>`;
-  content.innerHTML = alShell(`
-    <div class="al-vista al-ctl">
-      <div class="al-v-cab"><h1 class="al-d">Controles</h1><span>Cómo vienen las salidas del día y las agencias.</span></div>
-      <div class="al-lados al-ctl-tabs" role="group"><button type="button" class="al-lado on" aria-pressed="true">Servicios</button><button type="button" class="al-lado" aria-pressed="false" onclick="al.ctl.vista='agencias';alVistaControl(false)">Agencias</button></div>
-      <div class="al-filtros"><div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div></div>
-      <div class="al-man-sel">
-        <label class="al-campo"><span>Buscar</span><input type="search" value="${trEsc(al.ctl.q)}" placeholder="Hora, destino, coche" oninput="al.ctl.q=this.value;clearTimeout(window._alCtlT);window._alCtlT=setTimeout(()=>{alVistaControl(false).then(()=>{const i=document.querySelector('.al-ctl input[type=search]');if(i){i.focus();i.setSelectionRange(i.value.length,i.value.length)}})},250)"></label>
-        <label class="al-campo ci"><span>Resaltar si supera (%)</span><input type="number" min="0" max="100" step="5" value="${al.ctl.umbral}" onchange="al.ctl.umbral=+this.value;alVistaControl(false)"></label>
-        <button type="button" class="al-sec" onclick="alControlCSV()"><i class="ti ti-file-spreadsheet"></i> CSV</button>
-        <button type="button" class="al-sec" onclick="alTraerOcup(null,true).then(()=>alVistaControl(false))"><i class="ti ti-refresh"></i> Actualizar</button>
-      </div>
-      <div class="al-man-res">
-        <div><span>Salidas</span><b class="al-d">${filas.length}${filas.filter(f => f.est !== "abierto").length ? ` <small>· ${filas.filter(f => f.est === "cerrado").length} cerradas · ${filas.filter(f => f.est === "cancelado").length} canceladas</small>` : ""}</b></div>
-        <div><span>Pasajeros</span><b class="al-d">${tot("pax")}</b></div>
-        <div><span>Asientos libres</span><b class="al-d">${tot("libres")} <small>de ${tot("asientos")}</small></b></div>
-        <div><span>Pasan el ${um} %</span><b class="al-d">${filas.filter(f => um && f.pct >= um).length}</b></div>
-        <div class="fuerte"><span>Vendido para estas salidas</span><b class="al-d">${alGs(tot("recaudado"))}</b></div>
-      </div>
-      <div class="al-ctl-cuerpo">
-        <div class="al-tabla-w"><table class="al-tabla al-ctl-t">
-          <thead><tr><th>Sale</th><th>Servicio</th><th>Coche</th><th class="al-t-c">Libres</th><th class="al-t-c">Pasajeros</th><th class="al-t-c">Reservas</th><th class="al-t-c">Ocupado</th><th class="al-t-m">Vendido</th><th>Estado</th></tr></thead>
-          <tbody>${vis.map(fila).join("") || `<tr><td colspan="9">No hay salidas${q ? " con esa búsqueda" : ""}.</td></tr>`}</tbody></table></div>
-        ${sel ? alControlDetalle(sel, fecha) : ""}
-      </div>
-    </div>`, animar);
-}
-function alControlServicios(fecha) {
-  const ventas = alOcupDe(fecha), out = [];
-  alTodasSalidas().forEach(({ c, l, k }) => {
-    const sv = alServiciosDe(c, l)[k], pl = alPlano(sv), asientos = alAsientos(pl).length;
-    const vs = ventas.filter(v => v.servicio === sv.clave && alOcupa(v));
-    const sentados = new Set(vs.filter(v => v.asiento !== "P").map(v => v.asiento));
-    const vend = vs.filter(v => v.estado === "vendido");
-    out.push({ sv, titulo: c.titulo, asientos, ocupados: sentados.size, libres: Math.max(0, asientos - sentados.size),
-      pax: vend.length, parados: vend.filter(v => v.asiento === "P").length, reservas: vs.filter(v => v.estado === "reserva").length,
-      bloqueados: vs.filter(v => v.estado === "bloqueado").length, menores: vend.filter(v => v.menor).length,
-      pct: asientos ? Math.round(sentados.size * 100 / asientos) : 0, recaudado: vend.reduce((a, v) => a + (v.total || 0), 0),
-      est: alEstadoServ(fecha, sv.clave), vend });
-  });
-  return out.sort((a, b) => a.sv.hora.localeCompare(b.sv.hora) || a.titulo.localeCompare(b.titulo));
-}
-// En pantallas angostas el detalle de la salida se abre en una ventanita
-const AL_CTL_ANGOSTO = "(max-width: 1500px)";
-function alCtlElegir(clave) {
-  al.ctl.clave = clave;
-  if (!window.matchMedia(AL_CTL_ANGOSTO).matches) return alVistaControl(false);
-  document.querySelectorAll(".al-ctl-t tbody tr").forEach(tr => tr.classList.toggle("on", tr.getAttribute("onclick").includes(`'${clave.replace(/'/g, "\\'")}'`)));
-  const fecha = alISO(alFechaDe(al.dia)), f = alControlServicios(fecha).find(x => x.sv.clave === clave);
-  if (f) alModal({ titulo: `${f.sv.hora} · ${f.sv.cod}`, ancho: 560, cuerpo: alControlDetalle(f, fecha, true),
-    pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cerrar</button>` });
-}
-function alControlDetalle(f, fecha, enModal) {
-  const sv = f.sv, hr = alHojaRuta(sv, f.vend), info = (al.servEst[fecha] || {})[sv.clave] || {}, hist = info.historial || [];
-  const cl = sv.clave.replace(/'/g, "\\'");
-  return `<${enModal ? "div" : "aside"} class="${enModal ? "al-ctl-mod" : "al-card al-ctl-det"}" aria-label="Detalle de la salida">
-    <div class="al-card-cab">${enModal ? "" : `<h2 class="al-d">${sv.hora} · ${trEsc(sv.cod)}</h2>`}<span>${trEsc(sv.origen_nombre)} → ${trEsc(sv.llega_nombre)} · ${sv.coche ? "coche " + trEsc(sv.coche) : "coche a confirmar"}${sv.tripulacion.length ? " · " + sv.tripulacion.map(trEsc).join(" y ") : ""}</span>
-      ${f.est !== "abierto" ? `<span><span class="al-est ${AL_EST_SERV[f.est][1]}">${AL_EST_SERV[f.est][0]}</span>${info.motivo ? " " + trEsc(info.motivo) : ""} · ${trEsc(info.por || "")}, ${alDM((info.el || "").slice(0, 10))} ${(info.el || "").slice(11, 16)}</span>` : ""}</div>
-    <ol class="al-ruta">${hr.map((p, i) => `<li><span class="al-ruta-h">${p.hora || "—"}</span><b>${trEsc(p.nombre)}</b><span class="al-ruta-n">${p.suben.length ? `<em class="s">+${p.suben.length}</em>` : ""}${p.bajan.length ? `<em class="b">−${p.bajan.length}</em>` : ""}${i < hr.length - 1 ? `<small>${p.abordo} a bordo</small>` : ""}</span></li>`).join("")}</ol>
-    <div class="al-acc">
-      ${f.est === "abierto" ? `<button type="button" class="al-sec" onclick="alControlIr('vender','${cl}')"><i class="ti ti-ticket"></i> Vender</button>` : ""}
-      <button type="button" class="al-sec" onclick="alControlIr('manifiesto','${cl}')"><i class="ti ti-list-details"></i> Manifiesto</button>
-      <button type="button" class="al-sec" onclick="alHojaRutaImprimir('${cl}')"><i class="ti ti-route"></i> Hoja de ruta</button>
-      ${f.est === "abierto" ? `<button type="button" class="al-sec" onclick="alServEstado('${cl}','cerrado')"><i class="ti ti-lock"></i> Cerrar la venta</button>` : `<button type="button" class="al-sec" onclick="alServEstado('${cl}','abierto')"><i class="ti ti-lock-open"></i> Abrir la venta</button>`}
-      ${f.est !== "cancelado" ? `<button type="button" class="al-sec rojo" onclick="alServEstado('${cl}','cancelado')"><i class="ti ti-ban"></i> Cancelar el servicio</button>` : ""}
-    </div>
-    ${f.pax && f.est === "cancelado" ? `<p class="al-hint al-rojo-t">Este servicio tiene ${f.pax} pasajeros: cambiales el boleto a otra salida o devolvéselos desde Pasajes.</p>` : ""}
-    ${hist.length ? `<details class="al-ayuda"><summary>Historial del servicio (${hist.length})</summary><ol class="al-hist">${hist.slice().reverse().map(h => `<li><i class="ti ti-${h.estado === "abierto" ? "lock-open" : h.estado === "cerrado" ? "lock" : "ban"}"></i><div><b>${AL_EST_SERV[h.estado][0]}${h.motivo ? ": " + trEsc(h.motivo) : ""}</b><small>${alDM(h.el.slice(0, 10))} ${h.el.slice(11, 16)} · ${trEsc(h.por || "")}</small></div></li>`).join("")}</ol></details>` : ""}
-  </${enModal ? "div" : "aside"}>`;
-}
-async function alControlIr(vista, clave) {
-  alModalCerrar();
-  let hit = null;
-  alTodasSalidas().forEach(({ c, l, k }) => { if (!hit && alServiciosDe(c, l)[k].clave === clave) hit = { c, l, k }; });
-  if (!hit) return;
-  if (vista === "manifiesto") { al.man.clave = clave; al.manClave = ""; al.vista = "manifiesto"; return alRender(true); }
-  alLimpiarVenta();
-  al.cor = hit.c.clave; al.lado = hit.l; al.dep = hit.k; al.sube = 0; al.baja = -1; al.vista = "vender";
-  alRender(true);
-}
-async function alServEstado(clave, estado) {
-  const fecha = alISO(alFechaDe(al.dia)), f = alControlServicios(fecha).find(x => x.sv.clave === clave);
-  if (!f) return;
-  let motivo = "";
-  if (estado === "cancelado") {
-    motivo = prompt(`¿Por qué se cancela la salida de las ${f.sv.hora} (${f.sv.cod})? Queda en el historial.${f.pax ? `\n\nTiene ${f.pax} pasajeros: después cambiales el boleto o devolvéselos.` : ""}`, "");
-    if (motivo === null) return;
-    if (!motivo.trim()) { toast("Contá por qué se cancela", "error"); return; }
-  } else if (estado === "cerrado") {
-    motivo = prompt(`Cerrar la venta de la salida de las ${f.sv.hora} (${f.sv.cod}): nadie más la puede vender, ni las agencias. Motivo (opcional):`, "");
-    if (motivo === null) return;
-  } else if (!confirm(`¿Abrir de nuevo la venta de la salida de las ${f.sv.hora}?`)) return;
-  const r = await alPost("/api/alpha/servicios/estado", { fecha, servicio: clave, estado, motivo, hora: f.sv.hora, tramo: f.sv.cod });
-  if (!r) return;
-  al.servEst[fecha] = Object.assign({}, al.servEst[fecha], { [clave]: r.servicio });
-  toast(estado === "abierto" ? "Venta abierta" : estado === "cerrado" ? "Venta cerrada" : "Servicio cancelado", "success");
-  const enModal = !!document.getElementById("al-modal");
-  alModalCerrar();
-  await alVistaControl(false);
-  if (enModal) alCtlElegir(clave);
-}
-function alControlCSV() {
-  const fecha = alISO(alFechaDe(al.dia));
-  alCSV(`servicios-${fecha}.csv`, [["Sale", "Servicio", "Corredor", "Sentido", "Origen", "Destino", "Coche", "Asientos", "Libres", "Ocupados", "Pasajeros", "Parados", "Reservas", "Bloqueados", "Ocupación %", "Vendido Gs.", "Estado"]]
-    .concat(alControlServicios(fecha).map(f => [f.sv.hora, f.sv.cod, f.titulo, f.sv.lado, f.sv.origen_nombre, f.sv.llega_nombre, f.sv.coche || "", f.asientos, f.libres, f.ocupados, f.pax, f.parados, f.reservas, f.bloqueados, f.pct, f.recaudado, AL_EST_SERV[f.est][0]])));
-}
-async function alControlAgencias(animar) {
-  if (!document.querySelector(".al-ctl")) alShellCargando(animar);
-  const d = await api("/api/alpha/control/agencias");
-  if (al.vista !== "control" || !d || !d.agencias) return;
-  al.ctlAg = d;
-  const hoy = d.hoy, t = d.totales;
-  const fecha = x => x ? `${alDM(x.slice(0, 10))}/${x.slice(2, 4)}` : "—";
-  const aviso = a => {
-    const l = [];
-    if (a.estado !== "activa") l.push(a.estado === "baja" ? "De baja" : "Suspendida");
-    if (a.porc != null && a.porc >= 100) l.push("Pasó el tope");
-    else if (a.porc != null && a.porc >= 85) l.push("Cerca del tope");
-    if (!a.contrato) l.push("Sin contrato");
-    else if (a.contrato_hasta && a.contrato_hasta < hoy) l.push("Contrato vencido");
-    if (a.debe_desde && a.debe_desde.slice(0, 10) < alISO(new Date(Date.now() - 7 * 864e5))) l.push("Debe un depósito hace más de 7 días");
-    return l;
-  };
-  const fila = a => {
-    const av = aviso(a);
-    return `<tr class="${a.estado !== "activa" ? "anulado" : ""}">
-      <td><b>${trEsc(a.nombre)}</b><small>${trEsc(a.ciudad)}${a.comision ? " · " + trEsc(a.comision) : ""}</small></td>
-      <td class="al-t-m">${a.tope ? fmtNum(a.tope) : "—"}</td>
-      <td class="al-t-m">${fmtNum(a.sin_liquidar)}<small>${a.sin_liq_desde ? "desde " + fecha(a.sin_liq_desde) : ""}</small></td>
-      <td class="al-t-m">${fmtNum(a.sin_depositar)}<small>${a.liq_pendientes ? `${a.liq_pendientes} liq. desde ${fecha(a.debe_desde)}` : ""}</small></td>
-      <td class="al-t-m fuerte">${fmtNum(a.saldo)}</td>
-      <td class="al-t-c">${a.porc != null ? `<span class="al-pct ${a.porc >= 100 ? "rojo" : a.porc >= 85 ? "alto" : ""}">${a.porc} %</span>` : "—"}</td>
-      <td class="al-t-m">${a.hoy ? fmtNum(a.hoy) : ""}<small>${a.boletos_hoy ? a.boletos_hoy + " bol." : ""}</small></td>
-      <td>${fecha(a.ultima_liq)}</td><td>${a.contrato_hasta ? fecha(a.contrato_hasta) : a.contrato ? "sin fin" : "—"}</td>
-      <td>${av.length ? av.map(x => `<span class="al-est ${/tope|baja|Suspendida|vencido|Debe/.test(x) ? "anulado" : "reserva"}">${x}</span>`).join(" ") : `<span class="al-est vendido">Al día</span>`}</td>
-      <td class="al-t-a">${a.estado === "activa" ? `<button type="button" class="al-ic rojo" title="Suspender: no puede vender" aria-label="Suspender" onclick="alAgEstado(${a.id}, 'suspendida')"><i class="ti ti-player-pause"></i></button>` : a.estado === "suspendida" ? `<button type="button" class="al-ic" title="Habilitar de nuevo" aria-label="Habilitar" onclick="alAgEstado(${a.id}, 'activa')"><i class="ti ti-player-play"></i></button>` : ""}
-        <button type="button" class="al-ic" title="Liquidar" aria-label="Liquidar" onclick="al.liq.agencia='${a.id}';al.vista='liquidaciones';alRender(true)"><i class="ti ti-report-money"></i></button></td></tr>`;
-  };
-  content.innerHTML = alShell(`
-    <div class="al-vista al-ctl">
-      <div class="al-v-cab"><h1 class="al-d">Controles</h1><span>Cómo vienen las salidas del día y las agencias.</span></div>
-      <div class="al-lados al-ctl-tabs" role="group"><button type="button" class="al-lado" aria-pressed="false" onclick="al.ctl.vista='servicios';alVistaControl(false)">Servicios</button><button type="button" class="al-lado on" aria-pressed="true">Agencias</button></div>
-      <div class="al-man-res">
-        <div><span>Sin liquidar</span><b class="al-d">${alGs(t.sin_liquidar)}</b></div>
-        <div><span>Liquidado sin depositar</span><b class="al-d">${alGs(t.sin_depositar)}</b></div>
-        <div class="fuerte"><span>En manos de las agencias</span><b class="al-d">${alGs(t.saldo)}</b></div>
-        <div><span>Vendieron hoy</span><b class="al-d">${alGs(t.hoy)}</b></div>
-        <div><span>Ya depositado</span><b class="al-d">${alGs(t.depositado)}</b></div>
-      </div>
-      <p class="al-nota">El tope es el «Tope de venta sin depositar» del contrato (Comercial → Agencias). Una agencia que lo pasa, o que está suspendida, no puede vender en Alpha hasta que deposite o la habiliten.</p>
-      <div class="al-man-sel"><button type="button" class="al-sec" onclick="alControlAgCSV()"><i class="ti ti-file-spreadsheet"></i> CSV</button><button type="button" class="al-sec" onclick="alControlAgencias(false)"><i class="ti ti-refresh"></i> Actualizar</button></div>
-      ${d.agencias.length ? `<div class="al-tabla-w"><table class="al-tabla al-ctl-ag">
-        <thead><tr><th>Agencia</th><th class="al-t-m">Tope</th><th class="al-t-m">Sin liquidar</th><th class="al-t-m">Sin depositar</th><th class="al-t-m">Saldo</th><th class="al-t-c">% del tope</th><th class="al-t-m">Hoy</th><th>Últ. liquid.</th><th>Contrato hasta</th><th>Situación</th><th></th></tr></thead>
-        <tbody>${d.agencias.map(fila).join("")}</tbody>
-        <tfoot><tr><th>Total</th><th></th><th class="al-t-m">${fmtNum(t.sin_liquidar)}</th><th class="al-t-m">${fmtNum(t.sin_depositar)}</th><th class="al-t-m">${fmtNum(t.saldo)}</th><th></th><th class="al-t-m">${fmtNum(t.hoy)}</th><th></th><th></th><th></th><th></th></tr></tfoot></table></div>`
-        : `<div class="al-vacio"><i class="ti ti-building-store"></i><b>No hay agencias cargadas</b><span>Se cargan en Comercial → Agencias.</span></div>`}
-    </div>`, animar);
-}
-async function alAgEstado(id, estado) {
-  const a = ((al.ctlAg || {}).agencias || []).find(x => x.id === id);
-  if (!a) return;
-  let motivo = "";
-  if (estado !== "activa") {
-    motivo = prompt(`¿Por qué se suspende a ${a.nombre}? No va a poder vender en Alpha hasta que la habiliten.`, a.porc >= 100 ? "Pasó el tope de venta sin depositar" : "");
-    if (motivo === null) return;
-    if (!motivo.trim()) { toast("Contá el motivo (queda en la ficha de la agencia)", "error"); return; }
-  } else if (!confirm(`¿Habilitar de nuevo a ${a.nombre}?`)) return;
-  const r = await api(`/api/agencias/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ estado, motivo }) });
-  if (!r || r.ok === false || r.error) { toast((r && (r.msg || r.error)) || "No se pudo", "error"); return; }
-  toast(estado === "activa" ? `${a.nombre} habilitada` : `${a.nombre} suspendida`, "success");
-  alControlAgencias(false);
-}
-function alControlAgCSV() {
-  const d = al.ctlAg; if (!d) return;
-  alCSV(`agencias-control-${d.hoy}.csv`, [["Agencia", "Ciudad", "Estado", "Comisión", "Tope", "Sin liquidar", "Sin liquidar desde", "Sin depositar", "Liquidaciones pendientes", "Saldo", "% del tope", "Vendido hoy", "Última liquidación", "Contrato hasta"]]
-    .concat(d.agencias.map(a => [a.nombre, a.ciudad, a.estado, a.comision, Math.round(a.tope), Math.round(a.sin_liquidar), a.sin_liq_desde.slice(0, 10), Math.round(a.sin_depositar), a.liq_pendientes, Math.round(a.saldo), a.porc ?? "", Math.round(a.hoy), a.ultima_liq.slice(0, 10), a.contrato_hasta])));
 }
 
 // ════════════════════════════════════════════════════════════════════════════

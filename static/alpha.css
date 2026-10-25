@@ -487,3 +487,36 @@ body.boleteria #content { overflow: visible; }
 .al-ctl-ag td:first-child { min-width: 210px; }
 .al-ctl-ag .al-est { white-space: nowrap; margin: 2px 0; }
 .al-ctl-t td:nth-child(2) { min-width: 200px; }
+
+/* ═══ Controles (módulo aparte, con la misma estética de Alpha) ═══ */
+#content:has(> .ct) { padding-bottom: 0; background: #1F2226; }
+.ct-logo { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--al-rojo-btn); color: #FFFFFF; font-size: 24px; }
+.ct .al-card + .al-card { margin-top: 0; }
+.ct-tb .al-card > .al-campo { max-width: 760px; flex: 0 0 auto; }
+.ct-opc { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ct-op { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: start; gap: 4px 10px; padding: 14px 16px; border-radius: 14px; border: 1.5px solid var(--al-borde); background: var(--al-fondo); color: var(--al-txt); text-align: left; }
+.ct-op .ti { grid-row: 1 / 3; font-size: 26px; color: var(--al-txt2); }
+.ct-op b { font-size: 16px; }
+.ct-op span { font-size: 13px; color: var(--al-txt2); line-height: 1.4; }
+.ct-op:hover { border-color: #8F96A0; }
+.ct-op.on { border-color: var(--al-rojo); box-shadow: inset 4px 0 0 var(--al-rojo); background: #2F2326; }
+.ct-op.on .ti { color: #FF8790; }
+.ct-coche { flex: 0 1 260px; }
+.ct-plano { align-self: flex-end; margin: 0 0 12px; }
+.ct-plano b { color: var(--al-txt); }
+.ct-sug { display: flex; flex-direction: column; gap: 6px; }
+.ct-sug > span { font-size: 13px; font-weight: 700; color: var(--al-txt2); }
+.ct-sug .al-chip { height: 36px; font-size: 13px; }
+.ct-sug .al-chip small { font-weight: 500; opacity: .75; margin-left: 4px; }
+.ct-dest { align-items: flex-end; }
+.ct-dest .al-campo { flex: 1 1 420px; }
+.ct-ok { color: #9FE3B6; font-weight: 700; }
+.ct-cambia { color: #F5C26B; }
+.ct-mal { color: #FF8790; font-weight: 700; }
+.ct-q { color: var(--al-txt2); }
+.ct-hecho { border: 1.5px solid #3E7A55; background: #20302A; }
+.ct-hecho h2 .ti { color: #9FE3B6; vertical-align: -3px; }
+.ct-hecho .al-card-cab span { font-size: 14.5px; color: #CFF2DA; }
+.ct-tb .al-tabla input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--al-rojo); }
+.al-reemp { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; background: #3A2F1A; color: #F5C26B; font-size: 12.5px; font-weight: 700; vertical-align: 5px; }
+@media (max-width: 900px) { .ct-opc { grid-template-columns: minmax(0, 1fr); } }

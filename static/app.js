@@ -223,6 +223,9 @@ function irA(sec) {
     // Alpha vive en static/alpha.js: si ese archivo falta, que no se rompa todo el menú
     alpha: () => typeof renderAlpha === "function" ? renderAlpha()
       : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/alpha.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
+    // Controles vive en static/controles.js (usa los datos de Alpha)
+    controles: () => typeof renderControles === "function" ? renderControles()
+      : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/controles.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
   };
   map[sec]();
 }
