@@ -13,12 +13,14 @@
 // Lo ve solo administración. Alpha queda para vender.
 // ════════════════════════════════════════════════════════════════════════════
 
-const CT_VISTAS = [["servicios", "bus", "Servicios"], ["transbordos", "arrows-shuffle", "Transbordos"], ["agencias", "building-store", "Agencias"],
+const CT_VISTAS = [["servicios", "bus", "Servicios"], ["transbordos", "arrows-shuffle", "Transbordos"], ["programacion", "calendar-event", "Programación"],
+                   ["agencias", "building-store", "Agencias"],
                    ["liquidaciones", "report-money", "Liquidaciones"], ["recaudacion", "chart-bar", "Recaudación"]];
 const ct = {
   vista: "servicios",
   tb: { origen: "", parada: 0, motivoChip: "", motivo: "", tipo: "coche", coche: "", destDia: 0, destino: "", fuera: [],
-        avisar: false, cancelar: true, sug: null, sugDe: "", hecho: null, hist: [], histF: "" },
+        avisar: false, cancelar: true, sug: null, sugDe: "", hecho: null, hist: [], histF: "", manual: {}, selPas: null },
+  pg: { tipo: "desactivar", corredor: "", lado: "ida", horario: "", hora: "", destino: "", desde: "", hasta: "", dias: "0123456", plano: "", motivo: "" },
 };
 
 async function renderControles() {
@@ -43,6 +45,7 @@ function ctIr(v) { if (v === ct.vista) return; ct.vista = v; alModalCerrar(); ct
 function ctRender(animar) {
   const v = ct.vista;
   if (v === "transbordos") return ctVistaTransbordos(animar);
+  if (v === "programacion") return ctVistaProgramacion(animar);
   if (v === "agencias") return ctVistaAgencias(animar);
   if (v === "liquidaciones") return ctVistaLiquidaciones(animar);
   if (v === "recaudacion") return ctVistaRecaudacion(animar);
@@ -330,7 +333,7 @@ tfoot td{font-weight:800;background:#f3f3f3}.maq{margin-top:12px;font-size:9.5px
 //   Agencias: lo que cada una tiene sin liquidar y sin depositar contra el tope
 //   de su contrato, la última liquidación y el vencimiento del contrato.
 // ════════════════════════════════════════════════════════════════════════════
-const CT_EST_SERV = { abierto: ["Abierto", "vendido"], cerrado: ["Venta cerrada", "reserva"], cancelado: ["Cancelado", "anulado"] };
+const CT_EST_SERV = { abierto: ["Abierto", "vendido"], cerrado: ["Venta cerrada", "reserva"], cancelado: ["Cancelado", "anulado"], desactivado: ["Desactivado", "anulado"] };
 async function ctVistaServicios(animar) {
   const fecha = alISO(alFechaDe(al.dia));
   if (!al.cfg || !al.datos[fecha] || !al.ocup[fecha] || Date.now() - ((al.ocupEl || {})[fecha] || 0) > AL_OCUP_FRESCO) {
@@ -345,7 +348,7 @@ async function ctVistaServicios(animar) {
   const sel = filas.find(f => f.sv.clave === al.ctl.clave);
   const tot = k => filas.reduce((a, f) => a + f[k], 0);
   const fila = f => `<tr class="${f.sv.clave === al.ctl.clave ? "on" : ""} ${f.est === "cancelado" ? "anulado" : ""}" onclick="ctElegir('${f.sv.clave.replace(/'/g, "\\'")}')" tabindex="0" onkeydown="if(event.key==='Enter')this.click()">
-      <td><b>${f.sv.hora}</b></td><td><b>${trEsc(f.sv.origen_nombre)} → ${trEsc(f.sv.llega_nombre)}</b><small>${trEsc(f.sv.cod)} · ${f.sv.lado === "regreso" ? "regreso" : "ida"}</small></td>
+      <td><b>${f.sv.hora}</b></td><td><b>${trEsc(f.sv.origen_nombre)} → ${trEsc(f.sv.llega_nombre)}</b><small>${trEsc(f.sv.cod)} · ${f.sv.lado === "regreso" ? "regreso" : "ida"}${f.sv.adicional ? " · agregado" : ""}</small></td>
       <td>${f.sv.coche ? trEsc(f.sv.coche) : `<i class="al-conf">${f.sv.habitual ? "a conf. (" + trEsc(f.sv.habitual) + ")" : "a confirmar"}</i>`}${f.sv.reemplazo ? `<small>reemplaza al ${trEsc(f.sv.reemplazo.de)}</small>` : ""}</td>
       <td class="al-t-c">${f.libres}<small>de ${f.asientos}${f.bloqueados ? ` · ${f.bloqueados} bloq.` : ""}</small></td>
       <td class="al-t-c">${f.pax}${f.parados ? `<small>${f.parados} parados</small>` : ""}</td><td class="al-t-c">${f.reservas || ""}</td>
@@ -387,7 +390,7 @@ function ctServicios(fecha) {
       pax: vend.length, parados: vend.filter(v => v.asiento === "P").length, reservas: vs.filter(v => v.estado === "reserva").length,
       bloqueados: vs.filter(v => v.estado === "bloqueado").length, menores: vend.filter(v => v.menor).length,
       pct: asientos ? Math.round(sentados.size * 100 / asientos) : 0, recaudado: vend.reduce((a, v) => a + (v.total || 0), 0),
-      est: alEstadoServ(fecha, sv.clave), vend });
+      est: sv.desactivado ? "desactivado" : alEstadoServ(fecha, sv.clave), vend });
   });
   return out.sort((a, b) => a.sv.hora.localeCompare(b.sv.hora) || a.titulo.localeCompare(b.titulo));
 }
@@ -406,17 +409,20 @@ function ctDetalle(f, fecha, enModal) {
   const cl = sv.clave.replace(/'/g, "\\'");
   return `<${enModal ? "div" : "aside"} class="${enModal ? "al-ctl-mod" : "al-card al-ctl-det"}" aria-label="Detalle de la salida">
     <div class="al-card-cab">${enModal ? "" : `<h2 class="al-d">${sv.hora} · ${trEsc(sv.cod)}</h2>`}<span>${trEsc(sv.origen_nombre)} → ${trEsc(sv.llega_nombre)} · ${sv.coche ? "coche " + trEsc(sv.coche) : "coche a confirmar"}${sv.reemplazo ? ` (reemplaza al ${trEsc(sv.reemplazo.de)})` : ""}${sv.tripulacion.length ? " · " + sv.tripulacion.map(trEsc).join(" y ") : ""}</span>
-      ${f.est !== "abierto" ? `<span><span class="al-est ${CT_EST_SERV[f.est][1]}">${CT_EST_SERV[f.est][0]}</span>${info.motivo ? " " + trEsc(info.motivo) : ""} · ${trEsc(info.por || "")}, ${alDM((info.el || "").slice(0, 10))} ${(info.el || "").slice(11, 16)}</span>` : ""}</div>
+      ${f.est === "desactivado" ? `<span><span class="al-est anulado">Desactivado</span> ${trEsc(sv.desactivado.motivo || "")} · hasta el ${alDM(sv.desactivado.hasta)} (Programación)</span>`
+        : f.est !== "abierto" ? `<span><span class="al-est ${CT_EST_SERV[f.est][1]}">${CT_EST_SERV[f.est][0]}</span>${info.motivo ? " " + trEsc(info.motivo) : ""} · ${trEsc(info.por || "")}, ${alDM((info.el || "").slice(0, 10))} ${(info.el || "").slice(11, 16)}</span>` : ""}
+      ${sv.adicional ? `<span><span class="al-est vendido">Agregado</span> ${trEsc(sv.adicional.motivo || "")} · hasta el ${alDM(sv.adicional.hasta)} (Programación)</span>` : ""}</div>
     <ol class="al-ruta">${hr.map((p, i) => `<li><span class="al-ruta-h">${p.hora || "—"}</span><b>${trEsc(p.nombre)}</b><span class="al-ruta-n">${p.suben.length ? `<em class="s">+${p.suben.length}</em>` : ""}${p.bajan.length ? `<em class="b">−${p.bajan.length}</em>` : ""}${i < hr.length - 1 ? `<small>${p.abordo} a bordo</small>` : ""}</span></li>`).join("")}</ol>
     <div class="al-acc">
       ${f.est === "abierto" ? `<button type="button" class="al-sec" onclick="ctIrAlpha('vender','${cl}')"><i class="ti ti-ticket"></i> Vender</button>` : ""}
       <button type="button" class="al-sec" onclick="ctIrAlpha('manifiesto','${cl}')"><i class="ti ti-list-details"></i> Manifiesto</button>
       <button type="button" class="al-sec" onclick="alHojaRutaImprimir('${cl}')"><i class="ti ti-route"></i> Hoja de ruta</button>
       <button type="button" class="al-sec" onclick="ctTransbordoDesde('${cl}')"><i class="ti ti-arrows-shuffle"></i> Transbordo</button>
-      ${f.est === "abierto" ? `<button type="button" class="al-sec" onclick="ctServEstado('${cl}','cerrado')"><i class="ti ti-lock"></i> Cerrar la venta</button>` : `<button type="button" class="al-sec" onclick="ctServEstado('${cl}','abierto')"><i class="ti ti-lock-open"></i> Abrir la venta</button>`}
-      ${f.est !== "cancelado" ? `<button type="button" class="al-sec rojo" onclick="ctServEstado('${cl}','cancelado')"><i class="ti ti-ban"></i> Cancelar el servicio</button>` : ""}
+      ${f.est === "desactivado" || sv.adicional ? `<button type="button" class="al-sec" onclick="ctIr('programacion')"><i class="ti ti-calendar-event"></i> Programación</button>` : ""}
+      ${f.est === "desactivado" ? "" : f.est === "abierto" ? `<button type="button" class="al-sec" onclick="ctServEstado('${cl}','cerrado')"><i class="ti ti-lock"></i> Cerrar la venta</button>` : `<button type="button" class="al-sec" onclick="ctServEstado('${cl}','abierto')"><i class="ti ti-lock-open"></i> Abrir la venta</button>`}
+      ${f.est !== "cancelado" && f.est !== "desactivado" ? `<button type="button" class="al-sec rojo" onclick="ctServEstado('${cl}','cancelado')"><i class="ti ti-ban"></i> Cancelar el servicio</button>` : ""}
     </div>
-    ${f.pax && f.est === "cancelado" ? `<p class="al-hint al-rojo-t">Este servicio tiene ${f.pax} pasajeros: pasalos a otra salida con el transbordo.</p>` : ""}
+    ${f.pax && (f.est === "cancelado" || f.est === "desactivado") ? `<p class="al-hint al-rojo-t">Este servicio tiene ${f.pax} pasajeros: pasalos a otra salida con el transbordo.</p>` : ""}
     ${hist.length ? `<details class="al-ayuda"><summary>Historial del servicio (${hist.length})</summary><ol class="al-hist">${hist.slice().reverse().map(ctHistItem).join("")}</ol></details>` : ""}
   </${enModal ? "div" : "aside"}>`;
 }
@@ -565,7 +571,7 @@ function ctPlan(fecha, sv, pas) {
     destSv = Object.assign({}, sv, { coche: tb.coche, modelo, habitual: "", plano });
     destCam = cam; destFecha = fecha; destPl = alPlanos()[plano] || alPlano(sv);
     // Los bloqueados (tripulación…) siguen como están
-    existentes = alOcupDe(fecha).filter(v => v.servicio === sv.clave && v.estado === "bloqueado").map(v => ({ a: String(v.asiento), s: 0, b: 99 }));
+    existentes = alOcupDe(fecha).filter(v => v.servicio === sv.clave && v.estado === "bloqueado").map(v => ({ a: String(v.asiento), s: 0, b: 99, nombre: "Bloqueado: " + (v.motivo || v.nombre || "") }));
     pas.forEach(p => movers.push(Object.assign({}, p, { s2: p.s, b2: p.b })));
   } else {
     destFecha = ctFechaMas(fecha, tb.destDia || 0);
@@ -574,7 +580,8 @@ function ctPlan(fecha, sv, pas) {
     destCam = alCamino(destSv); destPl = alPlano(destSv);
     const n2 = destCam.length;
     existentes = alOcupDe(destFecha).filter(v => v.servicio === destSv.clave && alOcupa(v))
-      .map(v => ({ a: String(v.asiento), s: v.subeIdx ?? alIdxDe(destCam, v.sube, 0), b: Math.min(v.bajaIdx ?? alIdxDe(destCam, v.baja, n2 - 1), n2 - 1) }));
+      .map(v => ({ a: String(v.asiento), s: v.subeIdx ?? alIdxDe(destCam, v.sube, 0), b: Math.min(v.bajaIdx ?? alIdxDe(destCam, v.baja, n2 - 1), n2 - 1),
+                   nombre: v.estado === "bloqueado" ? "Bloqueado: " + (v.motivo || v.nombre || "") : (v.nombre || "") + (v.estado === "reserva" ? " (reserva)" : "") }));
     pas.forEach(p => {
       if (P > 0 && p.b <= P) { fuera.push(Object.assign({}, p, { problema: `Ya bajó en ${cam[p.b].nombre}`, fijo: true })); return; }
       if ((tb.fuera || []).includes(p.v.nro)) { fuera.push(Object.assign({}, p, { problema: "Queda en esta salida" })); return; }
@@ -589,8 +596,17 @@ function ctPlan(fecha, sv, pas) {
   let parados = ocup.filter(o => o.a === "P").length;
   const libre = (a, s, b) => !ocup.some(o => o.a === String(a) && o.s < b && s < o.b);
   const poner = (m, a) => { m.nuevo = a; ocup.push({ a: String(a), s: m.s2, b: m.b2 }); if (a === "P") parados++; };
+  // 0) los que se acomodaron a mano (si el lugar sigue libre)
+  const man = tb.manual || {};
+  movers.forEach(m => {
+    const a = man[m.v.nro];
+    if (a == null) return;
+    if (a === "P") { if (m.v.estado === "vendido" && parados < topeP) { poner(m, "P"); m.aMano = true; } return; }
+    if (asi.some(x => x.n === +a) && libre(+a, m.s2, m.b2)) { poner(m, +a); m.aMano = true; }
+  });
   // 1) el mismo número si está libre (y los parados siguen parados si hay lugar)
   movers.forEach(m => {
+    if (m.nuevo != null) return;
     if (m.v.asiento === "P") { if (parados < topeP) poner(m, "P"); return; }
     const x = asi.find(a => a.n === +m.v.asiento);
     if (x && libre(x.n, m.s2, m.b2)) poner(m, x.n);
@@ -604,7 +620,7 @@ function ctPlan(fecha, sv, pas) {
     else if (m.v.estado === "vendido" && parados < topeP) poner(m, "P");
     else m.problema = "No hay lugar";
   });
-  return { destSv, destCam, destFecha, destPl, movers, fuera, sinLugar: movers.filter(m => m.nuevo == null).length,
+  return { destSv, destCam, destFecha, destPl, movers, fuera, ext: existentes, topeP, sinLugar: movers.filter(m => m.nuevo == null).length,
     cambian: movers.filter(m => m.nuevo != null && String(m.nuevo) !== String(m.v.asiento)).length };
 }
 // Lo que se le manda al servidor por cada pasajero
@@ -668,7 +684,7 @@ function ctTbForm(fecha, sv) {
   const destF = ctFechaMas(fecha, tb.destDia || 0);
   const cands = tb.tipo === "salida" ? ctSalidasDe(destF).filter(x => x.clave !== sv.clave) : [];
   const mismo = cands.filter(x => x.cor === sv.cor && x.lado === sv.lado), otras = cands.filter(x => !(x.cor === sv.cor && x.lado === sv.lado));
-  const opt = x => `<option value="${e(x.clave)}" ${x.clave === tb.destino ? "selected" : ""}>${x.hora} · ${e(x.origen_nombre)} → ${e(x.llega_nombre)} · ${e(x.cod)} · ${ctLibres(destF, x)} libres${alEstadoServ(destF, x.clave) === "cancelado" ? " · CANCELADA" : ""}</option>`;
+  const opt = x => `<option value="${e(x.clave)}" ${x.clave === tb.destino ? "selected" : ""}>${x.hora} · ${e(x.origen_nombre)} → ${e(x.llega_nombre)} · ${e(x.cod)} · ${ctLibres(destF, x)} libres${x.desactivado ? " · DESACTIVADA" : alEstadoServ(destF, x.clave) === "cancelado" ? " · CANCELADA" : ""}</option>`;
   const hace = `<section class="al-card">
       <div class="al-card-cab"><h2 class="al-d">3. Qué se hace</h2></div>
       <div class="ct-opc" role="radiogroup" aria-label="Qué se hace">
@@ -696,16 +712,19 @@ function ctTbForm(fecha, sv) {
     const fila = m => {
       const mueve = plan.movers.includes(m), ok = mueve && m.nuevo != null;
       const ahora = !mueve ? `<span class="ct-q">${e(m.problema || "")}</span>` : !ok ? `<span class="ct-mal">${e(m.problema || "No hay lugar")}</span>`
-        : String(m.nuevo) === String(m.v.asiento) ? `<span class="ct-ok">${m.nuevo === "P" ? "Sigue parado" : "Sigue en el " + m.nuevo}</span>` : `<b class="ct-cambia">${m.nuevo === "P" ? "Parado" : "Asiento " + m.nuevo}</b>`;
+        : String(m.nuevo) === String(m.v.asiento) ? `<span class="ct-ok">${m.nuevo === "P" ? "Sigue parado" : "Sigue en el " + m.nuevo}</span>` : `<b class="ct-cambia">${m.nuevo === "P" ? "Parado" : "Asiento " + m.nuevo}</b>${m.aMano ? " <small>a mano</small>" : ""}`;
       const check = tb.tipo === "salida" ? `<td class="al-t-c"><input type="checkbox" aria-label="Pasa ${e(m.v.nombre)}" ${m.fijo ? "disabled" : ""} ${mueve ? "checked" : ""} onchange="ctTbToggle(${m.v.nro}, this.checked)"></td>` : "";
       return `<tr class="${mueve ? "" : "cerrado"}">${check}<td class="al-t-c"><b>${m.v.asiento}</b></td><td><b>${e(m.v.nombre)}</b><small>${m.v.mig ? e(m.v.tipoDoc) : "CI"} ${e(m.v.doc)}${m.v.estado === "reserva" ? " · reserva" : ""}</small></td>
         <td>${e(cam[m.s].nombre)} → ${e(cam[m.b].nombre)}${mueve && tb.tipo === "salida" && plan.destCam[m.s2].nombre !== cam[m.s].nombre ? `<small>sube en ${e(plan.destCam[m.s2].nombre)}</small>` : ""}</td><td>${ahora}</td></tr>`;
     };
-    const n = plan.movers.filter(m => m.nuevo != null).length;
-    queda = `<section class="al-card">
+    const n = plan.movers.filter(m => m.nuevo != null).length, aMano = plan.movers.filter(m => m.aMano).length;
+    queda = `<section class="al-card ct-queda">
       <div class="al-card-cab"><h2 class="al-d">4. Cómo queda</h2><span>${tb.tipo === "coche" ? `${n} ${n === 1 ? "pasajero sigue" : "pasajeros siguen"} en el coche ${e(tb.coche)}${plan.cambian ? ` · <b>${plan.cambian} cambian de asiento</b>` : " · nadie cambia de asiento"}` : `${n} ${n === 1 ? "pasa" : "pasan"} a la salida de las ${plan.destSv.hora} (${e(plan.destSv.cod)})${plan.fuera.length ? ` · ${plan.fuera.length} no` : ""}${plan.cambian ? ` · ${plan.cambian} con otro asiento` : ""}`}${plan.sinLugar ? ` · <b class="ct-mal">${plan.sinLugar} sin lugar</b>` : ""}</span></div>
-      ${filas.length ? `<div class="al-tabla-w"><table class="al-tabla"><thead><tr>${tb.tipo === "salida" ? `<th class="al-t-c"><input type="checkbox" aria-label="Todos" ${plan.fuera.every(m => m.fijo) ? "checked" : ""} onchange="ctTbTodos(this.checked)"></th>` : ""}<th class="al-t-c">Asiento</th><th>Pasajero</th><th>Tramo</th><th>${tb.tipo === "coche" ? "En el coche " + e(tb.coche) : "En la otra salida"}</th></tr></thead>
-        <tbody>${filas.map(fila).join("")}</tbody></table></div>` : `<p class="al-nota">Esta salida no tiene pasajeros: ${tb.tipo === "coche" ? "solo se cambia el coche." : "no hay a quién pasar."}</p>`}
+      ${filas.length ? `<div class="ct-auto"><button type="button" class="al-sec" onclick="ctTbAuto()"><i class="ti ti-wand"></i> Mudar automáticamente</button>
+        <span>Cada pasajero a su mismo número (el 1 al 1, el 2 al 2). Si ese número no existe o está ocupado, al primero libre de la misma clase.${aMano ? ` <b>${aMano} acomodado${aMano === 1 ? "" : "s"} a mano</b> (se pierden si mudás de nuevo).` : ""}</span></div>
+        ${ctPlanosHTML(sv, plan)}` : ""}
+      ${filas.length ? `<details class="ct-lista" ${tb.tipo === "salida" ? "open" : ""}><summary>La lista: ${filas.length} ${filas.length === 1 ? "pasajero" : "pasajeros"}</summary><div class="al-tabla-w"><table class="al-tabla"><thead><tr>${tb.tipo === "salida" ? `<th class="al-t-c"><input type="checkbox" aria-label="Todos" ${plan.fuera.every(m => m.fijo) ? "checked" : ""} onchange="ctTbTodos(this.checked)"></th>` : ""}<th class="al-t-c">Asiento</th><th>Pasajero</th><th>Tramo</th><th>${tb.tipo === "coche" ? "En el coche " + e(tb.coche) : "En la otra salida"}</th></tr></thead>
+        <tbody>${filas.map(fila).join("")}</tbody></table></div></details>` : `<p class="al-nota">Esta salida no tiene pasajeros: ${tb.tipo === "coche" ? "solo se cambia el coche." : "no hay a quién pasar."}</p>`}
       ${cocheAntes ? `<label class="al-check"><input type="checkbox" ${tb.avisar ? "checked" : ""} onchange="ct.tb.avisar=this.checked"> Avisar al taller: pedido de reparación para el coche ${e(cocheAntes)}</label>` : ""}
       ${tb.tipo === "salida" ? `<label class="al-check"><input type="checkbox" ${tb.cancelar ? "checked" : ""} onchange="ct.tb.cancelar=this.checked"> Cancelar esta salida (no se vende más)</label>` : ""}
       <div class="al-card-pie"><button type="button" class="al-btn-r" onclick="ctTbHacer()" ${tb.tipo === "salida" && !n ? "disabled" : ""}><i class="ti ti-check"></i> Hacer el transbordo${n ? ` (${n} ${n === 1 ? "pasajero" : "pasajeros"})` : ""}</button></div>
@@ -732,7 +751,7 @@ function ctTbHechoHTML() {
 }
 function ctTbOrigen(v) {
   Object.assign(ct.tb, { origen: v, parada: 0, coche: "", destino: "", fuera: [], sug: null, sugDe: "", hecho: null,
-                         motivoChip: "", motivo: "", avisar: false, cancelar: true });
+                         motivoChip: "", motivo: "", avisar: false, cancelar: true, manual: {}, selPas: null });
   ctVistaTransbordos(false);
 }
 function ctTransbordoDesde(clave) { alModalCerrar(); ctTbOrigen(clave); ct.vista = "transbordos"; ctRender(true); }
@@ -742,10 +761,10 @@ function ctTbMotivo(m) {
   const m2 = document.getElementById("ct-tb-mot"); if (m2) ct.tb.motivo = m2.value;
   ctVistaTransbordos(false);
 }
-function ctTbTipo(t) { if (t === ct.tb.tipo) return; ct.tb.tipo = t; ctVistaTransbordos(false); }
-function ctTbCoche(c) { ct.tb.coche = String(c || "").trim(); ctVistaTransbordos(false); }
-function ctTbDestDia(d) { ct.tb.destDia = d; ct.tb.destino = ""; ctVistaTransbordos(false); }
-function ctTbDestino(c) { ct.tb.destino = c; ct.tb.fuera = []; ctVistaTransbordos(false); }
+function ctTbTipo(t) { if (t === ct.tb.tipo) return; ct.tb.tipo = t; ct.tb.manual = {}; ct.tb.selPas = null; ctVistaTransbordos(false); }
+function ctTbCoche(c) { const v = String(c || "").trim(); if (v !== ct.tb.coche) { ct.tb.manual = {}; ct.tb.selPas = null; } ct.tb.coche = v; ctVistaTransbordos(false); }
+function ctTbDestDia(d) { ct.tb.destDia = d; ct.tb.destino = ""; ct.tb.manual = {}; ct.tb.selPas = null; ctVistaTransbordos(false); }
+function ctTbDestino(c) { ct.tb.destino = c; ct.tb.fuera = []; ct.tb.manual = {}; ct.tb.selPas = null; ctVistaTransbordos(false); }
 function ctTbToggle(nro, on) {
   const f = new Set(ct.tb.fuera || []);
   if (on) f.delete(nro); else f.add(nro);
@@ -775,6 +794,7 @@ async function ctTbHacer() {
   const pas = ctPasajeros(fecha, sv), plan = ctPlan(fecha, sv, pas);
   if (!plan) { toast(tb.tipo === "coche" ? "Elegí el coche que sigue la salida" : "Elegí la salida de destino", "error"); return; }
   if (tb.tipo === "salida" && alEstadoServ(plan.destFecha, plan.destSv.clave) === "cancelado") { toast("La salida de destino está cancelada", "error"); return; }
+  if (tb.tipo === "salida" && plan.destSv.desactivado) { toast("La salida de destino está desactivada en la programación", "error"); return; }
   const movs = ctMovs(plan), cam = alCamino(sv), P = Math.max(0, Math.min(tb.parada || 0, cam.length - 2));
   if (tb.tipo === "salida" && !movs.length) { toast("No hay pasajeros para pasar", "error"); return; }
   const cocheAntes = sv.coche || sv.habitual || "";
@@ -832,4 +852,269 @@ ${det.map((p, i) => `<tr><td>${i + 1}</td><td><b>${e(p.nombre)}</b>${p.estado ==
 <div class="firmas"><div>Chofer</div><div>Guarda</div><div>Despacho</div></div>
 <div class="maq">Maqueta de Alpha: sin valor fiscal</div></body></html>`;
   alImprimir(html, "hoja");
+}
+
+// ─── Los dos planos: el coche que queda (izquierda) y el que hace el transbordo (derecha) ───
+function ctPlanoHTML(pl, celda) {
+  if (!pl || !pl.pisos) return "";
+  return pl.pisos.map((p, pi) => {
+    const nf = p.filas.length, ultimo = pi === pl.pisos.length - 1, usa4 = p.filas.some(f => f[3] != null);
+    let cel = "";
+    p.filas.forEach((f, fi) => f.forEach((n, pos) => {
+      if (n == null) return;
+      const c = celda(n) || {};
+      cel += `<button type="button" class="ct-as ${c.cls || ""}" style="grid-column:${nf - fi};grid-row:${pos + 1}" ${c.dis ? "disabled" : ""} ${c.click ? `onclick="${c.click}"` : ""} title="${trEsc(c.title || "")}" aria-label="Asiento ${n}${c.title ? ": " + trEsc(c.title) : ""}"><b>${n}</b>${c.sub ? `<small>${trEsc(c.sub)}</small>` : ""}</button>`;
+    }));
+    if (ultimo) cel += `<div class="ct-cel" style="grid-column:${nf + 1};grid-row:1/3" aria-hidden="true"><i class="ti ti-steering-wheel"></i></div>`;
+    return `<div class="ct-piso">${pl.pisos.length > 1 ? `<span class="ct-piso-t">${trEsc(p.nombre)}</span>` : ""}
+      <div class="ct-grid" style="grid-template-columns:repeat(${nf}, 36px)${ultimo ? " 28px" : ""};grid-template-rows:36px 36px 8px ${usa4 ? "36px" : "0"} 36px">${cel}</div></div>`;
+  }).join("");
+}
+function ctTbRes(plan, m) { return !plan.movers.includes(m) ? "queda" : m.nuevo == null ? "sin" : String(m.nuevo) === String(m.v.asiento) ? "igual" : "cambia"; }
+function ctPlanosHTML(sv, plan) {
+  const tb = ct.tb, e = trEsc, cam = alCamino(sv), sel = tb.selPas, todos = plan.movers.concat(plan.fuera);
+  const res = m => ctTbRes(plan, m);
+  const porAs = {};
+  todos.forEach(m => { if (m.v.asiento !== "P") (porAs[+m.v.asiento] = porAs[+m.v.asiento] || []).push(m); });
+  const izq = ctPlanoHTML(alPlano(sv), n => {
+    const l = porAs[n];
+    if (!l) return { cls: "vacio", dis: true };
+    const m = l.find(x => x.v.nro === sel) || l[0], r = res(m);
+    return { cls: `${r} ${l.some(x => x.v.nro === sel) ? "sel" : ""}`,
+      sub: l.length > 1 ? `${l.length} pas.` : r === "cambia" ? `→ ${m.nuevo}` : r === "sin" ? "sin lugar" : r === "queda" ? "queda" : "",
+      title: l.map(x => `${x.v.nombre} (${cam[x.s].nombre} → ${cam[x.b].nombre})`).join(" · "), click: `ctTbSelAsiento(${n})` };
+  });
+  const asig = {}, ext = {};
+  plan.movers.forEach(m => { if (m.nuevo != null && m.nuevo !== "P") (asig[m.nuevo] = asig[m.nuevo] || []).push(m); });
+  plan.ext.forEach(o => { if (o.a !== "P") (ext[o.a] = ext[o.a] || []).push(o); });
+  const mSel = plan.movers.find(m => m.v.nro === sel);
+  const der = ctPlanoHTML(plan.destPl, n => {
+    const as = asig[n], ocu = ext[String(n)];
+    if (as) {
+      const m = as.find(x => x.v.nro === sel) || as[0], r = res(m);
+      return { cls: `${r} ${as.some(x => x.v.nro === sel) ? "sel" : ""} ${m.aMano ? "mano" : ""}`, sub: r === "cambia" ? `era ${m.v.asiento}` : "",
+        title: as.map(x => x.v.nombre).join(" · "),
+        // Con otro pasajero elegido, tocar un asiento ya asignado los intercambia
+        click: mSel && !as.includes(mSel) ? `ctTbPoner(${n})` : `ctTbSelPas(${m.v.nro})` };
+    }
+    if (ocu) {
+      const choca = mSel ? ocu.some(o => o.s < mSel.b2 && mSel.s2 < o.b) : true;
+      return { cls: choca ? "ocupado" : "libre parcial", dis: choca, title: ocu.map(o => o.nombre).join(" · "),
+        sub: choca ? "" : "libre", click: choca ? "" : `ctTbPoner(${n})` };
+    }
+    return { cls: `libre ${mSel ? "puede" : ""}`, click: `ctTbPoner(${n})` };
+  });
+  const extP = plan.ext.filter(o => o.a === "P").length, parP = plan.movers.filter(m => m.nuevo === "P");
+  const quedanP = Math.max(0, (plan.topeP || 0) - extP - parP.length);
+  const sinL = plan.movers.filter(m => m.nuevo == null), parOrig = todos.filter(m => m.v.asiento === "P");
+  const chip = (m, txt) => `<button type="button" class="al-chip ct-chip ${res(m)} ${m.v.nro === sel ? "on" : ""}" onclick="ctTbSelPas(${m.v.nro})">${txt}</button>`;
+  const fechaO = alISO(alFechaDe(al.dia));
+  return `<div class="ct-planos">
+    <div class="ct-plano-c">
+      <div class="ct-plano-t"><b>${tb.tipo === "coche" ? `Coche ${e(sv.coche || sv.habitual || "a confirmar")}` : `Salida de las ${sv.hora}`}</b><span>${e((alPlano(sv) || {}).nombre || sv.plano || "")} · el que queda</span></div>
+      <div class="ct-plano-g">${izq}</div>
+      ${parOrig.length ? `<div class="ct-par"><span>Parados</span>${parOrig.map(m => chip(m, `${e(m.v.nombre)}${res(m) === "cambia" ? " → " + m.nuevo : ""}`)).join("")}</div>` : ""}
+    </div>
+    <div class="ct-flecha" aria-hidden="true"><i class="ti ti-arrow-right"></i></div>
+    <div class="ct-plano-c">
+      <div class="ct-plano-t"><b>${tb.tipo === "coche" ? `Coche ${e(tb.coche)}` : `Salida de las ${plan.destSv.hora}${plan.destFecha !== fechaO ? " del " + alDM(plan.destFecha) : ""}`}</b><span>${e((plan.destPl || {}).nombre || "")} · ${tb.tipo === "coche" ? "el que sigue la salida" : e(plan.destSv.cod)}</span></div>
+      <div class="ct-plano-g">${der}</div>
+      ${plan.topeP ? `<div class="ct-par"><button type="button" class="al-chip ${mSel ? "ct-puede" : ""}" onclick="ctTbPoner('P')" ${quedanP || (mSel && mSel.nuevo === "P") ? "" : "disabled"}><i class="ti ti-man"></i> Parado <small>${quedanP} ${quedanP === 1 ? "lugar" : "lugares"}</small></button>${parP.map(m => chip(m, e(m.v.nombre))).join("")}</div>` : ""}
+      ${sinL.length ? `<div class="ct-par ct-mal"><span>Sin lugar</span>${sinL.map(m => chip(m, `${e(m.v.nombre)} (${m.v.asiento})`)).join("")}</div>` : ""}
+    </div>
+  </div>
+  <div class="ct-plano-ayuda" role="status">
+    ${mSel ? `<span><b>${e(mSel.v.nombre)}</b> (era el ${mSel.v.asiento}, ${e(cam[mSel.s].nombre)} → ${e(cam[mSel.b].nombre)}): tocá un asiento libre a la derecha${mSel.nuevo != null ? " o uno ocupado por otro de los que se mudan para intercambiarlos" : ""}. <button type="button" class="al-link" onclick="ctTbSelPas(null)">Soltar</button></span>`
+      : `<span>Para acomodar a alguien a mano, tocalo en el plano de la izquierda y después tocá el asiento en el de la derecha.</span>`}
+    <span class="ct-ley"><i class="igual"></i>mismo número <i class="cambia"></i>otro asiento <i class="sin"></i>sin lugar <i class="ocupado"></i>ya ocupado <i class="libre"></i>libre</span>
+  </div>`;
+}
+function ctTbActual() {
+  const fecha = alISO(alFechaDe(al.dia)), sv = ctSalidasDe(fecha).find(x => x.clave === ct.tb.origen);
+  if (!sv) return {};
+  const pas = ctPasajeros(fecha, sv);
+  return { fecha, sv, pas, plan: ctPlan(fecha, sv, pas) };
+}
+function ctTbSelPas(nro) { ct.tb.selPas = nro == null || ct.tb.selPas === nro ? null : nro; ctVistaTransbordos(false); }
+function ctTbSelAsiento(n) {
+  const { plan } = ctTbActual();
+  if (!plan) return;
+  const l = plan.movers.concat(plan.fuera).filter(m => +m.v.asiento === n);
+  if (!l.length) return;
+  const i = l.findIndex(m => m.v.nro === ct.tb.selPas);
+  if (l.length === 1 && i === 0) ct.tb.selPas = null;
+  else {
+    const m = l[(i + 1) % l.length];
+    if (!plan.movers.includes(m)) {
+      toast(m.fijo ? m.problema : "Ese pasajero no pasa: tildalo en la lista para que pase", "info");
+      return;
+    }
+    ct.tb.selPas = m.v.nro;
+  }
+  ctVistaTransbordos(false);
+}
+function ctTbPoner(a) {
+  const tb = ct.tb;
+  if (tb.selPas == null) { toast("Primero tocá un pasajero en el plano de la izquierda", "info"); return; }
+  const { plan } = ctTbActual();
+  const m = plan && plan.movers.find(x => x.v.nro === tb.selPas);
+  if (!m) { toast("Ese pasajero no se muda", "error"); return; }
+  const man = Object.assign({}, tb.manual);
+  if (a === "P") {
+    if (m.v.estado !== "vendido") { toast("Una reserva no puede ir parada", "error"); return; }
+    const usados = plan.ext.filter(o => o.a === "P").length + plan.movers.filter(x => x !== m && x.nuevo === "P").length;
+    if (usados >= (plan.topeP || 0)) { toast("No quedan lugares parados", "error"); return; }
+  } else {
+    const otro = plan.movers.find(x => x !== m && String(x.nuevo) === String(a));
+    if (otro) {
+      // Se intercambian: el otro va al lugar que tenía este
+      if (m.nuevo != null) man[otro.v.nro] = m.nuevo; else delete man[otro.v.nro];
+    } else if (plan.ext.some(o => o.a === String(a) && o.s < m.b2 && m.s2 < o.b)) {
+      toast(`El ${a} ya está ocupado en ese tramo`, "error"); return;
+    }
+  }
+  man[m.v.nro] = a;
+  tb.manual = man; tb.selPas = null;
+  ctVistaTransbordos(false);
+}
+function ctTbAuto() {
+  ct.tb.manual = {}; ct.tb.selPas = null;
+  ctVistaTransbordos(false);
+  toast("Mudados automáticamente: cada uno a su mismo número cuando se puede", "success");
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PROGRAMACIÓN: desactivar horarios por un período (no se venden; la agencia
+// no los ve) y agregar servicios que no están en el tráfico (refuerzos)
+// ════════════════════════════════════════════════════════════════════════════
+const CT_DIAS = [["0", "L", "lunes"], ["1", "M", "martes"], ["2", "X", "miércoles"], ["3", "J", "jueves"], ["4", "V", "viernes"], ["5", "S", "sábado"], ["6", "D", "domingo"]];
+function ctDiasTxt(d) {
+  d = d || "0123456";
+  if (d === "0123456") return "todos los días";
+  if (d === "01234") return "de lunes a viernes";
+  if (d === "56") return "sábados y domingos";
+  return CT_DIAS.filter(x => d.includes(x[0])).map(x => x[2]).join(", ");
+}
+function ctHorariosConocidos(cor, lado) {
+  const vistos = new Map();
+  Object.values(al.datos).forEach(dia => ((dia && dia.corredores) || []).filter(c => c.clave === cor).forEach(c =>
+    ["ida", "regreso"].filter(l => !lado || l === lado).forEach(l => (c[l] || []).forEach(x => {
+      if (x.adicional) return;
+      const k = `${x.hora}|${x.destino}`;
+      if (!vistos.has(k)) vistos.set(k, { hora: x.hora, destino: x.destino, lado: l });
+    }))));
+  return [...vistos.values()].sort((a, b) => a.hora.localeCompare(b.hora) || a.destino.localeCompare(b.destino));
+}
+async function ctVistaProgramacion(animar) {
+  const pg = ct.pg, hoy = alISO(new Date()), e = trEsc;
+  if (!document.querySelector(".ct-pg")) ctCargando(animar);
+  await ctDatos(alISO(alFechaDe(al.dia)));
+  // Los horarios de toda la semana, para elegir
+  const faltan = [];
+  for (let i = 0; i < 7; i++) { const f = alISO(alFechaDe(i)); if (!al.datos[f]) faltan.push(api(`/api/alpha/dia/${f}`).then(d => { if (d && d.corredores) al.datos[f] = d; }).catch(() => {})); }
+  const [r] = await Promise.all([api("/api/alpha/programacion"), ...faltan]);
+  if (ct.vista !== "programacion") return;
+  const reglas = (r && r.reglas) || [], cors = (al.cfg && al.cfg.corredores) || [];
+  ct.pgReglas = reglas;
+  if (!pg.desde) { pg.desde = hoy; pg.hasta = hoy; }
+  if (!pg.corredor || !cors.some(c => c.clave === pg.corredor)) pg.corredor = cors.some(c => c.clave === al.cor) ? al.cor : (cors[0] || {}).clave || "";
+  if (pg.tipo === "activar" && !pg.lado) pg.lado = "ida";
+  const conocidos = ctHorariosConocidos(pg.corredor, pg.lado), titulo = k => ((cors.find(c => c.clave === k) || {}).titulo || String(k).split("|").pop());
+  const des = pg.tipo === "desactivar";
+  const chipsLado = (des ? [["ida", "Ida"], ["regreso", "Regreso"], ["", "Los dos"]] : [["ida", "Ida"], ["regreso", "Regreso"]])
+    .map(([k, t]) => `<button type="button" class="al-chip ${pg.lado === k ? "on" : ""}" aria-pressed="${pg.lado === k}" onclick="ct.pg.lado='${k}';ct.pg.horario='';ctVistaProgramacion(false)">${t}</button>`).join("");
+  const form = `<section class="al-card">
+      <div class="al-card-cab"><h2 class="al-d">Nueva regla</h2><span>Para un período y los días de la semana que elijas. Se quita cuando quieras.</span></div>
+      <div class="ct-opc" role="radiogroup" aria-label="Qué hacer">
+        <button type="button" class="ct-op ${des ? "on" : ""}" role="radio" aria-checked="${des}" onclick="ct.pg.tipo='desactivar';ctVistaProgramacion(false)"><i class="ti ti-calendar-off"></i><b>Desactivar un horario</b><span>No sale en ese período: no se vende y las agencias no lo ven.</span></button>
+        <button type="button" class="ct-op ${!des ? "on" : ""}" role="radio" aria-checked="${!des}" onclick="ct.pg.tipo='activar';if(!ct.pg.lado)ct.pg.lado='ida';ctVistaProgramacion(false)"><i class="ti ti-calendar-plus"></i><b>Agregar un servicio</b><span>Un refuerzo o un horario de temporada que no está en el tráfico.</span></button>
+      </div>
+      <div class="al-fila">
+        <label class="al-campo"><span>Recorrido</span><select onchange="ct.pg.corredor=this.value;ct.pg.horario='';ctVistaProgramacion(false)">${cors.map(c => `<option value="${e(c.clave)}" ${c.clave === pg.corredor ? "selected" : ""}>Asunción ⇄ ${e(c.titulo)}${c.tipo === "internacional" ? " (internacional)" : ""}</option>`).join("")}</select></label>
+        <div class="ct-campo-chips"><span>Sentido</span><div class="al-chips">${chipsLado}</div></div>
+      </div>
+      ${des ? `<label class="al-campo"><span>Horario</span><select onchange="ct.pg.horario=this.value"><option value="">Todos los horarios de ese recorrido${pg.lado ? " y sentido" : ""}</option>${conocidos.map(h => `<option value="${e(h.hora + "|" + h.destino)}" ${pg.horario === h.hora + "|" + h.destino ? "selected" : ""}>${h.hora} · ${e(h.destino)}${pg.lado ? "" : " · " + h.lado}</option>`).join("")}</select></label>`
+        : `<div class="al-fila">
+          <label class="al-campo ci"><span>Hora</span><input type="time" value="${e(pg.hora)}" onchange="ct.pg.hora=this.value"></label>
+          <label class="al-campo"><span>Destino (como en el tráfico)</span><input list="ct-pg-dest" value="${e(pg.destino)}" placeholder="Ej.: ASU/COP X 25" oninput="ct.pg.destino=this.value.toUpperCase();this.value=ct.pg.destino"></label>
+          <datalist id="ct-pg-dest">${[...new Set(conocidos.map(h => h.destino))].map(d => `<option value="${e(d)}"></option>`).join("")}</datalist>
+          <label class="al-campo"><span>Plano (si todavía no tiene coche)</span><select onchange="ct.pg.plano=this.value"><option value="">El de siempre</option>${Object.entries(alPlanos()).map(([k, p]) => `<option value="${e(k)}" ${pg.plano === k ? "selected" : ""}>${e(p.nombre || k)}</option>`).join("")}</select></label>
+        </div>`}
+      <div class="al-fila ct-pg-f">
+        <label class="al-campo ci"><span>Desde</span><input type="date" value="${pg.desde}" onchange="ct.pg.desde=this.value;if(ct.pg.hasta<this.value){ct.pg.hasta=this.value};ctVistaProgramacion(false)"></label>
+        <label class="al-campo ci"><span>Hasta</span><input type="date" value="${pg.hasta}" min="${pg.desde}" onchange="ct.pg.hasta=this.value"></label>
+        <div class="ct-campo-chips"><span>Días</span><div class="al-chips ct-dias">${CT_DIAS.map(([k, t, n]) => `<button type="button" class="al-chip ${pg.dias.includes(k) ? "on" : ""}" aria-pressed="${pg.dias.includes(k)}" title="${n}" onclick="ctPgDia('${k}')">${t}</button>`).join("")}
+          <button type="button" class="al-link" onclick="ct.pg.dias='0123456';ctVistaProgramacion(false)">todos</button><button type="button" class="al-link" onclick="ct.pg.dias='01234';ctVistaProgramacion(false)">lun a vie</button><button type="button" class="al-link" onclick="ct.pg.dias='56';ctVistaProgramacion(false)">fin de semana</button></div></div>
+      </div>
+      <label class="al-campo"><span>Motivo${des ? "" : " (opcional)"}</span><input maxlength="160" value="${e(pg.motivo)}" placeholder="${des ? "Ej.: temporada baja" : "Ej.: refuerzo de fin de año"}" oninput="ct.pg.motivo=this.value"></label>
+      <div class="al-card-pie"><button type="button" class="al-btn-r" onclick="ctPgCrear()"><i class="ti ti-${des ? "calendar-off" : "calendar-plus"}"></i> ${des ? "Desactivar" : "Agregar el servicio"}</button></div>
+    </section>`;
+  const fila = x => `<div class="al-cierre ct-regla ${x.hasta < hoy ? "pasada" : ""}">
+      <span class="al-est ${x.tipo === "desactivar" ? "anulado" : "vendido"}">${x.tipo === "desactivar" ? "Desactivado" : "Agregado"}</span>
+      <div class="ct-regla-t"><b>Asunción ⇄ ${e(titulo(x.corredor))} · ${x.lado === "ida" ? "ida" : x.lado === "regreso" ? "regreso" : "ida y regreso"} · ${x.hora ? `${x.hora}${x.destino ? " " + e(x.destino) : ""}` : "todos los horarios"}</b>
+        <small>Del ${alDM(x.desde)}/${x.desde.slice(2, 4)} al ${alDM(x.hasta)}/${x.hasta.slice(2, 4)}, ${ctDiasTxt(x.dias)}${x.motivo ? " · " + e(x.motivo) : ""}${x.plano ? " · plano " + e(x.plano) : ""} · ${e(x.por || "")}</small></div>
+      ${x.hasta >= hoy ? `<button type="button" class="al-sec" onclick="ctPgQuitar(${x.id})"><i class="ti ti-${x.tipo === "desactivar" ? "calendar-check" : "trash"}"></i> ${x.tipo === "desactivar" ? "Reactivar" : "Sacar"}</button>` : ""}
+    </div>`;
+  const vig = reglas.filter(x => x.hasta >= hoy), pas = reglas.filter(x => x.hasta < hoy);
+  content.innerHTML = ctShell(`
+    <div class="al-vista ct-pg">
+      <div class="al-v-cab"><h1 class="al-d">Programación</h1><span>Activar y desactivar servicios por período. Lo que está en el tráfico se vende salvo que se desactive acá.</span></div>
+      ${form}
+      <h2 class="al-d al-h2">Vigentes y próximas</h2>
+      ${vig.length ? `<div class="al-cierres">${vig.map(fila).join("")}</div>` : `<p class="al-nota">No hay reglas: se vende todo lo que trae el tráfico.</p>`}
+      ${pas.length ? `<details class="al-ayuda"><summary>Pasadas (${pas.length})</summary><div class="al-cierres">${pas.map(fila).join("")}</div></details>` : ""}
+    </div>`, animar);
+}
+function ctPgDia(k) {
+  const d = new Set(ct.pg.dias.split(""));
+  if (d.has(k)) d.delete(k); else d.add(k);
+  ct.pg.dias = [...d].sort().join("");
+  ctVistaProgramacion(false);
+}
+async function ctPgCrear() {
+  const pg = ct.pg, cors = (al.cfg && al.cfg.corredores) || [], cor = cors.find(c => c.clave === pg.corredor);
+  if (!cor) { toast("Elegí el recorrido", "error"); return; }
+  if (!pg.dias) { toast("Elegí al menos un día de la semana", "error"); return; }
+  const des = pg.tipo === "desactivar";
+  const [hora, destino] = des ? (pg.horario ? pg.horario.split("|") : ["", ""]) : [pg.hora, pg.destino.trim()];
+  if (!des && (!hora || !destino)) { toast("Poné la hora y el destino del servicio", "error"); return; }
+  if (des && !pg.motivo.trim()) { toast("Contá por qué se desactiva", "error"); return; }
+  const que = `${des ? "Desactivar" : "Agregar"} Asunción ⇄ ${cor.titulo}, ${pg.lado || "ida y regreso"}, ${hora ? hora + " " + destino : "todos los horarios"}, del ${alDM(pg.desde)} al ${alDM(pg.hasta)}, ${ctDiasTxt(pg.dias)}`;
+  if (!confirm(`¿${que}?`)) return;
+  const r = await alPost("/api/alpha/programacion", { tipo: pg.tipo, corredor: cor.clave, corredor_nombre: cor.corredor, lado: pg.lado,
+    hora, destino, desde: pg.desde, hasta: pg.hasta, dias: pg.dias, plano: des ? "" : pg.plano, motivo: pg.motivo.trim() });
+  if (!r) return;
+  al.datos = {}; al.ocup = {};
+  pg.motivo = ""; pg.horario = ""; pg.hora = ""; pg.destino = "";
+  toast(des ? "Horario desactivado en ese período" : "Servicio agregado en ese período", "success");
+  await ctVistaProgramacion(false);
+  if (r.afectados && r.afectados.length) {
+    const tot = r.afectados.reduce((a, x) => a + x.pasajeros, 0), x0 = r.afectados[0];
+    al.ctPgAf = r.afectados;
+    alModal({ titulo: "Hay pasajes vendidos en esas salidas", ancho: 520, cuerpo: `
+      <p class="al-m-txt">Quedaron desactivadas salidas que ya tienen <b>${tot} ${tot === 1 ? "pasajero" : "pasajeros"}</b> (vendidos o con reserva). Pasalos a otra salida con el transbordo.</p>
+      <ul class="ct-af">${r.afectados.slice(0, 12).map((x, i) => `<li><span>${alDiaTxt(alDeISO(x.fecha))}, ${x.hora}</span><b>${x.pasajeros}</b><button type="button" class="al-link" onclick="ctPgTransbordo(${i})">Transbordo</button></li>`).join("")}</ul>
+      ${r.afectados.length > 12 ? `<p class="al-hint">y ${r.afectados.length - 12} salidas más</p>` : ""}`,
+      pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Después</button><button type="button" class="al-btn-r" onclick="ctPgTransbordo(0)"><i class="ti ti-arrows-shuffle"></i> Hacer el transbordo de ${alDM(x0.fecha)} ${x0.hora}</button>` });
+  }
+}
+async function ctPgTransbordo(i) {
+  const x = (al.ctPgAf || [])[i]; if (!x) return;
+  alModalCerrar();
+  const d = Math.round((alDeISO(x.fecha) - alFechaDe(0)) / 864e5);
+  if (d < 0) { toast("Esa salida ya pasó", "error"); return; }
+  al.dia = d;
+  await ctDatos(x.fecha);
+  ctTbOrigen(x.servicio);
+  ct.tb.tipo = "salida"; ct.tb.motivoChip = "Otro"; ct.tb.motivo = "Servicio desactivado";
+  ct.vista = "transbordos"; ctRender(true);
+}
+async function ctPgQuitar(id) {
+  const x = (ct.pgReglas || []).find(r => r.id === id);
+  if (!x || !confirm(x.tipo === "desactivar" ? "¿Reactivar? Esos horarios se vuelven a vender." : "¿Sacar el servicio agregado? Si tiene pasajes vendidos, quedan en un servicio que ya no aparece: pasalos antes con el transbordo.")) return;
+  const r = await api(`/api/alpha/programacion/${id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo", "error"); return; }
+  al.datos = {}; al.ocup = {};
+  toast(x.tipo === "desactivar" ? "Reactivado" : "Servicio sacado", "success");
+  ctVistaProgramacion(false);
 }

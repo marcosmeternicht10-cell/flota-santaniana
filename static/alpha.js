@@ -196,6 +196,7 @@ function alFuenteTxt(r) {
   if (f.estado === "publicado") return `Del tráfico ${qu} publicado (versión ${f.version}).`;
   if (f.estado === "cambios") return `Del tráfico ${qu} (versión ${f.version}, con cambios sin publicar).`;
   if (f.estado === "borrador") return `Del tráfico ${qu}, armado pero sin publicar.`;
+  if (f.estado === "programado") return `Salidas agregadas en Controles → Programación (no están en el tráfico ${qu}).`;
   return `El tráfico ${qu} de este día todavía no está armado: horarios del ${dm(f.fecha_ref)}; el coche se confirma cuando se arme.`;
 }
 function alServiciosDe(r, lado) {
@@ -203,7 +204,9 @@ function alServiciosDe(r, lado) {
   return (r[lado] || []).map(x => {
     const coche = x.coche || x.habitual;
     // La agencia no recibe el coche: el plano ya viene resuelto del servidor
-    const plano = window.USUARIO_ROL === "agencia" ? (alPlanos()[x.plano] ? x.plano : alPlanoAuto("")) : alPlanoDe(coche, x.coche ? x.modelo : x.habitual_modelo);
+    const plano = window.USUARIO_ROL === "agencia" ? (alPlanos()[x.plano] ? x.plano : alPlanoAuto(""))
+      : !coche && x.adicional && alPlanos()[x.plano] ? x.plano            // servicio agregado en Controles, con su plano
+      : alPlanoDe(coche, x.coche ? x.modelo : x.habitual_modelo);
     const dur = lado === "ida" && x.origen === "ASU" ? AL_DUR[`${x.llega}|${x.hora}`] : null;
     return Object.assign({}, x, { cor: r.clave, intl: r.tipo === "internacional", lado, h: alMin(x.hora), dur: dur || null, plano,
       cod: [x.tramo, ...(x.extras || [])].join(" ") });
@@ -527,7 +530,7 @@ function alPintar(animar) {
     return alVacio(animar, "Trayendo los asientos…");
   }
   const lleno = k => { const pl = alPlano(alServ(k)); return alOcupacion(fecha, k).size >= alAsientos(pl).length && alParadosVendidos(fecha, k) >= (pl.parados || 0); };
-  const estSv = k => alEstadoServ(fecha, lista[k] && lista[k].clave);
+  const estSv = k => lista[k] && lista[k].desactivado ? "desactivado" : alEstadoServ(fecha, lista[k] && lista[k].clave);
   const sirve = k => k < lista.length && !alYaSalio(al.dia, k) && !lleno(k) && estSv(k) === "abierto";
   if (al.dep >= lista.length) al.dep = 0;
   if (!sirve(al.dep)) { const k = lista.findIndex((_, i) => sirve(i)); if (k >= 0 && k !== al.dep) { al.dep = k; al.sube = 0; al.baja = -1; } }
@@ -548,8 +551,8 @@ function alPintar(animar) {
     const asi = alAsientos(alPlano(x));
     const porClase = ["CO", "CA"].map(c => { const tot = asi.filter(a => a.clase === c); if (!tot.length) return ""; return (tot.length - tot.filter(a => v.has(a.n)).length) + " " + c; }).filter(Boolean);
     const est = estSv(k);
-    const txt = fue ? "Ya salió" : est === "cancelado" ? "Cancelado" : est === "cerrado" ? "Venta cerrada" : lleno(k) ? "Completo" : porClase.join(", ") + " libres";
-    const coche = alEsAgencia() ? "" : x.coche ? `Coche ${x.coche}` : x.habitual ? `A confirmar (suele ir el ${x.habitual})` : "Coche a confirmar";
+    const txt = fue ? "Ya salió" : est === "desactivado" ? "Desactivado" : est === "cancelado" ? "Cancelado" : est === "cerrado" ? "Venta cerrada" : lleno(k) ? "Completo" : porClase.join(", ") + " libres";
+    const coche = alEsAgencia() ? "" : x.coche ? `Coche ${x.coche}` : x.habitual ? `A confirmar (suele ir el ${x.habitual})` : x.adicional ? "Agregado, coche a confirmar" : "Coche a confirmar";
     return `<button type="button" class="al-tab ${k === al.dep ? "on" : ""}" ${fue || !sirve(k) ? "disabled" : ""} aria-pressed="${k === al.dep}" onclick="alSalida(${k})" aria-label="${alHH(x.h)}, ${trEsc(x.cod)}${coche ? ", " + coche : ""}, ${txt}">
       <span class="al-tab-in"><b class="al-d">${alHH(x.h)}</b><span class="al-tab-t"><span>${trEsc(x.cod)}${x.dur ? `, llega ${alHH(x.h + x.dur)}` : ""}</span>${coche ? `<span class="al-tab-c ${x.coche ? "" : "conf"}">${coche}</span>` : ""}<span class="al-tab-l">${txt}</span></span></span></button>`;
   }).join("");
