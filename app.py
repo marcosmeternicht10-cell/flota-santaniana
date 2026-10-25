@@ -166,7 +166,8 @@ init_trafico()
 app.register_blueprint(bp_trafico)
 
 # Alpha (venta de pasajes, maqueta): los servicios salen del tráfico
-from alpha import bp_alpha
+from alpha import bp_alpha, init_alpha
+init_alpha()
 app.register_blueprint(bp_alpha)
 # Cuántas salidas lleva cada día de la semana (el internacional cambia según el día)
 from trafico_patron import bp_patron, init_trafico_patron
@@ -431,6 +432,8 @@ def version_assets():
         archivos = [
             os.path.join(app.static_folder, "style.css"),
             os.path.join(app.static_folder, "app.js"),
+            os.path.join(app.static_folder, "alpha.js"),
+            os.path.join(app.static_folder, "alpha.css"),
         ]
         ultima = max(os.path.getmtime(a) for a in archivos if os.path.exists(a))
         return str(int(ultima))  # timestamp como número de versión
