@@ -164,6 +164,10 @@ app.register_blueprint(bp_rend_comb)
 from trafico import bp_trafico, init_trafico
 init_trafico()
 app.register_blueprint(bp_trafico)
+
+# Alpha (venta de pasajes, maqueta): los servicios salen del tráfico
+from alpha import bp_alpha
+app.register_blueprint(bp_alpha)
 # Cuántas salidas lleva cada día de la semana (el internacional cambia según el día)
 from trafico_patron import bp_patron, init_trafico_patron
 init_trafico_patron()
