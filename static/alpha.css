@@ -374,3 +374,19 @@ body.boleteria { margin: 0; background: #1F2226; }
 body.boleteria #content { min-height: 100vh; padding: 0; }
 body.boleteria { overflow: auto; height: auto; }
 body.boleteria #content { overflow: visible; }
+.al-gira { animation: alGira 1s linear infinite; display: inline-block; }
+@keyframes alGira { to { transform: rotate(360deg); } }
+.al-vacio .al-sec { margin-top: 10px; }
+.al-check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--al-txt); }
+.al-check input { width: 18px; height: 18px; accent-color: var(--al-rojo); }
+.al-liq-gen { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.al-liq-gen .al-campo { flex: 0 1 320px; }
+.al-liq-gen .al-campo input { color-scheme: dark; }
+.al-liq-pend { display: flex; flex-wrap: wrap; gap: 8px; }
+.al-liq-p { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 14px; border-radius: 12px; border: 1.5px solid #8A6A2A; background: #3A2F1A; color: #F8E3B5; text-align: left; min-width: 220px; }
+.al-liq-p span { font-size: 12.5px; opacity: .85; }
+.al-liq-p em { font-style: normal; font-weight: 800; font-size: 16px; }
+.al-liq-t td.fuerte { font-weight: 800; }
+.al-tabla tfoot th { background: #30353B; color: var(--al-txt); font-size: 13px; padding: 10px 12px; }
+.al-modal .al-man-res b { font-size: 22px; }
+.al-modal .al-tabla-w { max-height: 52vh; overflow: auto; }

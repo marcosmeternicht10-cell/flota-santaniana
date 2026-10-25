@@ -6,10 +6,10 @@
 // no se armó, se toman los horarios del último tráfico del mismo día de la
 // semana y el coche queda a confirmar.
 //
-// La configuración es real y está en la base (/api/alpha/config): los planos
-// de asientos, qué plano usa cada coche, los recorridos con sus paradas, las
-// tarifas por tramo y los descuentos. Las ventas, reservas y la caja todavía
-// son de prueba y quedan en este navegador (falta lo fiscal).
+// Todo está en la base: la configuración (/api/alpha/config: planos, coche →
+// plano, recorridos, tarifas, descuentos) y las ventas de todas las agencias
+// (/api/alpha/ventas, ocupación, caja y liquidaciones). Las ventas siguen
+// siendo de prueba, sin valor fiscal (falta lo fiscal).
 //
 // Pantallas: Vender · Pasajes · Manifiesto · Caja · Tarifas · Planos.
 // Las AGENCIAS (rol agencia, entran por /boleteria) ven solo Vender, sus
@@ -23,10 +23,6 @@ const AL_PAGOS = [["efectivo", "Efectivo"], ["tarjeta", "Tarjeta"], ["transferen
 const AL_TIPODOC = [["CI", "Cédula paraguaya"], ["PAS", "Pasaporte"], ["DNI", "DNI argentino"], ["OTRO", "Otro documento"]];
 const AL_NACION = ["Paraguaya", "Argentina", "Brasileña", "Boliviana", "Uruguaya", "Otra"];
 const AL_PAISES = ["Paraguay", "Argentina", "Brasil", "Bolivia", "Uruguay", "Otro"];
-const AL_CONOCIDOS = {
-  "3456789": { apellidos: "GIMÉNEZ", nombres: "ROSA", sexo: "F", nac: "1990-03-14", nacionalidad: "Paraguaya", residencia: "Paraguay", viajes: 4 },
-  "4123987": { apellidos: "ORTIZ", nombres: "DERLIS", sexo: "M", nac: "1985-11-02", nacionalidad: "Paraguaya", residencia: "Argentina", viajes: 2 },
-};
 const AL_DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const AL_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"];
 // Precio de ejemplo de punta a punta mientras ese corredor no tenga tarifa cargada
@@ -43,7 +39,8 @@ const AL_DUR = { "COP|09:00": 485, "COP|11:30": 485, "COP|17:00": 320, "COP|23:0
 const AL_RESERVA_MIN = 60;            // la reserva vence una hora antes de la salida
 const AL_RETENCION = 0.1;             // devolución: se retiene el 10 % (de ejemplo)
 const AL_VISTAS = [["vender", "ticket", "Vender"], ["pasajes", "receipt", "Pasajes"], ["manifiesto", "list-details", "Manifiesto"],
-                   ["caja", "cash-register", "Caja"], ["tarifas", "currency-dollar", "Tarifas"], ["planos", "armchair", "Planos"]];
+                   ["caja", "cash-register", "Caja"], ["liquidaciones", "report-money", "Liquidaciones"],
+                   ["tarifas", "currency-dollar", "Tarifas"], ["planos", "armchair", "Planos"]];
 const AL_PVACIO = () => ({ tipoDoc: "CI", doc: "", nombre: "", apellidos: "", nombres: "", sexo: "", nac: "", nacionalidad: "", residencia: "" });
 const AL_LOGO = `<svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>`;
 
@@ -53,7 +50,9 @@ const al = {
   comoAgencia: false,
   vista: "vender", cor: "", lado: "ida", dia: 0, dep: 0, sube: 0, baja: -1, sel: null,
   tarifa: "general", pago: "efectivo", recibe: "", aviso: "", p: AL_PVACIO(),
-  datos: {}, cargando: false, error: "", cfg: null, cambio: null, cobrarReserva: null,
+  datos: {}, cargando: false, error: "", cfg: null, cambio: null, cambioV: null, cobrarReserva: null,
+  ocup: {}, miCaja: 0, reservas: 0, conocido: null, pasLista: [],
+  liq: { agencia: "", hasta: "", soloEf: false, prev: null },
   buscaHits: [], buscaSel: 0,
   pas: { q: "", estado: "" }, man: { clave: "" }, caja: { fecha: "", vendedor: "" },
   tar: { cor: "", rec: null, pre: null, des: null }, pla: { cod: "", draft: null, nuevo: false, modo: "poner", q: "", cp: null },
@@ -69,7 +68,17 @@ function alDiaTxt(d) { return AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.g
 function alDM(f) { return f ? `${f.slice(8, 10)}/${f.slice(5, 7)}` : ""; }
 function alMin(h) { const [a, b] = String(h || "0:0").split(":").map(Number); return a * 60 + b; }
 function alAhoraISO() { const a = new Date(); return alISO(a) + "T" + String(a.getHours()).padStart(2, "0") + ":" + String(a.getMinutes()).padStart(2, "0"); }
-function alNorm(t) { return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim(); }
+const _alNormMemo = new Map();
+function alNorm(t) {
+  const k = String(t || "");
+  let r = _alNormMemo.get(k);
+  if (r === undefined) {
+    r = k.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+    if (_alNormMemo.size > 5000) _alNormMemo.clear();
+    _alNormMemo.set(k, r);
+  }
+  return r;
+}
 function alRnd(seed, n) {
   let x = (seed ^ Math.imul(n, 0x9E3779B1)) >>> 0;
   x = (x ^ (x >>> 16)) >>> 0; x = Math.imul(x, 0x45d9f3b) >>> 0; x = (x ^ (x >>> 16)) >>> 0;
@@ -84,24 +93,46 @@ function alVendedor() {
 function alGs(n) { return "Gs. " + fmtNum(Math.round(n || 0)); }
 function alNro(n) { return String(n).padStart(7, "0"); }
 
-// Las ventas de prueba (este navegador)
-function alGuardado() {
-  try {
-    const d = JSON.parse(localStorage.getItem("alpha_maqueta_v3") || "null");
-    if (d && Array.isArray(d.ventas)) { d.cierres = d.cierres || []; return d; }
-  } catch (e) {}
-  return { nro: 124, ventas: [], cierres: [] };
-}
-function alGuardar(d) { try { localStorage.setItem("alpha_maqueta_v3", JSON.stringify(d)); } catch (e) { toast("No se pudo guardar en este navegador", "error"); } }
+// Las ventas (de todas las agencias, en la base). De cada día se trae la
+// ocupación: las ventas propias completas y las ajenas solo como "ocupado".
 function alSalidaISO(v) { return `${v.fecha}T${v.sale || v.hora}`; }
-function alReservaViva(v) { return v.estado === "reserva" && alAhoraISO() < (v.vence || alSalidaISO(v)); }
+function alReservaViva(v) { return v.estado === "reserva" && alAhoraISO() < (v.vence || alSalidaISO(v)).slice(0, 16); }
 function alOcupa(v) { return v.estado === "vendido" || alReservaViva(v); }
+// Los asientos se vuelven a pedir si lo que hay tiene más de 15 segundos:
+// así se ve lo que vendieron las otras agencias (el servidor igual no deja
+// vender dos veces el mismo asiento).
+const AL_OCUP_FRESCO = 15000;
+async function alTraerOcup(fecha, forzar) {
+  fecha = fecha || alISO(alFechaDe(al.dia));
+  al.ocupEl = al.ocupEl || {};
+  if (al.ocup[fecha] && !forzar && Date.now() - (al.ocupEl[fecha] || 0) < AL_OCUP_FRESCO) return al.ocup[fecha];
+  let d = null;
+  try { d = await api(`/api/alpha/ocupacion?fecha=${fecha}`); } catch (e) { d = null; }
+  if (d && d.ventas) { al.ocup[fecha] = d.ventas; al.ocupEl[fecha] = Date.now(); al.miCaja = d.mi_caja_hoy || 0; al.reservas = d.reservas || 0; }
+  else if (!al.ocup[fecha]) al.ocup[fecha] = [];
+  return al.ocup[fecha];
+}
+// Refresca en segundo plano y repinta solo si cambió algo y no se está escribiendo
+async function alRefrescarOcup() {
+  if (al.vista !== "vender" || al.enviando || document.hidden) return;
+  const f = alISO(alFechaDe(al.dia)), antes = JSON.stringify(al.ocup[f] || []);
+  await alTraerOcup(f, true);
+  const escribiendo = document.activeElement && document.activeElement.closest && document.activeElement.closest("#al-raiz") && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+  if (al.vista === "vender" && JSON.stringify(al.ocup[f] || []) !== antes && !escribiendo) alPintar(false);
+}
+setInterval(() => { if (document.getElementById("al-raiz")) alRefrescarOcup(); }, 20000);
+function alOcupDe(fecha) { return al.ocup[fecha] || []; }
+async function alPost(url, cuerpo) {
+  const r = await api(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo || {}) });
+  if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo", "error"); return null; }
+  return r;
+}
 
 // ─── Configuración (de la base) ───
 async function alCfgTraer(forzar) {
   if (al.cfg && !forzar) return al.cfg;
   const d = await api("/api/alpha/config");
-  if (d && d.planos) al.cfg = d;
+  if (d && d.planos) { al.cfg = d; al.cfgVer = (al.cfgVer || 0) + 1; }
   else if (!al.cfg) al.cfg = { planos: {}, coche_plano: {}, recorridos: {}, tarifas: {}, descuentos: [{ id: "general", nombre: "General", factor: 1 }], coches: [], corredores: [] };
   return al.cfg;
 }
@@ -109,6 +140,7 @@ async function alCfgGuardar(clave, valor) {
   const r = await api(`/api/alpha/config/${clave}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ valor }) });
   if (!r || !r.ok) { toast((r && (r.msg || r.error)) || "No se pudo guardar", "error"); return false; }
   al.cfg[clave] = JSON.parse(JSON.stringify(valor));
+  al.cfgVer = (al.cfgVer || 0) + 1;
   return true;
 }
 function alPlanos() { return (al.cfg && al.cfg.planos) || {}; }
@@ -135,11 +167,13 @@ async function alCambiarPlano(pl) {
 // ─── El tráfico del día ───
 async function alTraer(forzar) {
   const f = alISO(alFechaDe(al.dia));
-  if (al.datos[f] && !forzar) return;
+  if (al.datos[f] && !forzar) { al.cargando = false; return; }
   al.cargando = true; al.error = "";
-  const d = await api(`/api/alpha/dia/${f}`);
-  al.cargando = false;
-  if (!d || !d.corredores) { al.error = (d && d.error) || "No se pudo traer el tráfico"; al.datos[f] = { corredores: [] }; return; }
+  let d = null;
+  try { d = await api(`/api/alpha/dia/${f}`); }
+  catch (e) { d = null; }
+  finally { al.cargando = false; }
+  if (!d || !d.corredores) { al.error = (d && d.error) || "No se pudo traer el tráfico. Probá de nuevo."; return; }
   al.datos[f] = d;
   if (!d.corredores.some(c => c.clave === al.cor)) { al.cor = d.corredores[0]?.clave || ""; al.dep = 0; }
 }
@@ -166,12 +200,23 @@ function alServiciosDe(r, lado) {
       cod: [x.tramo, ...(x.extras || [])].join(" ") });
   });
 }
-function alServicios() { return { lista: alServiciosDe(alRuta(), al.lado) }; }
+// Las salidas del corredor y sentido elegidos: se arman una vez y se guardan
+// hasta que cambie el día, el corredor, el sentido o la configuración
+let _alSvMemo = { k: null, r: null, lista: [] };
+function alServicios() {
+  const r = alRuta(), k = `${alISO(alFechaDe(al.dia))}|${r ? r.clave : ""}|${al.lado}|${al.cfgVer || 0}|${window.USUARIO_ROL}`;
+  if (_alSvMemo.k !== k || _alSvMemo.r !== r) _alSvMemo = { k, r, lista: alServiciosDe(r, al.lado) };
+  return { lista: _alSvMemo.lista };
+}
 function alServ(k) { return alServicios().lista[k ?? al.dep]; }
 function alPlano(sv) { return alPlanos()[sv.plano] || Object.values(alPlanos())[0]; }
-function alAsientos(pl) {
+const _alAsiMemo = new WeakMap();
+function alAsientos(pl, fresco) {
+  if (!pl) return [];
+  const m = !fresco && _alAsiMemo.get(pl);
+  if (m) return m;
   const out = [];
-  if (!pl) return out;
+  if (!fresco) _alAsiMemo.set(pl, out);
   pl.pisos.forEach((p, pi) => p.filas.forEach((f, fi) => f.forEach((n, pos) => {
     if (n == null) return;
     const lado = pos < 2 ? [f[0], f[1]] : [f[3], f[4]];
@@ -199,7 +244,14 @@ function alIgual(a, b) {
   const x = alNorm(a), y = alNorm(b);
   return x && y && (x === y || x.startsWith(y + " ") || y.startsWith(x + " "));
 }
+const _alCamMemo = new Map();
 function alCamino(sv) {
+  const k = `${sv.clave}|${al.cfgVer || 0}`;
+  let c = _alCamMemo.get(k);
+  if (!c) { c = _alCaminoCalc(sv); if (_alCamMemo.size > 500) _alCamMemo.clear(); _alCamMemo.set(k, c); }
+  return c;
+}
+function _alCaminoCalc(sv) {
   // Las paradas de esta salida, en el orden en que las hace
   const rec = alRecorrido(sv);
   const base = [{ nombre: sv.origen_nombre, min: null }, { nombre: sv.llega_nombre, min: null }];
@@ -229,13 +281,13 @@ function alHorasTramo(sv, camino, s, b) {
 }
 
 // ─── Ocupación (por tramo) y precio ───
-function alVentasDe(fecha, sv) { return alGuardado().ventas.filter(v => v.fecha === fecha && v.servicio === sv.clave && alOcupa(v) && v.nro !== al.cambio); }
+function alVentasDe(fecha, sv) { return alOcupDe(fecha).filter(v => v.servicio === sv.clave && alOcupa(v) && (v.nro == null || v.nro !== al.cambio)); }
 function alOcupacion(fecha, k, s, b) {
   // asiento → venta, solo las que se pisan con el tramo s..b
   const sv = alServ(k), cam = alCamino(sv), out = new Map();
   if (s == null) { s = 0; b = cam.length - 1; }
   alVentasDe(fecha, sv).forEach(v => {
-    const vs = alIdxDe(cam, v.sube, 0), vb = alIdxDe(cam, v.baja, cam.length - 1);
+    const vs = v.subeIdx ?? alIdxDe(cam, v.sube, 0), vb = Math.min(v.bajaIdx ?? alIdxDe(cam, v.baja, cam.length - 1), cam.length - 1);
     if (vs < b && s < vb && v.asiento !== "P") out.set(v.asiento, v);
   });
   return out;
@@ -280,16 +332,24 @@ function alPrecio(n) {
   const f = (alDescuentos().find(t => t.id === al.tarifa) || alDescuentos()[0]).factor;
   return Math.round(pt.precio * f / 1000) * 1000;
 }
-function alConocido(doc) {
+function alConocido() { return al.conocido; }
+let _alConTimer = null;
+function alBuscarConocido(doc) {
+  clearTimeout(_alConTimer);
+  al.conocido = null;
   const dig = String(doc || "").replace(/\D/g, "");
-  if (!dig) return null;
-  const propias = alGuardado().ventas.filter(v => String(v.doc).replace(/\D/g, "") === dig && v.estado !== "reserva");
-  const base = AL_CONOCIDOS[dig];
-  if (!base && !propias.length) return null;
-  const ult = propias.length ? propias[propias.length - 1] : null;
-  const datos = Object.assign({}, base || {}, ult && ult.mig ? ult.mig : {});
-  if (!datos.nombres && ult) datos.nombreCompleto = ult.nombre;
-  return { datos, viajes: (base ? base.viajes : 0) + propias.length };
+  if (dig.length < 5) return;
+  _alConTimer = setTimeout(async () => {
+    const r = await api(`/api/alpha/pasajero?doc=${encodeURIComponent(dig)}`);
+    if (!r || !r.datos || String(al.p.doc).replace(/\D/g, "") !== dig) return;
+    al.conocido = r;
+    const d = r.datos, p = al.p, intl = alServ()?.intl;
+    const poner = (k, val) => { if (val && !p[k]) { p[k] = val; const e = document.getElementById("al-" + k); if (e) e.value = val; } };
+    if (intl) ["apellidos", "nombres", "sexo", "nac", "nacionalidad", "residencia"].forEach(k => poner(k, d[k]));
+    else poner("nombre", d.nombreCompleto || [d.nombres, d.apellidos].filter(Boolean).join(" "));
+    const h = document.getElementById("al-hint");
+    if (h) h.textContent = `Ya viajó ${r.viajes} ${r.viajes === 1 ? "vez" : "veces"} con ustedes`;
+  }, 350);
 }
 function alNombreCompleto(p) { return p.nombre || [p.nombres, p.apellidos].filter(Boolean).join(" "); }
 
@@ -297,7 +357,7 @@ function alNombreCompleto(p) { return p.nombre || [p.nombres, p.apellidos].filte
 // LA PANTALLA: cabecera con las secciones de Alpha
 // ════════════════════════════════════════════════════════════════════════════
 async function renderAlpha() {
-  if (typeof status === "function") status("Alpha: la venta de pasajes. Servicios del tráfico; tarifas y planos en la base; las ventas de prueba quedan en este navegador");
+  if (typeof status === "function") status("Alpha: la venta de pasajes. servicios del tráfico; tarifas, planos y ventas (de prueba) en la base");
   if (!["admin", "agencia"].includes(window.USUARIO_ROL)) {
     content.innerHTML = `<div class="page-header"><h1>Alpha</h1><p>Esta sección la ven administración y las agencias.</p></div>`;
     return;
@@ -313,27 +373,27 @@ async function renderAlpha() {
   al.cargando = true;
   alRender(true);
   await alCfgTraer();
-  await alTraer();
+  try { await Promise.all([alTraer(), alTraerOcup(null, true)]); }
+  finally { al.cargando = false; }
   alRender(true);
 }
 function alIr(vista) {
   if (vista === al.vista || !alVistasPermitidas().includes(vista)) return;
   al.vista = vista;
+  if (vista === "vender") setTimeout(alRefrescarOcup, 0);
   if (vista === "tarifas") { al.tar.rec = al.tar.pre = al.tar.des = null; }
   if (vista === "planos") { al.pla.draft = null; al.pla.cp = null; }
   alRender(true);
 }
 function alShell(cuerpo, animar, extraCab = "") {
-  const g = alGuardado(), hoy = alISO(new Date());
-  const caja = alMovs(g).filter(m => m.el.slice(0, 10) === hoy && m.vendedor === alVendedor()).reduce((a, m) => a + m.monto, 0);
-  const res = g.ventas.filter(alReservaViva).length;
+  const caja = al.miCaja || 0, res = al.reservas || 0;
   return `<div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
     <header class="al-cab">
       <div class="al-marca">${AL_LOGO}<span class="al-d al-marca-t">Alpha</span><span class="al-maqueta">Maqueta</span></div>
       <nav class="al-nav" aria-label="Secciones de Alpha">${AL_VISTAS.filter(([k]) => alVistasPermitidas().includes(k)).map(([k, ic, t], i) => `${k === "tarifas" ? '<span class="al-nav-sep" aria-hidden="true"></span>' : ""}<button type="button" class="al-nav-b ${al.vista === k ? "on" : ""}" aria-current="${al.vista === k ? "page" : "false"}" onclick="alIr('${k}')"><i class="ti ti-${ic}"></i><span>${t}</span>${k === "pasajes" && res ? `<em title="Reservas vigentes">${res}</em>` : ""}</button>`).join("")}</nav>
       ${extraCab}
       <div class="al-caja">
-        <div><span>Tu caja de hoy (prueba)</span><b class="al-d">${alGs(caja)}</b></div>
+        <div><span>Tu caja de hoy</span><b class="al-d">${alGs(caja)}</b></div>
         ${window.USUARIO_ROL === "admin" ? `<button type="button" class="al-sec al-comoag ${al.comoAgencia ? "on" : ""}" onclick="alComoAgencia()" title="Ver Alpha como la ve una agencia">
             <i class="ti ti-${al.comoAgencia ? "shield" : "building-store"}"></i> ${al.comoAgencia ? "Volver a administración" : "Ver como agencia"}</button>` : ""}
         ${window.USUARIO_ROL === "agencia" ? `<div class="al-quien"><span>${trEsc(window.USUARIO_AGENCIA || "Agencia")}</span><b>${trEsc(window.USUARIO_NOMBRE || "")}</b></div>
@@ -343,6 +403,11 @@ function alShell(cuerpo, animar, extraCab = "") {
     ${al.comoAgencia ? `<div class="al-banner al-banner-ag"><i class="ti ti-eye"></i><span><b>Así lo ve una agencia.</b> Solo vende, ve sus pasajes y su caja: sin tarifario, planos, manifiesto, tripulación ni coche.</span></div>` : ""}
     ${cuerpo}
   </div>`;
+}
+async function alReintentar() {
+  al.error = ""; al.cargando = true; alRender(false);
+  try { await Promise.all([alCfgTraer(true), alTraer(true), alTraerOcup(null, true)]); } finally { al.cargando = false; }
+  alRender(true);
 }
 function alComoAgencia() {
   al.comoAgencia = !al.comoAgencia;
@@ -360,6 +425,7 @@ function alRender(animar) {
   if (v === "pasajes") return alVistaPasajes(animar);
   if (v === "manifiesto") return alVistaManifiesto(animar);
   if (v === "caja") return alVistaCaja(animar);
+  if (v === "liquidaciones") return alVistaLiquidaciones(animar);
   if (v === "tarifas") return alVistaTarifas(animar);
   if (v === "planos") return alVistaPlanos(animar);
   return alPintar(animar);
@@ -421,11 +487,11 @@ function alVacio(animar, txt) {
     ${al.vista === "vender" ? alBuscador() : ""}
     <div class="al-filtros">${alChipsCorredores()}<div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div></div>
     ${alChipsLado()}
-    <div class="al-vacio"><i class="ti ti-${al.cargando ? "loader-2" : "calendar-off"}"></i><b>${txt}</b><span>${alDiaTxt(alFechaDe(al.dia))}</span></div>`, animar);
+    <div class="al-vacio"><i class="ti ti-${al.cargando || /Trayendo/.test(txt) ? "loader-2 al-gira" : "calendar-off"}"></i><b>${txt}</b><span>${alDiaTxt(alFechaDe(al.dia))}</span>
+      ${!al.cargando && al.error ? `<button type="button" class="al-sec" onclick="alReintentar()"><i class="ti ti-refresh"></i> Probar de nuevo</button>` : ""}</div>`, animar);
 }
 function alBannerCambio() {
-  if (!al.cambio) return "";
-  const v = alGuardado().ventas.find(x => x.nro === al.cambio);
+  const v = al.cambio ? al.cambioV : null;
   if (!v) { al.cambio = null; return ""; }
   return `<div class="al-banner"><i class="ti ti-arrows-exchange"></i><span><b>Cambiando el boleto ${alNro(v.nro)}</b> de ${trEsc(v.nombre)}: antes ${alDM(v.fecha)} ${v.sale || v.hora}, ${trEsc(v.origen)} → ${trEsc(v.destino)}, ${v.asiento === "P" ? "parado" : "asiento " + v.asiento}. Elegí el nuevo servicio y asiento.</span>
     <button type="button" class="al-link" onclick="alCambioCancelar()">Cancelar el cambio</button></div>`;
@@ -436,6 +502,10 @@ function alPintar(animar) {
   if (!r0) return alVacio(animar, al.error || "No hay tráfico armado para tomar los servicios.");
   if (!alServicios().lista.length) return alVacio(animar, `No hay salidas de ${al.lado === "ida" ? "ida" : "regreso"} en este corredor.`);
   const fechaD = alFechaDe(al.dia), fecha = alISO(fechaD), lista = alServicios().lista;
+  if (!al.ocup[fecha]) {
+    if (!al._trayendoOcup) { al._trayendoOcup = true; alTraerOcup(fecha).finally(() => { al._trayendoOcup = false; if (al.vista === "vender") alPintar(false); }); }
+    return alVacio(animar, "Trayendo los asientos…");
+  }
   const lleno = k => { const pl = alPlano(alServ(k)); return alOcupacion(fecha, k).size >= alAsientos(pl).length && alParadosVendidos(fecha, k) >= (pl.parados || 0); };
   const sirve = k => k < lista.length && !alYaSalio(al.dia, k) && !lleno(k);
   if (al.dep >= lista.length) al.dep = 0;
@@ -537,6 +607,11 @@ function alPanel() {
   const d = alDescAsiento(al.sel), intl = sv.intl, p = al.p;
   // Asiento reservado: se cobra o se libera
   const res = al.sel != null && al.sel !== "P" ? alOcupacion(fecha, al.dep, s, b).get(al.sel) : null;
+  if (res && res.estado === "reserva" && !res.mia) {
+    return `<div class="al-elegido"><div class="al-num reservado"><span class="al-d">${al.sel}</span></div>
+      <div class="al-elegido-t"><b class="al-d">Reservado</b><span>Por otra agencia</span><small>Vence ${res.vence ? alDM(res.vence.slice(0, 10)) + " " + res.vence.slice(11, 16) : "al salir"}</small></div></div>
+      <p class="al-hint">Elegí otro asiento.</p>`;
+  }
   if (res && res.estado === "reserva" && al.cobrarReserva !== res.nro) {
     return `<div class="al-elegido"><div class="al-num reservado"><span class="al-d">${al.sel}</span></div>
       <div class="al-elegido-t"><b class="al-d">Reservado</b><span>${trEsc(res.nombre)}</span><small>${res.tipoDoc && res.mig ? trEsc(res.tipoDoc) : "CI"} ${trEsc(res.doc)}</small></div></div>
@@ -546,7 +621,7 @@ function alPanel() {
         <span>Vence ${res.vence ? `el ${alDM(res.vence.slice(0, 10))} a las ${res.vence.slice(11, 16)}` : "al salir"} si no se cobra</span>
       </div>
       <button type="button" class="al-cobrar" onclick="alReservaCobrar(${res.nro})"><span class="al-cobrar-in"><span class="al-d">Cobrar la reserva</span></span></button>
-      <button type="button" class="al-sec" onclick="alReservaLiberar(${res.nro})"><i class="ti ti-lock-open"></i> Liberar el asiento</button>`;
+      <button type="button" class="al-sec" onclick="alReservaLiberar(${res.nro}, '${trEsc(res.nombre).replace(/'/g, "\\'")}', ${res.asiento})"><i class="ti ti-lock-open"></i> Liberar el asiento</button>`;
   }
   const pt = d ? alPrecioTramo(sv, d.clase, s, b) : null, total = alPrecio(al.sel);
   const con = alConocido(p.doc);
@@ -585,11 +660,8 @@ function alPanel() {
   const hor = alHorasTramo(sv, cam, s, b);
   // Cambio de boleto: la diferencia con lo que ya pagó
   let cambio = null;
-  if (al.cambio) {
-    const v = alGuardado().ventas.find(x => x.nro === al.cambio);
-    if (v) cambio = { v, dif: total - v.total };
-  }
-  const reserva = al.cobrarReserva ? alGuardado().ventas.find(x => x.nro === al.cobrarReserva) : null;
+  if (al.cambio && al.cambioV) cambio = { v: al.cambioV, dif: total - al.cambioV.total };
+  const reserva = al.cobrarReserva ? alOcupDe(fecha).find(x => x.nro === al.cobrarReserva) : null;
   const aCobrar = cambio ? Math.max(0, cambio.dif) : total;
   const boton = cambio ? "Confirmar el cambio" : reserva ? "Cobrar la reserva" : "Cobrar e imprimir";
   return `
@@ -632,15 +704,19 @@ function alVueltoTxt(total) {
 function alRepintarPanel() { const p = document.getElementById("al-panel"); if (p) p.innerHTML = alPanel(); }
 function alAvisoLimpio() { if (al.aviso) { al.aviso = ""; const a = document.getElementById("al-aviso"); if (a) a.textContent = ""; } }
 
-function alCambiarRuta(c) { if (c === al.cor) return; al.cor = c; al.lado = "ida"; al.dep = 0; al.sube = 0; al.baja = -1; al.sel = null; al.aviso = ""; alPintar(true); }
-function alLado(l) { if (l === al.lado) return; al.lado = l; al.dep = 0; al.sube = 0; al.baja = -1; al.sel = null; al.aviso = ""; alPintar(true); }
-function alSalida(k) { al.dep = k; al.sube = 0; al.baja = -1; al.sel = null; al.aviso = ""; alPintar(true); }
+function alCambiarRuta(c) { if (c === al.cor) return; al.cor = c; al.lado = "ida"; al.dep = 0; al.sube = 0; al.baja = -1; al.sel = null; al.aviso = ""; alPintar(true); alRefrescarOcup(); }
+function alLado(l) { if (l === al.lado) return; al.lado = l; al.dep = 0; al.sube = 0; al.baja = -1; al.sel = null; al.aviso = ""; alPintar(true); alRefrescarOcup(); }
+function alSalida(k) { al.dep = k; al.sube = 0; al.baja = -1; al.sel = null; al.aviso = ""; alPintar(true); alRefrescarOcup(); }
 function alSube(i) { al.sube = i; const [, b] = alTramoIdx(); if (b <= i) al.baja = -1; al.sel = null; alPintar(false); }
 function alBaja(i) { al.baja = i; al.sel = null; alPintar(false); }
 async function alDia(i) {
   al.dia = i; al.sel = null; al.aviso = ""; al.dep = 0; al.sube = 0; al.baja = -1;
-  if (!al.datos[alISO(alFechaDe(i))]) { al.cargando = true; alRender(false); await alTraer(); }
-  alRender(true);
+  const f = alISO(alFechaDe(i));
+  if (!al.datos[f] || !al.ocup[f]) {
+    al.cargando = true; alRender(false);
+    try { await Promise.all([alTraer(), alTraerOcup(f)]); } finally { al.cargando = false; }
+    alRender(true);
+  } else { alRender(true); alRefrescarOcup(); }
 }
 function alInvertir() { alLado(al.lado === "ida" ? "regreso" : "ida"); }
 function alAsiento(n) { al.sel = n; al.aviso = ""; if (al.cobrarReserva) { al.cobrarReserva = null; al.p = AL_PVACIO(); } alPintar(false); }
@@ -653,14 +729,9 @@ function alCampo(id, el) {
   al.p[id] = v;
   alAvisoLimpio();
   if (id !== "doc") return;
-  const con = alConocido(v), h = document.getElementById("al-hint"), intl = alServ()?.intl;
-  if (con) {
-    const d = con.datos, p = al.p;
-    const poner = (k, val) => { if (val && !p[k]) { p[k] = val; const e = document.getElementById("al-" + k); if (e) e.value = val; } };
-    if (intl) ["apellidos", "nombres", "sexo", "nac", "nacionalidad", "residencia"].forEach(k => poner(k, d[k]));
-    else poner("nombre", d.nombreCompleto || [d.nombres, d.apellidos].filter(Boolean).join(" "));
-  }
-  if (h) h.textContent = con ? `Ya viajó ${con.viajes} ${con.viajes === 1 ? "vez" : "veces"} con ustedes` : intl ? "Con el documento se completan los datos si ya viajó" : "Con la cédula se completa el nombre si ya viajó";
+  const h = document.getElementById("al-hint"), intl = alServ()?.intl;
+  if (h) h.textContent = intl ? "Con el documento se completan los datos si ya viajó" : "Con la cédula se completa el nombre si ya viajó";
+  alBuscarConocido(v);
 }
 function alDocFormato(inp) {
   // La cédula paraguaya con puntos; pasaportes y otros documentos se dejan como están
@@ -677,7 +748,7 @@ function alRecibe(inp) {
   const v = document.getElementById("al-vuelto");
   if (v) {
     let aCobrar = alPrecio(al.sel);
-    if (al.cambio) { const x = alGuardado().ventas.find(y => y.nro === al.cambio); if (x) aCobrar = Math.max(0, aCobrar - x.total); }
+    if (al.cambio && al.cambioV) aCobrar = Math.max(0, aCobrar - al.cambioV.total);
     v.textContent = alVueltoTxt(aCobrar);
   }
 }
@@ -723,10 +794,10 @@ function alPasajero() {
 }
 function alLimpiarVenta() {
   al.p = AL_PVACIO(); al.recibe = ""; al.tarifa = "general"; al.pago = "efectivo"; al.sel = null; al.aviso = "";
-  al.cambio = null; al.cobrarReserva = null;
+  al.cambio = null; al.cambioV = null; al.cobrarReserva = null; al.conocido = null;
 }
-function alCobrar() {
-  if (al.vista !== "vender") return;
+async function alCobrar() {
+  if (al.vista !== "vender" || al.enviando) return;
   // Se suelta el campo que se estaba escribiendo antes de vaciar el formulario,
   // así su "al salir" no vuelve a poner el dato viejo en la venta siguiente
   if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#al-raiz")) document.activeElement.blur();
@@ -736,72 +807,62 @@ function alCobrar() {
   if (d && !pt) { al.aviso = "Ese tramo no tiene precio: cargalo en Tarifas."; alRepintarPanel(); return; }
   const falta = alFaltan(true);
   if (falta) { al.aviso = falta; alRepintarPanel(); return; }
-  const g = alGuardado(), ahora = alAhoraISO(), vend = alVendedor();
-  const cambio = al.cambio ? g.ventas.find(x => x.nro === al.cambio) : null;
+  const cambio = al.cambio ? al.cambioV : null;
   const aCobrar = cambio ? Math.max(0, total - cambio.total) : total;
   if (al.pago === "efectivo" && al.recibe && aCobrar > 0 && +al.recibe < aCobrar) { al.aviso = "Lo que recibe no alcanza: faltan " + alGs(aCobrar - al.recibe) + "."; alRepintarPanel(); return; }
-  // El asiento puede haberse vendido en otra pestaña mientras se cargaban los datos
-  const o = alOcupacion(alISO(alFechaDe(al.dia)), al.dep, s, b).get(al.sel);
-  if (o && o.nro !== al.cobrarReserva && (o.estado === "vendido" || o.estado === "reserva")) { al.aviso = "Ese asiento ya está tomado en ese tramo."; alPintar(false); return; }
-  const viaje = alDatosViaje(), pas = alPasajero();
   const recibe = al.pago === "efectivo" && aCobrar > 0 ? (+al.recibe || aCobrar) : null;
-  let v;
-  if (cambio) {
-    const antes = { fecha: cambio.fecha, sale: cambio.sale, origen: cambio.origen, destino: cambio.destino, asiento: cambio.asiento, total: cambio.total, tramo: cambio.tramo };
-    v = Object.assign(cambio, viaje, pas, { total, tarifa: al.tarifa });
-    v.cambios = (v.cambios || []).concat([{ el: ahora, por: vend, antes }]);
-    const dif = total - antes.total;
-    if (dif) v.movs.push({ t: "cambio", el: ahora, monto: dif, pago: dif > 0 ? al.pago : "efectivo", vendedor: vend, recibe });
-  } else if (al.cobrarReserva) {
-    v = g.ventas.find(x => x.nro === al.cobrarReserva);
-    if (!v || !alReservaViva(v)) { al.aviso = "La reserva ya no está vigente."; al.cobrarReserva = null; alPintar(false); return; }
-    Object.assign(v, viaje, pas, { estado: "vendido", total, tarifa: al.tarifa, pago: al.pago, recibe, vendido_en: ahora, vendedor: vend });
-    v.movs.push({ t: "cobro", el: ahora, monto: total, pago: al.pago, vendedor: vend, recibe });
-  } else {
-    v = Object.assign({ nro: g.nro, estado: "vendido" }, viaje, pas, { total, tarifa: al.tarifa, pago: al.pago, recibe, vendido_en: ahora, vendedor: vend,
-      movs: [{ t: "venta", el: ahora, monto: total, pago: al.pago, vendedor: vend, recibe }] });
-    g.ventas.push(v); g.nro += 1;
-  }
-  alGuardar(g);
+  const cuerpo = { viaje: alDatosViaje(), pasajero: alPasajero(), total, tarifa: al.tarifa, pago: al.pago, recibe, sube_idx: s, baja_idx: b };
+  al.enviando = true;
+  let r;
+  try {
+    if (cambio) r = await alPost(`/api/alpha/ventas/${cambio.nro}/cambiar`, cuerpo);
+    else if (al.cobrarReserva) r = await alPost(`/api/alpha/ventas/${al.cobrarReserva}/cobrar`, cuerpo);
+    else r = await alPost("/api/alpha/ventas", Object.assign({ accion: "vender" }, cuerpo));
+  } finally { al.enviando = false; }
+  if (!r) { await alTraerOcup(null, true); alPintar(false); return; }
+  const v = r.venta;
   alImprimir(alBoletoHTML(v));
   toast(cambio ? `Boleto ${alNro(v.nro)} cambiado` : `Boleto ${alNro(v.nro)} vendido: ${v.asiento === "P" ? "parado" : "asiento " + v.asiento}`, "success");
   alLimpiarVenta();
+  await alTraerOcup(null, true);
   alPintar(false);
 }
-function alReservar() {
+async function alReservar() {
+  if (al.enviando) return;
   if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#al-raiz")) document.activeElement.blur();
   if (al.sel === "P") { al.aviso = "Los pasajes parados no se reservan."; alRepintarPanel(); return; }
   const falta = alFaltan(false);
   if (falta) { al.aviso = falta; alRepintarPanel(); return; }
-  const g = alGuardado(), ahora = alAhoraISO(), viaje = alDatosViaje();
+  const viaje = alDatosViaje(), [s, b] = alTramoIdx();
   const venc = new Date(`${viaje.fecha}T${viaje.sale}`); venc.setMinutes(venc.getMinutes() - AL_RESERVA_MIN);
   const vence = alISO(venc) + "T" + String(venc.getHours()).padStart(2, "0") + ":" + String(venc.getMinutes()).padStart(2, "0");
-  if (vence <= ahora) { al.aviso = "Falta menos de una hora para la salida: ya no se reserva, se vende."; alRepintarPanel(); return; }
-  const v = Object.assign({ nro: g.nro, estado: "reserva" }, viaje, alPasajero(), { total: alPrecio(al.sel), tarifa: al.tarifa,
-    reservado_en: ahora, vence, vendedor: alVendedor(), movs: [] });
-  g.ventas.push(v); g.nro += 1;
-  alGuardar(g);
-  toast(`Asiento ${v.asiento} reservado para ${v.nombre} hasta el ${alDM(vence.slice(0, 10))} ${vence.slice(11)}`, "success");
+  if (vence <= alAhoraISO()) { al.aviso = "Falta menos de una hora para la salida: ya no se reserva, se vende."; alRepintarPanel(); return; }
+  al.enviando = true;
+  let r;
+  try { r = await alPost("/api/alpha/ventas", { accion: "reservar", viaje, pasajero: alPasajero(), total: alPrecio(al.sel), tarifa: al.tarifa, vence, sube_idx: s, baja_idx: b }); }
+  finally { al.enviando = false; }
+  if (r) toast(`Asiento ${r.venta.asiento} reservado para ${r.venta.nombre} hasta el ${alDM(vence.slice(0, 10))} ${vence.slice(11)}`, "success");
   alLimpiarVenta();
+  await alTraerOcup(null, true);
   alPintar(false);
 }
 function alReservaCobrar(nro) {
-  const v = alGuardado().ventas.find(x => x.nro === nro);
+  const v = alOcupDe(alISO(alFechaDe(al.dia))).find(x => x.nro === nro);
   if (!v) return;
   al.cobrarReserva = nro; al.tarifa = v.tarifa || "general";
   const cam = alCamino(alServ());
-  al.sube = alIdxDe(cam, v.sube, 0); al.baja = alIdxDe(cam, v.baja, cam.length - 1);
+  al.sube = v.subeIdx ?? alIdxDe(cam, v.sube, 0); al.baja = Math.min(v.bajaIdx ?? alIdxDe(cam, v.baja, cam.length - 1), cam.length - 1);
   al.sel = v.asiento;
   al.p = Object.assign(AL_PVACIO(), v.mig || {}, { doc: v.doc, nombre: v.mig ? "" : v.nombre, tipoDoc: v.tipoDocId || "CI" });
   alPintar(false);
 }
-function alReservaLiberar(nro) {
-  const g = alGuardado(), v = g.ventas.find(x => x.nro === nro);
-  if (!v || !confirm(`¿Liberar el asiento ${v.asiento} reservado para ${v.nombre}?`)) return;
-  v.estado = "liberada"; v.liberada_en = alAhoraISO(); v.liberada_por = alVendedor();
-  alGuardar(g);
+async function alReservaLiberar(nro, nombre, asiento) {
+  if (!confirm(`¿Liberar el asiento${asiento ? " " + asiento : ""} reservado${nombre ? " para " + nombre : ""}?`)) return;
+  const r = await alPost(`/api/alpha/ventas/${nro}/liberar`);
+  if (!r) return;
   toast("Reserva liberada", "success");
   al.sel = null;
+  await alTraerOcup(null, true);
   alRender(false);
 }
 function alCambioCancelar() { alLimpiarVenta(); alPintar(false); }
@@ -1014,13 +1075,15 @@ function alImprimir(html, ancho = "80mm") {
 // ════════════════════════════════════════════════════════════════════════════
 const AL_ESTADOS = { vendido: "Vendido", reserva: "Reserva", anulado: "Anulado", devuelto: "Devuelto", liberada: "Liberada", vencida: "Vencida" };
 function alEstado(v) { return v.estado === "reserva" && !alReservaViva(v) ? "vencida" : v.estado; }
-function alVistaPasajes(animar) {
-  const g = alGuardado(), q = alNorm(al.pas.q), est = al.pas.estado;
-  const palabras = q.split(/\s+/).filter(Boolean);
-  const todas = g.ventas.filter(v => window.USUARIO_ROL !== "agencia" || v.vendedor === alVendedor()).sort((a, b) => b.nro - a.nro);
-  const cuenta = {}; todas.forEach(v => { const e = alEstado(v); cuenta[e] = (cuenta[e] || 0) + 1; });
-  const lista = todas.filter(v => (!est || alEstado(v) === est) && (!palabras.length || palabras.every(w =>
-    alNorm([alNro(v.nro), v.nro, v.nombre, v.doc, String(v.doc).replace(/\D/g, ""), v.origen, v.destino, v.tramo, v.coche, v.fecha, alDM(v.fecha), v.sale].join(" ")).includes(w))));
+async function alVistaPasajes(animar, sinTraer) {
+  if (!sinTraer) {
+    if (!document.getElementById("al-pas-lista")) content.innerHTML = alShell(`<div class="al-vacio"><i class="ti ti-loader-2"></i><b>Trayendo los pasajes…</b></div>`, animar);
+    const r = await api(`/api/alpha/ventas?q=${encodeURIComponent(al.pas.q)}&estado=${al.pas.estado}&limite=200`);
+    if (al.vista !== "pasajes") return;
+    al.pasLista = (r && r.ventas) || []; al.pasCuenta = (r && r.cuenta) || {}; al.pasTotal = (r && r.total) || 0;
+  }
+  const est = al.pas.estado, lista = al.pasLista, cuenta = al.pasCuenta || {};
+  const todas = Object.values(cuenta).reduce((a, n) => a + n, 0);
   const ahora = alAhoraISO(), hoy = ahora.slice(0, 10);
   const fila = v => {
     const e = alEstado(v), futuro = alSalidaISO(v) > ahora;
@@ -1032,7 +1095,7 @@ function alVistaPasajes(animar) {
       if ((v.vendido_en || "").slice(0, 10) === hoy && futuro) acc.push(`<button type="button" class="al-ic rojo" title="Anular (solo el mismo día)" aria-label="Anular" onclick="alAnular(${v.nro})"><i class="ti ti-ban"></i></button>`);
     } else if (e === "reserva") {
       acc.push(`<button type="button" class="al-ic" title="Ir a cobrarla" aria-label="Cobrar la reserva" onclick="alIrAReserva(${v.nro})"><i class="ti ti-cash"></i></button>`);
-      acc.push(`<button type="button" class="al-ic rojo" title="Liberar el asiento" aria-label="Liberar" onclick="alReservaLiberar(${v.nro})"><i class="ti ti-lock-open"></i></button>`);
+      acc.push(`<button type="button" class="al-ic rojo" title="Liberar el asiento" aria-label="Liberar" onclick="alReservaLiberar(${v.nro}, '${trEsc(v.nombre).replace(/'/g, "\\'")}', '${v.asiento}')"><i class="ti ti-lock-open"></i></button>`);
     }
     return `<tr class="${e}">
       <td class="al-t-n"><b>${alNro(v.nro)}</b>${v.cambios && v.cambios.length ? `<small title="Cambiado">cambiado</small>` : ""}</td>
@@ -1041,44 +1104,45 @@ function alVistaPasajes(animar) {
       <td class="al-t-c">${v.asiento === "P" ? "P" : v.asiento}</td>
       <td><b>${trEsc(v.nombre)}</b><small>${v.mig ? trEsc(v.tipoDoc) : "CI"} ${trEsc(v.doc)}</small></td>
       <td class="al-t-m">${fmtNum(v.total)}${v.devuelto != null ? `<small>devuelto ${fmtNum(v.devuelto)}</small>` : ""}</td>
-      <td><span class="al-est ${e}">${AL_ESTADOS[e] || e}</span>${e === "reserva" ? `<small>vence ${alDM(v.vence.slice(0, 10))} ${v.vence.slice(11)}</small>` : ""}</td>
+      <td><span class="al-est ${e}">${AL_ESTADOS[e] || e}</span>${e === "reserva" ? `<small>vence ${alDM(v.vence.slice(0, 10))} ${v.vence.slice(11, 16)}</small>` : ""}${!alEsAgencia() ? `<small>${trEsc(v.vendedor || "")}</small>` : ""}</td>
       <td class="al-t-a">${acc.join("")}</td></tr>`;
   };
+  const q = document.getElementById("al-pas-q"), foco = document.activeElement === q, pos = q ? q.selectionStart : 0;
   content.innerHTML = alShell(`
     <div class="al-vista">
-      <div class="al-v-cab"><h1 class="al-d">Pasajes</h1><span>Buscá un boleto o una reserva para reimprimir, cambiar, devolver o anular.</span></div>
+      <div class="al-v-cab"><h1 class="al-d">Pasajes</h1><span>Buscá un boleto o una reserva para reimprimir, cambiar, devolver o anular.${alEsAgencia() ? " Ves los de tu agencia." : ""}</span></div>
       <div class="al-busca al-busca-pas"><i class="ti ti-search" aria-hidden="true"></i>
-        <input id="al-pas-q" type="search" autocomplete="off" value="${trEsc(al.pas.q)}" placeholder="Número de boleto, documento, nombre, destino o fecha" oninput="al.pas.q=this.value;alPasRefrescar()" aria-label="Buscar pasajes"></div>
+        <input id="al-pas-q" type="search" autocomplete="off" value="${trEsc(al.pas.q)}" placeholder="Número de boleto, documento, nombre, destino o fecha" oninput="alPasBuscar(this.value)" aria-label="Buscar pasajes"></div>
       <div class="al-chips al-pas-est" role="group" aria-label="Estado">
-        <button type="button" class="al-chip ${!est ? "on" : ""}" onclick="al.pas.estado='';alPasRefrescar()">Todos <small>${todas.length}</small></button>
-        ${["vendido", "reserva", "vencida", "devuelto", "anulado", "liberada"].filter(k => cuenta[k]).map(k => `<button type="button" class="al-chip ${est === k ? "on" : ""}" onclick="al.pas.estado='${k}';alPasRefrescar()">${AL_ESTADOS[k]}s <small>${cuenta[k]}</small></button>`).join("")}
+        <button type="button" class="al-chip ${!est ? "on" : ""}" onclick="al.pas.estado='';alVistaPasajes(false)">Todos <small>${todas}</small></button>
+        ${["vendido", "reserva", "vencida", "devuelto", "anulado", "liberada"].filter(k => cuenta[k]).map(k => `<button type="button" class="al-chip ${est === k ? "on" : ""}" onclick="al.pas.estado='${k}';alVistaPasajes(false)">${AL_ESTADOS[k]}s <small>${cuenta[k]}</small></button>`).join("")}
       </div>
       <div id="al-pas-lista">${lista.length ? `<div class="al-tabla-w"><table class="al-tabla">
         <thead><tr><th>Boleto</th><th>Viaje</th><th>Tramo</th><th class="al-t-c">Asiento</th><th>Pasajero</th><th class="al-t-m">Gs.</th><th>Estado</th><th></th></tr></thead>
-        <tbody>${lista.slice(0, 200).map(fila).join("")}</tbody></table></div>`
-        : `<div class="al-vacio"><i class="ti ti-receipt-off"></i><b>${todas.length ? "No hay pasajes con esa búsqueda" : "Todavía no hay pasajes vendidos"}</b><span>Las ventas de prueba quedan en este navegador.</span></div>`}</div>
-      ${todas.length ? `<p class="al-nota"><button type="button" class="al-link" onclick="alBorrar()">Borrar todas las ventas de prueba</button></p>` : ""}
+        <tbody>${lista.map(fila).join("")}</tbody></table></div>${al.pasTotal > lista.length ? `<p class="al-nota">Se muestran los ${lista.length} más recientes de ${al.pasTotal}: buscá para encontrar los demás.</p>` : ""}`
+        : `<div class="al-vacio"><i class="ti ti-receipt-off"></i><b>${todas ? "No hay pasajes con esa búsqueda" : "Todavía no hay pasajes vendidos"}</b></div>`}</div>
+      ${window.USUARIO_ROL === "admin" && todas ? `<p class="al-nota"><button type="button" class="al-link" onclick="alBorrar()">Borrar todas las ventas de prueba (de todas las agencias)</button></p>` : ""}
     </div>`, animar);
-}
-function alPasRefrescar() {
-  const q = document.getElementById("al-pas-q"), pos = q ? q.selectionStart : 0, foco = document.activeElement === q;
-  alVistaPasajes(false);
   if (foco) { const n = document.getElementById("al-pas-q"); n.focus(); n.setSelectionRange(pos, pos); }
 }
+let _alPasTimer = null;
+function alPasBuscar(v) { al.pas.q = v; clearTimeout(_alPasTimer); _alPasTimer = setTimeout(() => alVistaPasajes(false), 300); }
+function alPasRefrescar() { alVistaPasajes(false); }
 function alReimprimir(nro) {
-  const v = alGuardado().ventas.find(x => x.nro === nro);
+  const v = al.pasLista.find(x => x.nro === nro);
   if (v) { alImprimir(alBoletoHTML(Object.assign({}, v, { _reimpresion: true }))); toast(`Reimprimiendo el boleto ${alNro(nro)}`, "success"); }
 }
-function alAnular(nro) {
-  const g = alGuardado(), v = g.ventas.find(x => x.nro === nro);
+async function alAnular(nro) {
+  const v = al.pasLista.find(x => x.nro === nro);
   if (!v || !confirm(`¿Anular el boleto ${alNro(nro)} de ${v.nombre}?\n\nSe devuelve todo (${alGs(v.total)}) y el asiento queda libre. Se usa para errores del mismo día.`)) return;
-  const ahora = alAhoraISO();
-  v.estado = "anulado"; v.anulado_en = ahora; v.anulado_por = alVendedor();
-  v.movs.push({ t: "anulacion", el: ahora, monto: -v.total, pago: v.pago, vendedor: alVendedor() });
-  alGuardar(g); toast(`Boleto ${alNro(nro)} anulado`, "success"); alRender(false);
+  const r = await alPost(`/api/alpha/ventas/${nro}/anular`);
+  if (!r) return;
+  toast(`Boleto ${alNro(nro)} anulado`, "success");
+  al.ocup = {};
+  alVistaPasajes(false);
 }
 function alDevolver(nro) {
-  const v = alGuardado().ventas.find(x => x.nro === nro);
+  const v = al.pasLista.find(x => x.nro === nro);
   if (!v) return;
   const sug = Math.round(v.total * (1 - AL_RETENCION) / 1000) * 1000;
   alModal({ titulo: `Devolver el boleto ${alNro(nro)}`, ancho: 480, cuerpo: `
@@ -1087,55 +1151,55 @@ function alDevolver(nro) {
     <p class="al-hint">Sugerido: el total menos ${Math.round(AL_RETENCION * 100)} % de retención (de ejemplo, hasta que se defina la regla).</p>`,
     pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cancelar</button><button type="button" class="al-btn-r" onclick="alDevolverOk(${nro})"><i class="ti ti-receipt-refund"></i> Devolver</button>` });
 }
-function alDevolverOk(nro) {
+async function alDevolverOk(nro) {
   const m = +String(document.getElementById("al-dev-m")?.value || "").replace(/\D/g, "");
-  const g = alGuardado(), v = g.ventas.find(x => x.nro === nro);
-  if (!v) return;
-  if (!(m >= 0) || m > v.total) { toast("Lo que se devuelve no puede ser más de lo que pagó", "error"); return; }
-  const ahora = alAhoraISO();
-  v.estado = "devuelto"; v.devuelto = m; v.devuelto_en = ahora; v.devuelto_por = alVendedor();
-  v.movs.push({ t: "devolucion", el: ahora, monto: -m, pago: "efectivo", vendedor: alVendedor() });
-  alGuardar(g); alModalCerrar(); toast(`Boleto ${alNro(nro)} devuelto: ${alGs(m)}`, "success"); alRender(false);
+  const r = await alPost(`/api/alpha/ventas/${nro}/devolver`, { monto: m });
+  if (!r) return;
+  alModalCerrar(); toast(`Boleto ${alNro(nro)} devuelto: ${alGs(m)}`, "success");
+  al.ocup = {};
+  alVistaPasajes(false);
 }
 async function alIrAViaje(v) {
   const i = Math.round((alDeISO(v.fecha) - alFechaDe(0)) / 864e5);
   if (i < 0) { toast("Ese viaje ya pasó", "error"); return false; }
   al.dia = i; al.vista = "vender";
-  if (!al.datos[v.fecha]) { al.cargando = true; alRender(false); await alTraer(); }
+  const f = alISO(alFechaDe(i));
+  al.cargando = true; alRender(false);
+  try { await Promise.all([alTraer(), alTraerOcup(f, true)]); } finally { al.cargando = false; }
   al.cor = v.cor; al.lado = v.lado;
   const lista = alServicios().lista, k = lista.findIndex(x => x.clave === v.servicio);
   if (k < 0) { toast("Ese servicio ya no está en el tráfico de ese día: elegí otro", "error"); al.dep = 0; return true; }
   al.dep = k;
   const cam = alCamino(lista[k]);
-  al.sube = alIdxDe(cam, v.sube, 0); al.baja = alIdxDe(cam, v.baja, cam.length - 1);
+  al.sube = v.subeIdx ?? alIdxDe(cam, v.sube, 0); al.baja = Math.min(v.bajaIdx ?? alIdxDe(cam, v.baja, cam.length - 1), cam.length - 1);
   return true;
 }
 async function alCambiar(nro) {
-  const v = alGuardado().ventas.find(x => x.nro === nro);
+  const v = al.pasLista.find(x => x.nro === nro);
   if (!v) return;
   alLimpiarVenta();
-  al.cambio = nro; al.tarifa = v.tarifa || "general";
+  al.cambio = nro; al.cambioV = v; al.tarifa = v.tarifa || "general";
   al.p = Object.assign(AL_PVACIO(), v.mig || {}, { doc: v.doc, nombre: v.mig ? "" : v.nombre, tipoDoc: v.tipoDocId || "CI" });
   await alIrAViaje(v);
   al.sel = null;
   alRender(true);
 }
 async function alIrAReserva(nro) {
-  const v = alGuardado().ventas.find(x => x.nro === nro);
+  const v = al.pasLista.find(x => x.nro === nro);
   if (!v) return;
   alLimpiarVenta();
   if (!(await alIrAViaje(v))) return;
   alRender(true);
   alReservaCobrar(nro);
 }
-function alBorrar() {
-  if (!confirm("¿Borrar todas las ventas, reservas y cierres de caja de prueba guardados en esta computadora?")) return;
-  try { localStorage.removeItem("alpha_maqueta_v3"); } catch (e) {}
-  alLimpiarVenta();
-  alRender(false);
+async function alBorrar() {
+  if (!confirm("¿Borrar TODAS las ventas, reservas, cierres de caja y liquidaciones de prueba de Alpha, de todas las agencias?\n\nNo se puede deshacer.")) return;
+  const r = await api("/api/alpha/ventas", { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  alLimpiarVenta(); al.ocup = {}; al.miCaja = 0; al.reservas = 0;
   toast("Ventas de prueba borradas", "success");
+  alRender(false);
 }
-
 // ════════════════════════════════════════════════════════════════════════════
 // MANIFIESTO: los pasajeros de un servicio
 // ════════════════════════════════════════════════════════════════════════════
@@ -1143,18 +1207,25 @@ function alManServicios() {
   return alTodasSalidas().map(({ c, l, k }) => alServiciosDe(c, l)[k]);
 }
 function alManifiestoDatos(sv, fecha) {
-  const pas = alGuardado().ventas.filter(v => v.fecha === fecha && v.servicio === sv.clave && (v.estado === "vendido" || alReservaViva(v)));
+  const pas = (al.manPas || []).filter(v => v.fecha === fecha && v.servicio === sv.clave && (v.estado === "vendido" || alReservaViva(v)));
   const cam = alCamino(sv);
-  pas.sort((a, b) => (a.asiento === "P") - (b.asiento === "P") || (+a.asiento || 0) - (+b.asiento || 0) || alIdxDe(cam, a.sube, 0) - alIdxDe(cam, b.sube, 0));
+  pas.sort((a, b) => (a.asiento === "P") - (b.asiento === "P") || (+a.asiento || 0) - (+b.asiento || 0) || (a.subeIdx ?? alIdxDe(cam, a.sube, 0)) - (b.subeIdx ?? alIdxDe(cam, b.sube, 0)));
   return pas;
 }
 async function alVistaManifiesto(animar) {
   if (!al.cfg) await alCfgTraer();
-  if (!alHoyDatos()) { al.cargando = true; alShellCargando(animar); await alTraer(); }
+  if (!alHoyDatos()) { alShellCargando(animar); await alTraer(); if (al.vista !== "manifiesto") return; }
   const fecha = alISO(alFechaDe(al.dia)), svs = alManServicios();
   const actual = alServ();
   if (!svs.some(s => s.clave === al.man.clave)) al.man.clave = (actual && svs.some(s => s.clave === actual.clave)) ? actual.clave : (svs[0]?.clave || "");
   const sv = svs.find(s => s.clave === al.man.clave);
+  const clave = `${fecha}|${al.man.clave}`;
+  if (sv && al.manClave !== clave) {
+    if (!document.querySelector(".al-man-res")) alShellCargando(animar);
+    const r = await api(`/api/alpha/ventas?fecha=${fecha}&servicio=${encodeURIComponent(sv.clave)}&limite=1000`);
+    if (al.vista !== "manifiesto") return;
+    al.manPas = (r && r.ventas) || []; al.manClave = clave;
+  }
   let cuerpo;
   if (!sv) cuerpo = `<div class="al-vacio"><i class="ti ti-calendar-off"></i><b>No hay servicios este día</b></div>`;
   else {
@@ -1176,15 +1247,15 @@ async function alVistaManifiesto(animar) {
           <td class="al-t-c"><b>${v.asiento}</b></td><td><b>${trEsc(v.nombre)}</b></td><td>${v.mig ? trEsc(v.tipoDoc) : "CI"} ${trEsc(v.doc)}</td>
           <td>${trEsc(v.sube)}</td><td>${trEsc(v.baja)}</td>
           ${sv.intl ? `<td>${trEsc(v.mig?.nacionalidad || "")}</td><td>${v.mig?.nac ? alDM(v.mig.nac) + "/" + v.mig.nac.slice(0, 4) : ""}</td><td>${trEsc(v.mig?.sexo || "")}</td>` : ""}
-          <td>${alNro(v.nro)}</td><td><span class="al-est ${v.estado}">${AL_ESTADOS[v.estado]}</span></td></tr>`).join("")}</tbody></table></div>`
-        : `<div class="al-vacio"><i class="ti ti-users"></i><b>Todavía no hay pasajeros en este servicio</b><span>Las ventas de prueba quedan en este navegador.</span></div>`}`;
+          <td>${alNro(v.nro)}<small>${trEsc(v.vendedor || "")}</small></td><td><span class="al-est ${v.estado}">${AL_ESTADOS[v.estado]}</span></td></tr>`).join("")}</tbody></table></div>`
+        : `<div class="al-vacio"><i class="ti ti-users"></i><b>Todavía no hay pasajeros en este servicio</b></div>`}`;
   }
   content.innerHTML = alShell(`
     <div class="al-vista">
       <div class="al-v-cab"><h1 class="al-d">Manifiesto</h1><span>La lista de pasajeros de cada servicio, para el guarda y para migraciones.</span></div>
       <div class="al-filtros"><div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div></div>
       <div class="al-man-sel">
-        <label class="al-campo"><span>Servicio</span><select onchange="al.man.clave=this.value;alVistaManifiesto(false)">${svs.map(s => `<option value="${trEsc(s.clave)}" ${s.clave === al.man.clave ? "selected" : ""}>${s.hora} · ${trEsc(s.origen_nombre)} → ${trEsc(s.llega_nombre)} · ${trEsc(s.cod)}${s.coche ? " · coche " + trEsc(s.coche) : ""}</option>`).join("")}</select></label>
+        <label class="al-campo"><span>Servicio</span><select onchange="al.man.clave=this.value;al.manClave='';alVistaManifiesto(false)">${svs.map(s => `<option value="${trEsc(s.clave)}" ${s.clave === al.man.clave ? "selected" : ""}>${s.hora} · ${trEsc(s.origen_nombre)} → ${trEsc(s.llega_nombre)} · ${trEsc(s.cod)}${s.coche ? " · coche " + trEsc(s.coche) : ""}</option>`).join("")}</select></label>
         ${sv ? `<button type="button" class="al-btn-r" onclick="alManImprimir()"><i class="ti ti-printer"></i> Imprimir${sv.intl ? " (para migraciones)" : ""}</button>` : ""}
       </div>
       ${sv ? `<p class="al-nota">${alDiaTxt(alFechaDe(al.dia))} · ${sv.coche ? "Coche " + trEsc(sv.coche) + (sv.modelo ? ", " + trEsc(sv.modelo) : "") : "Coche a confirmar"}${sv.tripulacion.length ? " · Tripulación: " + sv.tripulacion.map(trEsc).join(" y ") : ""}</p>` : ""}
@@ -1223,30 +1294,23 @@ table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:4p
 // CAJA: lo que entró y salió por vendedor, y el cierre
 // ════════════════════════════════════════════════════════════════════════════
 const AL_MOV_TXT = { venta: "Venta", cobro: "Cobro de reserva", cambio: "Diferencia por cambio", devolucion: "Devolución", anulacion: "Anulación" };
-function alMovs(g) {
-  const out = [];
-  (g || alGuardado()).ventas.forEach(v => (v.movs || []).forEach(m => out.push(Object.assign({ nro: v.nro, nombre: v.nombre, destino: v.destino, origen: v.origen }, m))));
-  return out.sort((a, b) => a.el.localeCompare(b.el));
-}
-function alVistaCaja(animar) {
-  const g = alGuardado(), fecha = al.caja.fecha || alISO(new Date());
-  const movsDia = alMovs(g).filter(m => m.el.slice(0, 10) === fecha);
-  const vendedores = alEsAgencia() ? [alVendedor()] : [...new Set(movsDia.map(m => m.vendedor).concat([alVendedor()]))].sort();
-  if (!al.caja.vendedor || !vendedores.includes(al.caja.vendedor)) al.caja.vendedor = alVendedor();
-  const vend = al.caja.vendedor;
-  const cierres = g.cierres.filter(c => c.fecha === fecha && c.vendedor === vend).sort((a, b) => a.hasta.localeCompare(b.hasta));
-  const ultimo = cierres.length ? cierres[cierres.length - 1].hasta : "";
-  const movs = movsDia.filter(m => m.vendedor === vend);
-  const abiertos = movs.filter(m => m.el > ultimo);
+async function alVistaCaja(animar) {
+  const fecha = al.caja.fecha || alISO(new Date());
+  if (!document.querySelector(".al-caja-v")) alShellCargando(animar);
+  const d = await api(`/api/alpha/caja?fecha=${fecha}&usuario=${encodeURIComponent(al.caja.usuario || "")}`);
+  if (al.vista !== "caja" || !d || !d.movs) return;
+  al.caja.usuario = d.usuario; al.cajaDatos = d;
+  const cierres = d.cierres, ultimo = cierres.length ? cierres[cierres.length - 1].hasta : "";
+  const movs = d.movs, abiertos = movs.filter(m => m.el > ultimo);
   const tot = alTotales(abiertos);
   const fila = m => `<tr class="${m.el <= ultimo ? "cerrado" : ""}"><td>${m.el.slice(11, 16)}</td><td>${AL_MOV_TXT[m.t] || m.t}</td><td>${alNro(m.nro)}</td><td>${trEsc(m.nombre)}<small>${trEsc(m.origen)} → ${trEsc(m.destino)}</small></td>
     <td>${(AL_PAGOS.find(p => p[0] === m.pago) || ["", m.pago || ""])[1]}</td><td class="al-t-m ${m.monto < 0 ? "neg" : ""}">${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</td></tr>`;
   content.innerHTML = alShell(`
-    <div class="al-vista">
+    <div class="al-vista al-caja-v">
       <div class="al-v-cab"><h1 class="al-d">Caja</h1><span>Lo que cobró y devolvió cada vendedor, y el cierre del turno.</span></div>
       <div class="al-man-sel">
         <label class="al-campo"><span>Día</span><input type="date" value="${fecha}" max="${alISO(new Date())}" onchange="al.caja.fecha=this.value;alVistaCaja(false)"></label>
-        <label class="al-campo"><span>Vendedor</span><select onchange="al.caja.vendedor=this.value;alVistaCaja(false)">${vendedores.map(x => `<option ${x === vend ? "selected" : ""}>${trEsc(x)}</option>`).join("")}</select></label>
+        <label class="al-campo"><span>Vendedor</span><select onchange="al.caja.usuario=this.value;alVistaCaja(false)">${d.vendedores.map(x => `<option value="${trEsc(x.usuario)}" ${x.usuario === d.usuario ? "selected" : ""}>${trEsc(x.vendedor)}</option>`).join("")}</select></label>
         ${abiertos.length ? `<button type="button" class="al-btn-r" onclick="alCerrarCaja()"><i class="ti ti-lock"></i> Cerrar la caja</button>` : ""}
       </div>
       <div class="al-man-res">
@@ -1260,7 +1324,7 @@ function alVistaCaja(animar) {
         <thead><tr><th>Hora</th><th>Movimiento</th><th>Boleto</th><th>Pasajero</th><th>Forma de pago</th><th class="al-t-m">Gs.</th></tr></thead>
         <tbody>${movs.slice().reverse().map(fila).join("")}</tbody></table></div>`
         : `<div class="al-vacio"><i class="ti ti-cash-off"></i><b>Sin movimientos ese día</b></div>`}
-      ${cierres.length ? `<h2 class="al-d al-h2">Cierres del día</h2><div class="al-cierres">${cierres.map((c, i) => `<div class="al-cierre"><b>Cierre ${i + 1}</b><span>a las ${c.hasta.slice(11, 16)} · ${c.tot.boletos} boletos · efectivo ${alGs(c.tot.efectivoNeto)}</span><button type="button" class="al-link" onclick="alCierreImprimir('${c.id}')">Reimprimir</button></div>`).join("")}</div>` : ""}
+      ${cierres.length ? `<h2 class="al-d al-h2">Cierres del día</h2><div class="al-cierres">${cierres.map((c, i) => `<div class="al-cierre"><b>Cierre ${i + 1}</b><span>a las ${c.hasta.slice(11, 16)} · ${c.tot.boletos} boletos · efectivo ${alGs(c.tot.efectivoNeto)}</span><button type="button" class="al-link" onclick="alCierreImprimir(${c.id})">Reimprimir</button></div>`).join("")}</div>` : ""}
     </div>`, animar);
 }
 function alTotales(movs) {
@@ -1273,25 +1337,20 @@ function alTotales(movs) {
   });
   return t;
 }
-function alCerrarCaja() {
-  const g = alGuardado(), fecha = al.caja.fecha || alISO(new Date()), vend = al.caja.vendedor;
-  const prev = g.cierres.filter(c => c.fecha === fecha && c.vendedor === vend).map(c => c.hasta).sort().pop() || "";
-  const ahora = alAhoraISO();
-  const hasta = fecha === ahora.slice(0, 10) ? ahora : `${fecha}T23:59`;
-  const movs = alMovs(g).filter(m => m.el.slice(0, 10) === fecha && m.vendedor === vend && m.el > prev && m.el <= hasta);
-  if (!movs.length) { toast("No hay nada para cerrar", "error"); return; }
-  const tot = alTotales(movs);
-  if (!confirm(`¿Cerrar la caja de ${vend}?\n\n${tot.boletos} boletos · efectivo en caja ${alGs(tot.efectivoNeto)}`)) return;
-  const c = { id: "c" + Date.now(), fecha, vendedor: vend, desde: prev, hasta, tot, movs: movs.length, el: ahora };
-  g.cierres.push(c); alGuardar(g);
-  alCierreImprimir(c.id);
+async function alCerrarCaja() {
+  const d = al.cajaDatos; if (!d) return;
+  const vend = (d.vendedores.find(x => x.usuario === d.usuario) || {}).vendedor || d.usuario;
+  if (!confirm(`¿Cerrar la caja de ${vend}?`)) return;
+  const r = await alPost("/api/alpha/caja/cerrar", { fecha: d.fecha, usuario: d.usuario });
+  if (!r) return;
   toast("Caja cerrada", "success");
-  alVistaCaja(false);
+  await alVistaCaja(false);
+  alCierreImprimir(r.cierre.id);
 }
 function alCierreImprimir(id) {
-  const g = alGuardado(), c = g.cierres.find(x => x.id === id);
+  const d = al.cajaDatos, c = d && d.cierres.find(x => x.id === id);
   if (!c) return;
-  const movs = alMovs(g).filter(m => m.el.slice(0, 10) === c.fecha && m.vendedor === c.vendedor && m.el > c.desde && m.el <= c.hasta);
+  const movs = d.movs.filter(m => m.el > c.desde && m.el <= c.hasta);
   const t = c.tot, fl = (a, b, f) => `<div class="r ${f || ""}"><span>${a}</span><b>${b}</b></div>`;
   const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Cierre de caja</title>
 <style>@page{size:80mm auto;margin:0}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#000}
@@ -1306,6 +1365,153 @@ ${fl("Efectivo en caja", fmtNum(t.efectivoNeto), "f")}
 <div class="m">${movs.map(m => `<div><span>${m.el.slice(11, 16)} ${AL_MOV_TXT[m.t] || m.t} ${alNro(m.nro)}</span><span>${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</span></div>`).join("")}</div>
 <div class="fi">Firma del vendedor</div><div class="fi">Recibió</div><div class="maq">Maqueta de Alpha: sin valor fiscal</div></article></body></html>`;
   alImprimir(html);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// LIQUIDACIONES DE LAS AGENCIAS (solo administración)
+// Lo que vendió cada agencia hasta un corte: efectivo, tarjeta, transferencia,
+// devoluciones, la comisión de su contrato y lo que tiene que depositar.
+// ════════════════════════════════════════════════════════════════════════════
+const AL_LIQ_COLS = [["venta_ef", "Venta EF"], ["venta_tc", "Venta TC"], ["venta_tr", "Transf."], ["devoluciones", "Devol."], ["comision", "Comisión"], ["saldo", "Saldo"], ["saldo_neto", "Saldo neto"]];
+async function alVistaLiquidaciones(animar) {
+  if (window.USUARIO_ROL !== "admin") { al.vista = "vender"; return alRender(animar); }
+  if (!document.querySelector(".al-liq")) alShellCargando(animar);
+  const d = await api("/api/alpha/liquidaciones");
+  if (al.vista !== "liquidaciones" || !d || !d.liquidaciones) return;
+  al.liqDatos = d;
+  if (!al.liq.hasta) al.liq.hasta = (d.ahora || alAhoraISO()).slice(0, 16);
+  const pend = d.agencias.filter(a => a.pendiente_movs);
+  const filtro = al.liq.filtro || "";
+  const liqs = d.liquidaciones.filter(l => !filtro || String(l.agencia_id) === filtro);
+  const fila = l => `<tr class="${l.estado}">
+      <td class="al-t-n"><b>${l.id}</b></td><td><b>${trEsc(l.agencia)}</b><small>${l.desde ? alDM(l.desde.slice(0, 10)) + " " + l.desde.slice(11, 16) + " → " : ""}${alDM(l.hasta.slice(0, 10))} ${l.hasta.slice(11, 16)}</small></td>
+      ${AL_LIQ_COLS.map(([k]) => `<td class="al-t-m ${k === "saldo_neto" ? "fuerte" : ""}">${fmtNum(l[k])}</td>`).join("")}
+      <td class="al-t-c">${l.boletos}</td>
+      <td><span class="al-est ${l.estado === "depositada" ? "vendido" : "reserva"}">${l.estado === "depositada" ? "Depositada" : "Pendiente"}</span>${l.estado === "depositada" ? `<small>${alDM(l.depositada_el.slice(0, 10))}${l.referencia ? " · " + trEsc(l.referencia) : ""}</small>` : ""}</td>
+      <td class="al-t-a">
+        <button type="button" class="al-ic" title="Ver el detalle" aria-label="Detalle" onclick="alLiqDetalle(${l.id})"><i class="ti ti-list-details"></i></button>
+        <button type="button" class="al-ic" title="Imprimir" aria-label="Imprimir" onclick="alLiqImprimir(${l.id})"><i class="ti ti-printer"></i></button>
+        ${l.estado !== "depositada" ? `<button type="button" class="al-ic" title="Marcar como depositada" aria-label="Depositada" onclick="alLiqDepositada(${l.id})"><i class="ti ti-building-bank"></i></button>` : ""}
+        ${l.estado !== "depositada" && l.ultima ? `<button type="button" class="al-ic rojo" title="Deshacer (vuelve a quedar pendiente)" aria-label="Deshacer" onclick="alLiqDeshacer(${l.id})"><i class="ti ti-arrow-back-up"></i></button>` : ""}
+      </td></tr>`;
+  const tot = k => liqs.reduce((a, l) => a + (l[k] || 0), 0);
+  content.innerHTML = alShell(`
+    <div class="al-vista al-liq">
+      <div class="al-v-cab"><h1 class="al-d">Liquidaciones</h1><span>Lo que vendió cada agencia hasta un corte, con la comisión de su contrato y lo que tiene que depositar.</span></div>
+      <section class="al-card">
+        <div class="al-card-cab"><h2 class="al-d">Generar</h2><span>${pend.length ? `${pend.length} agencia${pend.length === 1 ? "" : "s"} con ventas sin liquidar.` : "No hay ventas de agencias sin liquidar."} La comisión sale del contrato que regía el día de cada venta (Comercial → Agencias).</span></div>
+        <div class="al-liq-gen">
+          <label class="al-campo"><span>Agencia</span><select id="al-liq-ag" onchange="al.liq.agencia=this.value">
+            <option value="todas">Todas las que tienen pendiente</option>
+            ${d.agencias.map(a => `<option value="${a.id}" ${String(a.id) === al.liq.agencia ? "selected" : ""}>${trEsc(a.nombre)}${a.pendiente_movs ? ` · ${a.pendiente_movs} mov. · ${alGs(a.pendiente_monto)}` : " · nada pendiente"}</option>`).join("")}
+          </select></label>
+          <label class="al-campo"><span>Corte (hasta)</span><input type="datetime-local" id="al-liq-hasta" value="${al.liq.hasta}" onchange="al.liq.hasta=this.value"></label>
+          <label class="al-check"><input type="checkbox" ${al.liq.soloEf ? "checked" : ""} onchange="al.liq.soloEf=this.checked"> Comisión solo sobre lo cobrado en efectivo</label>
+          <button type="button" class="al-sec" onclick="alLiqPrevia()"><i class="ti ti-eye"></i> Ver lo pendiente</button>
+          <button type="button" class="al-btn-r" onclick="alLiqGenerar()"><i class="ti ti-file-dollar"></i> Generar liquidación</button>
+        </div>
+        ${pend.length ? `<div class="al-liq-pend">${pend.map(a => `<button type="button" class="al-liq-p" onclick="al.liq.agencia='${a.id}';alLiqPrevia()"><b>${trEsc(a.nombre)}</b><span>${a.pendiente_movs} movimiento${a.pendiente_movs === 1 ? "" : "s"} desde el ${alDM(a.pendiente_desde.slice(0, 10))}</span><em>${alGs(a.pendiente_monto)}</em></button>`).join("")}</div>` : ""}
+      </section>
+      <div class="al-man-sel">
+        <label class="al-campo"><span>Ver liquidaciones de</span><select onchange="al.liq.filtro=this.value;alVistaLiquidaciones(false)"><option value="">Todas las agencias</option>${d.agencias.map(a => `<option value="${a.id}" ${String(a.id) === filtro ? "selected" : ""}>${trEsc(a.nombre)}</option>`).join("")}</select></label>
+        ${liqs.length ? `<button type="button" class="al-sec" onclick="alLiqCSV()"><i class="ti ti-file-spreadsheet"></i> CSV</button>` : ""}
+      </div>
+      ${liqs.length ? `<div class="al-tabla-w"><table class="al-tabla al-liq-t">
+        <thead><tr><th>Nro</th><th>Agencia · período</th>${AL_LIQ_COLS.map(([, t]) => `<th class="al-t-m">${t}</th>`).join("")}<th class="al-t-c">Boletos</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${liqs.map(fila).join("")}</tbody>
+        <tfoot><tr><th></th><th>Total</th>${AL_LIQ_COLS.map(([k]) => `<th class="al-t-m">${fmtNum(tot(k))}</th>`).join("")}<th class="al-t-c">${tot("boletos")}</th><th></th><th></th></tr></tfoot></table></div>`
+        : `<div class="al-vacio"><i class="ti ti-report-money"></i><b>Todavía no hay liquidaciones</b><span>Se generan arriba, con el corte que elijas.</span></div>`}
+    </div>`, animar);
+}
+function alLiqTablaMovs(movs) {
+  return `<div class="al-tabla-w"><table class="al-tabla">
+    <thead><tr><th>Fecha</th><th>Boleto</th><th>Pasajero</th><th>Viaje</th><th>Movimiento</th><th>Pago</th><th class="al-t-m">Gs.</th><th class="al-t-m">Comisión</th></tr></thead>
+    <tbody>${movs.map(m => `<tr><td>${alDM(m.el.slice(0, 10))} ${m.el.slice(11, 16)}</td><td>${alNro(m.nro)}</td><td>${trEsc(m.nombre)}<small>${trEsc(m.vendedor)}</small></td>
+      <td>${trEsc(m.origen)} → ${trEsc(m.destino)}<small>${alDM(m.fecha)} ${m.sale}${m.asiento != null ? " · asiento " + m.asiento : ""}</small></td>
+      <td>${AL_MOV_TXT[m.t] || m.t}${m.estado_venta && m.estado_venta !== "vendido" && (m.t === "venta" || m.t === "cobro") ? `<small>(${AL_ESTADOS[m.estado_venta] || m.estado_venta})</small>` : ""}</td>
+      <td>${(AL_PAGOS.find(p => p[0] === m.pago) || ["", m.pago || ""])[1]}</td>
+      <td class="al-t-m ${m.monto < 0 ? "neg" : ""}">${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</td>
+      <td class="al-t-m">${m.comision ? fmtNum(m.comision) : "—"}${m.comision_txt ? `<small>${trEsc(m.comision_txt)}</small>` : ""}</td></tr>`).join("")}</tbody></table></div>`;
+}
+function alLiqResumen(t) {
+  return `<div class="al-man-res">${AL_LIQ_COLS.map(([k, n]) => `<div class="${k === "saldo_neto" ? "fuerte" : ""}"><span>${k === "saldo_neto" ? "Saldo neto (a depositar)" : n}</span><b class="al-d">${alGs(t[k])}</b></div>`).join("")}<div><span>Boletos</span><b class="al-d">${t.boletos}</b></div></div>`;
+}
+async function alLiqPrevia() {
+  const ag = al.liq.agencia && al.liq.agencia !== "todas" ? al.liq.agencia : "";
+  if (!ag) { toast("Elegí una agencia para ver lo pendiente", "error"); return; }
+  const hasta = (document.getElementById("al-liq-hasta")?.value || al.liq.hasta);
+  const t = await api(`/api/alpha/liquidaciones/pendiente?agencia_id=${ag}&hasta=${encodeURIComponent(hasta)}&solo_ef=${al.liq.soloEf ? 1 : 0}`);
+  if (!t || !t.movs) return;
+  const nombre = ((al.liqDatos?.agencias || []).find(a => String(a.id) === ag) || {}).nombre || "";
+  alModal({ titulo: `Pendiente de ${nombre}`, ancho: 1100, cuerpo: t.movs.length
+      ? `<p class="al-m-txt">Hasta el ${alDM(hasta.slice(0, 10))} a las ${hasta.slice(11, 16)}.</p>${alLiqResumen(t)}${alLiqTablaMovs(t.movs)}`
+      : `<p class="al-m-txt">No tiene nada sin liquidar hasta ese corte.</p>`,
+    pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cerrar</button>${t.movs.length ? `<button type="button" class="al-btn-r" onclick="alModalCerrar();alLiqGenerar()"><i class="ti ti-file-dollar"></i> Generar esta liquidación</button>` : ""}` });
+}
+async function alLiqGenerar() {
+  const ag = document.getElementById("al-liq-ag")?.value || al.liq.agencia || "todas";
+  const hasta = document.getElementById("al-liq-hasta")?.value || al.liq.hasta;
+  const nombre = ag === "todas" ? "todas las agencias con ventas pendientes" : ((al.liqDatos?.agencias || []).find(a => String(a.id) === ag) || {}).nombre;
+  if (!confirm(`¿Generar la liquidación de ${nombre} hasta el ${alDM(hasta.slice(0, 10))} a las ${hasta.slice(11, 16)}?`)) return;
+  const r = await alPost("/api/alpha/liquidaciones", { agencia_id: ag, hasta, solo_ef: al.liq.soloEf });
+  if (!r) return;
+  toast(`${r.ids.length} liquidación${r.ids.length === 1 ? "" : "es"} generada${r.ids.length === 1 ? "" : "s"}`, "success");
+  alVistaLiquidaciones(false);
+}
+async function alLiqDetalle(id) {
+  const l = await api(`/api/alpha/liquidaciones/${id}`);
+  if (!l || !l.movs) return;
+  alModal({ titulo: `Liquidación ${l.id} · ${l.agencia}`, ancho: 1100,
+    cuerpo: `<p class="al-m-txt">${l.desde ? `Del ${alDM(l.desde.slice(0, 10))} ${l.desde.slice(11, 16)} ` : ""}al ${alDM(l.hasta.slice(0, 10))} ${l.hasta.slice(11, 16)} · generada el ${alDM(l.el.slice(0, 10))} por ${trEsc(l.por)}${l.solo_ef ? " · comisión solo sobre efectivo" : ""}.</p>${alLiqResumen(l)}${alLiqTablaMovs(l.movs)}`,
+    pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cerrar</button><button type="button" class="al-btn-r" onclick="alLiqImprimir(${l.id})"><i class="ti ti-printer"></i> Imprimir</button>` });
+}
+async function alLiqImprimir(id) {
+  const l = await api(`/api/alpha/liquidaciones/${id}`);
+  if (!l || !l.movs) return;
+  const e = trEsc;
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Liquidación ${l.id}</title>
+<style>@page{size:A4;margin:12mm}*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#000;font-size:11px}
+.cab{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #000;padding-bottom:6px;margin-bottom:8px}h1{font-size:18px;margin:0}
+.res{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0 12px}.res div{border:1px solid #999;padding:6px}.res span{display:block;font-size:9.5px;text-transform:uppercase;color:#444}.res b{font-size:14px}
+.res .f{background:#000;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}.res .f span{color:#ddd}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:3px 5px;text-align:left}th{background:#eee;font-size:9.5px;text-transform:uppercase}.n{text-align:right;white-space:nowrap}
+.firmas{display:flex;gap:40px;margin-top:40px}.firmas div{flex:1;border-top:1px solid #000;padding-top:4px;text-align:center}.maq{margin-top:12px;font-size:9.5px;color:#555;text-align:center}</style></head><body>
+<div class="cab"><div><b>LA SANTANIANA</b><h1>Liquidación ${l.id} · ${e(l.agencia)}</h1></div><span>${l.desde ? "Del " + alDM(l.desde.slice(0, 10)) + "/" + l.desde.slice(0, 4) + " " + l.desde.slice(11, 16) + " " : ""}al ${alDM(l.hasta.slice(0, 10))}/${l.hasta.slice(0, 4)} ${l.hasta.slice(11, 16)}</span></div>
+<div class="res">${AL_LIQ_COLS.map(([k, n]) => `<div class="${k === "saldo_neto" ? "f" : ""}"><span>${k === "saldo_neto" ? "Saldo neto a depositar" : n}</span><b>Gs. ${fmtNum(l[k])}</b></div>`).join("")}<div><span>Boletos</span><b>${l.boletos}</b></div></div>
+<table><thead><tr><th>Fecha</th><th>Boleto</th><th>Pasajero</th><th>Viaje</th><th>Movimiento</th><th>Pago</th><th class="n">Gs.</th><th class="n">Comisión</th></tr></thead><tbody>
+${l.movs.map(m => `<tr><td>${alDM(m.el.slice(0, 10))} ${m.el.slice(11, 16)}</td><td>${alNro(m.nro)}</td><td>${e(m.nombre)}</td><td>${e(m.origen)} → ${e(m.destino)}, ${alDM(m.fecha)} ${m.sale}</td><td>${AL_MOV_TXT[m.t] || m.t}</td><td>${(AL_PAGOS.find(p => p[0] === m.pago) || ["", m.pago || ""])[1]}</td><td class="n">${m.monto < 0 ? "−" : ""}${fmtNum(Math.abs(m.monto))}</td><td class="n">${m.comision ? fmtNum(m.comision) : "—"}</td></tr>`).join("")}
+</tbody></table>
+<div class="firmas"><div>Por la agencia</div><div>Por La Santaniana</div></div>
+<div class="maq">Generada el ${alDM(l.el.slice(0, 10))}/${l.el.slice(0, 4)} por ${e(l.por)}${l.estado === "depositada" ? ` · Depositada el ${alDM(l.depositada_el.slice(0, 10))}${l.referencia ? " (" + e(l.referencia) + ")" : ""}` : ""} · Maqueta de Alpha: sin valor fiscal</div></body></html>`;
+  alImprimir(html, "210mm");
+}
+async function alLiqDepositada(id) {
+  const ref = prompt("¿Con qué se depositó? (número de depósito o transferencia, opcional)", "");
+  if (ref === null) return;
+  const r = await alPost(`/api/alpha/liquidaciones/${id}/depositada`, { referencia: ref });
+  if (!r) return;
+  toast("Liquidación marcada como depositada", "success");
+  alVistaLiquidaciones(false);
+}
+async function alLiqDeshacer(id) {
+  if (!confirm(`¿Deshacer la liquidación ${id}? Sus ventas vuelven a quedar pendientes.`)) return;
+  const r = await api(`/api/alpha/liquidaciones/${id}`, { method: "DELETE" });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  toast("Liquidación deshecha", "success");
+  alVistaLiquidaciones(false);
+}
+function alLiqCSV() {
+  const d = al.liqDatos; if (!d) return;
+  const filtro = al.liq.filtro || "";
+  const liqs = d.liquidaciones.filter(l => !filtro || String(l.agencia_id) === filtro);
+  const q = x => `"${String(x ?? "").replace(/"/g, '""')}"`;
+  const filas = [["Nro", "Agencia", "Desde", "Corte", ...AL_LIQ_COLS.map(c => c[1]), "Boletos", "Estado", "Depositada", "Referencia"]]
+    .concat(liqs.map(l => [l.id, l.agencia, l.desde, l.hasta, ...AL_LIQ_COLS.map(([k]) => Math.round(l[k])), l.boletos, l.estado, l.depositada_el, l.referencia]));
+  const blob = new Blob(["﻿" + filas.map(f => f.map(q).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `liquidaciones-${alISO(new Date())}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1491,7 +1697,7 @@ function alPlanoEditor(d) {
       <div class="al-scroll"><div class="al-coche"><div class="al-grid" style="grid-template-columns:repeat(${nf}, 40px) 58px;grid-template-rows:40px 40px 12px 40px 40px">${celdas}</div><div class="al-parabrisas" aria-hidden="true"></div></div></div>
     </div>`;
   }).join("");
-  const a = alAsientos(d);
+  const a = alAsientos(d, true);
   return `
     <div class="al-pl-cab">
       <label class="al-campo"><span>Código</span><input value="${trEsc(al.pla.nuevo ? al.pla.codNuevo : al.pla.cod)}" ${al.pla.nuevo ? "" : "readonly"} maxlength="12" oninput="al.pla.codNuevo=this.value.toUpperCase().replace(/[^A-Z0-9_-]/g,'');this.value=al.pla.codNuevo"></label>
@@ -1515,7 +1721,7 @@ function alPlanoEditor(d) {
     </div>`;
 }
 function alPlanoElegir(k) { al.pla.cod = k; al.pla.draft = null; alVistaPlanos(false); }
-function alPlanoMax(d) { return Math.max(0, ...alAsientos(d).map(a => a.n)); }
+function alPlanoMax(d) { return Math.max(0, ...alAsientos(d, true).map(a => a.n)); }
 function alPlanoCelda(pi, fi, pos) {
   const f = al.pla.draft.pisos[pi].filas[fi];
   f[pos] = f[pos] != null ? null : alPlanoMax(al.pla.draft) + 1;
@@ -1524,7 +1730,7 @@ function alPlanoCelda(pi, fi, pos) {
 function alPlanoNumero(pi, fi, pos, inp) {
   const n = +inp.value.replace(/\D/g, "");
   if (!n || n > 199) { inp.value = al.pla.draft.pisos[pi].filas[fi][pos]; toast("El número va de 1 a 199", "error"); return; }
-  const otro = alAsientos(al.pla.draft).find(a => a.n === n && !(a.piso === pi && a.fila === fi && a.pos === pos));
+  const otro = alAsientos(al.pla.draft, true).find(a => a.n === n && !(a.piso === pi && a.fila === fi && a.pos === pos));
   if (otro) {
     // Si el número ya lo tiene otro asiento, se intercambian
     al.pla.draft.pisos[otro.piso].filas[otro.fila][otro.pos] = al.pla.draft.pisos[pi].filas[fi][pos];
