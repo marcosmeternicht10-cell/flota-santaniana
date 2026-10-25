@@ -7815,3 +7815,49 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
   .bpc-hora { display: none; }
   .bpc-fila > .badge:last-of-type { grid-area: e; justify-self: end; }
 }
+
+/* Alpha con el tráfico: sentido, coche de cada salida, tripulación y plano */
+.al-lados { display: inline-flex; gap: 0; margin-top: 14px; border: 1.5px solid var(--al-borde); border-radius: 12px; overflow: hidden; }
+.al-lado { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 8px 18px; border: 0; background: transparent; color: var(--al-txt); font-weight: 800; font-size: 15px; }
+.al-lado small { font-size: 12px; font-weight: 500; color: var(--al-txt2); }
+.al-lado + .al-lado { border-left: 1.5px solid var(--al-borde); }
+.al-lado.on { background: var(--al-txt); color: var(--al-fondo); }
+.al-lado.on small { color: #4A5058; }
+.al-tab-c { font-weight: 700; color: var(--al-txt); }
+.al-tab-c.conf { color: #F5C26B; font-weight: 600; }
+.al-tab.on .al-tab-c, .al-tab.on .al-tab-c.conf { color: #FFFFFF; }
+.al-trip { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 13.5px; font-weight: 600; color: var(--al-txt); }
+.al-trip .ti { color: var(--al-txt2); font-size: 17px; }
+.al-plano-sel { display: flex; width: max-content; max-width: 100%; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--al-txt2); }
+.al-plano-sel select { height: 32px; border-radius: 8px; border: 1.5px solid var(--al-borde); background: var(--al-coche); color: var(--al-txt); font: 600 13px 'Atkinson Hyperlegible Next', Verdana, sans-serif; padding: 0 8px; }
+.al-vacio { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 80px 20px; color: var(--al-txt2); text-align: center; }
+.al-vacio .ti { font-size: 40px; opacity: .6; }
+.al-vacio b { color: var(--al-txt); font-size: 17px; }
+.al-corredores .ti { font-size: 15px; vertical-align: -2px; }
+
+/* Alpha: buscador de horarios y otra fecha */
+.al-busca { position: relative; margin-top: 14px; max-width: 720px; }
+.al-busca > .ti { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); font-size: 20px; color: var(--al-txt2); pointer-events: none; }
+.al-busca input { width: 100%; height: 48px; box-sizing: border-box; padding: 0 16px 0 46px; border-radius: 12px; border: 1.5px solid var(--al-borde);
+  background: var(--al-coche); color: var(--al-txt); font: 600 15px 'Atkinson Hyperlegible Next', Verdana, sans-serif; }
+.al-busca input::placeholder { color: var(--al-txt2); font-weight: 500; }
+.al-busca input:focus { outline: none; border-color: var(--al-txt); }
+.al-busca-res { position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 6px); max-height: 430px; overflow-y: auto;
+  background: var(--al-panel); border: 1.5px solid var(--al-borde); border-radius: 12px; box-shadow: 0 18px 40px rgba(0,0,0,.45); padding: 6px; }
+.al-busca-cab { padding: 6px 10px 4px; font-size: 12px; font-weight: 700; color: var(--al-txt2); }
+.al-busca-it { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; padding: 8px 10px;
+  border: 0; border-radius: 9px; background: transparent; color: var(--al-txt); text-align: left; }
+.al-busca-it:hover, .al-busca-it.on { background: #383D44; }
+.al-busca-it.on { box-shadow: inset 3px 0 0 var(--al-rojo); }
+.al-busca-it > b { font-size: 24px; line-height: 1; font-variant-numeric: tabular-nums; }
+.al-busca-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.al-busca-t b { font-size: 14px; }
+.al-busca-t small { font-size: 12px; color: var(--al-txt2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.al-busca-c { display: flex; flex-direction: column; align-items: flex-end; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.al-busca-c i { font-style: normal; font-weight: 600; color: #F5C26B; }
+.al-busca-c small { font-size: 11px; font-weight: 600; color: var(--al-txt2); }
+.al-busca-it.fue { opacity: .55; }
+.al-busca-nada { padding: 18px 12px; color: var(--al-txt2); font-size: 14px; }
+.al-fecha { position: relative; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.al-fecha .ti { font-size: 16px; }
+.al-fecha input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }

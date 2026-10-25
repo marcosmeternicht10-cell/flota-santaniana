@@ -21764,10 +21764,12 @@ function agIrA(id) {
 
 
 // ════════════════════════════════════════════════════════════════════════════
-// ALPHA: maqueta de la venta de pasajes (solo admin). Los planos de los coches,
-// los servicios de Asunción a Concepción y los precios salen de Delta (el
-// programa actual); el resto es de ejemplo. Nada va a la base: las ventas de
-// prueba quedan en este navegador para probar el circuito completo.
+// ALPHA: maqueta de la venta de pasajes (solo admin). Los servicios salen del
+// TRÁFICO de cada día (corredores, salidas de ida y regreso, coche asignado y
+// tripulación); si ese día todavía no se armó, se toman los horarios del último
+// tráfico del mismo día de la semana y el coche queda a confirmar. Los planos
+// de los coches y los precios a Concepción son los de Delta; el resto de los
+// precios es de ejemplo. Las ventas de prueba quedan en este navegador.
 // En los viajes a Buenos Aires se piden los datos para migraciones; en los de
 // adentro del país alcanza con la cédula y el nombre.
 // ════════════════════════════════════════════════════════════════════════════
@@ -21794,36 +21796,19 @@ const AL_PLANOS = {
     { nombre: "Planta única", clase: "CO", filas: AL_FILAS(1, 12, { 11: "izq" }) },
   ] },
 };
-const AL_RUTAS = [
-  { a: "Asunción", b: "Concepción", intl: false, precios: { CO: 150000, CA: 180000 },
-    servicios: [
-      { nota: "Servicios y precios de Delta del 23 de octubre", lista: [
-        { cod: "AO01", h: 540, dur: 485, plano: "AO01", occ: { CO: 0.52, CA: 0.17 } },
-        { cod: "AO04", h: 690, dur: 485, plano: "AO03", occ: { CO: 0.06 } },
-        { cod: "ACXC", h: 1020, dur: 320, plano: "ACXC", occ: { CO: 0.13 } },
-        { cod: "AO03", h: 1380, dur: 321, plano: "AO03", occ: { CO: 0.32 } },
-        { cod: "PYCO", h: 1395, dur: 355, plano: "AO01", occ: { CO: 0.17, CA: 0.92 } },
-      ] },
-      { nota: "Horarios de ejemplo; precios de Delta", lista: [
-        { cod: "", h: 330, dur: 485, plano: "AO01", occ: { CO: 0.4, CA: 0.3 } },
-        { cod: "", h: 600, dur: 320, plano: "ACXC", occ: { CO: 0.2 } },
-        { cod: "", h: 810, dur: 485, plano: "AO03", occ: { CO: 0.25 } },
-        { cod: "", h: 1260, dur: 355, plano: "AO01", occ: { CO: 0.55, CA: 0.6 } },
-        { cod: "", h: 1350, dur: 321, plano: "AO03", occ: { CO: 0.85 } },
-      ] },
-    ] },
-  { a: "Asunción", b: "Buenos Aires", intl: true, precios: { CO: 450000, CA: 550000 },
-    servicios: [
-      { nota: "Horarios y precios de ejemplo", lista: [
-        { cod: "", h: 780, dur: 1140, plano: "AO01", occ: { CO: 0.45, CA: 0.5 } },
-        { cod: "", h: 1170, dur: 1140, plano: "AO03", occ: { CO: 0.3 } },
-      ] },
-      { nota: "Horarios y precios de ejemplo", lista: [
-        { cod: "", h: 660, dur: 1140, plano: "AO01", occ: { CO: 0.35, CA: 0.4 } },
-        { cod: "", h: 1080, dur: 1140, plano: "AO03", occ: { CO: 0.6 } },
-      ] },
-    ] },
-];
+// Precio por lugar del otro extremo (desde/hasta Asunción). Concepción es el de
+// Delta; los demás son de ejemplo hasta cargar el tarifario.
+const AL_PRECIOS = {
+  COP: { CO: 150000, CA: 180000, real: true }, LOT: { CO: 150000, CA: 180000 },
+  PJC: { CO: 170000, CA: 200000 }, "SAN PEDRO": { CO: 90000, CA: 110000 }, ATQ: { CO: 100000, CA: 120000 },
+  TACUATI: { CO: 120000, CA: 140000 }, "SAN VICENTE": { CO: 110000, CA: 130000 }, CDE: { CO: 100000, CA: 120000 },
+  VILLARRICA: { CO: 60000, CA: 75000 }, CARAPEGUA: { CO: 40000, CA: 50000 },
+};
+const AL_PRECIO_INTL = { CO: 450000, CA: 550000 };
+const AL_PRECIO_OTRO = { CO: 100000, CA: 120000 };
+// Duración de Delta para las salidas de Asunción a Concepción (las demás no se saben todavía)
+const AL_DUR = { "COP|09:00": 485, "COP|11:30": 485, "COP|17:00": 320, "COP|23:00": 321, "LOT|23:15": 355 };
+const AL_PLANO_TXT = { AO01: "Doble piso con cama abajo (AO01)", AO03: "Doble piso, todo diferencial (AO03)", ACXC: "Un piso (ACXC)" };
 const AL_TARIFAS = [["general", "General", 1], ["menor", "Menor de 12", 0.5], ["jubilado", "Jubilado", 0.75]];  // descuentos de ejemplo
 const AL_PAGOS = [["efectivo", "Efectivo"], ["tarjeta", "Tarjeta"], ["transferencia", "Transferencia"]];
 const AL_TIPODOC = [["CI", "Cédula paraguaya"], ["PAS", "Pasaporte"], ["DNI", "DNI argentino"], ["OTRO", "Otro documento"]];
@@ -21836,13 +21821,32 @@ const AL_CONOCIDOS = {
 const AL_DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const AL_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"];
 const AL_PVACIO = () => ({ tipoDoc: "CI", doc: "", nombre: "", apellidos: "", nombres: "", sexo: "", nac: "", nacionalidad: "", residencia: "" });
-const al = { ruta: 0, sentido: 0, dia: 0, dep: 0, sel: null, tarifa: "general", pago: "efectivo", recibe: "", aviso: "", p: AL_PVACIO() };
+const al = { cor: "", lado: "ida", dia: 0, dep: 0, sel: null, tarifa: "general", pago: "efectivo", recibe: "", aviso: "", p: AL_PVACIO(),
+             datos: {}, cargando: false, error: "" };
 
 function alGuardado() {
-  try { const d = JSON.parse(localStorage.getItem("alpha_maqueta_v2") || "null"); if (d && Array.isArray(d.ventas)) return d; } catch (e) {}
+  try { const d = JSON.parse(localStorage.getItem("alpha_maqueta_v3") || "null"); if (d && Array.isArray(d.ventas)) return d; } catch (e) {}
   return { nro: 124, ventas: [] };
 }
-function alGuardar(d) { try { localStorage.setItem("alpha_maqueta_v2", JSON.stringify(d)); } catch (e) {} }
+function alGuardar(d) { try { localStorage.setItem("alpha_maqueta_v3", JSON.stringify(d)); } catch (e) {} }
+// El plano de cada coche: se deduce del modelo; si está mal, se corrige y queda en esta computadora
+function alPlanosCoche() { try { return JSON.parse(localStorage.getItem("alpha_planos_coche") || "{}") || {}; } catch (e) { return {}; } }
+function alPlanoDe(coche, modelo, extras) {
+  const fijo = coche && alPlanosCoche()[coche];
+  if (fijo && AL_PLANOS[fijo]) return fijo;
+  const m = String(modelo || "").toLowerCase();
+  if (/1800\s*dd|b6x2/.test(m)) return "AO01";
+  if (/8x2/.test(m)) return "AO03";
+  if (m) return "ACXC";
+  return "AO01";
+}
+function alCambiarPlano(pl) {
+  const sv = alServ(), coche = sv.coche || sv.habitual;
+  if (!coche) return;
+  const m = alPlanosCoche(); m[coche] = pl;
+  try { localStorage.setItem("alpha_planos_coche", JSON.stringify(m)); } catch (e) {}
+  al.sel = null; alPintar(false);
+}
 function alHH(m) { const x = ((m % 1440) + 1440) % 1440; return String(Math.floor(x / 60)).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0"); }
 function alDur(m) { return Math.floor(m / 60) + " h" + (m % 60 ? " " + (m % 60) + " min" : ""); }
 function alFechaDe(i) { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + i); return d; }
@@ -21854,12 +21858,34 @@ function alRnd(seed, n) {
   return (x % 10000) / 10000;
 }
 function alSemilla(...p) { let h = 2166136261; for (const c of p.join("|")) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0; return h; }
-function alRuta() { return AL_RUTAS[al.ruta]; }
-function alOrigen() { const r = alRuta(); return al.sentido === 0 ? r.a : r.b; }
-function alDestino() { const r = alRuta(); return al.sentido === 0 ? r.b : r.a; }
-function alServicios() { return alRuta().servicios[al.sentido]; }
+function alHoyDatos() { return al.datos[alISO(alFechaDe(al.dia))]; }
+function alCorredores() { return (alHoyDatos() || {}).corredores || []; }
+function alRuta() {
+  const cs = alCorredores();
+  return cs.find(c => c.clave === al.cor) || cs[0] || null;
+}
+function alMin(h) { const [a, b] = String(h || "0:0").split(":").map(Number); return a * 60 + b; }
+function alServicios() {
+  const r = alRuta();
+  if (!r) return { lista: [] };
+  const intl = r.tipo === "internacional";
+  const lista = (r[al.lado] || []).map(x => {
+    const otro = x.origen === "ASU" ? x.llega : x.llega === "ASU" ? x.origen : (al.lado === "ida" ? x.llega : x.origen);
+    const precios = intl ? AL_PRECIO_INTL : (AL_PRECIOS[otro] || AL_PRECIO_OTRO);
+    const coche = x.coche || x.habitual;
+    const modelo = x.coche ? x.modelo : x.habitual_modelo;
+    const plano = alPlanoDe(coche, modelo, x.extras);
+    const dur = al.lado === "ida" && x.origen === "ASU" ? AL_DUR[`${x.llega}|${x.hora}`] : null;
+    const seed = alSemilla(x.clave);
+    return Object.assign({}, x, { h: alMin(x.hora), dur: dur || null, plano, precios,
+      cod: [x.tramo, ...x.extras].join(" "), occ: { CO: 0.05 + alRnd(seed, 1) * 0.55, CA: 0.05 + alRnd(seed, 2) * 0.6 } });
+  });
+  return { lista };
+}
 function alServ(k) { return alServicios().lista[k ?? al.dep]; }
 function alPlano(sv) { return AL_PLANOS[sv.plano]; }
+function alOrigen() { const sv = alServ(); if (sv) return sv.origen_nombre; const r = alRuta(); return r ? (al.lado === "ida" ? "Asunción" : r.titulo) : ""; }
+function alDestino() { const sv = alServ(); if (sv) return sv.llega_nombre; const r = alRuta(); return r ? (al.lado === "ida" ? r.titulo : "Asunción") : ""; }
 function alAsientos(pl) {
   // Todos los asientos del plano con su piso, fila y lugar
   const out = [];
@@ -21872,13 +21898,14 @@ function alAsientos(pl) {
   return out;
 }
 function alVendidos(fecha, k) {
-  const sv = alServ(k), seed = alSemilla(fecha, al.ruta, al.sentido, k), out = new Set();
+  const sv = alServ(k), seed = alSemilla(fecha, sv.clave), out = new Set();
   alAsientos(alPlano(sv)).forEach(a => { if (alRnd(seed, a.n) < (sv.occ[a.clase] || 0)) out.add(a.n); });
-  alGuardado().ventas.forEach(v => { if (v.fecha === fecha && v.ruta === al.ruta && v.sentido === al.sentido && v.dep === k && v.asiento !== "P") out.add(v.asiento); });
+  alGuardado().ventas.forEach(v => { if (v.fecha === fecha && v.servicio === sv.clave && v.asiento !== "P") out.add(v.asiento); });
   return out;
 }
 function alParadosVendidos(fecha, k) {
-  return alGuardado().ventas.filter(v => v.fecha === fecha && v.ruta === al.ruta && v.sentido === al.sentido && v.dep === k && v.asiento === "P").length;
+  const sv = alServ(k);
+  return alGuardado().ventas.filter(v => v.fecha === fecha && v.servicio === sv.clave && v.asiento === "P").length;
 }
 function alYaSalio(dia, k) {
   if (dia !== 0) return false;
@@ -21898,7 +21925,7 @@ function alPrecio(n) {
   const d = alDescAsiento(n);
   if (!d) return 0;
   const f = (AL_TARIFAS.find(t => t[0] === al.tarifa) || AL_TARIFAS[0])[2];
-  return Math.round(alRuta().precios[d.clase] * f / 1000) * 1000;
+  return Math.round(alServ().precios[d.clase] * f / 1000) * 1000;
 }
 function alConocido(doc) {
   const dig = String(doc || "").replace(/\D/g, "");
@@ -21914,7 +21941,7 @@ function alConocido(doc) {
 function alNombreCompleto(p) { return p.nombre || [p.nombres, p.apellidos].filter(Boolean).join(" "); }
 
 async function renderAlpha() {
-  status("Alpha: maqueta de la venta de pasajes. Planos y precios de Delta; nada se guarda en la base");
+  status("Alpha: maqueta de la venta de pasajes. Los servicios salen del tráfico; las ventas de prueba no van a la base");
   if (window.USUARIO_ROL !== "admin") {
     content.innerHTML = `<div class="page-header"><h1>Alpha</h1><p>Esta sección la ve solo administración.</p></div>`;
     return;
@@ -21926,10 +21953,144 @@ async function renderAlpha() {
     document.head.appendChild(l);
   }
   al.sel = null; al.aviso = "";
+  await alTraer();
   alPintar(true);
+}
+// El tráfico del día elegido (se guarda por fecha mientras se está en Alpha)
+async function alTraer(forzar) {
+  const f = alISO(alFechaDe(al.dia));
+  if (al.datos[f] && !forzar) return;
+  al.cargando = true; al.error = "";
+  const d = await api(`/api/alpha/dia/${f}`);
+  al.cargando = false;
+  if (!d || !d.corredores) { al.error = (d && d.error) || "No se pudo traer el tráfico"; al.datos[f] = { corredores: [] }; return; }
+  al.datos[f] = d;
+  if (!d.corredores.some(c => c.clave === al.cor)) { al.cor = d.corredores[0]?.clave || ""; al.dep = 0; }
+}
+function alFuenteTxt(r) {
+  const f = r.fuente || {};
+  const dm = x => x ? `${AL_DIAS[new Date(x + "T12:00").getDay()]} ${x.slice(8, 10)}/${x.slice(5, 7)}` : "";
+  const qu = r.tipo === "internacional" ? "internacional" : "nacional";
+  if (f.estado === "publicado") return `Del tráfico ${qu} publicado (versión ${f.version}).`;
+  if (f.estado === "cambios") return `Del tráfico ${qu} (versión ${f.version}, con cambios sin publicar).`;
+  if (f.estado === "borrador") return `Del tráfico ${qu}, armado pero sin publicar.`;
+  return `El tráfico ${qu} de este día todavía no está armado: horarios del ${dm(f.fecha_ref)}; el coche se confirma cuando se arme.`;
+}
+
+function alVacio(animar, txt) {
+  const fechaD = alFechaDe(al.dia);
+  content.innerHTML = `<div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
+    <header class="al-cab"><div class="al-marca">${AL_LOGO}<span class="al-d al-marca-t">Alpha</span><span class="al-maqueta">Maqueta</span></div></header>
+    ${alBuscador()}
+    <div class="al-filtros">${alChipsCorredores()}<div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div></div>
+    ${alChipsLado()}
+    <div class="al-vacio"><i class="ti ti-${al.cargando ? "loader-2" : "calendar-off"}"></i><b>${txt}</b><span>${alDiaTxt(fechaD)}</span></div>
+  </div>`;
+}
+const AL_LOGO = `<svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>`;
+function alChipsCorredores() {
+  const cs = alCorredores(), r = alRuta();
+  if (!cs.length) return "";
+  return `<div class="al-dias al-corredores" role="group" aria-label="Viaje">${cs.map(c => `<button type="button" class="al-chip ${r && c.clave === r.clave ? "on" : ""}" aria-pressed="${r && c.clave === r.clave}" onclick="alCambiarRuta('${c.clave.replace(/'/g, "\\'")}')">Asunción ⇄ ${trEsc(c.titulo)}${c.tipo === "internacional" ? ' <i class="ti ti-world" aria-label="internacional"></i>' : ""}</button>`).join("")}</div>`;
+}
+function alChipsDias() {
+  const chip = i => {
+    const d = alFechaDe(i);
+    const t = i === 0 ? "Hoy" : i === 1 ? "Mañana" : AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.getDay()].slice(1) + " " + d.getDate();
+    return `<button type="button" class="al-chip ${i === al.dia ? "on" : ""}" aria-pressed="${i === al.dia}" onclick="alDia(${i})">${t}</button>`;
+  };
+  const otro = al.dia > 2;
+  return [0, 1, 2].map(chip).join("") + `
+    <label class="al-chip al-fecha ${otro ? "on" : ""}" title="Elegir otra fecha"><i class="ti ti-calendar"></i>
+      <span>${otro ? alDiaTxt(alFechaDe(al.dia)).replace(/ de \S+$/, "") : "Otra fecha"}</span>
+      <input type="date" min="${alISO(alFechaDe(0))}" max="${alISO(alFechaDe(90))}" value="${alISO(alFechaDe(al.dia))}" onchange="alOtraFecha(this.value)" onclick="try{this.showPicker()}catch(e){}" aria-label="Otra fecha de viaje"></label>`;
+}
+function alOtraFecha(v) {
+  if (!v) return;
+  const d = new Date(v + "T12:00"), h = alFechaDe(0);
+  const i = Math.round((d - h) / 864e5);
+  if (i < 0 || i > 90) { toast("Elegí una fecha desde hoy y hasta 3 meses", "error"); return; }
+  alDia(i);
+}
+
+// ─── Buscador de horarios: todas las salidas del día, de todos los corredores ───
+function alBuscador() {
+  if (!alCorredores().length) return "";
+  return `<div class="al-busca" id="al-busca">
+    <i class="ti ti-search" aria-hidden="true"></i>
+    <input id="al-busca-q" type="search" autocomplete="off" placeholder="Buscá un horario: destino, hora, coche o tripulante"
+      aria-label="Buscar un horario" aria-controls="al-busca-res" oninput="alBuscar()" onfocus="alBuscar()" onkeydown="alBuscaTecla(event)">
+    <div class="al-busca-res" id="al-busca-res" role="listbox" hidden></div>
+  </div>`;
+}
+function alNorm(t) { return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(); }
+function alTodasSalidas() {
+  const out = [];
+  alCorredores().forEach(c => ["ida", "regreso"].forEach(l => (c[l] || []).forEach((x, k) => out.push({ c, l, k, x }))));
+  return out.sort((a, b) => a.x.hora.localeCompare(b.x.hora) || a.c.titulo.localeCompare(b.c.titulo));
+}
+function alBuscar() {
+  const box = document.getElementById("al-busca-res"), q = document.getElementById("al-busca-q");
+  if (!box || !q) return;
+  const palabras = alNorm(q.value).split(/\s+/).filter(Boolean);
+  const todas = alTodasSalidas();
+  const hits = todas.filter(({ c, l, x }) => {
+    if (!palabras.length) return true;
+    const txt = alNorm([c.titulo, c.corredor, x.origen_nombre, x.llega_nombre, x.origen, x.llega, x.destino, x.tramo, (x.extras || []).join(" "),
+      x.hora, x.hora.replace(":", ""), l, l === "ida" ? "desde asuncion" : "a asuncion", x.coche, x.habitual, (x.tripulacion || []).join(" "),
+      c.tipo === "internacional" ? "internacional buenos aires argentina" : ""].join(" "));
+    return palabras.every(w => txt.includes(w));
+  });
+  al.buscaHits = hits; al.buscaSel = 0;
+  const fue = (x) => al.dia === 0 && alMin(x.hora) <= new Date().getHours() * 60 + new Date().getMinutes();
+  box.hidden = false;
+  box.innerHTML = hits.length ? `<div class="al-busca-cab">${palabras.length ? `${hits.length} horario${hits.length === 1 ? "" : "s"}` : `Todos los horarios del día · ${hits.length}`}</div>` +
+    hits.slice(0, 60).map(({ c, l, x }, i) => `
+      <button type="button" class="al-busca-it ${i === 0 ? "on" : ""} ${fue(x) ? "fue" : ""}" role="option" data-i="${i}" onmousedown="event.preventDefault()" onclick="alIrA(${i})">
+        <b class="al-d">${x.hora}</b>
+        <span class="al-busca-t"><b>${trEsc(x.origen_nombre)} → ${trEsc(x.llega_nombre)}</b><small>${trEsc([x.tramo, ...(x.extras || [])].join(" "))} · ${l === "ida" ? "ida" : "regreso"}${c.tipo === "internacional" ? " · internacional" : ""}${palabras.length && (x.tripulacion || []).length && palabras.some(w => alNorm(x.tripulacion.join(" ")).includes(w)) ? " · " + trEsc(x.tripulacion.join(" y ")) : ""}</small></span>
+        <span class="al-busca-c">${x.coche ? `Coche ${trEsc(x.coche)}` : x.habitual ? `<i>a conf. (${trEsc(x.habitual)})</i>` : "<i>a confirmar</i>"}${fue(x) ? "<small>ya salió</small>" : ""}</span>
+      </button>`).join("") + (hits.length > 60 ? `<div class="al-busca-cab">y ${hits.length - 60} más: escribí algo más</div>` : "")
+    : `<div class="al-busca-nada">No hay horarios con «${trEsc(q.value)}» este día.</div>`;
+}
+function alBuscaTecla(e) {
+  const box = document.getElementById("al-busca-res");
+  const its = box ? [...box.querySelectorAll(".al-busca-it")] : [];
+  if (e.key === "Escape") { box.hidden = true; e.target.blur(); return; }
+  if (!its.length) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    al.buscaSel = Math.max(0, Math.min(its.length - 1, (al.buscaSel || 0) + (e.key === "ArrowDown" ? 1 : -1)));
+    its.forEach((b, i) => b.classList.toggle("on", i === al.buscaSel));
+    its[al.buscaSel].scrollIntoView({ block: "nearest" });
+  } else if (e.key === "Enter") { e.preventDefault(); alIrA(al.buscaSel || 0); }
+}
+function alIrA(i) {
+  const h = (al.buscaHits || [])[i];
+  if (!h) return;
+  al.cor = h.c.clave; al.lado = h.l; al.dep = h.k; al.sel = null; al.aviso = "";
+  alPintar(true);
+  document.querySelector(".al-tab.on")?.scrollIntoView({ block: "nearest" });
+}
+document.addEventListener("mousedown", e => {
+  const b = document.getElementById("al-busca");
+  if (b && !b.contains(e.target)) { const r = document.getElementById("al-busca-res"); if (r) r.hidden = true; }
+});
+function alChipsLado() {
+  const r = alRuta();
+  if (!r) return "";
+  const n = l => (r[l] || []).length;
+  return `<div class="al-lados" role="group" aria-label="Sentido">
+    <button type="button" class="al-lado ${al.lado === "ida" ? "on" : ""}" aria-pressed="${al.lado === "ida"}" onclick="alLado('ida')">Ida <small>desde Asunción · ${n("ida")}</small></button>
+    <button type="button" class="al-lado ${al.lado === "regreso" ? "on" : ""}" aria-pressed="${al.lado === "regreso"}" onclick="alLado('regreso')">Regreso <small>a Asunción · ${n("regreso")}</small></button>
+  </div>`;
 }
 
 function alPintar(animar) {
+  if (al.cargando) return alVacio(animar, "Trayendo el tráfico…");
+  const r0 = alRuta();
+  if (!r0) return alVacio(animar, al.error || "No hay tráfico armado para tomar los servicios.");
+  if (!alServicios().lista.length) return alVacio(animar, `No hay salidas de ${al.lado === "ida" ? "ida" : "regreso"} en este corredor.`);
   const fechaD = alFechaDe(al.dia), fecha = alISO(fechaD), lista = alServicios().lista;
   // Si la salida elegida ya salió o está completa, se pasa a la próxima que sirva
   const sirve = k => k < lista.length && !alYaSalio(al.dia, k) && (alVendidos(fecha, k).size < alAsientos(alPlano(alServ(k))).length || alParadosVendidos(fecha, k) < alPlano(alServ(k)).parados);
@@ -21942,20 +22103,16 @@ function alPintar(animar) {
 
   const g = alGuardado(), hoy = alISO(new Date());
   const caja = g.ventas.filter(v => (v.vendido_en || "").slice(0, 10) === hoy).reduce((a, v) => a + v.total, 0);
-  const rutas = AL_RUTAS.map((r, i) => `<button type="button" class="al-chip ${i === al.ruta ? "on" : ""}" aria-pressed="${i === al.ruta}" onclick="alCambiarRuta(${i})">${r.a} ⇄ ${r.b}</button>`).join("");
-  const dias = [0, 1, 2].map(i => {
-    const d = alFechaDe(i);
-    const t = i === 0 ? "Hoy" : i === 1 ? "Mañana" : AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.getDay()].slice(1) + " " + d.getDate();
-    return `<button type="button" class="al-chip ${i === al.dia ? "on" : ""}" aria-pressed="${i === al.dia}" onclick="alDia(${i})">${t}</button>`;
-  }).join("");
+  const r = alRuta();
   const tabs = lista.map((x, k) => {
     const v = alVendidos(fecha, k), fue = alYaSalio(al.dia, k);
     const asi = alAsientos(alPlano(x));
     const porClase = ["CO", "CA"].map(c => { const tot = asi.filter(a => a.clase === c); if (!tot.length) return ""; return (tot.length - tot.filter(a => v.has(a.n)).length) + " " + c; }).filter(Boolean);
     const lleno = v.size >= asi.length;
     const txt = fue ? "Ya salió" : lleno ? "Completo" : porClase.join(", ") + " libres";
-    return `<button type="button" class="al-tab ${k === al.dep ? "on" : ""}" ${fue || !sirve(k) ? "disabled" : ""} aria-pressed="${k === al.dep}" onclick="alSalida(${k})" aria-label="${alHH(x.h)}${x.cod ? ", servicio " + x.cod : ""}, ${txt}">
-      <span class="al-tab-in"><b class="al-d">${alHH(x.h)}</b><span class="al-tab-t"><span>${x.cod ? x.cod + ", " : ""}llega ${alHH(x.h + x.dur)}</span><span class="al-tab-l">${txt}</span></span></span></button>`;
+    const coche = x.coche ? `Coche ${x.coche}` : x.habitual ? `A confirmar (suele ir el ${x.habitual})` : "Coche a confirmar";
+    return `<button type="button" class="al-tab ${k === al.dep ? "on" : ""}" ${fue || !sirve(k) ? "disabled" : ""} aria-pressed="${k === al.dep}" onclick="alSalida(${k})" aria-label="${alHH(x.h)}, ${trEsc(x.cod)}, ${coche}, ${txt}">
+      <span class="al-tab-in"><b class="al-d">${alHH(x.h)}</b><span class="al-tab-t"><span>${trEsc(x.cod)}${x.dur ? `, llega ${alHH(x.h + x.dur)}` : ""}</span><span class="al-tab-c ${x.coche ? "" : "conf"}">${coche}</span><span class="al-tab-l">${txt}</span></span></span></button>`;
   }).join("");
 
   const pisos = pl.pisos.map((p, pi) => {
@@ -21973,7 +22130,7 @@ function alPintar(animar) {
     const ancho = cama ? 64 : nf >= 12 ? 40 : 48, alto = cama ? 50 : 42;
     const libres = p.filas.flat().filter(n => n != null && !vend.has(n)).length;
     return `<div class="al-piso">
-      <div class="al-piso-t"><h3 class="al-d">${pl.pisos.length > 1 ? p.nombre : "Asientos"}</h3><span class="al-sub">${AL_CLASES[p.clase]}, Gs. ${fmtNum(alRuta().precios[p.clase])}</span><b>${libres} libres</b></div>
+      <div class="al-piso-t"><h3 class="al-d">${pl.pisos.length > 1 ? p.nombre : "Asientos"}</h3><span class="al-sub">${AL_CLASES[p.clase]}, Gs. ${fmtNum(sv.precios[p.clase])}</span><b>${libres} libres</b></div>
       <div class="al-scroll"><div class="al-coche">
         <div class="al-grid" style="grid-template-columns:repeat(${nf}, ${ancho}px)${ultimo ? " 58px" : ""};grid-template-rows:${alto}px ${alto}px 14px ${usa4 ? alto + "px" : "0"} ${alto}px">${celdas}</div>
         <div class="al-parabrisas" aria-hidden="true"></div>
@@ -21987,7 +22144,7 @@ function alPintar(animar) {
   <div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
     <header class="al-cab">
       <div class="al-marca">
-        <svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>
+        ${AL_LOGO}
         <span class="al-d al-marca-t">Alpha</span>
         <span class="al-maqueta">Maqueta</span>
       </div>
@@ -22001,21 +22158,26 @@ function alPintar(animar) {
         ${g.ventas.length ? `<button type="button" class="al-link" onclick="alBorrar()">Borrar ventas de prueba</button>` : ""}
       </div>
     </header>
+    ${alBuscador()}
     <div class="al-filtros">
-      <div class="al-dias" role="group" aria-label="Viaje">${rutas}</div>
-      <div class="al-dias" role="group" aria-label="Día del viaje">${dias}</div>
+      ${alChipsCorredores()}
+      <div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div>
     </div>
+    ${alChipsLado()}
 
     <div class="al-salidas" role="group" aria-label="Salidas del ${alDiaTxt(fechaD)}">${tabs}</div>
-    <p class="al-nota">${alDiaTxt(fechaD)}. ${alServicios().nota}.${alRuta().intl ? " Viaje internacional: se piden los datos para migraciones." : ""}</p>
+    <p class="al-nota">${alDiaTxt(fechaD)}. ${alFuenteTxt(r)}${sv.precios.real ? "" : " Precios de ejemplo."}${r.tipo === "internacional" ? " Viaje internacional: se piden los datos para migraciones." : ""}</p>
 
     <div class="al-cuerpo">
       <section class="al-escena" aria-labelledby="al-coche-t">
         <div class="al-cartel" aria-hidden="true">${trEsc(alDestino().toUpperCase())}</div>
         <div class="al-contenido">
           <div class="al-esc-cab">
-            <div><h2 id="al-coche-t" class="al-d">${sv.cod ? "Servicio " + sv.cod : "Servicio de ejemplo"}</h2>
-              <span class="al-sub">${pl.tipo}, sale ${alHH(sv.h)}, ${alDur(sv.dur)} de viaje</span></div>
+            <div><h2 id="al-coche-t" class="al-d">${sv.coche ? "Coche " + trEsc(sv.coche) : "Coche a confirmar"}</h2>
+              <span class="al-sub">${trEsc(sv.coche ? sv.modelo : sv.habitual ? `Suele ir el ${sv.habitual}${sv.habitual_modelo ? " (" + sv.habitual_modelo + ")" : ""}` : "Todavía sin coche")} · ${trEsc(sv.cod)}, sale ${alHH(sv.h)}${sv.dur ? `, ${alDur(sv.dur)} de viaje` : ""}</span>
+              ${sv.tripulacion.length ? `<span class="al-trip"><i class="ti ti-steering-wheel"></i> ${sv.tripulacion.map(trEsc).join(" y ")}</span>` : ""}
+              ${sv.coche || sv.habitual ? `<label class="al-plano-sel"><span>Plano</span><select onchange="alCambiarPlano(this.value)" aria-label="Plano de asientos de este coche">${Object.keys(AL_PLANOS).map(k => `<option value="${k}" ${k === sv.plano ? "selected" : ""}>${AL_PLANO_TXT[k] || k}</option>`).join("")}</select></label>` : ""}
+            </div>
             <div class="al-ley">
               <span><i class="al-ley-c"></i>Libre</span><span><i class="al-ley-c v"></i>Vendido</span><span><i class="al-ley-c e"></i>Elegido</span>
               ${parados}
@@ -22030,7 +22192,7 @@ function alPintar(animar) {
 }
 
 function alPanel() {
-  const sv = alServ(), d = alDescAsiento(al.sel), total = alPrecio(al.sel), intl = alRuta().intl, p = al.p;
+  const sv = alServ(), d = alDescAsiento(al.sel), total = alPrecio(al.sel), intl = alRuta().tipo === "internacional", p = al.p;
   const con = alConocido(p.doc);
   const chips = (lista, actual, fn, nombre) => `<div class="al-chips" role="group" aria-label="${nombre}">${lista.map(t =>
     `<button type="button" class="al-chip ${t[0] === actual ? "on" : ""}" aria-pressed="${t[0] === actual}" onclick="${fn}('${t[0]}')">${t[1]}</button>`).join("")}</div>`;
@@ -22074,8 +22236,8 @@ function alPanel() {
       </div>
     </div>
     <div class="al-linea">
-      <b class="al-d">${alHH(sv.h)}</b><i aria-hidden="true"></i><b class="al-d der">${alHH(sv.h + sv.dur)}</b>
-      <span>${alOrigen()}</span><span class="cen">${alDur(sv.dur)}</span><span class="der">${alDestino()}</span>
+      <b class="al-d">${alHH(sv.h)}</b><i aria-hidden="true"></i><b class="al-d der">${sv.dur ? alHH(sv.h + sv.dur) : "—"}</b>
+      <span>${alOrigen()}</span><span class="cen">${sv.dur ? alDur(sv.dur) : trEsc(sv.cod)}</span><span class="der">${alDestino()}</span>
     </div>
     ${datos}
     ${chips(AL_TARIFAS, al.tarifa, "alTarifa", "Tarifa")}
@@ -22100,10 +22262,15 @@ function alVueltoTxt(total) {
 function alRepintarPanel() { const p = document.getElementById("al-panel"); if (p) p.innerHTML = alPanel(); }
 function alAvisoLimpio() { if (al.aviso) { al.aviso = ""; const a = document.getElementById("al-aviso"); if (a) a.textContent = ""; } }
 
-function alCambiarRuta(i) { if (i === al.ruta) return; al.ruta = i; al.sentido = 0; al.dep = 0; al.sel = null; al.aviso = ""; alPintar(true); }
+function alCambiarRuta(c) { if (c === al.cor) return; al.cor = c; al.lado = "ida"; al.dep = 0; al.sel = null; al.aviso = ""; alPintar(true); }
+function alLado(l) { if (l === al.lado) return; al.lado = l; al.dep = 0; al.sel = null; al.aviso = ""; alPintar(true); }
 function alSalida(k) { al.dep = k; al.sel = null; al.aviso = ""; alPintar(true); }
-function alDia(i) { al.dia = i; al.sel = null; al.aviso = ""; alPintar(true); }
-function alInvertir() { al.sentido = 1 - al.sentido; al.dep = 0; al.sel = null; al.aviso = ""; alPintar(true); }
+async function alDia(i) {
+  al.dia = i; al.sel = null; al.aviso = ""; al.dep = 0;
+  if (!al.datos[alISO(alFechaDe(i))]) { al.cargando = true; alPintar(false); await alTraer(); }
+  alPintar(true);
+}
+function alInvertir() { alLado(al.lado === "ida" ? "regreso" : "ida"); }
 function alAsiento(n) { al.sel = n; al.aviso = ""; alPintar(false); }
 function alTarifa(t) { al.tarifa = t; alRepintarPanel(); }
 function alPago(p) { al.pago = p; alRepintarPanel(); }
@@ -22118,10 +22285,10 @@ function alCampo(id, el) {
   if (con) {
     const d = con.datos, p = al.p;
     const poner = (k, val) => { if (val && !p[k]) { p[k] = val; const e = document.getElementById("al-" + k); if (e) e.value = val; } };
-    if (alRuta().intl) ["apellidos", "nombres", "sexo", "nac", "nacionalidad", "residencia"].forEach(k => poner(k, d[k]));
+    if ((alRuta()?.tipo === "internacional")) ["apellidos", "nombres", "sexo", "nac", "nacionalidad", "residencia"].forEach(k => poner(k, d[k]));
     else poner("nombre", d.nombreCompleto || [d.nombres, d.apellidos].filter(Boolean).join(" "));
   }
-  if (h) h.textContent = con ? `Ya viajó ${con.viajes} ${con.viajes === 1 ? "vez" : "veces"} con ustedes` : alRuta().intl ? "Con el documento se completan los datos si ya viajó" : "Con la cédula se completa el nombre si ya viajó";
+  if (h) h.textContent = con ? `Ya viajó ${con.viajes} ${con.viajes === 1 ? "vez" : "veces"} con ustedes` : (alRuta()?.tipo === "internacional") ? "Con el documento se completan los datos si ya viajó" : "Con la cédula se completa el nombre si ya viajó";
 }
 function alDocFormato(inp) {
   // La cédula paraguaya con puntos; pasaportes y otros documentos se dejan como están
@@ -22150,7 +22317,7 @@ function alCobrar() {
   // Se suelta el campo que se estaba escribiendo antes de vaciar el formulario,
   // así su "al salir" no vuelve a poner el dato viejo en la venta siguiente
   if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#al-raiz")) document.activeElement.blur();
-  const d = alDescAsiento(al.sel), p = al.p, intl = alRuta().intl;
+  const d = alDescAsiento(al.sel), p = al.p, intl = alRuta().tipo === "internacional";
   const falta = [];
   if (!d) falta.push("el asiento");
   if (!String(p.doc).trim()) falta.push(intl ? "el documento" : "la cédula");
@@ -22168,7 +22335,8 @@ function alCobrar() {
   if (al.pago === "efectivo" && al.recibe && +al.recibe < total) { al.aviso = "Lo que recibe no alcanza: faltan Gs. " + fmtNum(total - al.recibe) + "."; alRepintarPanel(); return; }
   const g = alGuardado(), sv = alServ(), fechaD = alFechaDe(al.dia), ahora = new Date();
   const v = {
-    nro: g.nro, fecha: alISO(fechaD), ruta: al.ruta, sentido: al.sentido, dep: al.dep, asiento: al.sel,
+    nro: g.nro, fecha: alISO(fechaD), servicio: sv.clave, asiento: al.sel,
+    origen: sv.origen_nombre, destino: sv.llega_nombre, tramo: sv.cod, coche: sv.coche || "",
     nombre: alNombreCompleto(p).trim().toUpperCase(), doc: String(p.doc).trim(),
     tipoDoc: (AL_TIPODOC.find(t => t[0] === p.tipoDoc) || AL_TIPODOC[0])[1],
     mig: intl ? { apellidos: p.apellidos, nombres: p.nombres, sexo: p.sexo, nac: p.nac, nacionalidad: p.nacionalidad, residencia: p.residencia } : null,
@@ -22186,13 +22354,13 @@ function alCobrar() {
 
 // ─── El boleto: 3 copias en papel de 80 mm, una por hoja (la impresora corta entre una y otra) ───
 function alBoletoHTML(v, sv, d, fechaD) {
-  const e = trEsc, r = AL_RUTAS[v.ruta];
-  const origen = v.sentido === 0 ? r.a : r.b, destino = v.sentido === 0 ? r.b : r.a;
+  const e = trEsc;
+  const origen = v.origen || sv.origen_nombre, destino = v.destino || sv.llega_nombre;
   const nro = "001-001-" + String(v.nro).padStart(7, "0");
-  const sale = alHH(sv.h), llega = alHH(sv.h + sv.dur);
-  const servicio = sv.cod ? "Servicio " + sv.cod : "Servicio de ejemplo";
-  const dLlega = new Date(fechaD); dLlega.setDate(dLlega.getDate() + Math.floor((sv.h + sv.dur) / 1440));
-  const otroDia = dLlega.getDate() !== fechaD.getDate() ? AL_DIAS[dLlega.getDay()] + " " + dLlega.getDate() : "";
+  const sale = alHH(sv.h), llega = sv.dur ? alHH(sv.h + sv.dur) : "";
+  const servicio = `Servicio ${sv.cod}${v.coche ? ", coche " + v.coche : ""}`;
+  const dLlega = new Date(fechaD); dLlega.setDate(dLlega.getDate() + Math.floor((sv.h + (sv.dur || 0)) / 1440));
+  const otroDia = sv.dur && dLlega.getDate() !== fechaD.getDate() ? AL_DIAS[dLlega.getDay()] + " " + dLlega.getDate() : "";
   const tarifa = (AL_TARIFAS.find(t => t[0] === v.tarifa) || AL_TARIFAS[0])[1].toLowerCase();
   const pago = (AL_PAGOS.find(p => p[0] === v.pago) || AL_PAGOS[0])[1].toLowerCase();
   const [fy, fm, fdd] = v.vendido_en.slice(0, 10).split("-");
@@ -22215,7 +22383,7 @@ function alBoletoHTML(v, sv, d, fechaD) {
   const ruta = (larga) => `
     <div class="ruta">
       <i class="p"></i><b class="c">${e(origen.toUpperCase())}</b><b class="h">${sale}</b>
-      ${larga ? `<i class="l"></i><span class="m">${e(servicio)}. ${otroDia ? `Llega el ${e(otroDia)}; la hora` : "La llegada"} es aproximada.</span>` : ""}
+      ${larga ? `<i class="l"></i><span class="m">${e(servicio)}.${llega ? ` ${otroDia ? `Llega el ${e(otroDia)}; la hora` : "La llegada"} es aproximada.` : ""}</span>` : ""}
       <i class="p o"></i><b class="c">${e(destino.toUpperCase())}</b><b class="h">${llega}</b>
     </div>`;
   const nroAs = (big) => parado
@@ -22223,7 +22391,7 @@ function alBoletoHTML(v, sv, d, fechaD) {
     : `<div class="nro ${big ? "big" : ""}"><span>Asiento</span><b>${v.asiento}</b>${big ? `<span>${e(d.piso.toLowerCase())}</span>` : ""}</div>`;
   const asiento = (conMapa) => `
     <div class="as">${nroAs(false)}
-      <div class="as-t"><b>${e(d.piso)}</b><span>${e(d.pos)}</span>${conMapa ? mapa : ""}<small>${e(d.tipo)}, ${e(servicio.toLowerCase())}</small></div>
+      <div class="as-t"><b>${e(d.piso)}</b><span>${e(d.pos)}</span>${conMapa ? mapa : ""}<small>${e(d.tipo)} · ${e(servicio)}</small></div>
     </div>`;
   const pas = `<div class="pas"><b>${e(v.nombre)}</b><span>${docTxt}</span>${v.mig ? `<span>${e(v.mig.nacionalidad)}, nac. ${e(v.mig.nac.split("-").reverse().join("/"))}</span>` : ""}</div>`;
   const precio = (detalle) => `
