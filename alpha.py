@@ -37,7 +37,7 @@ from datetime import date, timedelta
 
 from flask import Blueprint, jsonify, session, request
 
-from db_compat import get_connection
+from db_compat import get_connection, USE_POSTGRES
 from hora_local import ahora_iso
 import trafico as tr
 
@@ -188,6 +188,7 @@ def dia_para_alpha(fecha):
                 for lado in tr.LADOS:
                     c[lado].sort(key=lambda x: x["hora"])
                 corredores.append(c)
+        aplicar_programacion(conn, fecha, corredores)
         # El plano de asientos de cada salida (sale del coche asignado o del que suele ir)
         try:
             cfg = {r["clave"]: json.loads(r["valor"]) for r in conn.execute(
@@ -225,6 +226,9 @@ def dia_para_alpha(fecha):
                 for x in c[lado]:
                     coche = x["coche"] or x["habitual"]
                     x["plano"] = plano_de(coche, x["modelo"] if x["coche"] else x["habitual_modelo"], planos, cp)
+                    # Un servicio agregado sin coche usa el plano que se le eligió
+                    if not coche and (x.get("adicional") or {}).get("plano") in planos:
+                        x["plano"] = x["adicional"]["plano"]
         return {"fecha": fecha, "corredores": corredores}
 
     finally:
@@ -256,6 +260,11 @@ def para_agencia(d):
     for c in d.get("corredores", []):
         c["fuente"] = {"tipo": c["fuente"].get("tipo")}
         for lado in tr.LADOS:
+            c[lado] = [x for x in c[lado] if not x.get("desactivado")]
+            for x in c[lado]:
+                if x.get("adicional"):
+                    x["adicional"] = True
+        for lado in tr.LADOS:
             for x in c[lado]:
                 for k in ("tripulacion",):
                     x[k] = []
@@ -264,6 +273,7 @@ def para_agencia(d):
                 x.pop("reemplazo", None)
                 x["id"] = None
                 x["a_confirmar"] = False
+    d["corredores"] = [c for c in d.get("corredores", []) if c["ida"] or c["regreso"]]
     return d
 
 
@@ -283,6 +293,231 @@ def api_alpha_dia(fecha):
         return jsonify({"ok": False, "error": "Fecha inválida"}), 400
     d = dia_para_alpha(fecha)
     return jsonify(para_agencia(d) if rol == "agencia" else d)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# PROGRAMACIÓN: activar y desactivar servicios por período
+#   desactivar  un horario (o todos los de un corredor y sentido) que no sale
+#               en un período y ciertos días: no se vende; la agencia no lo ve
+#   activar     un servicio que no está en el tráfico (un refuerzo, un
+#               feriado): se agrega a esos días. Si el tráfico lo arma, vale el
+#               del tráfico (es el mismo servicio)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _norm_dest(d):
+    return tr._sin_tildes(tr.limpiar(d or ""))
+
+
+def reglas_del_dia(conn, fecha):
+    try:
+        wd = str(date.fromisoformat(fecha).weekday())
+        filas = [dict(r) for r in conn.execute(
+            "SELECT * FROM alpha_programacion WHERE desde <= ? AND hasta >= ? ORDER BY id", (fecha, fecha)).fetchall()]
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
+    return [r for r in filas if wd in (r.get("dias") or "0123456")]
+
+
+def _coincide(r, corredor, lado, hora, dest_norm):
+    return (r["corredor"] == corredor and (not r["lado"] or r["lado"] == lado) and (not r["hora"] or r["hora"] == hora)
+            and (not r["destino"] or _norm_dest(r["destino"]) == dest_norm))
+
+
+def servicio_desactivado(conn, fecha, clave):
+    """El motivo si ese servicio está desactivado ese día (None si se vende)."""
+    p = str(clave or "").split("|", 4)
+    if len(p) < 5:
+        return None
+    for r in reglas_del_dia(conn, fecha):
+        if r["tipo"] == "desactivar" and _coincide(r, f"{p[0]}|{p[1]}", p[2], p[3], p[4]):
+            return r["motivo"] or "Servicio desactivado"
+    return None
+
+
+def aplicar_programacion(conn, fecha, corredores):
+    reglas = reglas_del_dia(conn, fecha)
+    if not reglas:
+        return
+    for r in [x for x in reglas if x["tipo"] == "activar" and _hora_ok(x["hora"]) and x["lado"] in tr.LADOS and x["destino"]]:
+        tipo, clave_corr = (r["corredor"].split("|", 1) + [""])[:2]
+        c = next((c for c in corredores if c["clave"] == r["corredor"]), None)
+        nombre = (c or {}).get("corredor") or r["corredor_nombre"] or clave_corr
+        if c is None:
+            lugar = (tr._lugar_ar(nombre) or "BUENOS AIRES") if tipo == "internacional" else tr.lugar_del_corredor(nombre)
+            c = {"clave": r["corredor"], "tipo": tipo, "corredor": nombre, "lugar": lugar,
+                 "titulo": nombre_lugar(lugar) if lugar and lugar != "ASU" else nombre.title(),
+                 "fuente": {"tipo": tipo, "estado": "programado"}, "ida": [], "regreso": []}
+            corredores.append(c)
+        clave = f"{r['corredor']}|{r['lado']}|{r['hora']}|{_norm_dest(r['destino'])}"
+        if any(x["clave"] == clave for x in c[r["lado"]]):
+            continue
+        o, dst = tr.tramo(r["destino"], r["lado"], nombre, tipo)
+        base, extras = tr.partes_destino(r["destino"])
+        c[r["lado"]].append({
+            "id": None, "clave": clave, "hora": r["hora"], "destino": r["destino"], "tramo": base, "extras": extras,
+            "origen": o, "llega": dst, "origen_nombre": nombre_lugar(o), "llega_nombre": nombre_lugar(dst),
+            "coche": "", "modelo": "", "a_confirmar": False, "habitual": "", "habitual_modelo": "",
+            "tripulacion": [], "nota": "", "adicional": {"id": r["id"], "motivo": r["motivo"], "plano": r["plano"], "hasta": r["hasta"]}})
+        c[r["lado"]].sort(key=lambda x: x["hora"])
+    des = [x for x in reglas if x["tipo"] == "desactivar"]
+    if des:
+        for c in corredores:
+            for lado in tr.LADOS:
+                for x in c[lado]:
+                    p = x["clave"].split("|", 4)
+                    r = next((r for r in des if len(p) == 5 and _coincide(r, c["clave"], lado, x["hora"], p[4])), None)
+                    if r:
+                        x["desactivado"] = {"id": r["id"], "motivo": r["motivo"] or "", "hasta": r["hasta"]}
+
+
+def programacion_listar():
+    conn = get_connection()
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM alpha_programacion ORDER BY hasta DESC, id DESC").fetchall()]
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return []
+    finally:
+        conn.close()
+
+
+def programacion_crear(d, quien=""):
+    tipo = d.get("tipo")
+    if tipo not in ("activar", "desactivar"):
+        return None, "¿Activar o desactivar?"
+    corredor = str(d.get("corredor") or "")[:120]
+    if "|" not in corredor:
+        return None, "Elegí el recorrido"
+    lado = d.get("lado") or ""
+    if lado not in ("", "ida", "regreso"):
+        return None, "Sentido inválido"
+    hora = tr.normalizar_hora(d.get("hora")) if d.get("hora") else ""
+    if d.get("hora") and not hora:
+        return None, "La hora no se entiende (poné HH:MM)"
+    destino = " ".join(str(d.get("destino") or "").split()).upper()[:80]
+    desde, hasta = str(d.get("desde") or ""), str(d.get("hasta") or d.get("desde") or "")
+    try:
+        f1, f2 = date.fromisoformat(desde), date.fromisoformat(hasta)
+    except ValueError:
+        return None, "Revisá las fechas"
+    if f2 < f1:
+        return None, "La fecha de fin es anterior a la de inicio"
+    if (f2 - f1).days > 400:
+        return None, "El período es de más de un año"
+    dias = "".join(ch for ch in "0123456" if ch in str(d.get("dias") or "0123456"))
+    if not dias:
+        return None, "Elegí al menos un día de la semana"
+    motivo = " ".join(str(d.get("motivo") or "").split())[:160]
+    plano = str(d.get("plano") or "")[:12]
+    if tipo == "activar":
+        if lado not in tr.LADOS or not hora or not destino:
+            return None, "Para agregar un servicio hacen falta el sentido, la hora y el destino (como en el tráfico, ej.: ASU/COP X 25)"
+    elif not motivo:
+        return None, "Contá por qué se desactiva (queda anotado)"
+    conn = get_connection()
+    try:
+        cur = conn.execute("""INSERT INTO alpha_programacion (tipo, desde, hasta, dias, corredor, corredor_nombre, lado, hora,
+                                  destino, plano, motivo, por, el) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           (tipo, desde, hasta, dias, corredor, str(d.get("corredor_nombre") or "")[:80], lado, hora,
+                            destino, plano, motivo, (quien or "")[:80], ahora_iso()))
+        rid = cur.lastrowid
+        conn.commit()
+        # Lo que ya está vendido en las salidas que se desactivan
+        afectados = []
+        if tipo == "desactivar":
+            r = {"corredor": corredor, "lado": lado, "hora": hora, "destino": destino}
+            try:
+                filas = conn.execute("""SELECT fecha, servicio, estado, vence, COUNT(*) AS n FROM alpha_ventas
+                                        WHERE fecha >= ? AND fecha <= ? AND estado IN ('vendido', 'reserva')
+                                        GROUP BY fecha, servicio, estado, vence""", (desde, hasta)).fetchall()
+            except Exception:
+                conn.rollback()
+                filas = []
+            ahora = ahora_iso()
+            grupos = {}
+            for f in filas:
+                if f["estado"] == "reserva" and (f["vence"] or "") <= ahora:
+                    continue
+                if str(date.fromisoformat(f["fecha"]).weekday()) not in dias:
+                    continue
+                p = f["servicio"].split("|", 4)
+                if len(p) == 5 and _coincide(r, f"{p[0]}|{p[1]}", p[2], p[3], p[4]):
+                    k = (f["fecha"], f["servicio"])
+                    grupos[k] = grupos.get(k, 0) + int(f["n"])
+            afectados = [{"fecha": k[0], "servicio": k[1], "hora": k[1].split("|")[3], "pasajeros": n}
+                         for k, n in sorted(grupos.items())]
+        return {"id": rid, "afectados": afectados}, None
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def programacion_borrar(rid):
+    conn = get_connection()
+    try:
+        r = conn.execute("SELECT * FROM alpha_programacion WHERE id=?", (int(rid),)).fetchone()
+        if not r:
+            return None
+        conn.execute("DELETE FROM alpha_programacion WHERE id=?", (int(rid),))
+        conn.commit()
+        return dict(r)
+    finally:
+        conn.close()
+
+
+@bp_alpha.route("/api/alpha/programacion", methods=["GET"])
+def api_programacion():
+    if session.get("rol") != "admin":
+        return jsonify({"ok": False, "error": "La programación la ve administración"}), 403
+    return jsonify({"reglas": programacion_listar(), "hoy": ahora_iso()[:10]})
+
+
+@bp_alpha.route("/api/alpha/programacion", methods=["POST"])
+def api_programacion_crear():
+    if session.get("rol") != "admin":
+        return jsonify({"ok": False, "error": "La programación la maneja administración"}), 403
+    quien = session.get("nombre") or session.get("usuario") or ""
+    d = request.get_json(silent=True) or {}
+    r, err = programacion_crear(d, quien)
+    if err:
+        return jsonify({"ok": False, "msg": err, "error": err}), 400
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=quien or "?", rol="admin", categoria="Alpha",
+                            accion=f"Alpha: {'desactivó' if d.get('tipo') == 'desactivar' else 'agregó'} servicios por período",
+                            detalle=f"{d.get('corredor')} {d.get('lado') or ''} {d.get('hora') or 'todos'} del {d.get('desde')} al {d.get('hasta')}: {d.get('motivo') or ''}"[:200])
+    except Exception:
+        pass
+    return jsonify(dict(r, ok=True))
+
+
+@bp_alpha.route("/api/alpha/programacion/<int:rid>", methods=["DELETE"])
+def api_programacion_borrar(rid):
+    if session.get("rol") != "admin":
+        return jsonify({"ok": False, "error": "La programación la maneja administración"}), 403
+    r = programacion_borrar(rid)
+    if not r:
+        return jsonify({"ok": False, "msg": "No existe", "error": "No existe"}), 404
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=session.get("nombre") or "?", rol="admin", categoria="Alpha",
+                            accion=f"Alpha: quitó una regla de programación ({'reactivó' if r['tipo'] == 'desactivar' else 'sacó el servicio agregado'})",
+                            detalle=f"{r['corredor']} {r['lado']} {r['hora'] or 'todos'} del {r['desde']} al {r['hasta']}"[:200])
+    except Exception:
+        pass
+    return jsonify({"ok": True})
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -349,6 +584,28 @@ MAX_JSON = 400_000
 
 def init_alpha():
     conn = get_connection()
+    try:
+        conn.execute(f"""CREATE TABLE IF NOT EXISTS alpha_programacion (
+            id {"SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"},
+            tipo TEXT NOT NULL,
+            desde TEXT NOT NULL,
+            hasta TEXT NOT NULL,
+            dias TEXT DEFAULT '0123456',
+            corredor TEXT NOT NULL,
+            corredor_nombre TEXT DEFAULT '',
+            lado TEXT DEFAULT '',
+            hora TEXT DEFAULT '',
+            destino TEXT DEFAULT '',
+            plano TEXT DEFAULT '',
+            motivo TEXT DEFAULT '',
+            por TEXT DEFAULT '',
+            el TEXT DEFAULT '')""")
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     try:
         conn.execute("""CREATE TABLE IF NOT EXISTS alpha_config (
             clave TEXT PRIMARY KEY,

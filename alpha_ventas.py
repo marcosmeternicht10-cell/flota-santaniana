@@ -329,13 +329,24 @@ def _estados_servicios(conn, fecha):
         return {}
 
 
+def _programa_err(conn, fecha, servicio):
+    """Si el servicio está desactivado ese día por la programación de Controles."""
+    try:
+        from alpha import servicio_desactivado
+        m = servicio_desactivado(conn, fecha, servicio)
+    except Exception:
+        _rollback(conn)
+        return None
+    return f"Ese servicio está desactivado ese día ({m})" if m else None
+
+
 def _servicio_err(conn, fecha, servicio):
     e = (_estados_servicios(conn, fecha).get(servicio) or {}).get("estado")
     if e == "cerrado":
         return "La venta de ese servicio está cerrada"
     if e == "cancelado":
         return "Ese servicio está cancelado"
-    return None
+    return _programa_err(conn, fecha, servicio)
 
 
 def _servicio_guardar(conn, fecha, servicio, entrada, estado=None, motivo=None, coche=None, reemplazo=None):
@@ -609,6 +620,9 @@ def accion_venta(vid, accion, d):
             total = max(0.0, _num(d.get("total"), v["total"]))
             if (_estados_servicios(conn, v["fecha"]).get(v["servicio"]) or {}).get("estado") == "cancelado":
                 return None, "Ese servicio está cancelado"
+            err = _programa_err(conn, v["fecha"], v["servicio"])
+            if err:
+                return None, err
             err = _tope_err(conn, total)
             if err:
                 return None, err
@@ -826,6 +840,9 @@ def aplicar_transbordo(d):
                 est = (_estados_servicios(conn, f).get(sv) or {}).get("estado")
                 if est == "cancelado":
                     return None, "La salida de destino está cancelada"
+                err = _programa_err(conn, f, sv)
+                if err:
+                    return None, "La salida de destino: " + err[0].lower() + err[1:]
             otros = [dict(r) for r in conn.execute(
                 "SELECT id, estado, vence, asiento, sube_idx, baja_idx FROM alpha_ventas WHERE fecha=? AND servicio=?",
                 (f, sv)).fetchall()]
