@@ -196,6 +196,30 @@ def dia_para_alpha(fecha):
             cfg = {}
         planos = cfg.get("planos") or PLANOS_INICIALES
         cp = cfg.get("coche_plano") or {}
+        # Transbordos: el coche que reemplazó al que se rompió. Si el tráfico ya
+        # tiene la salida, el cambio está ahí; si no, se toma de Controles.
+        try:
+            reemp = {r["servicio"]: dict(r) for r in conn.execute(
+                """SELECT servicio, COALESCE(coche, '') AS coche, COALESCE(reemplazo, '') AS reemplazo FROM alpha_servicios
+                   WHERE fecha=? AND (COALESCE(coche, '') <> '' OR COALESCE(reemplazo, '') <> '')""", (fecha,)).fetchall()}
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            reemp = {}
+        for c in corredores:
+            for lado in tr.LADOS:
+                for x in c[lado]:
+                    r = reemp.get(x["clave"])
+                    if not r:
+                        continue
+                    if r["coche"] and not x["coche"]:
+                        x["coche"], x["modelo"], x["habitual"], x["habitual_modelo"] = r["coche"], modelo(r["coche"]), "", ""
+                    try:
+                        x["reemplazo"] = json.loads(r["reemplazo"]) if r["reemplazo"] else None
+                    except ValueError:
+                        x["reemplazo"] = None
         for c in corredores:
             for lado in tr.LADOS:
                 for x in c[lado]:
@@ -237,6 +261,7 @@ def para_agencia(d):
                     x[k] = []
                 for k in ("nota", "coche", "modelo", "habitual", "habitual_modelo"):
                     x[k] = ""
+                x.pop("reemplazo", None)
                 x["id"] = None
                 x["a_confirmar"] = False
     return d
@@ -314,8 +339,11 @@ DESCUENTOS_INICIALES = [
     {"id": "menor", "nombre": "Menor (hasta 8 años)", "factor": 0.5},
     {"id": "jubilado", "nombre": "Jubilado", "factor": 0.75},
 ]
+# Lo que dice el boleto (no fiscal): cuánto antes presentarse, el equipaje
+# incluido, un teléfono y una leyenda al pie
+BOLETO_INICIAL = {"presentarse_min": 15, "equipaje_kg": 20, "telefono": "", "leyenda": "", "menor_edad": 5}
 INICIALES = {"planos": PLANOS_INICIALES, "coche_plano": {}, "recorridos": RECORRIDOS_INICIALES,
-             "tarifas": TARIFAS_INICIALES, "descuentos": DESCUENTOS_INICIALES}
+             "tarifas": TARIFAS_INICIALES, "descuentos": DESCUENTOS_INICIALES, "boleto": BOLETO_INICIAL}
 MAX_JSON = 400_000
 
 
@@ -469,6 +497,17 @@ def _valido(clave, valor):
                 return "Un descuento tiene un porcentaje inválido"
             if not 0 <= f <= 1 or not str(d.get("nombre") or "").strip():
                 return "Revisá los descuentos: nombre y porcentaje entre 0 y 100"
+    elif clave == "boleto":
+        if not isinstance(valor, dict):
+            return "Formato inválido"
+        for k, (lo, hi) in {"presentarse_min": (0, 240), "equipaje_kg": (0, 100), "menor_edad": (0, 12)}.items():
+            try:
+                if not lo <= int(valor.get(k) or 0) <= hi:
+                    return f"Revisá «{k.replace('_', ' ')}»: va de {lo} a {hi}"
+            except (TypeError, ValueError):
+                return f"«{k.replace('_', ' ')}» tiene que ser un número"
+        if len(str(valor.get("telefono") or "")) > 60 or len(str(valor.get("leyenda") or "")) > 300:
+            return "El teléfono o la leyenda son demasiado largos"
     else:
         return "Eso no se puede guardar"
     return None
@@ -502,7 +541,7 @@ def api_alpha_config():
     if rol == "agencia":
         # Solo lo necesario para vender: los planos para dibujar el coche, las
         # paradas, los descuentos y el precio de cada tramo. Nada de la flota.
-        cfg = {k: cfg.get(k) for k in ("planos", "recorridos", "tarifas", "descuentos", "corredores")}
+        cfg = {k: cfg.get(k) for k in ("planos", "recorridos", "tarifas", "descuentos", "corredores", "boleto")}
         cfg["coches"] = []
         cfg["coche_plano"] = {}
     return jsonify(cfg)
@@ -520,7 +559,8 @@ def api_alpha_guardar(clave):
     try:
         from database import registrar_auditoria
         nombres = {"planos": "los planos de asientos", "coche_plano": "el plano de los coches",
-                   "recorridos": "los recorridos", "tarifas": "las tarifas", "descuentos": "los descuentos"}
+                   "recorridos": "los recorridos", "tarifas": "las tarifas", "descuentos": "los descuentos",
+                   "boleto": "lo que dice el boleto"}
         registrar_auditoria(usuario=quien or "?", rol=session.get("rol") or "",
                             accion=f"Alpha: cambió {nombres.get(clave, clave)}", categoria="Alpha", detalle="")
     except Exception:

@@ -129,7 +129,27 @@ def init_alpha_ventas():
                 motivo TEXT DEFAULT '',
                 por TEXT DEFAULT '',
                 el TEXT DEFAULT '',
-                historial TEXT DEFAULT '[]')""",
+                historial TEXT DEFAULT '[]',
+                coche TEXT DEFAULT '',
+                reemplazo TEXT DEFAULT '')""",
+            f"""CREATE TABLE IF NOT EXISTS alpha_transbordos (
+                id {PK},
+                el TEXT NOT NULL,
+                por TEXT DEFAULT '',
+                fecha TEXT NOT NULL,
+                servicio TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                motivo TEXT DEFAULT '',
+                parada TEXT DEFAULT '',
+                hora TEXT DEFAULT '',
+                tramo TEXT DEFAULT '',
+                destino TEXT DEFAULT '',
+                coche_antes TEXT DEFAULT '',
+                coche_nuevo TEXT DEFAULT '',
+                pasajeros INTEGER DEFAULT 0,
+                taller TEXT DEFAULT '',
+                detalle TEXT DEFAULT '[]')""",
+            "CREATE INDEX IF NOT EXISTS ix_alpha_transbordos_f ON alpha_transbordos (fecha)",
             "CREATE INDEX IF NOT EXISTS ix_alpha_servicios_f ON alpha_servicios (fecha)",
             "CREATE INDEX IF NOT EXISTS ix_alpha_ventas_serv ON alpha_ventas (fecha, servicio)",
             "CREATE INDEX IF NOT EXISTS ix_alpha_ventas_ag ON alpha_ventas (agencia_id)",
@@ -146,6 +166,12 @@ def init_alpha_ventas():
         if "ie" not in columnas_de_tabla(conn, "alpha_liquidaciones"):
             conn.execute("ALTER TABLE alpha_liquidaciones ADD COLUMN ie REAL DEFAULT 0")
             conn.commit()
+        # El coche que reemplaza al que se rompió (cuando el tráfico no tiene la salida)
+        cols = columnas_de_tabla(conn, "alpha_servicios")
+        for col in ("coche", "reemplazo"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE alpha_servicios ADD COLUMN {col} TEXT DEFAULT ''")
+                conn.commit()
     except Exception:
         try:
             conn.rollback()
@@ -292,6 +318,10 @@ def _estados_servicios(conn, fecha):
         for r in conn.execute("SELECT * FROM alpha_servicios WHERE fecha=?", (fecha,)).fetchall():
             x = dict(r)
             x["historial"] = json.loads(x.get("historial") or "[]")
+            try:
+                x["reemplazo_obj"] = json.loads(x.get("reemplazo") or "null")
+            except ValueError:
+                x["reemplazo_obj"] = None
             out[x["servicio"]] = x
         return out
     except Exception:
@@ -308,6 +338,24 @@ def _servicio_err(conn, fecha, servicio):
     return None
 
 
+def _servicio_guardar(conn, fecha, servicio, entrada, estado=None, motivo=None, coche=None, reemplazo=None):
+    """Agrega una entrada al historial del servicio y cambia lo que venga."""
+    ant = _estados_servicios(conn, fecha).get(servicio) or {}
+    hist = (ant.get("historial") or []) + [entrada]
+    est = estado or ant.get("estado") or "abierto"
+    mot = motivo if motivo is not None else (ant.get("motivo") or "")
+    co = coche if coche is not None else (ant.get("coche") or "")
+    rz = json.dumps(reemplazo, ensure_ascii=False) if reemplazo is not None else (ant.get("reemplazo") or "")
+    conn.execute("""INSERT INTO alpha_servicios (clave, fecha, servicio, estado, motivo, por, el, historial, coche, reemplazo)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT (clave) DO UPDATE SET estado=excluded.estado, motivo=excluded.motivo, por=excluded.por,
+                    el=excluded.el, historial=excluded.historial, coche=excluded.coche, reemplazo=excluded.reemplazo""",
+                 (f"{fecha}|{servicio}", fecha, servicio, est, mot, entrada.get("por") or "", entrada.get("el") or "",
+                  json.dumps(hist, ensure_ascii=False), co, rz))
+    return {"fecha": fecha, "servicio": servicio, "estado": est, "motivo": mot, "por": entrada.get("por"),
+            "el": entrada.get("el"), "historial": hist}
+
+
 def estado_servicio(d):
     fecha, servicio, estado = str(d.get("fecha") or ""), str(d.get("servicio") or "")[:200], d.get("estado")
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha) or not servicio:
@@ -320,19 +368,11 @@ def estado_servicio(d):
     ahora = ahora_iso()
     conn = get_connection()
     try:
-        ant = _estados_servicios(conn, fecha).get(servicio)
-        hist = (ant or {}).get("historial") or []
-        hist.append({"el": ahora, "por": _vendedor(), "estado": estado, "motivo": motivo,
-                     "hora": str(d.get("hora") or "")[:5], "tramo": str(d.get("tramo") or "")[:60]})
-        conn.execute("""INSERT INTO alpha_servicios (clave, fecha, servicio, estado, motivo, por, el, historial)
-                        VALUES (?,?,?,?,?,?,?,?)
-                        ON CONFLICT (clave) DO UPDATE SET estado=excluded.estado, motivo=excluded.motivo,
-                        por=excluded.por, el=excluded.el, historial=excluded.historial""",
-                     (f"{fecha}|{servicio}", fecha, servicio, estado, motivo, _vendedor(), ahora,
-                      json.dumps(hist, ensure_ascii=False)))
+        out = _servicio_guardar(conn, fecha, servicio, {
+            "el": ahora, "por": _vendedor(), "estado": estado, "motivo": motivo,
+            "hora": str(d.get("hora") or "")[:5], "tramo": str(d.get("tramo") or "")[:60]}, estado=estado, motivo=motivo)
         conn.commit()
-        return {"fecha": fecha, "servicio": servicio, "estado": estado, "motivo": motivo, "por": _vendedor(),
-                "el": ahora, "historial": hist}, None
+        return out, None
     except Exception:
         _rollback(conn)
         raise
@@ -705,6 +745,181 @@ def accion_venta(vid, accion, d):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# TRANSBORDOS (solo administración): se rompe un coche y
+#   - otro coche sigue la misma salida (los asientos se reacomodan si el plano
+#     es otro y el cambio queda en el tráfico), o
+#   - los pasajeros pasan a otra salida (del mismo día o del siguiente).
+# La pantalla arma el plan (qué asiento le toca a cada uno) y acá se revisa que
+# no choque con nada y se aplica todo junto. No mueve plata: el boleto sigue
+# siendo el mismo, con otro servicio o asiento, y queda anotado el transbordo.
+# ════════════════════════════════════════════════════════════════════════════
+
+def _taller_aviso(coche, texto, quien):
+    """Un pedido de reparación en la bandeja del taller (Pedidos de los choferes)."""
+    try:
+        from ot_pedidos import crear_reporte
+        conn = get_connection()
+        try:
+            v = conn.execute("SELECT id FROM vehiculos WHERE TRIM(CAST(n_interno AS TEXT))=?", (str(coche).strip(),)).fetchone()
+        finally:
+            conn.close()
+        if not v:
+            return ""
+        rid = crear_reporte(v["id"], [{"descripcion": texto[:300], "tipo": "correctivo"}], f"Controles · {quien}"[:80])
+        return f"pedido {rid}"
+    except Exception:
+        return ""
+
+
+def aplicar_transbordo(d):
+    tipo = d.get("tipo")
+    if tipo not in ("coche", "salida"):
+        return None, "¿Otro coche o otra salida?"
+    fecha, servicio = str(d.get("fecha") or ""), str(d.get("servicio") or "")[:200]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha) or not servicio:
+        return None, "Falta la salida con problemas"
+    motivo = " ".join(str(d.get("motivo") or "").split())[:160]
+    if not motivo:
+        return None, "Contá qué pasó (queda en el historial)"
+    parada = " ".join(str(d.get("parada") or "").split())[:80]
+    coche_antes = str(d.get("coche_antes") or "").strip()[:20]
+    coche_nuevo = str(d.get("coche_nuevo") or "").strip()[:20]
+    if tipo == "coche" and not coche_nuevo:
+        return None, "Elegí el coche que sigue la salida"
+    if tipo == "coche" and coche_nuevo == coche_antes:
+        return None, "Es el mismo coche"
+    movs = d.get("movs") or []
+    if not isinstance(movs, list) or len(movs) > 300:
+        return None, "Lista de pasajeros inválida"
+    if tipo == "salida" and not movs:
+        return None, "Elegí qué pasajeros pasan a la otra salida"
+    ahora, quien = ahora_iso(), _vendedor()
+    conn = get_connection()
+    try:
+        limpios, ids = [], set()
+        for m in movs:
+            try:
+                nro = int(m.get("nro"))
+            except (TypeError, ValueError):
+                return None, "Pasajero inválido"
+            v = _ve(conn, nro)
+            if not v or v["fecha"] != fecha or v["servicio"] != servicio or not _viva(v, ahora) or v["estado"] == "bloqueado":
+                return None, f"El boleto {nro:07d} ya no está en esa salida: volvé a armar el transbordo"
+            viaje, err = _limpiar_viaje(m.get("viaje") or {})
+            if err:
+                return None, err
+            s, b = int(_num(m.get("sube_idx"), 0)), int(_num(m.get("baja_idx"), 99))
+            if b <= s:
+                return None, f"El tramo del boleto {nro:07d} no es válido"
+            if tipo == "coche" and (viaje["fecha"] != fecha or viaje["servicio"] != servicio):
+                return None, "Con otro coche, la salida es la misma"
+            if v["estado"] == "reserva" and viaje["asiento"] == "P":
+                return None, "Una reserva no puede quedar parada"
+            limpios.append((v, viaje, s, b))
+            ids.add(nro)
+        # Que nadie quede en un asiento ocupado (ni dos de los que se mueven en el mismo)
+        destinos = {}
+        for v, viaje, s, b in limpios:
+            destinos.setdefault((viaje["fecha"], viaje["servicio"]), []).append((v, viaje, s, b))
+        for (f, sv), lista in destinos.items():
+            if tipo == "salida":
+                est = (_estados_servicios(conn, f).get(sv) or {}).get("estado")
+                if est == "cancelado":
+                    return None, "La salida de destino está cancelada"
+            otros = [dict(r) for r in conn.execute(
+                "SELECT id, estado, vence, asiento, sube_idx, baja_idx FROM alpha_ventas WHERE fecha=? AND servicio=?",
+                (f, sv)).fetchall()]
+            ocup = [o for o in otros if o["id"] not in ids and _viva(o, ahora)]
+            tope = _parados_max(conn, lista[0][1]["plano"])
+            for v, viaje, s, b in lista:
+                a = viaje["asiento"]
+                if a == "P":
+                    if len([o for o in ocup if o["asiento"] == "P"]) >= tope:
+                        return None, f"En la salida de destino no quedan lugares parados (boleto {v['id']:07d})"
+                elif any(o["asiento"] == a and o["sube_idx"] < b and s < o["baja_idx"] for o in ocup):
+                    return None, f"El asiento {a} de la salida de destino ya está ocupado: volvé a armar el transbordo"
+                ocup.append({"asiento": a, "sube_idx": s, "baja_idx": b})
+        # Aplicar
+        detalle = []
+        for v, viaje, s, b in limpios:
+            datos = json.loads(v.get("datos") or "{}")
+            antes = {k: datos.get(k) for k in ("hora", "sale", "llega", "tramo", "coche", "sube", "baja")}
+            antes.update(fecha=v["fecha"], servicio=v["servicio"], asiento=v["asiento"])
+            for k in CAMPOS_VIAJE:
+                if viaje.get(k) is not None and k != "intl":
+                    datos[k] = viaje[k]
+            if tipo == "salida":
+                datos.pop("embarque", None)
+            datos["transbordos"] = (datos.get("transbordos") or []) + [
+                {"el": ahora, "por": quien, "tipo": tipo, "motivo": motivo, "parada": parada, "antes": antes}]
+            conn.execute("""UPDATE alpha_ventas SET fecha=?, servicio=?, asiento=?, sube_idx=?, baja_idx=?, datos=?, actualizado_el=?
+                            WHERE id=?""", (viaje["fecha"], viaje["servicio"], viaje["asiento"], s, b,
+                                            json.dumps(datos, ensure_ascii=False), ahora, v["id"]))
+            detalle.append({"nro": v["id"], "nombre": v["nombre"], "doc": v["doc"], "estado": v["estado"],
+                            "antes": antes, "despues": {k: datos.get(k) for k in ("fecha", "hora", "sale", "llega", "tramo", "coche",
+                                                                                  "sube", "baja", "asiento")}})
+        destino_txt = str(d.get("destino_txt") or "")[:160]
+        entrada = {"el": ahora, "por": quien, "estado": None, "transbordo": tipo, "motivo": motivo, "parada": parada,
+                   "destino": destino_txt, "pasajeros": len(limpios), "hora": str(d.get("hora") or "")[:5],
+                   "tramo": str(d.get("tramo") or "")[:60]}
+        cancelar = tipo == "salida" and bool(d.get("cancelar_origen"))
+        salida_id = d.get("salida_id")
+        reemplazo = {"de": coche_antes, "a": coche_nuevo, "motivo": motivo, "parada": parada, "el": ahora, "por": quien} if tipo == "coche" else None
+        entrada["estado"] = "cancelado" if cancelar else None
+        _servicio_guardar(conn, fecha, servicio, entrada, estado="cancelado" if cancelar else None,
+                          motivo=f"Transbordo: {motivo}" if cancelar else None,
+                          coche=coche_nuevo if tipo == "coche" and not salida_id else None, reemplazo=reemplazo)
+        cur = conn.execute("""INSERT INTO alpha_transbordos (el, por, fecha, servicio, tipo, motivo, parada, hora, tramo, destino,
+                                  coche_antes, coche_nuevo, pasajeros, taller, detalle)
+                              VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                           (ahora, quien, fecha, servicio, tipo, motivo, parada, entrada["hora"], entrada["tramo"],
+                            destino_txt, coche_antes, coche_nuevo if tipo == "coche" else "", len(limpios), "",
+                            json.dumps(detalle, ensure_ascii=False)))
+        tid = cur.lastrowid
+        conn.commit()
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+    # Después de guardar: el coche nuevo en el tráfico y el aviso al taller
+    trafico_ok = False
+    if tipo == "coche" and salida_id:
+        try:
+            import trafico as tr
+            trafico_ok = bool(tr.editar_salida(int(salida_id), {"coche": coche_nuevo}))
+        except Exception:
+            trafico_ok = False
+    taller = ""
+    if d.get("avisar_taller") and coche_antes:
+        taller = _taller_aviso(coche_antes, f"Se rompió en servicio ({entrada['tramo']} {entrada['hora']} del "
+                                            f"{fecha[8:10]}/{fecha[5:7]}{', en ' + parada if parada else ''}): {motivo}", quien)
+        if taller:
+            conn = get_connection()
+            try:
+                conn.execute("UPDATE alpha_transbordos SET taller=? WHERE id=?", (taller, tid))
+                conn.commit()
+            finally:
+                conn.close()
+    return {"id": tid, "pasajeros": len(detalle), "detalle": detalle, "trafico": trafico_ok, "taller": taller,
+            "cancelado": cancelar}, None
+
+
+def transbordos(fecha="", limite=50):
+    conn = get_connection()
+    try:
+        sql, args = "SELECT * FROM alpha_transbordos", []
+        if fecha:
+            sql += " WHERE fecha=?"; args.append(fecha)
+        filas = [dict(r) for r in conn.execute(sql + " ORDER BY id DESC LIMIT ?", args + [int(limite)]).fetchall()]
+        for f in filas:
+            f["detalle"] = json.loads(f.get("detalle") or "[]")
+        return filas
+    finally:
+        conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # CONSULTAS: ocupación, pasajes, pasajero conocido
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -735,7 +950,8 @@ def ocupacion(fecha):
             q += " AND agencia_id=?"; args.append(_agencia())
         res = conn.execute(q, args).fetchone()["n"]
         servicios = {k: {"estado": e["estado"], "motivo": e["motivo"], "por": e["por"], "el": e["el"],
-                         "historial": e["historial"] if session.get("rol") == "admin" else []}
+                         "historial": e["historial"] if session.get("rol") == "admin" else [],
+                         "reemplazo": e.get("reemplazo_obj") if session.get("rol") == "admin" else None}
                      for k, e in _estados_servicios(conn, fecha).items() if e["estado"] != "abierto" or session.get("rol") == "admin"}
         credito = None
         if _agencia():
@@ -811,7 +1027,7 @@ def pasajero(doc):
 def borrar_todo():
     conn = get_connection()
     try:
-        for t in ("alpha_movs", "alpha_ventas", "alpha_cierres", "alpha_liquidaciones"):
+        for t in ("alpha_movs", "alpha_ventas", "alpha_cierres", "alpha_liquidaciones", "alpha_transbordos", "alpha_servicios"):
             conn.execute(f"DELETE FROM {t}")
         conn.commit()
     finally:
@@ -1677,6 +1893,29 @@ def api_estado_servicio():
     ult = e["historial"][-1]
     _auditar(f"Alpha: {txt} {ult.get('tramo') or 'un servicio'} {ult.get('hora')}", f"{e['fecha']} {e['motivo']}")
     return jsonify({"ok": True, "servicio": e})
+
+
+@bp_alpha_ventas.route("/api/alpha/transbordos", methods=["GET"])
+def api_transbordos():
+    if session.get("rol") != "admin":
+        return _no("Los transbordos los ve administración")
+    f = request.args.get("fecha") or ""
+    if f and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", f):
+        return _no("Fecha inválida", 400)
+    return jsonify({"transbordos": transbordos(f)})
+
+
+@bp_alpha_ventas.route("/api/alpha/transbordos", methods=["POST"])
+def api_transbordo():
+    if session.get("rol") != "admin":
+        return _no("Los transbordos los hace administración")
+    d = request.get_json(silent=True) or {}
+    r, err = aplicar_transbordo(d)
+    if err:
+        return _no(err, 409 if "ocupado" in err or "ya no está" in err or "parados" in err else 400)
+    _auditar(f"Alpha: transbordo de {r['pasajeros']} pasajero(s) " + ("a otro coche" if d.get("tipo") == "coche" else "a otra salida"),
+             f"{d.get('tramo')} {d.get('hora')} {d.get('fecha')}: {d.get('motivo')}")
+    return jsonify(dict(r, ok=True))
 
 
 @bp_alpha_ventas.route("/api/alpha/control/agencias", methods=["GET"])
