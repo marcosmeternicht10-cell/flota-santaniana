@@ -207,6 +207,9 @@ app.register_blueprint(bp_ot_pedidos)
 from agencias import bp_agencias, init_agencias
 init_agencias()
 app.register_blueprint(bp_agencias)
+# Panel del gerente: operación del día y plata del mes, solo lectura
+from gerencia import bp_gerencia
+app.register_blueprint(bp_gerencia)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -413,6 +416,20 @@ def proteger_rutas():
                 return jsonify({"error": "Sin permiso"}), 403
             return redirect(url_for("pantalla_corp"))
 
+    # El gerente: solo su panel, y solo para mirar. Cualquier pedido que
+    # escriba se rechaza, aunque llegue por fuera de la pantalla.
+    if session.get("rol") == "gerente":
+        if request.method not in ("GET", "HEAD") and p != "/api/logout":
+            return jsonify({"error": "El panel del gerente es de solo lectura"}), 403
+        permitido = (
+            p in ("/", "/gerencia", "/api/logout", "/api/me", "/api/usuario_actual") or
+            p.startswith("/api/gerencia/")
+        )
+        if not permitido:
+            if p.startswith("/api/"):
+                return jsonify({"error": "Sin permiso"}), 403
+            return redirect("/gerencia")
+
     # El rol Compras accede a la app principal pero solo a sus endpoints + lectura básica.
     if session.get("rol") == "compras":
         permitido = (
@@ -452,6 +469,8 @@ def version_assets():
             os.path.join(app.static_folder, "alpha.js"),
             os.path.join(app.static_folder, "alpha.css"),
             os.path.join(app.static_folder, "controles.js"),
+            os.path.join(app.static_folder, "gerencia.js"),
+            os.path.join(app.static_folder, "gerencia.css"),
         ]
         ultima = max(os.path.getmtime(a) for a in archivos if os.path.exists(a))
         return str(int(ultima))  # timestamp como número de versión
@@ -469,6 +488,8 @@ def index():
         return redirect(url_for("pantalla_corp"))
     if session.get("rol") == "agencia":
         return redirect("/boleteria")
+    if session.get("rol") == "gerente":
+        return redirect("/gerencia")
     html = render_template("index.html",
                            usuario=session.get("nombre") or session.get("usuario"),
                            rol=session.get("rol"),
@@ -496,6 +517,24 @@ def pantalla_boleteria():
                            usuario=session.get("nombre") or session.get("usuario"),
                            rol=session.get("rol"), agencia=session.get("agencia") or "",
                            v=version_assets())
+    resp = make_response(html)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/gerencia")
+@login_requerido
+def pantalla_gerencia():
+    """El panel del gerente: cómo viene el día y la plata del mes, en una
+    sola pantalla para la compu o el celular. Administración también la abre."""
+    from gerencia import puede_ver
+    if not puede_ver():
+        return redirect("/")
+    html = render_template("gerencia.html",
+                           usuario=session.get("nombre") or session.get("usuario"),
+                           rol=session.get("rol"), v=version_assets())
     resp = make_response(html)
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
