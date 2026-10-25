@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Boletería — La Santaniana</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ v }}">
+  <link rel="stylesheet" href="/static/alpha.css?v={{ v }}">
+</head>
+<body class="boleteria">
+  <!-- La boletería de las agencias: solo Alpha. No carga el resto del sistema. -->
+  <div id="content"></div>
+  <div class="toast" id="toast"></div>
+  <script>
+    window.USUARIO_ROL = {{ rol|tojson }};
+    window.USUARIO_NOMBRE = {{ usuario|tojson }};
+    window.USUARIO_AGENCIA = {{ agencia|tojson }};
+    window.AL_BOLETERIA = true;
+    // Lo mínimo del sistema que usa Alpha
+    const $ = sel => document.querySelector(sel);
+    const content = $("#content");
+    function fmtNum(v) { return (v || 0).toLocaleString("es-PY").replace(/,/g, "."); }
+    const trEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    let _toastTimer = null;
+    function toast(msg, tipo = "") {
+      const t = $("#toast");
+      const icono = tipo === "success" ? "check" : tipo === "error" ? "alert-triangle" : "info-circle";
+      t.innerHTML = `<i class="ti ti-${icono}"></i><span>${msg}</span>`;
+      t.className = "toast";
+      void t.offsetWidth;
+      t.className = "toast show " + tipo;
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => t.className = "toast", 2800);
+    }
+    function status() {}
+    async function api(url, opts) {
+      const r = await fetch(url, opts);
+      if (r.status === 401) { window.location.href = "/login"; return {}; }
+      if (r.status === 403) {
+        const d = await r.json().catch(() => ({}));
+        toast(d.error || "No tenés permiso para esto", "error");
+        return { ok: false, msg: d.error };
+      }
+      return r.json();
+    }
+  </script>
+  <script src="/static/alpha.js?v={{ v }}"></script>
+  <script>renderAlpha();</script>
+</body>
+</html>
