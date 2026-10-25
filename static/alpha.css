@@ -362,3 +362,15 @@
 .al-modal-cuerpo .al-campo { flex: 0 0 auto; }
 .al-man-baja p b { font-size: 16px; font-family: 'Atkinson Hyperlegible Next', Verdana, sans-serif; }
 .al-rec > .al-link { align-self: flex-start; }
+
+/* Agencias: quién está vendiendo, y la vista "como agencia" de administración */
+.al-quien { display: flex; flex-direction: column; align-items: flex-end; }
+.al-quien span { font-size: 12.5px; font-weight: 700; color: var(--al-txt2); }
+.al-quien b { font-size: 15px; font-family: 'Atkinson Hyperlegible Next', Verdana, sans-serif; }
+.al-comoag.on { border-color: #F5C26B; color: #F5C26B; }
+.al-banner-ag { background: #1F3340; border-color: #3E6A85; color: #CFE6F5; }
+.al-banner-ag > .ti { color: #8CC8EE; }
+body.boleteria { margin: 0; background: #1F2226; }
+body.boleteria #content { min-height: 100vh; padding: 0; }
+body.boleteria { overflow: auto; height: auto; }
+body.boleteria #content { overflow: visible; }

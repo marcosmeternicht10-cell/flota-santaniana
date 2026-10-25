@@ -220,7 +220,9 @@ function irA(sec) {
     personal: renderPersonal,
     corp_asignacion: renderCorpAsignacion,
     comb_rendicion: renderRendCombustible,
-    alpha: renderAlpha,
+    // Alpha vive en static/alpha.js: si ese archivo falta, que no se rompa todo el menú
+    alpha: () => typeof renderAlpha === "function" ? renderAlpha()
+      : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/alpha.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
   };
   map[sec]();
 }
@@ -8116,7 +8118,7 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo" };
+const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", agencia: "Agencia" };
 
 // Los roles que se pueden asignar, en un solo lugar para no repetirlos
 const ROLES_DISPONIBLES = [
@@ -8126,7 +8128,24 @@ const ROLES_DISPONIBLES = [
   ["auditor", "Auditor (combustible e historial)"],
   ["chofer", "Chofer (solo reportar)"],
   ["chofer_corp", "Chofer corporativo (rendiciones)"],
+  ["agencia", "Agencia de pasajes (solo vende en Alpha)"],
 ];
+// Las agencias del módulo Comercial, para atar un usuario de agencia a la suya
+let _agenciasUsuarios = null;
+async function agenciasParaUsuarios() {
+  if (!_agenciasUsuarios) {
+    const r = await api("/api/agencias").catch(() => null);
+    _agenciasUsuarios = ((r && r.agencias) || []).filter(a => a.estado !== "baja").map(a => ({ id: a.id, nombre: a.nombre, ciudad: a.ciudad || "" }));
+  }
+  return _agenciasUsuarios;
+}
+function selectAgencia(id, actual) {
+  const ags = _agenciasUsuarios || [];
+  return `<select id="${id}" style="width:100%">
+    <option value="">${ags.length ? "Elegí la agencia…" : "No hay agencias cargadas en Comercial"}</option>
+    ${ags.map(a => `<option value="${a.id}" ${a.id === actual ? "selected" : ""}>${trEsc(a.nombre)}${a.ciudad ? " · " + trEsc(a.ciudad) : ""}</option>`).join("")}
+  </select>`;
+}
 
 async function renderUsuarios() {
   status("Gestión de usuarios");
@@ -8134,6 +8153,7 @@ async function renderUsuarios() {
   try {
     usuarios = await api("/api/usuarios");
     await catalogoSecciones();
+    await agenciasParaUsuarios();
   } catch (e) {
     content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-lock"></i>Solo el administrador puede gestionar usuarios.</div></div>`;
     return;
@@ -8155,11 +8175,15 @@ async function renderUsuarios() {
             <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez"></div>
             <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" style="width:140px"></div>
             <div class="field"><label>Rol</label>
-              <select id="u-rol" style="width:230px" onchange="$('#u-secc-wrap').style.display = this.value === 'taller' ? '' : 'none'">
+              <select id="u-rol" style="width:230px" onchange="$('#u-secc-wrap').style.display = this.value === 'taller' ? '' : 'none'; $('#u-ag-wrap').style.display = this.value === 'agencia' ? '' : 'none'">
                 ${ROLES_DISPONIBLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}
               </select>
             </div>
             <button class="btn btn-primary" onclick="guardarUsuario()"><i class="ti ti-plus"></i> Crear</button>
+          </div>
+          <div id="u-ag-wrap" class="field" style="margin-top:14px;max-width:420px;display:none">
+            <label>Agencia</label>${selectAgencia("u-agencia", null)}
+            <p class="hint" style="margin-top:6px"><i class="ti ti-info-circle"></i> Entra directo a la boletería: solo vende pasajes y ve su caja. No ve el resto del sistema, ni tarifas, ni choferes.</p>
           </div>
           <div id="u-secc-wrap" style="margin-top:14px">
             <div class="secc-titulo"><i class="ti ti-layout-sidebar"></i> Qué secciones ve</div>
@@ -8167,7 +8191,7 @@ async function renderUsuarios() {
           </div>
           <p class="hint" style="margin-top:14px">
             <i class="ti ti-info-circle"></i>
-            <b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios. <b>Chofer</b>: solo ve una pantalla simple para cargar sus reportes desde el celular. <b>Chofer corporativo</b>: carga sus rendiciones de servicios desde el celular.
+            <span><b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios. <b>Chofer</b>: solo ve una pantalla simple para cargar sus reportes desde el celular. <b>Chofer corporativo</b>: carga sus rendiciones de servicios desde el celular. <b>Agencia</b>: solo la boletería de Alpha (vender, sus pasajes y su caja).</span>
           </p>
         </div>
       </div>
@@ -8186,7 +8210,7 @@ async function renderUsuarios() {
               <tr>
                 <td><b>${u.usuario}</b></td>
                 <td>${u.nombre || "—"}</td>
-                <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span></td>
+                <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span>${u.rol === "agencia" ? `<div style="font-size:11.5px;color:var(--muted);margin-top:3px">${trEsc(u.agencia || "sin agencia")}</div>` : ""}</td>
                 <td style="font-size:12px">${textoAcceso(u)}</td>
                 <td class="center">${celdaBorraOTs(u)}</td>
                 <td class="center">${celdaEditaKm(u)}</td>
@@ -8386,11 +8410,13 @@ async function guardarUsuario() {
   const rol = $("#u-rol").value;
   const secciones = rol === "taller" ? leerSecciones("u-secc") : [];
   if (secciones === null) return;    // eligió "algunas" pero no tildó ninguna
+  const agencia_id = rol === "agencia" ? $("#u-agencia").value : null;
+  if (rol === "agencia" && !agencia_id) { toast("Elegí a qué agencia pertenece", "error"); return; }
   const r = await api("/api/usuarios", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       usuario: user, password: pass,
-      nombre: $("#u-nombre").value.trim(), rol, secciones
+      nombre: $("#u-nombre").value.trim(), rol, secciones, agencia_id
     })
   });
   if (r.ok) {
@@ -8433,11 +8459,12 @@ async function cambiarRolUsuario(uid, usuario, rolActual) {
       <div class="firma-items">
         ${ROLES_DISPONIBLES.map(([v, t]) => `
           <label class="firma-item" style="margin-bottom:7px">
-            <input type="radio" name="rol-nuevo" value="${v}" ${v === rolActual ? "checked" : ""} style="width:18px;height:18px">
+            <input type="radio" name="rol-nuevo" value="${v}" ${v === rolActual ? "checked" : ""} style="width:18px;height:18px" onchange="document.getElementById('rol-ag-wrap').style.display = this.value === 'agencia' ? '' : 'none'">
             <span class="firma-item-info">
               <span class="firma-item-desc">${t}</span>
             </span>
           </label>`).join("")}
+        <div id="rol-ag-wrap" class="field" style="margin-top:8px;${rolActual === "agencia" ? "" : "display:none"}"><label>Agencia</label>${selectAgencia("rol-agencia", ((window._usuarios || []).find(x => x.id === uid) || {}).agencia_id || null)}</div>
         <p class="hint" style="margin-top:10px"><i class="ti ti-info-circle"></i> Al cambiar el rol cambia la pantalla que ve al entrar. Si pasa a chofer corporativo, entra directo a cargar rendiciones desde el celular.</p>
       </div>
       <div class="firma-acciones">
@@ -8453,10 +8480,15 @@ async function cambiarRolUsuario(uid, usuario, rolActual) {
 async function guardarRolUsuario(uid, btn) {
   const sel = document.querySelector('input[name="rol-nuevo"]:checked');
   if (!sel) { toast("Elegí un rol", "error"); return; }
+  const datos = { rol: sel.value };
+  if (sel.value === "agencia") {
+    datos.agencia_id = document.getElementById("rol-agencia")?.value || "";
+    if (!datos.agencia_id) { toast("Elegí a qué agencia pertenece", "error"); return; }
+  }
   btn.disabled = true;
   const r = await api(`/api/usuarios/${uid}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rol: sel.value })
+    body: JSON.stringify(datos)
   });
   if (r && r.ok) {
     toast(r.msg || "Rol actualizado", "success");
