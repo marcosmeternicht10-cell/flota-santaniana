@@ -106,6 +106,8 @@ function setCoche(v) {
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
+    // Los que abren otra pestaña (Tablero, Panel del gerente) no son secciones
+    if (!btn.dataset.sec) { cerrarSidebar(); return; }
     if (btn.hasAttribute("data-needs-coche") && !cocheActual) {
       elegirCocheYIr(btn.dataset.sec);
       cerrarSidebar();
@@ -8121,7 +8123,7 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", agencia: "Agencia" };
+const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", agencia: "Agencia", gerente: "Gerente" };
 
 // Los roles que se pueden asignar, en un solo lugar para no repetirlos
 const ROLES_DISPONIBLES = [
@@ -8132,6 +8134,7 @@ const ROLES_DISPONIBLES = [
   ["chofer", "Chofer (solo reportar)"],
   ["chofer_corp", "Chofer corporativo (rendiciones)"],
   ["agencia", "Agencia de pasajes (solo vende en Alpha)"],
+  ["gerente", "Gerente (solo mira su panel)"],
 ];
 // Las agencias del módulo Comercial, para atar un usuario de agencia a la suya
 let _agenciasUsuarios = null;
