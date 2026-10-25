@@ -487,6 +487,12 @@ def inicializar_db():
             conn.execute("ALTER TABLE usuarios ADD COLUMN secciones TEXT DEFAULT ''")
     except Exception:
         pass
+    # Usuarios de agencia (venden pasajes en Alpha): a qué agencia pertenecen
+    try:
+        if "agencia_id" not in columnas_de_tabla(conn, "usuarios"):
+            conn.execute("ALTER TABLE usuarios ADD COLUMN agencia_id INTEGER")
+    except Exception:
+        pass
     # Quién puede eliminar órdenes de trabajo además de administración. La
     # primera vez que aparece la columna se le habilita a Celeste, que fue
     # quien lo pidió; después se maneja desde el panel de Usuarios.
@@ -2734,7 +2740,7 @@ def _verificar_password(password, password_hash):
         return False
 
 
-def crear_usuario(usuario, password, nombre="", rol="taller", secciones=""):
+def crear_usuario(usuario, password, nombre="", rol="taller", secciones="", agencia_id=None):
     """Crea un nuevo usuario. Las secciones solo cuentan para el rol Taller:
     vacío es acceso completo."""
     from permisos import a_texto
@@ -2746,6 +2752,9 @@ def crear_usuario(usuario, password, nombre="", rol="taller", secciones=""):
                       _hash_password(password), rol,
                       a_texto(secciones) if rol == "taller" else ""))
         conn.commit()
+        if rol == "agencia" and agencia_id:
+            conn.execute("UPDATE usuarios SET agencia_id=? WHERE usuario=?", (int(agencia_id), usuario.lower().strip()))
+            conn.commit()
         return True, "Usuario creado."
     except IntegrityError:
         return False, f"El usuario '{usuario}' ya existe."
@@ -2770,8 +2779,12 @@ def autenticar_usuario(usuario, password):
             secs = desde_texto(u["secciones"])
         except Exception:
             secs = []
+        try:
+            ag = u["agencia_id"]
+        except (KeyError, IndexError):
+            ag = None
         return {"id": u["id"], "usuario": u["usuario"],
-                "nombre": u["nombre"], "rol": u["rol"], "secciones": secs}
+                "nombre": u["nombre"], "rol": u["rol"], "secciones": secs, "agencia_id": ag}
     conn.close()
     return None
 
@@ -2782,8 +2795,16 @@ def obtener_usuarios():
                            fecha_creacion, ultimo_acceso,
                            COALESCE(secciones, '') AS secciones,
                            COALESCE(borra_ots, 0) AS borra_ots,
-                           COALESCE(edita_km, 0) AS edita_km FROM usuarios
+                           COALESCE(edita_km, 0) AS edita_km, agencia_id FROM usuarios
                            ORDER BY usuario""").fetchall()
+    nombres_ag = {}
+    try:
+        nombres_ag = {r["id"]: r["nombre"] for r in conn.execute("SELECT id, nombre FROM agencias").fetchall()}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
     conn.close()
     from permisos import desde_texto
     salida = []
@@ -2792,6 +2813,7 @@ def obtener_usuarios():
         d["secciones"] = desde_texto(d.get("secciones"))
         d["borra_ots"] = 1 if (d.get("rol") == "admin" or d.get("borra_ots")) else 0
         d["edita_km"] = 1 if (d.get("rol") in ("admin", "taller") or d.get("edita_km")) else 0
+        d["agencia"] = nombres_ag.get(d.get("agencia_id")) or ""
         salida.append(d)
     return salida
 
@@ -2854,7 +2876,7 @@ def secciones_de_usuario(uid):
 
 # Lo único que se puede modificar de un usuario. Antes el SQL se armaba con
 # los nombres de campo que vinieran en el pedido, sin filtrar.
-CAMPOS_USUARIO = {"nombre", "rol", "activo", "password_hash", "secciones", "borra_ots", "edita_km"}
+CAMPOS_USUARIO = {"nombre", "rol", "activo", "password_hash", "secciones", "borra_ots", "edita_km", "agencia_id"}
 
 
 def actualizar_usuario(uid, **kwargs):
@@ -2870,6 +2892,8 @@ def actualizar_usuario(uid, **kwargs):
         kwargs["borra_ots"] = 1 if kwargs["borra_ots"] in (1, True, "1", "true", "si", "sí") else 0
     if "edita_km" in kwargs:
         kwargs["edita_km"] = 1 if kwargs["edita_km"] in (1, True, "1", "true", "si", "sí") else 0
+    if "agencia_id" in kwargs:
+        kwargs["agencia_id"] = int(kwargs["agencia_id"]) if str(kwargs["agencia_id"] or "").isdigit() else None
     kwargs = {k: v for k, v in kwargs.items() if k in CAMPOS_USUARIO}
     if not kwargs:
         return

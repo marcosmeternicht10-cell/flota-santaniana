@@ -382,6 +382,20 @@ def proteger_rutas():
         if not permitidos_auditor:
             return jsonify({"error": "El rol auditor no puede modificar datos"}), 403
 
+    # La agencia de pasajes: solo la boletería (Alpha). Todo lo demás del
+    # sistema (flota, taller, tráfico, choferes, tarifas) le queda cerrado
+    # también en el servidor, no solo en la pantalla.
+    if session.get("rol") == "agencia":
+        permitido = (
+            p in ("/", "/boleteria", "/api/logout") or
+            p in ("/api/alpha/config",) and request.method == "GET" or
+            p.startswith("/api/alpha/dia/")
+        )
+        if not permitido:
+            if p.startswith("/api/"):
+                return jsonify({"error": "Sin permiso"}), 403
+            return redirect("/boleteria")
+
     # El chofer de corporativos: solo su pantalla de rendiciones (celular).
     if session.get("rol") == "chofer_corp":
         permitido = (
@@ -449,6 +463,8 @@ def index():
         return redirect(url_for("pantalla_chofer"))
     if session.get("rol") == "chofer_corp":
         return redirect(url_for("pantalla_corp"))
+    if session.get("rol") == "agencia":
+        return redirect("/boleteria")
     html = render_template("index.html",
                            usuario=session.get("nombre") or session.get("usuario"),
                            rol=session.get("rol"),
@@ -459,6 +475,24 @@ def index():
     resp = make_response(html)
     # El HTML NUNCA se cachea: siempre se pide fresco, así trae la versión
     # correcta de CSS/JS. Los archivos estáticos sí se cachean pero con el ?v=.
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/boleteria")
+@login_requerido
+def pantalla_boleteria():
+    """La boletería de una agencia: solo Alpha (vender, sus pasajes y su caja).
+    Administración también puede abrirla para ver lo mismo que ve la agencia."""
+    if session.get("rol") not in ("agencia", "admin"):
+        return redirect("/")
+    html = render_template("boleteria.html",
+                           usuario=session.get("nombre") or session.get("usuario"),
+                           rol=session.get("rol"), agencia=session.get("agencia") or "",
+                           v=version_assets())
+    resp = make_response(html)
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
@@ -550,6 +584,17 @@ def api_login():
         session["nombre"] = u["nombre"]
         session["rol"] = u["rol"]
         session["secciones"] = u.get("secciones") or []
+        session["agencia_id"] = u.get("agencia_id")
+        session["agencia"] = ""
+        if u["rol"] == "agencia" and u.get("agencia_id"):
+            try:
+                from db_compat import get_connection as _gc
+                _c = _gc()
+                _r = _c.execute("SELECT nombre FROM agencias WHERE id=?", (u["agencia_id"],)).fetchone()
+                _c.close()
+                session["agencia"] = (_r["nombre"] if _r else "") or ""
+            except Exception:
+                pass
         # Sesión NO permanente: se cierra al cerrar el navegador (más seguro)
         session.permanent = False
         auditar("Inició sesión", "Acceso")
@@ -592,9 +637,11 @@ def api_crear_usuario():
     d = request.json or {}
     if not d.get("usuario") or not d.get("password"):
         return jsonify({"ok": False, "msg": "Usuario y contraseña obligatorios"}), 400
+    if d.get("rol") == "agencia" and not str(d.get("agencia_id") or "").isdigit():
+        return jsonify({"ok": False, "msg": "Elegí a qué agencia pertenece"}), 400
     ok, msg = crear_usuario(d["usuario"], d["password"],
                             d.get("nombre", ""), d.get("rol", "taller"),
-                            d.get("secciones") or [])
+                            d.get("secciones") or [], d.get("agencia_id"))
     if ok:
         from permisos import normalizar
         secs = normalizar(d.get("secciones") or []) if d.get("rol", "taller") == "taller" else []
@@ -620,6 +667,8 @@ def api_actualizar_usuario(uid):
 
     # Frenos para no quedarse afuera del sistema:
     nuevo_rol = d.get("rol")
+    if nuevo_rol == "agencia" and not str(d.get("agencia_id") or "").isdigit():
+        return jsonify({"ok": False, "msg": "Elegí a qué agencia pertenece"}), 400
     if nuevo_rol and nuevo_rol != "admin":
         if uid == session.get("usuario_id"):
             return jsonify({"ok": False,

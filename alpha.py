@@ -185,20 +185,73 @@ def dia_para_alpha(fecha):
                 for lado in tr.LADOS:
                     c[lado].sort(key=lambda x: x["hora"])
                 corredores.append(c)
+        # El plano de asientos de cada salida (sale del coche asignado o del que suele ir)
+        try:
+            cfg = {r["clave"]: json.loads(r["valor"]) for r in conn.execute(
+                "SELECT clave, valor FROM alpha_config WHERE clave IN ('planos', 'coche_plano')").fetchall()}
+        except Exception:
+            cfg = {}
+        planos = cfg.get("planos") or PLANOS_INICIALES
+        cp = cfg.get("coche_plano") or {}
+        for c in corredores:
+            for lado in tr.LADOS:
+                for x in c[lado]:
+                    coche = x["coche"] or x["habitual"]
+                    x["plano"] = plano_de(coche, x["modelo"] if x["coche"] else x["habitual_modelo"], planos, cp)
         return {"fecha": fecha, "corredores": corredores}
+
     finally:
         conn.close()
 
 
+def plano_de(coche, modelo, planos, coche_plano):
+    """El plano del coche: el que se le eligió; si no, se deduce del modelo
+    (Paradiso 1800 DD → AO01, los 8x2 → AO03, el resto → un piso)."""
+    fijo = coche and coche_plano.get(coche)
+    if fijo and fijo in planos:
+        return fijo
+    m = str(modelo or "").lower()
+    def ok(c):
+        return c if c in planos else (next(iter(planos)) if planos else c)
+    if re.search(r"1800\s*dd|b6x2", m):
+        return ok("AO01")
+    if "8x2" in m:
+        return ok("AO03")
+    return ok("ACXC" if m else "AO01")
+
+
+# Lo que una agencia no ve del tráfico: quién maneja, qué coche va, notas
+# internas y en qué estado está el armado del día.
+def para_agencia(d):
+    for c in d.get("corredores", []):
+        c["fuente"] = {"tipo": c["fuente"].get("tipo")}
+        for lado in tr.LADOS:
+            for x in c[lado]:
+                for k in ("tripulacion",):
+                    x[k] = []
+                for k in ("nota", "coche", "modelo", "habitual", "habitual_modelo"):
+                    x[k] = ""
+                x["id"] = None
+                x["a_confirmar"] = False
+    return d
+
+
+def _rol_alpha():
+    r = session.get("rol")
+    return r if r in ("admin", "agencia") else None
+
+
 @bp_alpha.route("/api/alpha/dia/<fecha>", methods=["GET"])
 def api_alpha_dia(fecha):
-    if session.get("rol") != "admin":
-        return jsonify({"ok": False, "error": "Alpha la ve solo administración"}), 403
+    rol = _rol_alpha()
+    if not rol:
+        return jsonify({"ok": False, "error": "Alpha la ve solo administración y las agencias"}), 403
     try:
         date.fromisoformat(fecha)
     except ValueError:
         return jsonify({"ok": False, "error": "Fecha inválida"}), 400
-    return jsonify(dia_para_alpha(fecha))
+    d = dia_para_alpha(fecha)
+    return jsonify(para_agencia(d) if rol == "agencia" else d)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -415,9 +468,17 @@ def guardar_config(clave, valor, quien=""):
 
 @bp_alpha.route("/api/alpha/config", methods=["GET"])
 def api_alpha_config():
-    if session.get("rol") != "admin":
-        return jsonify({"ok": False, "error": "Alpha la ve solo administración"}), 403
-    return jsonify(leer_config())
+    rol = _rol_alpha()
+    if not rol:
+        return jsonify({"ok": False, "error": "Alpha la ve solo administración y las agencias"}), 403
+    cfg = leer_config()
+    if rol == "agencia":
+        # Solo lo necesario para vender: los planos para dibujar el coche, las
+        # paradas, los descuentos y el precio de cada tramo. Nada de la flota.
+        cfg = {k: cfg.get(k) for k in ("planos", "recorridos", "tarifas", "descuentos", "corredores")}
+        cfg["coches"] = []
+        cfg["coche_plano"] = {}
+    return jsonify(cfg)
 
 
 @bp_alpha.route("/api/alpha/config/<clave>", methods=["PUT"])
