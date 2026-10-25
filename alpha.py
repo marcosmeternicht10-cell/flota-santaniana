@@ -209,13 +209,16 @@ def dia_para_alpha(fecha):
 
 def plano_de(coche, modelo, planos, coche_plano):
     """El plano del coche: el que se le eligió; si no, se deduce del modelo
-    (Paradiso 1800 DD → AO01, los 8x2 → AO03, el resto → un piso)."""
+    (Volare o Senior → micro, Paradiso 1800 DD → AO01, los 8x2 → AO03, el
+    resto → Paradiso un piso)."""
     fijo = coche and coche_plano.get(coche)
     if fijo and fijo in planos:
         return fijo
     m = str(modelo or "").lower()
     def ok(c):
         return c if c in planos else (next(iter(planos)) if planos else c)
+    if re.search(r"volare|senior", m):
+        return ok("VOLARE")
     if re.search(r"1800\s*dd|b6x2", m):
         return ok("AO01")
     if "8x2" in m:
@@ -272,21 +275,28 @@ def _filas(desde, n, huecos=None):
     return out
 
 
-# Los planos de Delta (los mismos que tenía la maqueta)
+# Los planos de Delta. La empresa usa solo carrocerías Marcopolo: los doble
+# piso son Paradiso 1800 DD, los de un piso Paradiso, y los micros Volare o
+# Senior. Los códigos quedan como en Delta.
 PLANOS_INICIALES = {
-    "AO01": {"nombre": "Doble piso con cama abajo", "tipo": "Doble piso", "parados": 10, "pisos": [
+    "AO01": {"nombre": "Paradiso 1800 DD · cama abajo", "tipo": "Doble piso", "parados": 10, "pisos": [
         {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 13, {2: "izq", 3: "izq"})},
         {"nombre": "Piso bajo", "clase": "CA", "filas": [[49, 50, None, None, 51], [52, 53, None, None, 54],
                                                          [55, 56, None, None, 57], [58, 59, None, None, 60]]},
     ]},
-    "AO03": {"nombre": "Doble piso, todo diferencial", "tipo": "Doble piso", "parados": 10, "pisos": [
+    "AO03": {"nombre": "Paradiso 1800 DD · todo diferencial", "tipo": "Doble piso", "parados": 10, "pisos": [
         {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 14, {3: "izq", 4: "izq"})},
         {"nombre": "Piso bajo", "clase": "CO", "filas": _filas(53, 4)},
     ]},
-    "ACXC": {"nombre": "Un piso", "tipo": "Un piso", "parados": 0, "pisos": [
+    "ACXC": {"nombre": "Paradiso un piso", "tipo": "Un piso", "parados": 0, "pisos": [
         {"nombre": "Planta única", "clase": "CO", "filas": _filas(1, 12, {11: "izq"})},
     ]},
+    # De arranque: 2 + 2 en 7 filas. Se ajusta en Alpha → Planos si no es así.
+    "VOLARE": {"nombre": "Volare / Senior (micro)", "tipo": "Un piso", "parados": 0, "pisos": [
+        {"nombre": "Planta única", "clase": "CO", "filas": _filas(1, 7)},
+    ]},
 }
+NOMBRES_VIEJOS = {"AO01": "Doble piso con cama abajo", "AO03": "Doble piso, todo diferencial", "ACXC": "Un piso"}
 # El recorrido de Concepción que ya se veía en la maqueta. Los demás se cargan
 # en Tarifas → Recorridos.
 RECORRIDOS_INICIALES = {
@@ -324,6 +334,20 @@ def init_alpha():
                 conn.execute("INSERT INTO alpha_config (clave, valor, actualizado_el) VALUES (?,?,?) ON CONFLICT (clave) DO NOTHING",
                              (k, json.dumps(v, ensure_ascii=False), ahora_iso()))
         conn.commit()
+        # Los planos con los nombres de Marcopolo y el del micro (solo si
+        # nadie los cambió a mano)
+        r = conn.execute("SELECT valor FROM alpha_config WHERE clave='planos'").fetchone()
+        if r:
+            pls = json.loads(r["valor"])
+            cambio = False
+            for cod, viejo in NOMBRES_VIEJOS.items():
+                if cod in pls and pls[cod].get("nombre") == viejo:
+                    pls[cod]["nombre"] = PLANOS_INICIALES[cod]["nombre"]; cambio = True
+            if "VOLARE" not in pls and not any(re.search(r"volare|senior", str(p.get("nombre") or ""), re.I) for p in pls.values()):
+                pls["VOLARE"] = PLANOS_INICIALES["VOLARE"]; cambio = True
+            if cambio:
+                conn.execute("UPDATE alpha_config SET valor=? WHERE clave='planos'", (json.dumps(pls, ensure_ascii=False),))
+                conn.commit()
     except Exception:
         try:
             conn.rollback()
