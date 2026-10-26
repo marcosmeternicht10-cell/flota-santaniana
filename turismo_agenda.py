@@ -583,6 +583,41 @@ def api_agenda_pdf():
                      download_name="agenda_turismo.pdf")
 
 
+def _asignacion(tipo):
+    """La asignación de turismo de unas fechas, con la cara del tráfico, para
+    compartir: PDF o imagen PNG (WhatsApp la muestra directo en el chat)."""
+    if not session.get("usuario_id"):
+        return jsonify({"error": "Sin sesión"}), 401
+    from flask import send_file
+    import io
+    import turismo_asig_pdf as TP
+    from hora_local import ahora, hoy
+    desde, hasta = TP.rango_ok(request.args.get("desde"), request.args.get("hasta"), hoy())
+    info = TP.datos(desde, hasta, request.args.get("cliente") or None,
+                    cancelados=request.args.get("cancelados") == "1",
+                    generado=ahora().strftime("%d/%m %H:%M"))
+    nombre = f"turismo-{desde}" + (f"-al-{hasta}" if hasta != desde else "")
+    if tipo == "imagen":
+        try:
+            png = TP.generar_imagen(info)
+        except ImportError:
+            return jsonify({"error": "Falta instalar pypdfium2 en el servidor"}), 501
+        return send_file(io.BytesIO(png), mimetype="image/png",
+                         as_attachment=request.args.get("descargar") == "1", download_name=nombre + ".png")
+    return send_file(io.BytesIO(TP.generar_pdf(info)), mimetype="application/pdf",
+                     as_attachment=request.args.get("descargar") == "1", download_name=nombre + ".pdf")
+
+
+@bp_turismo.route("/api/turismo/asignacion/pdf", methods=["GET"])
+def api_asignacion_pdf():
+    return _asignacion("pdf")
+
+
+@bp_turismo.route("/api/turismo/asignacion/imagen", methods=["GET"])
+def api_asignacion_imagen():
+    return _asignacion("imagen")
+
+
 def generar_pdf_agenda(servicios, desde, hasta):
     """La agenda impresa, con el mismo orden de columnas que la planilla."""
     from reportlab.lib.pagesizes import A4, landscape
