@@ -69,13 +69,17 @@ def rango_ok(desde, hasta, hoy_iso):
     return d.isoformat(), h.isoformat()
 
 
-def datos(desde, hasta, cliente=None, cancelados=False, generado=""):
-    """Lo que necesita la hoja: los días con sus servicios y los que siguen en viaje."""
+def datos(desde, hasta, cliente=None, cancelados=False, generado="", fechas=None):
+    """Lo que necesita la hoja: los días con sus servicios y los que siguen en viaje.
+    fechas: si se eligieron días sueltos dentro del rango, solo esos."""
     import turismo_agenda as TA
     servicios = TA.listar_servicios(desde=desde, hasta=hasta, cliente=cliente or None)
     if not cancelados:
         servicios = [s for s in servicios if s.get("estado") != "cancelado"]
     dias = TA.agrupar_por_dia(servicios, desde, hasta)
+    elegidas = sorted({f for f in (fechas or []) if desde <= f <= hasta})
+    if elegidas:
+        dias = [d for d in dias if d["fecha"] in elegidas]
     for d in dias:
         d["servicios"].sort(key=lambda s: ((s.get("hora") or "99:99"), s.get("cliente") or ""))
     activos = [s for d in dias for s in d["servicios"] if s.get("estado") != "cancelado"]
@@ -87,7 +91,12 @@ def datos(desde, hasta, cliente=None, cancelados=False, generado=""):
         stats.append((pasajeros, "PASAJEROS", white))
     if falta:
         stats.append((falta, "A CONFIRMAR", AMBAR_V))
-    rango = _fecha_corta(desde) if desde == hasta else f"DEL {_fecha_corta(desde)} AL {_fecha_corta(hasta)}"
+    if elegidas and len(elegidas) < (date.fromisoformat(hasta) - date.fromisoformat(desde)).days + 1:
+        desde, hasta = elegidas[0], elegidas[-1]
+        rango = " · ".join(_fecha_corta(f) for f in elegidas) if len(elegidas) <= 6 else \
+            f"{len(elegidas)} DÍAS DEL {_fecha_corta(desde)} AL {_fecha_corta(hasta)}"
+    else:
+        rango = _fecha_corta(desde) if desde == hasta else f"DEL {_fecha_corta(desde)} AL {_fecha_corta(hasta)}"
     return {
         "desde": desde, "hasta": hasta, "cliente": cliente or "", "dias": dias, "stats": stats,
         "generado": generado, "rango": rango,

@@ -595,7 +595,8 @@ def _asignacion(tipo):
     desde, hasta = TP.rango_ok(request.args.get("desde"), request.args.get("hasta"), hoy())
     info = TP.datos(desde, hasta, request.args.get("cliente") or None,
                     cancelados=request.args.get("cancelados") == "1",
-                    generado=ahora().strftime("%d/%m %H:%M"))
+                    generado=ahora().strftime("%d/%m %H:%M"),
+                    fechas=[f.strip() for f in (request.args.get("fechas") or "").split(",") if f.strip()])
     nombre = f"turismo-{desde}" + (f"-al-{hasta}" if hasta != desde else "")
     if tipo == "imagen":
         try:
