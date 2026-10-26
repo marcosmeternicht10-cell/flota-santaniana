@@ -1702,7 +1702,7 @@ def pdf_hojas(ot, hojas):
     def _cap_ultima(g):
         mats = {(it.get("material_pedido") or "").strip() for it in g["items"]} - {""}
         h_mat = 22 + max(len(mats) + 1, 3) * 22 + 6
-        resto = h_mat + 12 + 120 + 50 + 56
+        resto = h_mat + 12 + 164 + 50 + 56
         return max(3, int((H - Y_DETALLE - resto - 78 - 22) // ALTO_REN))
 
     paginas = []
@@ -1799,7 +1799,7 @@ def pdf_hojas(ot, hojas):
         h_mat = 22 + n_mat * 22 + 6
         if k == total_k - 1:
             # Los renglones del detalle llenan la hoja (para anotar a mano)
-            resto = h_mat + 12 + 120 + 50 + 56
+            resto = h_mat + 12 + 164 + 50 + 56
             libre = H - y - resto - 50 - 28
             n_lin = max(usados, int(libre // alto))
         else:
@@ -1840,24 +1840,31 @@ def pdf_hojas(ot, hojas):
                 texto(M + 26, y + 22 + i * 22 + 17, cortar(m, "I5", 11, aw - 40), "I5", 11, TINTA)
             y += h_mat + 12
 
-            # ── Horarios: dos tandas (si se empezó y no se terminó, el
-            #    intermedio es la hora en que se dejó) ──
+            # ── Horarios: dos tandas. Cada momento (inicio, intermedio y fin)
+            #    lleva su fecha y su hora: el intermedio es cuando se empezó
+            #    y no se terminó, y puede caer otro día ──
             tercio = aw / 3
             for n_t in (1, 2):
                 c.setFillColor(SUAVE)
-                c.rect(M, H - y - 20, aw, 20, stroke=0, fill=1)
+                c.rect(M, H - y - 18, aw, 18, stroke=0, fill=1)
                 c.setStrokeColor(NAVY)
                 c.setLineWidth(1)
-                c.rect(M, H - y - 20, aw, 20, stroke=1, fill=0)
-                texto(M + 8, y + 14, f"{n_t}° TANDA", "I7", 9.5, NAVY)
-                texto(M + 86, y + 14, "Fecha:", "I7", 9.5, NAVY)
-                texto(M + 124, y + 14.5, "_____ / _____ / ________", "I5", 10, GRIS)
+                c.rect(M, H - y - 18, aw, 18, stroke=1, fill=0)
+                texto(M + 8, y + 12.5, f"{n_t}° TANDA", "I7", 9.5, NAVY)
                 if n_t == 1:
-                    texto(M + aw - 8, y + 14, "Intermedio: si se empezó y no se terminó", "I5", 7.5, GRIS, align="r")
-                y += 20
-                for j, et in enumerate(("Inicio:", "Intermedio:", "Fin:")):
-                    caja(M + j * tercio, y, tercio, 32, et)
-                y += 40
+                    texto(M + aw - 8, y + 12.5, "Intermedio: si se empezó y no se terminó", "I5", 7.5, GRIS, align="r")
+                y += 18
+                for j, et in enumerate(("Inicio", "Intermedio", "Fin")):
+                    x = M + j * tercio
+                    c.setStrokeColor(NAVY)
+                    c.setLineWidth(1)
+                    c.rect(x, H - y - 56, tercio, 56, stroke=1, fill=0)
+                    texto(x + 8, y + 14, et, "I7", 10.5, NAVY)
+                    texto(x + 8, y + 32, "Fecha:", "I5", 9, TINTA)
+                    texto(x + 44, y + 32.5, "______ / ______ / ________", "I5", 9.5, GRIS)
+                    texto(x + 8, y + 49, "Hora:", "I5", 9, TINTA)
+                    texto(x + 44, y + 49.5, "________ : ________", "I5", 9.5, GRIS)
+                y += 64
             caja(M, y, aw * 0.48 - 6, 40, "Técnico Asignado:", quien)
             caja(M + aw * 0.48, y, aw * 0.22 - 6, 40, "Total horas:")
             caja(M + aw * 0.70, y, aw * 0.30, 40, "Firmas:")
