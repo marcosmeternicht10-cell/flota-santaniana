@@ -13802,13 +13802,13 @@ function descargarAgendaPDF() {
 // ─── Compartir la asignación ─────────────────────────────────────────────
 // La hoja con la cara del tráfico (coche y tripulación de cada servicio) de
 // las fechas que se elijan, como imagen para el grupo de WhatsApp o en PDF.
-const agc = { blob: null, clave: "", timer: null };
+const agc = { blob: null, clave: "", timer: null, dias: [], fuera: new Set() };
 
 function agCompartirAsignacion() {
   const hoy = trHoy();
   const cli = $("#ag-cliente") ? $("#ag-cliente").value : "";
   const clientes = (agDatos && agDatos.clientes) || [];
-  agc.blob = null; agc.clave = "";
+  agc.blob = null; agc.clave = ""; agc.dias = []; agc.fuera = new Set();
   rvModal({
     titulo: "Compartir la asignación", icono: "share", ancho: 760,
     sub: "Elegí las fechas: sale una imagen con el coche y la tripulación de cada servicio, lista para mandar al grupo.",
@@ -13816,7 +13816,9 @@ function agCompartirAsignacion() {
       <div class="ag-chips" id="agc-chips" style="margin-bottom:12px;flex-wrap:wrap">
         <button class="chip activo" onclick="agcRapido('hoy', this)">Hoy</button>
         <button class="chip" onclick="agcRapido('manana', this)">Mañana</button>
+        <button class="chip" onclick="agcRapido('pasado', this)">Pasado mañana</button>
         <button class="chip" onclick="agcRapido('semana', this)">Esta semana</button>
+        <button class="chip" onclick="agcRapido('proxima', this)">Próxima semana</button>
         <button class="chip" onclick="agcRapido('siete', this)">Próximos 7 días</button>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
@@ -13829,6 +13831,7 @@ function agCompartirAsignacion() {
         <label style="display:flex;gap:6px;align-items:center;font-size:13px;padding-bottom:9px;cursor:pointer">
           <input type="checkbox" id="agc-canc" onchange="agcCambio(true)"> Incluir cancelados</label>
       </div>
+      <div id="agc-dias" style="margin-top:12px"></div>
       <div id="agc-prev" style="margin-top:14px;max-height:52vh;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface2);min-height:180px"></div>
       <div style="font-size:12px;color:var(--muted);margin-top:8px">Hasta 31 días por imagen. Lo que falta asignar sale en ámbar como «A confirmar».</div>`,
     pie: `<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%">
@@ -13836,13 +13839,15 @@ function agCompartirAsignacion() {
       <button class="btn btn-ghost" onclick="agcDescargar(this)"><i class="ti ti-download"></i> Descargar imagen</button>
       <button class="btn btn-primary" onclick="agcCompartir(this)"><i class="ti ti-brand-whatsapp"></i> Compartir imagen</button></div>`,
   });
-  agcPrevista();
+  agcDias().then(agcPrevista);
 }
 
 function agcRapido(cual, btn) {
   const hoy = new Date();
   let d = new Date(hoy), h = new Date(hoy);
   if (cual === "manana") { d.setDate(d.getDate() + 1); h = new Date(d); }
+  else if (cual === "pasado") { d.setDate(d.getDate() + 2); h = new Date(d); }
+  else if (cual === "proxima") { d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 7); h = new Date(d); h.setDate(h.getDate() + 6); }
   else if (cual === "semana") { d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); h = new Date(d); h.setDate(h.getDate() + 6); }
   else if (cual === "siete") { h.setDate(h.getDate() + 6); }
   $("#agc-desde").value = trIso(d);
@@ -13853,11 +13858,46 @@ function agcRapido(cual, btn) {
 
 function agcCambio(mantenerChip) {
   if (!mantenerChip) document.querySelectorAll("#agc-chips .chip").forEach(c => c.classList.remove("activo"));
+  agc.fuera = new Set();
   clearTimeout(agc.timer);
-  agc.timer = setTimeout(agcPrevista, 350);
+  agc.timer = setTimeout(async () => { await agcDias(); agcPrevista(); }, 350);
 }
 
-function agcQs() {
+// Los días del rango que tienen servicios: se pueden sacar los que no se
+// quieren mandar (por ejemplo, avisar solo martes y jueves).
+async function agcDias() {
+  const box = $("#agc-dias");
+  if (!box) return;
+  const p = new URLSearchParams(agcQs(true));
+  const r = await api(`/api/turismo/agenda?${p.toString()}`).catch(() => null);
+  agc.dias = ((r && r.dias) || []).map(d => ({ fecha: d.fecha, n: (d.servicios || []).length, viaje: (d.en_viaje || []).length }));
+  agc.fuera = new Set([...agc.fuera].filter(f => agc.dias.some(d => d.fecha === f)));
+  agcPintarDias();
+}
+function agcPintarDias() {
+  const box = $("#agc-dias");
+  if (!box) return;
+  if (agc.dias.length < 2) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Días que van en la imagen · tocá para sacar o volver a poner</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${agc.dias.map(d => {
+      const on = !agc.fuera.has(d.fecha);
+      return `<button type="button" class="chip ${on ? "activo" : ""}" onclick="agcDia('${d.fecha}')" style="${on ? "" : "text-decoration:line-through;opacity:.6"}">
+        ${agcCorta(d.fecha)} · ${d.n ? `${d.n} serv.` : "en viaje"}</button>`; }).join("")}</div>`;
+}
+function agcCorta(f) {
+  const d = trFecha(f);
+  return `${TR_DIAS[d.getDay()].slice(0, 3)} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function agcDia(f) {
+  if (agc.fuera.has(f)) agc.fuera.delete(f);
+  else if (agc.fuera.size < agc.dias.length - 1) agc.fuera.add(f);
+  else { toast("Tiene que quedar al menos un día", "info"); return; }
+  agcPintarDias();
+  clearTimeout(agc.timer);
+  agc.timer = setTimeout(agcPrevista, 250);
+}
+
+function agcQs(sinDias) {
   const p = new URLSearchParams();
   let d = $("#agc-desde").value, h = $("#agc-hasta").value || d;
   if (d && h && h < d) [d, h] = [h, d];
@@ -13866,6 +13906,7 @@ function agcQs() {
   const c = $("#agc-cliente").value;
   if (c) p.set("cliente", c);
   if ($("#agc-canc").checked) p.set("cancelados", "1");
+  if (!sinDias && agc.fuera.size) p.set("fechas", agc.dias.filter(x => !agc.fuera.has(x.fecha)).map(x => x.fecha).join(","));
   return p.toString();
 }
 
