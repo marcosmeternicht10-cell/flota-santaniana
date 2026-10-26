@@ -2172,53 +2172,158 @@ async function alVistaPlanos(animar) {
     content.innerHTML = alPlaShell(`<div class="al-vacio"><i class="ti ti-loader-2 al-gira"></i><b>Trayendo los datos…</b></div>`, animar);
     await alCfgTraer();
   }
+  if (!al.pla.ver) al.pla.ver = "coches";
+  if (!al.pla.selec) al.pla.selec = new Set();
+  const ver = al.pla.ver;
+  content.innerHTML = alPlaShell(`
+    <div class="al-vista al-pa">
+      <div class="al-v-cab"><h1 class="al-d">Planos de asientos</h1><span>${ver === "coches"
+        ? "Qué plano de asientos se vende en cada coche de la flota."
+        : "Cómo están armados los asientos de cada modelo de coche."}</span></div>
+      <div class="al-lados al-pa-modo" role="group" aria-label="Qué querés hacer">
+        <button type="button" class="al-lado ${ver === "coches" ? "on" : ""}" aria-pressed="${ver === "coches"}" onclick="alPlaVer('coches')">Cambiar el plano de un coche <small>los coches de la flota</small></button>
+        <button type="button" class="al-lado ${ver === "armar" ? "on" : ""}" aria-pressed="${ver === "armar"}" onclick="alPlaVer('armar')">Armar o corregir un plano <small>los asientos de cada modelo</small></button>
+      </div>
+      ${ver === "coches" ? alPlaTablero() : alPlaArmar()}
+    </div>`, animar);
+}
+function alPlaVer(v) {
+  if (v === al.pla.ver) return;
+  al.pla.ver = v; al.pla.selec = new Set(); al.pla.draft = null;
+  alVistaPlanos(false);
+}
+
+// ─── Cambiar el plano de los coches: los coches agrupados bajo su plano ───
+function alPlaResumen(pl) {
+  const a = alAsientos(pl), co = a.filter(x => x.clase === "CO").length, ca = a.length - co;
+  return `${co} diferencial${ca ? ` · ${ca} cama` : ""}${pl.parados ? ` · ${pl.parados} parados` : ""}`;
+}
+// El plano en chiquito, con el frente a la derecha como en la venta
+function alPlaMini(pl) {
+  return `<div class="al-pa-mini" aria-hidden="true">${pl.pisos.map(p => {
+    const nf = p.filas.length;
+    let c = "";
+    p.filas.forEach((f, fi) => [0, 1, 3, 4].forEach(pos => {
+      if (f[pos] != null) c += `<i class="${p.clase === "CA" ? "ca" : ""}" style="grid-column:${nf - fi};grid-row:${pos + 1}"></i>`;
+    }));
+    return `<div class="al-pa-mini-p" style="grid-template-columns:repeat(${nf}, 7px)">${c}</div>`;
+  }).join("")}</div>`;
+}
+function alPlaGrupos() {
+  const pls = alPlanos(), fijos = (al.cfg && al.cfg.coche_plano) || {}, g = {};
+  Object.keys(pls).forEach(k => { g[k] = []; });
+  (al.cfg.coches || []).forEach(c => {
+    const k = alPlanoDe(c.coche, c.modelo);
+    if (g[k]) g[k].push({ ...c, fijo: !!(fijos[c.coche] && pls[fijos[c.coche]]) });
+  });
+  const num = x => parseInt(String(x).replace(/\D/g, ""), 10) || 0;
+  Object.values(g).forEach(l => l.sort((a, b) => num(a.coche) - num(b.coche)));
+  return g;
+}
+function alPlaTablero() {
+  return `
+    <div class="al-pa-ayuda"><i class="ti ti-hand-finger" aria-hidden="true"></i>
+      <span><b>Tocá los coches que querés cambiar</b> y elegí abajo a qué plano pasan. En la compu también los podés arrastrar a otro plano. Se guarda solo.</span></div>
+    <div class="al-busca al-busca-pas"><i class="ti ti-search" aria-hidden="true"></i><input id="al-pa-q" type="search" value="${trEsc(al.pla.q || "")}" placeholder="Buscar un coche: número, patente o modelo" oninput="al.pla.q=this.value;alPlaPintar()" aria-label="Buscar un coche"></div>
+    <div id="al-pa-tab">${alPlaTabHTML()}</div>
+    <div id="al-pa-barra">${alPlaBarraHTML()}</div>`;
+}
+function alPlaTabHTML() {
+  const pls = alPlanos(), g = alPlaGrupos(), q = alNorm(al.pla.q || ""), sel = al.pla.selec;
+  const coincide = c => !q || alNorm(`${c.coche} ${c.patente} ${c.marca} ${c.modelo}`).includes(q);
+  const total = Object.values(g).reduce((n, l) => n + l.filter(coincide).length, 0);
+  const cols = Object.keys(pls).map(k => {
+    const l = g[k] || [], vis = l.filter(coincide);
+    return `<section class="al-pa-col" data-cod="${trEsc(k)}" ondragover="alPlaSobre(event, true)" ondragleave="alPlaSobre(event, false)" ondrop="alPlaSoltar(event, '${trEsc(k)}')">
+      <header class="al-pa-col-cab">
+        <b class="al-d">${trEsc(k)}</b><span>${trEsc(pls[k].nombre || "")}</span><small>${alPlaResumen(pls[k])}</small>
+        ${alPlaMini(pls[k])}
+      </header>
+      <div class="al-pa-cuenta">${l.length} coche${l.length === 1 ? "" : "s"}${q && vis.length !== l.length ? ` · ${vis.length} con «${trEsc(al.pla.q)}»` : ""}</div>
+      <div class="al-pa-chips">${vis.length ? vis.map(c => `
+        <button type="button" class="al-pa-ch ${sel.has(c.coche) ? "on" : ""}" draggable="true" ondragstart="alPlaArrastre(event, '${trEsc(c.coche)}')"
+          onclick="alPlaToca('${trEsc(c.coche)}')" aria-pressed="${sel.has(c.coche)}" title="${trEsc(`${c.marca} ${c.modelo}`.trim())}${c.patente ? " · " + trEsc(c.patente) : ""}${c.fijo ? " · plano elegido a mano" : " · plano según el modelo"}">
+          <b>${trEsc(c.coche)}</b>${c.fijo ? `<i class="ti ti-pin-filled" aria-label="elegido a mano"></i>` : ""}
+        </button>`).join("") : `<span class="al-pa-nada">${q ? "Ninguno coincide" : "Ningún coche usa este plano"}</span>`}</div>
+    </section>`;
+  }).join("");
+  return `${q ? `<p class="al-pa-total">${total} coche${total === 1 ? "" : "s"} con «${trEsc(al.pla.q)}»</p>` : ""}
+    <div class="al-pa-cols">${cols}</div>
+    <p class="al-pa-nota">Cada coche arranca con el plano que corresponde a su modelo. Los que tienen <i class="ti ti-pin-filled" aria-hidden="true"></i> se cambiaron a mano; para que vuelvan al de su modelo, elegilos y tocá «Según el modelo».</p>`;
+}
+function alPlaBarraHTML() {
+  const sel = [...al.pla.selec];
+  if (!sel.length) return "";
+  const pls = alPlanos(), modelo = {};
+  (al.cfg.coches || []).forEach(c => { modelo[c.coche] = c.modelo; });
+  // Si todos los elegidos están en el mismo plano, ese botón se marca como el actual
+  const actuales = new Set(sel.map(c => alPlanoDe(c, modelo[c])));
+  const actual = actuales.size === 1 ? [...actuales][0] : "";
+  return `<div class="al-pa-barra" role="region" aria-label="Pasar los coches elegidos">
+    <div class="al-pa-barra-t"><b>${sel.length === 1 ? `Coche ${trEsc(sel[0])}` : `${sel.length} coches elegidos`}</b>
+      <span>${sel.length > 1 ? trEsc(sel.slice(0, 8).join(", ")) + (sel.length > 8 ? "…" : "") : "¿A qué plano pasa?"}</span></div>
+    <div class="al-pa-barra-b">
+      ${Object.keys(pls).map(k => k === actual
+        ? `<button type="button" class="al-pa-ir ya" disabled title="${sel.length === 1 ? "Ya tiene" : "Ya tienen"} este plano"><b class="al-d">${trEsc(k)}</b><small>el que ${sel.length === 1 ? "tiene" : "tienen"}</small></button>`
+        : `<button type="button" class="al-pa-ir" onclick="alPlaMover('${trEsc(k)}')"><b class="al-d">${trEsc(k)}</b><small>${trEsc(pls[k].nombre || "")}</small></button>`).join("")}
+      <button type="button" class="al-pa-ir auto" onclick="alPlaMover('')"><b>Según el modelo</b><small>automático</small></button>
+      <button type="button" class="al-sec" onclick="al.pla.selec=new Set();alPlaPintar()">Cancelar</button>
+    </div>
+  </div>`;
+}
+function alPlaPintar() {
+  const t = document.getElementById("al-pa-tab"), b = document.getElementById("al-pa-barra");
+  if (t) t.innerHTML = alPlaTabHTML();
+  if (b) b.innerHTML = alPlaBarraHTML();
+}
+function alPlaToca(coche) {
+  const s = al.pla.selec;
+  if (s.has(coche)) s.delete(coche); else s.add(coche);
+  alPlaPintar();
+}
+function alPlaArrastre(ev, coche) {
+  if (!al.pla.selec.has(coche)) al.pla.selec = new Set([coche]);
+  ev.dataTransfer.setData("text/plain", coche);
+  ev.dataTransfer.effectAllowed = "move";
+}
+function alPlaSobre(ev, dentro) {
+  if (dentro) ev.preventDefault();
+  ev.currentTarget.classList.toggle("sobre", dentro);
+}
+function alPlaSoltar(ev, cod) {
+  ev.preventDefault();
+  ev.currentTarget.classList.remove("sobre");
+  alPlaMover(cod);
+}
+async function alPlaMover(cod) {
+  const sel = [...al.pla.selec];
+  if (!sel.length) return;
+  const cp = Object.assign({}, al.cfg.coche_plano || {});
+  sel.forEach(c => { if (cod) cp[c] = cod; else delete cp[c]; });
+  if (!(await alCfgGuardar("coche_plano", cp))) return;
+  const quien = sel.length === 1 ? `El coche ${sel[0]}` : `${sel.length} coches`;
+  toast(cod ? `${quien} ${sel.length === 1 ? "queda" : "quedan"} con el plano ${cod}` : `${quien} ${sel.length === 1 ? "vuelve" : "vuelven"} al plano según su modelo`, "success");
+  al.pla.selec = new Set();
+  alPlaPintar();
+}
+
+// ─── Armar o corregir un plano (los asientos de cada modelo) ───
+function alPlaArmar() {
   const pls = alPlanos(), cods = Object.keys(pls);
   if (!al.pla.draft) {
     if (!al.pla.cod || !pls[al.pla.cod]) al.pla.cod = cods[0] || "";
     al.pla.draft = al.pla.cod ? JSON.parse(JSON.stringify(pls[al.pla.cod])) : null;
     al.pla.nuevo = false; al.pla.codNuevo = al.pla.cod;
   }
-  if (!al.pla.cp) al.pla.cp = JSON.parse(JSON.stringify(al.cfg.coche_plano || {}));
-  const usos = cod => (al.cfg.coches || []).filter(c => alPlanoDe(c.coche, c.modelo) === cod).length;
+  const g = alPlaGrupos();
+  const lista = cods.map(k => `<button type="button" class="al-pl-it ${k === al.pla.cod && !al.pla.nuevo ? "on" : ""}" onclick="alPlanoElegir('${k}')">
+      <b class="al-d">${trEsc(k)}</b><span>${trEsc(pls[k].nombre || "")}</span><small>${alPlaResumen(pls[k])} · ${(g[k] || []).length} coche${(g[k] || []).length === 1 ? "" : "s"}</small></button>`).join("");
   const d = al.pla.draft;
-  const lista = cods.map(k => { const a = alAsientos(pls[k]); const co = a.filter(x => x.clase === "CO").length, ca = a.length - co;
-    return `<button type="button" class="al-pl-it ${k === al.pla.cod && !al.pla.nuevo ? "on" : ""}" onclick="alPlanoElegir('${k}')">
-      <b class="al-d">${trEsc(k)}</b><span>${trEsc(pls[k].nombre || "")}</span><small>${co} diferencial${ca ? ` · ${ca} cama` : ""}${pls[k].parados ? ` · ${pls[k].parados} parados` : ""} · ${usos(k)} coche${usos(k) === 1 ? "" : "s"}</small></button>`; }).join("");
-  const editor = d ? alPlanoEditor(d) : `<div class="al-vacio"><b>No hay planos</b></div>`;
-  const q = alNorm(al.pla.q);
-  const coches = (al.cfg.coches || []).filter(c => !q || alNorm(`${c.coche} ${c.marca} ${c.modelo} ${c.patente}`).includes(q));
-  content.innerHTML = alPlaShell(`
-    <div class="al-vista">
-      <div class="al-v-cab"><h1 class="al-d">Planos de asientos</h1><span>Cómo está armado cada modelo de coche y qué plano usa cada coche de la flota. Se guarda en la base.</span></div>
-      <div class="al-pl">
-        <aside class="al-pl-lista">${lista}
-          <button type="button" class="al-sec" onclick="alPlanoNuevo()"><i class="ti ti-plus"></i> Nuevo plano</button></aside>
-        <section class="al-card al-pl-ed">${editor}</section>
-      </div>
-      <section class="al-card">
-        <div class="al-card-cab"><h2 class="al-d">Qué plano usa cada coche</h2><span>«Automático» lo deduce del modelo (todo es Marcopolo): Volare o Senior → micro, Paradiso 1800 DD → AO01, los 8x2 → AO03, el resto → Paradiso un piso.</span></div>
-        <div class="al-busca al-busca-pas"><i class="ti ti-search" aria-hidden="true"></i><input id="al-pl-q" type="search" value="${trEsc(al.pla.q)}" placeholder="Buscar coche, marca o modelo" oninput="al.pla.q=this.value;alPlanosCoches()" aria-label="Buscar coche"></div>
-        <div class="al-tabla-w al-pl-coches" id="al-pl-coches">${alPlanosCochesHTML(coches)}</div>
-        <div class="al-card-pie"><button type="button" class="al-btn-r" onclick="alCochesGuardar()"><i class="ti ti-device-floppy"></i> Guardar los coches</button></div>
-      </section>
-    </div>`, animar);
-}
-function alPlanosCochesHTML(coches) {
-  const pls = alPlanos();
-  return `<table class="al-tabla"><thead><tr><th>Coche</th><th>Modelo</th><th>Plano</th></tr></thead><tbody>${coches.map(c => {
-    const fijo = al.pla.cp[c.coche] && pls[al.pla.cp[c.coche]] ? al.pla.cp[c.coche] : "";
-    return `<tr><td><b>${trEsc(c.coche)}</b><small>${trEsc(c.patente)}</small></td><td>${trEsc(`${c.marca} ${c.modelo}`.trim())}</td>
-      <td><select class="al-in" onchange="if(this.value)al.pla.cp['${c.coche}']=this.value;else delete al.pla.cp['${c.coche}']" aria-label="Plano del coche ${trEsc(c.coche)}">
-        <option value="">Automático (${alPlanoAuto(`${c.marca} ${c.modelo}`)})</option>
-        ${Object.keys(pls).map(k => `<option value="${k}" ${k === fijo ? "selected" : ""}>${trEsc(k)} · ${trEsc(pls[k].nombre || "")}</option>`).join("")}</select></td></tr>`;
-  }).join("")}</tbody></table>`;
-}
-function alPlanosCoches() {
-  const q = alNorm(al.pla.q), box = document.getElementById("al-pl-coches");
-  if (box) box.innerHTML = alPlanosCochesHTML((al.cfg.coches || []).filter(c => !q || alNorm(`${c.coche} ${c.marca} ${c.modelo} ${c.patente}`).includes(q)));
-}
-async function alCochesGuardar() {
-  if (await alCfgGuardar("coche_plano", al.pla.cp)) { toast("Planos de los coches guardados", "success"); alVistaPlanos(false); }
+  return `<div class="al-pl">
+      <aside class="al-pl-lista">${lista}
+        <button type="button" class="al-sec" onclick="alPlanoNuevo()"><i class="ti ti-plus"></i> Nuevo plano</button></aside>
+      <section class="al-card al-pl-ed">${d ? alPlanoEditor(d) : `<div class="al-vacio"><b>No hay planos</b></div>`}</section>
+    </div>`;
 }
 function alPlanoEditor(d) {
   const pisos = d.pisos.map((p, pi) => {

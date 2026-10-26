@@ -589,3 +589,57 @@ body.boleteria #content { overflow: visible; }
 /* Controles tiene ocho pestañas: más compactas para que «Ir a Alpha» entre en la misma fila */
 .ct .al-cab { column-gap: 16px; }
 .ct .al-nav-b { padding: 0 10px; gap: 6px; }
+
+/* ═══ Planos: cambiar el plano de los coches (tablero por plano) ═══ */
+.al-pa-modo { margin-top: 4px; align-self: flex-start; }
+.al-pa-ayuda { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 14px; background: #2F3A46; color: var(--al-txt); font-size: 14px; line-height: 1.45; }
+.al-pa-ayuda .ti { font-size: 22px; color: #8CBDEB; flex: none; }
+.al-pa .al-busca { margin-top: 0; }
+.al-pa-total { margin: 0 0 8px; color: var(--al-txt2); font-size: 13.5px; }
+.al-pa-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; align-items: start; }
+.al-pa-col { border-radius: 18px; background: var(--al-panel); padding: 14px; border: 2px solid transparent; transition: border-color .15s, background .15s; min-width: 0; }
+.al-pa-col.sobre { border-color: #8CBDEB; background: #2F3A46; }
+.al-pa-col-cab { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.al-pa-col-cab .al-pa-mini { margin-top: 8px; align-self: flex-start; }
+.al-pa-col-cab b { font-size: 30px; line-height: 1; }
+.al-pa-col-cab span { font-weight: 700; font-size: 14px; }
+.al-pa-col-cab small { color: var(--al-txt2); font-size: 12.5px; }
+.al-pa-mini { display: flex; flex-direction: column; gap: 5px; padding: 6px 7px; border-radius: 8px; background: var(--al-fondo); flex: none; }
+.al-pa-mini-p { display: grid; grid-template-rows: 7px 7px 4px 7px 7px; gap: 2px; }
+.al-pa-mini i { display: block; width: 7px; height: 7px; border-radius: 2px; background: #A3A9B2; }
+.al-pa-mini i.ca { background: #F5C26B; }
+.al-pa-cuenta { margin: 12px 0 8px; font-size: 12.5px; font-weight: 700; color: var(--al-txt2); text-transform: uppercase; letter-spacing: .04em; }
+.al-pa-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.al-pa-ch { position: relative; display: inline-flex; align-items: center; gap: 4px; min-width: 64px; height: 38px; padding: 0 10px; justify-content: center;
+  border-radius: 10px; border: 1.5px solid var(--al-borde); background: var(--al-fondo); color: var(--al-txt); font-size: 15px; }
+.al-pa-ch:hover { border-color: #8CBDEB; }
+.al-pa-ch.on { background: var(--al-txt); color: var(--al-fondo); border-color: var(--al-txt); }
+.al-pa-ch .ti { font-size: 12px; color: #F5C26B; }
+.al-pa-ch.on .ti { color: #B7791F; }
+.al-pa-nada { color: var(--al-txt2); font-size: 13px; padding: 6px 0; }
+.al-pa-nota { margin: 12px 0 0; color: var(--al-txt2); font-size: 12.5px; }
+.al-pa-nota .ti { color: #F5C26B; }
+#al-pa-barra { position: sticky; bottom: 12px; z-index: 5; }
+#al-pa-barra:empty { display: none; }
+.al-pa-barra { margin-top: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; padding: 14px 16px;
+  border-radius: 18px; background: #F3F4F6; color: #1F2226; box-shadow: 0 12px 40px rgba(0,0,0,.45); }
+.al-pa-barra-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.al-pa-barra-t b { font-size: 16px; }
+.al-pa-barra-t span { font-size: 13px; color: #4A5058; }
+.al-pa-barra-b { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.al-pa-ir { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 14px; border-radius: 12px; border: 0; background: var(--al-rojo-btn); color: #FFFFFF; text-align: left; }
+.al-pa-ir b { font-size: 19px; line-height: 1.05; }
+.al-pa-ir small { font-size: 11.5px; opacity: .9; max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.al-pa-ir.auto { background: #4A5058; }
+.al-pa-ir.ya { background: transparent; color: #4A5058; box-shadow: inset 0 0 0 1.5px #A3A9B2; }
+.al-pa-ir.auto b { font-size: 14px; }
+.al-pa-barra .al-sec { color: #1F2226; border-color: #A3A9B2; }
+@media (max-width: 700px) {
+  #al-pa-barra { bottom: 8px; }
+  .al-pa-barra-b { margin-left: 0; }
+  .al-pa-barra { padding: 12px; gap: 8px; }
+  .al-pa-barra-b { gap: 6px; }
+  .al-pa-ir { flex: 1 1 calc(33% - 6px); padding: 6px 10px; }
+  .al-pa-ir small { display: none; }
+  .al-pa-ir.auto, .al-pa-barra .al-sec { flex: 1 1 calc(50% - 6px); height: 40px; }
+}

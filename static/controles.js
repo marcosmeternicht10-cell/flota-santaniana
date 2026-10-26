@@ -47,7 +47,7 @@ async function renderControles() {
 function ctIr(v) {
   if (v === ct.vista) return;
   ct.vista = v; alModalCerrar();
-  if (v === "planos") { al.pla.draft = null; al.pla.cp = null; }
+  if (v === "planos") { al.pla.draft = null; al.pla.selec = new Set(); }
   if (v === "tarifas") { al.tar.rec = al.tar.pre = al.tar.des = null; }
   ctRender(true);
 }
