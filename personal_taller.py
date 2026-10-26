@@ -1595,7 +1595,9 @@ def hojas_de_ot(ot, cuales="pendientes"):
     return hojas, sin_nadie
 
 
-def pdf_hojas(ot, hojas):
+def pdf_hojas(ot, hojas, en_blanco=False):
+    """Las hojas por técnico de una OT. Con en_blanco=True sale la misma hoja
+    sin ningún dato (para el turno noche, que la completa a mano)."""
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.colors import HexColor, white
@@ -1617,7 +1619,7 @@ def pdf_hojas(ot, hojas):
 
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
-    c.setTitle(f"OT {ot['id']} - hojas por técnico")
+    c.setTitle("Hoja del técnico - turno noche" if en_blanco else f"OT {ot['id']} - hojas por técnico")
     c.setAuthor("La Santaniana")
 
     def ancho(t, f, s):
@@ -1738,7 +1740,13 @@ def pdf_hojas(ot, hojas):
         wbox = 132
         c.setFillColor(NAVY)
         c.roundRect(W - M - wbox, H - y - 40, wbox, 40, 6, fill=1, stroke=0)
-        if g["numero"] is not None:
+        if en_blanco:
+            texto(W - M - wbox + 10, y + 15, "TURNO NOCHE", "I6", 7, HexColor("#8CBDEB"))
+            texto(W - M - wbox + 10, y + 33, "N°", "D9", 19, white)
+            c.setStrokeColor(white)
+            c.setLineWidth(0.8)
+            c.line(W - M - wbox + 38, H - y - 33, W - M - 12, H - y - 33)
+        elif g["numero"] is not None:
             texto(W - M - wbox + 10, y + 15, "TÉCNICO", "I6", 7, HexColor("#8CBDEB"))
             texto(W - M - wbox + 10, y + 33, f"N° {g['numero']}", "D9", 19, white)
         else:
@@ -1757,7 +1765,7 @@ def pdf_hojas(ot, hojas):
         fecha_txt = fdm(dias_h[0]) if len(dias_h) == 1 else \
             (f"{fdm(dias_h[0])[:5]} al {fdm(dias_h[-1])}" if dias_h else fdm(ot.get("fecha_apertura")))
         caja(M, y, aw * 0.55 - 6, 34, "Fecha:", fecha_txt)
-        caja(M + aw * 0.55, y, aw * 0.45, 34, "OT Nro.:", str(ot["id"]), grande=True)
+        caja(M + aw * 0.55, y, aw * 0.45, 34, "OT Nro.:", str(ot.get("id") or ""), grande=True)
         y += 44
         caja(M, y, aw * 0.30 - 6, 34, "Coche:", coche, grande=True)
         caja(M + aw * 0.30, y, aw * 0.30 - 6, 34, "Km:", km_txt)
@@ -1768,7 +1776,13 @@ def pdf_hojas(ot, hojas):
         c.setLineWidth(1.2 if sale_txt else 1)
         c.rect(M, H - y - 34, aw, 34, stroke=1, fill=0)
         texto(M + 8, y + 21, "Sale:", "I7", 10.5, ROJO if sale_txt else NAVY)
-        if sale_txt:
+        if en_blanco:
+            texto(M + 48, y + 21, "Día:", "I5", 10, TINTA)
+            texto(M + 74, y + 21.5, "______ / ______", "I5", 10, GRIS)
+            texto(M + 190, y + 21, "Hora:", "I5", 10, TINTA)
+            texto(M + 222, y + 21.5, "________ : ________", "I5", 10, GRIS)
+            texto(M + aw - 8, y + 21, "para cuándo tiene que estar listo el coche", "I5", 8, GRIS, align="r")
+        elif sale_txt:
             texto(M + 48, y + 16, cortar(sale_txt, "D8", 12.5, aw - 60), "D8", 12.5, TINTA)
             if sale_sig:
                 texto(M + 48, y + 28, cortar("Después: " + sale_sig, "I5", 8, aw - 60), "I5", 8, GRIS)
@@ -1878,8 +1892,12 @@ def pdf_hojas(ot, hojas):
         c.setStrokeColor(LINEA)
         c.setLineWidth(0.5)
         c.line(M, 30, W - M, 30)
-        texto(M, H - 18, f"OT #{ot['id']} · Coche {coche} · {quien}", "I5", 7.5, GRIS)
-        texto(W - M, H - 18, f"Hoja {n_pag} de {len(paginas)} · impresa el {impresa}", "I5", 7.5, GRIS, align="r")
+        if en_blanco:
+            texto(M, H - 18, "Hoja del técnico · Turno noche", "I5", 7.5, GRIS)
+            texto(W - M, H - 18, f"impresa el {impresa[:10]}", "I5", 7.5, GRIS, align="r")
+        else:
+            texto(M, H - 18, f"OT #{ot['id']} · Coche {coche} · {quien}", "I5", 7.5, GRIS)
+            texto(W - M, H - 18, f"Hoja {n_pag} de {len(paginas)} · impresa el {impresa}", "I5", 7.5, GRIS, align="r")
         c.showPage()
 
     c.save()
@@ -2074,6 +2092,21 @@ def api_hojas_info(ot_id):
                     "hojas": [{"clave": g["clave"], "numero": g["numero"], "nombre": g["nombre"],
                                "puesto": g["puesto"], "trabajos": len(g["items"])} for g in hojas],
                     "sin_tecnico": [it.get("descripcion") for it in sin]})
+
+
+@bp_personal.route("/api/ots/hoja_blanca.pdf", methods=["GET"])
+def api_hoja_blanca():
+    """La hoja del técnico vacía, para el turno noche (se completa a mano)."""
+    if not _puede_ver():
+        return _no()
+    try:
+        copias = max(1, min(30, int(request.args.get("copias") or 1)))
+    except ValueError:
+        copias = 1
+    vacia = {"numero": None, "nombre": "", "puesto": "", "items": []}
+    buf = pdf_hojas({}, [dict(vacia) for _ in range(copias)], en_blanco=True)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name="hoja_tecnico_turno_noche.pdf")
 
 
 @bp_personal.route("/api/ots/<int:ot_id>/hojas.pdf", methods=["GET"])
