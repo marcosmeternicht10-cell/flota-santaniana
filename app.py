@@ -203,6 +203,9 @@ app.register_blueprint(bp_ot_afuera)
 from ot_pedidos import bp_ot_pedidos, init_ot_pedidos
 init_ot_pedidos()
 app.register_blueprint(bp_ot_pedidos)
+# Cuándo sale el coche que está en el taller (tráfico, corporativos y turismo)
+from ot_salidas import bp_ot_salidas
+app.register_blueprint(bp_ot_salidas)
 # Agencias de venta de pasajes: fichas, contratos con versiones, papeles y vencimientos
 from agencias import bp_agencias, init_agencias
 init_agencias()

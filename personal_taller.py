@@ -1678,12 +1678,51 @@ def pdf_hojas(ot, hojas):
     impresa = ahora_iso().replace("T", " ")[:16]
     impresa = f"{impresa[8:10]}/{impresa[5:7]}/{impresa[0:4]} {impresa[11:16]}"
 
-    # Cada hoja puede necesitar más de una página si tiene muchos trabajos
-    POR_HOJA = 16
+    # Las próximas salidas del coche (tráfico, corporativos, turismo): el
+    # técnico sabe para qué hora tiene que estar listo
+    try:
+        from ot_salidas import proximas_salidas, texto_corto
+        salidas = proximas_salidas(ot.get("n_interno") or "", limite=2)
+        # La flecha no está en la fuente de la hoja: va con guion
+        sale_txt = texto_corto(salidas[0]).replace("→", "-") if salidas else ""
+        sale_sig = texto_corto(salidas[1]).replace("→", "-") if len(salidas) > 1 else ""
+    except Exception:
+        sale_txt, sale_sig = "", ""
+
+    # Cada hoja puede necesitar más de una página si tiene muchos trabajos:
+    # se reparten por renglones (una página de solo detalle lleva hasta 20;
+    # la última, que lleva materiales, horarios y firmas, menos)
+    ALTO_REN = 25
+    Y_DETALLE = M + 64 + 44 + 46 + 44
+    CAP_LLENA = 20
+
+    def _lineas_item(it):
+        return len(partir(it.get("descripcion") or "", "I5", 11.5, W - 2 * M - 40))
+
+    def _cap_ultima(g):
+        mats = {(it.get("material_pedido") or "").strip() for it in g["items"]} - {""}
+        h_mat = 22 + max(len(mats) + 1, 3) * 22 + 6
+        resto = h_mat + 12 + 120 + 50 + 56
+        return max(3, int((H - Y_DETALLE - resto - 78 - 22) // ALTO_REN))
+
     paginas = []
     for g in hojas:
-        items = g["items"]
-        trozos = [items[i:i + POR_HOJA] for i in range(0, len(items), POR_HOJA)] or [[]]
+        trozos, actual, n = [], [], 0
+        for it in g["items"]:
+            li = _lineas_item(it)
+            if actual and n + li > CAP_LLENA:
+                trozos.append(actual)
+                actual, n = [], 0
+            actual.append(it)
+            n += li
+        trozos.append(actual)
+        cap = _cap_ultima(g)
+        ult = trozos[-1]
+        if sum(_lineas_item(i) for i in ult) > cap and len(ult) > 1:
+            nueva = []
+            while len(ult) > 1 and sum(_lineas_item(i) for i in ult) > cap:
+                nueva.insert(0, ult.pop())
+            trozos.append(nueva)
         for k, tz in enumerate(trozos):
             paginas.append((g, tz, k, len(trozos)))
 
@@ -1723,6 +1762,20 @@ def pdf_hojas(ot, hojas):
         caja(M, y, aw * 0.30 - 6, 34, "Coche:", coche, grande=True)
         caja(M + aw * 0.30, y, aw * 0.30 - 6, 34, "Km:", km_txt)
         caja(M + aw * 0.60, y, aw * 0.40, 34, "Chofer:", str(ot.get("conductor") or ""))
+        y += 44
+        # Cuándo sale el coche: para qué hora tiene que estar listo
+        c.setStrokeColor(ROJO if sale_txt else NAVY)
+        c.setLineWidth(1.2 if sale_txt else 1)
+        c.rect(M, H - y - 34, aw, 34, stroke=1, fill=0)
+        texto(M + 8, y + 21, "Sale:", "I7", 10.5, ROJO if sale_txt else NAVY)
+        if sale_txt:
+            texto(M + 48, y + 16, cortar(sale_txt, "D8", 12.5, aw - 60), "D8", 12.5, TINTA)
+            if sale_sig:
+                texto(M + 48, y + 28, cortar("Después: " + sale_sig, "I5", 8, aw - 60), "I5", 8, GRIS)
+            else:
+                texto(M + 48, y + 28, "Próxima salida cargada en el tráfico, corporativos o turismo", "I5", 8, GRIS)
+        else:
+            texto(M + 48, y + 21, "Sin salidas cargadas en los próximos días", "I5", 10, GRIS)
         y += 46
 
         # ── Detalle: lo que hace este técnico ──
@@ -1746,9 +1799,9 @@ def pdf_hojas(ot, hojas):
         h_mat = 22 + n_mat * 22 + 6
         if k == total_k - 1:
             # Los renglones del detalle llenan la hoja (para anotar a mano)
-            resto = h_mat + 12 + 46 + 50 + 56
+            resto = h_mat + 12 + 120 + 50 + 56
             libre = H - y - resto - 50 - 28
-            n_lin = max(usados + 3, int(libre // alto))
+            n_lin = max(usados, int(libre // alto))
         else:
             n_lin = usados
         h_det = 22 + n_lin * alto + 6
@@ -1787,14 +1840,27 @@ def pdf_hojas(ot, hojas):
                 texto(M + 26, y + 22 + i * 22 + 17, cortar(m, "I5", 11, aw - 40), "I5", 11, TINTA)
             y += h_mat + 12
 
-            # ── Horas, técnico, firmas ──
-            tercio = (aw - 12) / 3
-            caja(M, y, tercio, 36, "Hora Inicio:")
-            caja(M + tercio + 6, y, tercio, 36, "Hora Entrega:")
-            caja(M + 2 * (tercio + 6), y, tercio, 36, "Total Horas:")
-            y += 46
-            caja(M, y, aw * 0.6 - 6, 40, "Técnico Asignado:", quien)
-            caja(M + aw * 0.6, y, aw * 0.4, 40, "Firmas:")
+            # ── Horarios: dos tandas (si se empezó y no se terminó, el
+            #    intermedio es la hora en que se dejó) ──
+            tercio = aw / 3
+            for n_t in (1, 2):
+                c.setFillColor(SUAVE)
+                c.rect(M, H - y - 20, aw, 20, stroke=0, fill=1)
+                c.setStrokeColor(NAVY)
+                c.setLineWidth(1)
+                c.rect(M, H - y - 20, aw, 20, stroke=1, fill=0)
+                texto(M + 8, y + 14, f"{n_t}° TANDA", "I7", 9.5, NAVY)
+                texto(M + 86, y + 14, "Fecha:", "I7", 9.5, NAVY)
+                texto(M + 124, y + 14.5, "_____ / _____ / ________", "I5", 10, GRIS)
+                if n_t == 1:
+                    texto(M + aw - 8, y + 14, "Intermedio: si se empezó y no se terminó", "I5", 7.5, GRIS, align="r")
+                y += 20
+                for j, et in enumerate(("Inicio:", "Intermedio:", "Fin:")):
+                    caja(M + j * tercio, y, tercio, 32, et)
+                y += 40
+            caja(M, y, aw * 0.48 - 6, 40, "Técnico Asignado:", quien)
+            caja(M + aw * 0.48, y, aw * 0.22 - 6, 40, "Total horas:")
+            caja(M + aw * 0.70, y, aw * 0.30, 40, "Firmas:")
             y += 50
             caja(M, y, aw, 46, "Verificación Jefe Técnico:")
             y += 56
