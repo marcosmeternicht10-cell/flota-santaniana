@@ -13184,6 +13184,7 @@ async function renderAgendaTurismo() {
             <i class="ti ti-alert-circle"></i> Solo sin asignar
           </button>
           <button class="btn btn-ghost" onclick="descargarAgendaPDF()"><i class="ti ti-download"></i> PDF</button>
+          <button class="btn btn-ghost" onclick="agCompartirAsignacion()"><i class="ti ti-share"></i> Compartir asignación</button>
           <button class="btn btn-primary" onclick="nuevoServicioTurismo()"><i class="ti ti-plus"></i> Agendar servicio</button>
         </div>
       </div>
@@ -13797,6 +13798,135 @@ async function borrarServicioTurismo(id) {
 function descargarAgendaPDF() {
   window.open(`/api/turismo/agenda_pdf?${paramsAgenda().toString()}`, "_blank");
 }
+
+// ─── Compartir la asignación ─────────────────────────────────────────────
+// La hoja con la cara del tráfico (coche y tripulación de cada servicio) de
+// las fechas que se elijan, como imagen para el grupo de WhatsApp o en PDF.
+const agc = { blob: null, clave: "", timer: null };
+
+function agCompartirAsignacion() {
+  const hoy = trHoy();
+  const cli = $("#ag-cliente") ? $("#ag-cliente").value : "";
+  const clientes = (agDatos && agDatos.clientes) || [];
+  agc.blob = null; agc.clave = "";
+  rvModal({
+    titulo: "Compartir la asignación", icono: "share", ancho: 760,
+    sub: "Elegí las fechas: sale una imagen con el coche y la tripulación de cada servicio, lista para mandar al grupo.",
+    cuerpo: `
+      <div class="ag-chips" id="agc-chips" style="margin-bottom:12px;flex-wrap:wrap">
+        <button class="chip activo" onclick="agcRapido('hoy', this)">Hoy</button>
+        <button class="chip" onclick="agcRapido('manana', this)">Mañana</button>
+        <button class="chip" onclick="agcRapido('semana', this)">Esta semana</button>
+        <button class="chip" onclick="agcRapido('siete', this)">Próximos 7 días</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div class="emp-campo"><label>Desde</label><input id="agc-desde" type="date" value="${hoy}" onchange="agcCambio()"></div>
+        <div class="emp-campo"><label>Hasta</label><input id="agc-hasta" type="date" value="${hoy}" onchange="agcCambio()"></div>
+        <div class="emp-campo" style="flex:1;min-width:160px"><label>Cliente</label>
+          <select id="agc-cliente" onchange="agcCambio(true)"><option value="">Todos</option>
+            ${clientes.map(c => `<option value="${trEsc(c)}" ${c === cli ? "selected" : ""}>${trEsc(c)}</option>`).join("")}
+          </select></div>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px;padding-bottom:9px;cursor:pointer">
+          <input type="checkbox" id="agc-canc" onchange="agcCambio(true)"> Incluir cancelados</label>
+      </div>
+      <div id="agc-prev" style="margin-top:14px;max-height:52vh;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface2);min-height:180px"></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Hasta 31 días por imagen. Lo que falta asignar sale en ámbar como «A confirmar».</div>`,
+    pie: `<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%">
+      <button class="btn btn-ghost" onclick="agcPdf()"><i class="ti ti-file-type-pdf"></i> Ver PDF</button>
+      <button class="btn btn-ghost" onclick="agcDescargar(this)"><i class="ti ti-download"></i> Descargar imagen</button>
+      <button class="btn btn-primary" onclick="agcCompartir(this)"><i class="ti ti-brand-whatsapp"></i> Compartir imagen</button></div>`,
+  });
+  agcPrevista();
+}
+
+function agcRapido(cual, btn) {
+  const hoy = new Date();
+  let d = new Date(hoy), h = new Date(hoy);
+  if (cual === "manana") { d.setDate(d.getDate() + 1); h = new Date(d); }
+  else if (cual === "semana") { d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); h = new Date(d); h.setDate(h.getDate() + 6); }
+  else if (cual === "siete") { h.setDate(h.getDate() + 6); }
+  $("#agc-desde").value = trIso(d);
+  $("#agc-hasta").value = trIso(h);
+  agcCambio();
+  document.querySelectorAll("#agc-chips .chip").forEach(c => c.classList.toggle("activo", c === btn));
+}
+
+function agcCambio(mantenerChip) {
+  if (!mantenerChip) document.querySelectorAll("#agc-chips .chip").forEach(c => c.classList.remove("activo"));
+  clearTimeout(agc.timer);
+  agc.timer = setTimeout(agcPrevista, 350);
+}
+
+function agcQs() {
+  const p = new URLSearchParams();
+  let d = $("#agc-desde").value, h = $("#agc-hasta").value || d;
+  if (d && h && h < d) [d, h] = [h, d];
+  if (d) p.set("desde", d);
+  if (h) p.set("hasta", h);
+  const c = $("#agc-cliente").value;
+  if (c) p.set("cliente", c);
+  if ($("#agc-canc").checked) p.set("cancelados", "1");
+  return p.toString();
+}
+
+async function agcTraer() {
+  const qs = agcQs();
+  if (agc.blob && agc.clave === qs) return agc.blob;
+  const r = await fetch(`/api/turismo/asignacion/imagen?${qs}`).catch(() => null);
+  if (!r || !r.ok) return null;
+  const b = await r.blob();
+  agc.blob = b; agc.clave = qs;
+  return b;
+}
+
+async function agcPrevista() {
+  const box = $("#agc-prev");
+  if (!box) return;
+  const qs = agcQs();
+  box.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const b = await agcTraer();
+  if (!$("#agc-prev") || agcQs() !== qs) return;           // cambiaron las fechas mientras tanto
+  if (!b) { box.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted)">No se pudo armar la imagen</div>`; return; }
+  const url = URL.createObjectURL(b);
+  box.innerHTML = `<img src="${url}" alt="Vista previa de la asignación de turismo" style="width:100%;display:block">`;
+}
+
+function agcTitulo() {
+  const d = $("#agc-desde").value, h = $("#agc-hasta").value || d;
+  return d === h ? `Turismo ${trLargo(d)}` : `Turismo del ${trLargo(d < h ? d : h)} al ${trLargo(d < h ? h : d)}`;
+}
+function agcNombre(ext) {
+  const p = new URLSearchParams(agcQs());
+  const d = p.get("desde"), h = p.get("hasta");
+  return `turismo-${d}${h && h !== d ? `-al-${h}` : ""}.${ext}`;
+}
+
+async function agcDescargar(btn) {
+  const blob = await trConEspera(btn, agcTraer);
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = agcNombre("png");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+// En el celular abre el menú de compartir (WhatsApp muestra la imagen en el
+// chat). En la computadora la descarga para adjuntarla.
+async function agcCompartir(btn) {
+  const blob = await trConEspera(btn, agcTraer);
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const archivo = new File([blob], agcNombre("png"), { type: "image/png" });
+  const titulo = agcTitulo();
+  if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    try { await navigator.share({ files: [archivo], title: titulo, text: titulo }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  agcDescargar(null);
+  toast("Se descargó la imagen: adjuntala en el grupo de WhatsApp", "success");
+}
+
+function agcPdf() { window.open(`/api/turismo/asignacion/pdf?${agcQs()}`, "_blank"); }
 
 
 // Compara el consumo del bus con lo esperado para su motor: un Scania K410 y
