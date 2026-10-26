@@ -10,12 +10,15 @@
 //                  tope de su contrato; suspender o habilitar
 //   Liquidaciones  lo que se le liquida a cada agencia hasta un corte
 //   Recaudación    por servicio, por agencia y vendedor, o por día
+//   Tarifas        recorridos (paradas), precio de cada tramo y descuentos
+//   Planos         el plano de asientos de cada modelo y qué plano usa cada coche
 // Lo ve solo administración. Alpha queda para vender.
 // ════════════════════════════════════════════════════════════════════════════
 
 const CT_VISTAS = [["servicios", "bus", "Servicios"], ["transbordos", "arrows-shuffle", "Transbordos"], ["programacion", "calendar-event", "Programación"],
                    ["agencias", "building-store", "Agencias"],
-                   ["liquidaciones", "report-money", "Liquidaciones"], ["recaudacion", "chart-bar", "Recaudación"]];
+                   ["liquidaciones", "report-money", "Liquidaciones"], ["recaudacion", "chart-bar", "Recaudación"],
+                   ["tarifas", "currency-dollar", "Tarifas"], ["planos", "armchair", "Planos"]];
 const ct = {
   vista: "servicios",
   tb: { origen: "", parada: 0, motivoChip: "", motivo: "", tipo: "coche", coche: "", destDia: 0, destino: "", fuera: [],
@@ -24,7 +27,7 @@ const ct = {
 };
 
 async function renderControles() {
-  if (typeof status === "function") status("Controles: salidas del día, transbordos, agencias, liquidaciones y recaudación");
+  if (typeof status === "function") status("Controles: salidas del día, transbordos, agencias, liquidaciones, recaudación, tarifas y planos");
   if (window.USUARIO_ROL !== "admin") {
     content.innerHTML = `<div class="page-header"><h1>Controles</h1><p>Esta sección es de administración.</p></div>`;
     return;
@@ -41,7 +44,13 @@ async function renderControles() {
   }
   ctRender(true);
 }
-function ctIr(v) { if (v === ct.vista) return; ct.vista = v; alModalCerrar(); ctRender(true); }
+function ctIr(v) {
+  if (v === ct.vista) return;
+  ct.vista = v; alModalCerrar();
+  if (v === "planos") { al.pla.draft = null; al.pla.cp = null; }
+  if (v === "tarifas") { al.tar.rec = al.tar.pre = al.tar.des = null; }
+  ctRender(true);
+}
 function ctRender(animar) {
   const v = ct.vista;
   if (v === "transbordos") return ctVistaTransbordos(animar);
@@ -49,6 +58,8 @@ function ctRender(animar) {
   if (v === "agencias") return ctVistaAgencias(animar);
   if (v === "liquidaciones") return ctVistaLiquidaciones(animar);
   if (v === "recaudacion") return ctVistaRecaudacion(animar);
+  if (v === "tarifas") return alVistaTarifas(animar); // los editores viven en alpha.js
+  if (v === "planos") return alVistaPlanos(animar);
   return ctVistaServicios(animar);
 }
 function ctShell(cuerpo, animar) {

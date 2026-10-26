@@ -585,3 +585,7 @@ body.boleteria #content { overflow: visible; }
 .ct .al-card > .al-campo { flex: 0 0 auto; }
 .ct-pg-f .al-campo.ci { flex: 0 1 170px; }
 .ct-pg .al-card > .al-campo { max-width: 900px; }
+
+/* Controles tiene ocho pestañas: más compactas para que «Ir a Alpha» entre en la misma fila */
+.ct .al-cab { column-gap: 16px; }
+.ct .al-nav-b { padding: 0 10px; gap: 6px; }

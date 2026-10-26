@@ -41,8 +41,8 @@ const AL_DUR = { "COP|09:00": 485, "COP|11:30": 485, "COP|17:00": 320, "COP|23:0
 const AL_RESERVA_MIN = 60;            // la reserva vence una hora antes de la salida
 const AL_RETENCION = 0.1;             // devolución: se retiene el 10 % (de ejemplo)
 const AL_VISTAS = [["vender", "ticket", "Vender"], ["pasajes", "receipt", "Pasajes"], ["manifiesto", "list-details", "Manifiesto"],
-                   ["caja", "cash-register", "Caja"],
-                   ["tarifas", "currency-dollar", "Tarifas"], ["planos", "armchair", "Planos"]];
+                   ["caja", "cash-register", "Caja"]];
+// Las tarifas y los planos de asientos se editan en Controles (administración): el que vende no los ve
 const AL_PVACIO = () => ({ tipoDoc: "CI", doc: "", nombre: "", apellidos: "", nombres: "", sexo: "", nac: "", nacionalidad: "", residencia: "" });
 const AL_LOGO = `<svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>`;
 
@@ -393,8 +393,6 @@ function alIr(vista) {
   if (vista === al.vista || !alVistasPermitidas().includes(vista)) return;
   al.vista = vista;
   if (vista === "vender") setTimeout(alRefrescarOcup, 0);
-  if (vista === "tarifas") { al.tar.rec = al.tar.pre = al.tar.des = null; }
-  if (vista === "planos") { al.pla.draft = null; al.pla.cp = null; }
   alRender(true);
 }
 function alShell(cuerpo, animar, extraCab = "") {
@@ -449,8 +447,6 @@ function alRender(animar) {
   if (v === "pasajes") return alVistaPasajes(animar);
   if (v === "manifiesto") return alVistaManifiesto(animar);
   if (v === "caja") return alVistaCaja(animar);
-  if (v === "tarifas") return alVistaTarifas(animar);
-  if (v === "planos") return alVistaPlanos(animar);
   return alPintar(animar);
 }
 // Ventanita propia de Alpha (oscura)
@@ -736,7 +732,7 @@ function alPanel() {
       <button type="button" class="al-link" onclick="alImpModal()" title="Configurar la impresora de esta computadora"><i class="ti ti-printer"></i> ${trEsc(alImpTxt(imp))}</button>
     </div>
     ${adm && !cambio && !reserva && d && !d.parado ? `<button type="button" class="al-link al-bloq" onclick="alBloquear()"><i class="ti ti-lock"></i> Bloquear el asiento ${al.sel} (tripulación, compromiso…)</button>` : ""}
-    <p class="al-aviso" id="al-aviso" role="status">${d && !pt ? "Ese tramo no tiene precio: cargalo en Tarifas." : trEsc(al.aviso)}</p>`;
+    <p class="al-aviso" id="al-aviso" role="status">${d && !pt ? "Ese tramo no tiene precio: lo carga administración en Controles → Tarifas." : trEsc(al.aviso)}</p>`;
 }
 function alVueltoTxt(total) {
   const r = +al.recibe || 0;
@@ -987,7 +983,7 @@ async function alCobrar() {
   const sv = alServ(); if (!sv) return;
   const total = alPrecio(al.sel), [s, b] = alTramoIdx();
   const d = alDescAsiento(al.sel), pt = d ? alPrecioTramo(sv, d.clase, s, b) : null;
-  if (d && !pt) { al.aviso = "Ese tramo no tiene precio: cargalo en Tarifas."; alRepintarPanel(); return; }
+  if (d && !pt) { al.aviso = "Ese tramo no tiene precio: lo carga administración en Controles → Tarifas."; alRepintarPanel(); return; }
   const falta = alFaltan(true);
   if (falta) { al.aviso = falta; alRepintarPanel(); return; }
   const me = al.x.menor, tope = alBoletoCfg().menor_edad;
@@ -2051,10 +2047,14 @@ ${fl("Efectivo en caja", fmtNum(t.efectivoNeto), "f")}
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// TARIFAS: recorridos (paradas), precio por tramo y descuentos — en la base
+// TARIFAS: recorridos (paradas), precio por tramo y descuentos — en la base.
+// Se muestra en Controles (solo administración), no en Alpha.
 // ════════════════════════════════════════════════════════════════════════════
 async function alVistaTarifas(animar) {
-  if (!al.cfg) { alShellCargando(animar); await alCfgTraer(); }
+  if (!al.cfg) {
+    content.innerHTML = alPlaShell(`<div class="al-vacio"><i class="ti ti-loader-2 al-gira"></i><b>Trayendo los datos…</b></div>`, animar);
+    await alCfgTraer();
+  }
   const cfg = al.cfg, cors = cfg.corredores || [];
   if (!al.tar.cor || !cors.some(c => c.clave === al.tar.cor)) al.tar.cor = (cors.find(c => c.clave === al.cor) || cors[0] || {}).clave || "";
   const cor = al.tar.cor;
@@ -2073,7 +2073,7 @@ async function alVistaTarifas(animar) {
   const pre = al.tar.pre[cor] || {};
   const precioDe = (a, b, cl) => { const k = Object.keys(pre).find(k => { const [x, y] = k.split("|"); return (alNorm(x) === alNorm(a) && alNorm(y) === alNorm(b)) || (alNorm(x) === alNorm(b) && alNorm(y) === alNorm(a)); }); return k && pre[k][cl] ? fmtNum(pre[k][cl]) : ""; };
   const sinPrecio = pares.filter(([a, b]) => !precioDe(a, b, "CO")).length;
-  content.innerHTML = alShell(`
+  content.innerHTML = alPlaShell(`
     <div class="al-vista">
       <div class="al-v-cab"><h1 class="al-d">Tarifas</h1><span>El recorrido de cada corredor con sus paradas, el precio de cada tramo y los descuentos. Se guarda en la base y vale para todas las computadoras.</span></div>
       <div class="al-dias al-corredores" role="group" aria-label="Corredor">${cors.map(x => `<button type="button" class="al-chip ${x.clave === cor ? "on" : ""}" onclick="al.tar.cor='${x.clave.replace(/'/g, "\\'")}';alVistaTarifas(false)">${x.tipo === "internacional" ? "Asunción ⇄ " : "Asunción ⇄ "}${trEsc(x.titulo)}${x.tipo === "internacional" ? ' <i class="ti ti-world"></i>' : ""}</button>`).join("")}</div>
@@ -2161,10 +2161,17 @@ async function alDesGuardar() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// PLANOS DE ASIENTOS: editor y qué plano usa cada coche — en la base
+// PLANOS DE ASIENTOS: editor y qué plano usa cada coche — en la base.
+// Se muestra en Controles (solo administración), no en Alpha.
 // ════════════════════════════════════════════════════════════════════════════
+function alPlaShell(cuerpo, animar) {
+  return typeof ctShell === "function" ? ctShell(cuerpo, animar) : alShell(cuerpo, animar);
+}
 async function alVistaPlanos(animar) {
-  if (!al.cfg) { alShellCargando(animar); await alCfgTraer(); }
+  if (!al.cfg) {
+    content.innerHTML = alPlaShell(`<div class="al-vacio"><i class="ti ti-loader-2 al-gira"></i><b>Trayendo los datos…</b></div>`, animar);
+    await alCfgTraer();
+  }
   const pls = alPlanos(), cods = Object.keys(pls);
   if (!al.pla.draft) {
     if (!al.pla.cod || !pls[al.pla.cod]) al.pla.cod = cods[0] || "";
@@ -2180,7 +2187,7 @@ async function alVistaPlanos(animar) {
   const editor = d ? alPlanoEditor(d) : `<div class="al-vacio"><b>No hay planos</b></div>`;
   const q = alNorm(al.pla.q);
   const coches = (al.cfg.coches || []).filter(c => !q || alNorm(`${c.coche} ${c.marca} ${c.modelo} ${c.patente}`).includes(q));
-  content.innerHTML = alShell(`
+  content.innerHTML = alPlaShell(`
     <div class="al-vista">
       <div class="al-v-cab"><h1 class="al-d">Planos de asientos</h1><span>Cómo está armado cada modelo de coche y qué plano usa cada coche de la flota. Se guarda en la base.</span></div>
       <div class="al-pl">
