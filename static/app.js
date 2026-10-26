@@ -5998,6 +5998,7 @@ async function renderOts() {
       <div class="toolbar">
         <button class="btn btn-primary" onclick="abrirNuevaOT()"><i class="ti ti-plus"></i> Nueva OT</button>
         <button class="btn btn-ghost" onclick="abrirReporteFechas()"><i class="ti ti-file-text"></i> Reporte por fechas</button>
+        <button class="btn btn-ghost" onclick="otHojaBlanca()" title="La hoja del técnico vacía, para completar a mano"><i class="ti ti-moon"></i> Hoja turno noche</button>
         <div class="tabs">
           <button class="tab-btn ${otFiltroEstado===''?'active':''}" onclick="filtrarOTs('')"><i class="ti ti-list"></i> Todas</button>
           <button class="tab-btn ${otFiltroEstado==='abierta'?'active':''}" onclick="filtrarOTs('abierta')"><i class="ti ti-progress"></i> Abiertas</button>
@@ -20450,6 +20451,31 @@ async function otHojas(otId, btn) {
     const qs = new URLSearchParams({ cuales: d.cuales });
     if (sel.length !== d.hojas.length) qs.set("quienes", sel.join("|"));
     window.open(`/api/ots/${otId}/hojas.pdf?${qs}`, "_blank");
+    o.remove();
+  };
+}
+
+
+// ─── Hoja del técnico en blanco (turno noche: se completa a mano) ───
+function otHojaBlanca() {
+  const o = rvModal({
+    titulo: "Hoja turno noche", icono: "moon", ancho: 420,
+    sub: "La hoja del técnico vacía: sin coche, sin OT y sin técnico, para completar a mano",
+    cuerpo: `<label style="display:block;font-size:13px;font-weight:600;margin-bottom:8px">¿Cuántas hojas?</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        ${[1, 5, 10, 20].map(n => `<button type="button" class="btn btn-ghost hb-n" data-n="${n}" style="min-width:52px;height:40px">${n}</button>`).join("")}
+        <label class="rv-f" style="width:96px"><input id="hb-copias" type="number" min="1" max="30" value="5" inputmode="numeric" aria-label="Cantidad de hojas"></label>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px">Hasta 30 por vez. Salen todas en un solo PDF para imprimir.</div>`,
+    pie: `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;width:100%">
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" id="hb-ok"><i class="ti ti-printer"></i> Imprimir</button></div>`,
+  });
+  const inp = o.querySelector("#hb-copias");
+  o.querySelectorAll(".hb-n").forEach(b => b.onclick = () => { inp.value = b.dataset.n; });
+  o.querySelector("#hb-ok").onclick = () => {
+    const n = Math.max(1, Math.min(30, parseInt(inp.value, 10) || 1));
+    window.open(`/api/ots/hoja_blanca.pdf?copias=${n}`, "_blank");
     o.remove();
   };
 }
