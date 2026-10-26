@@ -6546,6 +6546,7 @@ async function abrirOT(otId) {
         </div>
 
         <div id="ot-km-box">${otKmCaja(ot)}</div>
+        <div id="ot-sal-box"></div>
         <div id="pv-ot-box"></div>
         <div id="ot-dep-box" class="ot-dep"></div>
 
@@ -6611,6 +6612,35 @@ async function abrirOT(otId) {
   pvOtCargar(ot);
   ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
   otSepBuscar(ot);
+  otSalidasCargar(ot);
+}
+
+// ─── Cuándo sale el coche: tráfico, corporativos y turismo ───
+// El taller ve para qué hora tiene que estar listo. Lo próximo (menos de 3 h)
+// sale en rojo.
+async function otSalidasCargar(ot) {
+  const box = document.getElementById("ot-sal-box");
+  if (!box || ot.estado === "cerrada") return;
+  const r = await api(`/api/ots/${ot.id}/salidas`).catch(() => null);
+  if (!r || !document.getElementById("ot-sal-box")) return;
+  const ss = r.salidas || [];
+  const ic = { trafico: "route", corporativos: "building-factory-2", turismo: "map-2" };
+  const falta = m => m == null ? "" : m < 60 ? `en ${m} min` : m < 24 * 60 ? `en ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : "";
+  box.innerHTML = `<div style="margin-bottom:16px;border:1px solid ${ss.length && ss[0].faltan_min != null && ss[0].faltan_min < 180 ? "var(--danger-bd, #F3B3BC)" : "var(--border)"};border-radius:12px;padding:12px 14px;background:var(--surface2)">
+    <div style="font-size:13px;color:var(--muted);margin-bottom:8px;line-height:1.4">
+      <span style="font-weight:600;white-space:nowrap"><i class="ti ti-clock-hour-4" style="vertical-align:-2px"></i> Cuándo sale el coche ${trEsc(r.coche || "")}</span>
+      <span>· tráfico, corporativos y turismo de los próximos ${r.dias} días</span></div>
+    ${ss.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px">${ss.map((x, i) => {
+      const urge = x.faltan_min != null && x.faltan_min < 180;
+      return `<div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-radius:10px;background:var(--surface);border:1px solid ${urge ? "var(--danger, #DC2641)" : "var(--border)"};min-width:0">
+        <i class="ti ti-${ic[x.origen] || "bus"}" style="font-size:20px;color:${urge ? "var(--danger, #DC2641)" : "var(--brand-blue)"}"></i>
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:14px">${trEsc(x.dia)} ${trEsc(x.hora || "(sin hora)")}
+            ${falta(x.faltan_min) ? `<span style="font-weight:600;font-size:12px;color:${urge ? "var(--danger, #DC2641)" : "var(--muted)"}">· ${falta(x.faltan_min)}</span>` : ""}</div>
+          <div style="font-size:12.5px;color:var(--muted);line-height:1.35">${trEsc(x.titulo)}${x.detalle ? " · " + trEsc(x.detalle) : ""}</div>
+        </div></div>`; }).join("")}</div>`
+      : `<div style="font-size:13px;color:var(--muted)">No tiene salidas cargadas en el tráfico, corporativos ni turismo en los próximos ${r.dias} días.</div>`}
+  </div>`;
 }
 
 // ─── Trabajos del chofer que traen varias cosas juntas: se ofrece separarlos ───
