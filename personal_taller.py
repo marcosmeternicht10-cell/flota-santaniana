@@ -1102,6 +1102,145 @@ def pdf_informe(res):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# AHORA: QUIÉN ESTÁ EN QUÉ COCHE (OT abiertas, trabajos sin terminar)
+# ════════════════════════════════════════════════════════════════════════════
+
+def pdf_ahora(res, puesto=""):
+    """Foto del momento: por técnico, por coche, y quién no tiene nada asignado."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, KeepTogether
+    from pdf_export import AZUL, ROJO, GRIS, GRIS_CLARO
+    from xml.sax.saxutils import escape as e
+
+    VERDE, AMBAR, LINEA = "#1F6B3A", "#8A5A00", "#D9E2EE"
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=14 * mm, bottomMargin=14 * mm,
+                            leftMargin=14 * mm, rightMargin=14 * mm,
+                            title="Quién está en qué coche", author="La Santaniana")
+    st = getSampleStyleSheet()
+    normal = st["Normal"]
+    tit = ParagraphStyle("PaTit", parent=st["Heading1"], fontSize=17, textColor=colors.HexColor(AZUL), spaceAfter=2)
+    h2 = ParagraphStyle("PaH2", parent=st["Heading2"], fontSize=12, textColor=colors.HexColor(AZUL), spaceBefore=6, spaceAfter=4)
+    sub = ParagraphStyle("PaSub", parent=normal, fontSize=9, textColor=colors.HexColor(GRIS))
+    sm = ParagraphStyle("PaSm", parent=normal, fontSize=8.5, leading=10.5)
+    smg = ParagraphStyle("PaSmg", parent=sm, textColor=colors.HexColor(GRIS))
+    grande = ParagraphStyle("PaGr", parent=normal, fontSize=13, leading=15, fontName="Helvetica-Bold")
+
+    rk = [r for r in res["ranking"] if not puesto or r["puesto"] == puesto]
+    con = sorted([r for r in rk if r.get("ahora")], key=lambda r: r["numero"])
+    libres = sorted([r for r in rk if r["activo"] and not r.get("ahora")], key=lambda r: r["numero"])
+    ah = ahora_iso()
+    cuando = f"{ah[8:10]}/{ah[5:7]}/{ah[:4]} a las {ah[11:16]}"
+    alcance = []
+    if res.get("turno"):
+        alcance.append("Turno " + TURNOS.get(res["turno"], res["turno"]).lower())
+    if puesto:
+        alcance.append(puesto)
+    if res.get("coche"):
+        alcance.append(f"coche {res['coche']}")
+
+    def estado(a):
+        partes = []
+        if a["en_proceso"]:
+            partes.append(f'<font color="{VERDE}"><b>{a["en_proceso"]} en proceso</b></font>')
+        if a["pendientes"]:
+            partes.append(f'<font color="{AMBAR}">{a["pendientes"]} pendiente{"" if a["pendientes"] == 1 else "s"}</font>')
+        return "<br/>".join(partes)
+
+    def trabajos(a):
+        n = a["en_proceso"] + a["pendientes"]
+        ls = [("<b>• </b>" if t["estado"] == "en_proceso" else "· ") + e(t["descripcion"] or "") for t in a["trabajos"][:5]]
+        if n > 5:
+            ls.append(f'<font color="{GRIS}">y {n - 5} más</font>')
+        return "<br/>".join(ls)
+
+    coches = {}
+    for r in con:
+        for a in r["ahora"]:
+            c = coches.setdefault(a["coche"], {"coche": a["coche"], "ots": set(), "gente": [], "en_proceso": 0, "pendientes": 0})
+            c["ots"].update(a["ots"])
+            c["gente"].append(r)
+            c["en_proceso"] += a["en_proceso"]
+            c["pendientes"] += a["pendientes"]
+
+    story = [
+        Paragraph("<b>LA SANTANIANA</b>", ParagraphStyle("PaE", parent=normal, fontSize=12, textColor=colors.HexColor(ROJO))),
+        Paragraph("Quién está en qué coche", tit),
+        Paragraph(f"{' · '.join(alcance) + ' · ' if alcance else ''}Impreso el {cuando}. Sale de las OT abiertas: "
+                  f"los trabajos sin terminar con el número de cada técnico (en proceso o pendientes).", sub),
+        Spacer(1, 4 * mm),
+    ]
+    n_proc = sum(c["en_proceso"] for c in coches.values())
+    kp = Table([[
+        Paragraph(f"<font size=16><b>{len(con)}</b></font><br/>persona{'' if len(con) == 1 else 's'} con trabajo asignado", sm),
+        Paragraph(f"<font size=16><b>{len(coches)}</b></font><br/>coche{'' if len(coches) == 1 else 's'} con gente trabajando", sm),
+        Paragraph(f"<font size=16><b>{n_proc}</b></font><br/>trabajo{'' if n_proc == 1 else 's'} en proceso", sm),
+        Paragraph(f"<font size=16><b>{len(libres)}</b></font><br/>sin nada asignado", sm),
+    ]], colWidths=[45.5 * mm] * 4)
+    kp.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(GRIS_CLARO)),
+                            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor(LINEA)),
+                            ("LINEAFTER", (0, 0), (-2, -1), 0.5, colors.HexColor(LINEA)),
+                            ("TOPPADDING", (0, 0), (-1, -1), 7), ("BOTTOMPADDING", (0, 0), (-1, -1), 7)]))
+    story += [kp, Spacer(1, 4 * mm)]
+
+    base = [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(AZUL)), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, 0), 8.5),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
+
+    # ── Por técnico ──
+    story.append(Paragraph("Por técnico", h2))
+    if con:
+        data, estilo = [["N°", "Técnico", "Coche", "OT", "Estado", "Trabajos"]], list(base)
+        fila = 1
+        for r in con:
+            inicio = fila
+            for i, a in enumerate(r["ahora"]):
+                data.append([Paragraph(f"<b>{r['numero']}</b>", grande) if i == 0 else "",
+                             Paragraph(f"<b>{e(r['nombre'])}</b><br/><font color='{GRIS}'>{e(r['puesto'] or '')}</font>", sm) if i == 0 else "",
+                             Paragraph(f"<b>{e(a['coche'] or '—')}</b>", grande),
+                             Paragraph(", ".join(f"#{o}" for o in a["ots"]), sm),
+                             Paragraph(estado(a), sm), Paragraph(trabajos(a), sm)])
+                if a["en_proceso"]:
+                    estilo.append(("BACKGROUND", (2, fila), (-1, fila), colors.HexColor("#F1F8F3")))
+                fila += 1
+            if fila - 1 > inicio:
+                estilo += [("SPAN", (0, inicio), (0, fila - 1)), ("SPAN", (1, inicio), (1, fila - 1))]
+            estilo.append(("LINEBELOW", (0, fila - 1), (-1, fila - 1), 0.6, colors.HexColor(LINEA)))
+        t = Table(data, colWidths=[11 * mm, 44 * mm, 19 * mm, 15 * mm, 25 * mm, 68 * mm], repeatRows=1)
+        t.setStyle(TableStyle(estilo))
+        story.append(t)
+    else:
+        story.append(Paragraph("Nadie tiene trabajos sin terminar en OT abiertas.", sub))
+
+    # ── Por coche ──
+    if coches:
+        story.append(Spacer(1, 3 * mm))
+        story.append(Paragraph("Por coche", h2))
+        num = lambda c: int(re.sub(r"\D", "", c) or 0)
+        data, estilo = [["Coche", "OT", "Quiénes están", "Estado"]], list(base)
+        for k, c in enumerate(sorted(coches.values(), key=lambda c: num(c["coche"])), 1):
+            gente = "<br/>".join(f"<b>N°{r['numero']}</b> {e(r['nombre'])}" for r in sorted(c["gente"], key=lambda r: r["numero"]))
+            data.append([Paragraph(f"<b>{e(c['coche'] or '—')}</b>", grande), Paragraph(", ".join(f"#{o}" for o in sorted(c["ots"])), sm),
+                         Paragraph(gente, sm), Paragraph(estado(c), sm)])
+            estilo.append(("LINEBELOW", (0, k), (-1, k), 0.4, colors.HexColor(LINEA)))
+        t = Table(data, colWidths=[22 * mm, 22 * mm, 100 * mm, 38 * mm], repeatRows=1)
+        t.setStyle(TableStyle(estilo))
+        story.append(KeepTogether([t]) if len(data) < 14 else t)
+
+    if libres:
+        story += [Spacer(1, 4 * mm), Paragraph(f"Sin nada asignado ahora ({len(libres)})", h2),
+                  Paragraph(" · ".join(f"<b>N°{r['numero']}</b> {e(r['nombre'])}" for r in libres), sm),
+                  Spacer(1, 1 * mm),
+                  Paragraph("Puede ser que estén haciendo algo que no está cargado en una OT, o que falte poner su número.", smg)]
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # PRODUCCIÓN DE UN TURNO (día por día, con cada trabajo) — para el jefe
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -2092,6 +2231,18 @@ def api_pdf_informe():
     buf = pdf_informe(res)
     return send_file(buf, mimetype="application/pdf", as_attachment=False,
                      download_name=f"trabajo-personal-{desde}-{hasta}.pdf")
+
+
+@bp_personal.route("/api/personal/ahora.pdf", methods=["GET"])
+def api_pdf_ahora():
+    """Quién está en qué coche ahora (con los filtros de la pantalla)."""
+    if not _puede_ver():
+        return _no()
+    desde, hasta, _ = _periodo_req()
+    res = resumen(desde, hasta, request.args.get("vehiculo_id") or None, request.args.get("turno") or "")
+    buf = pdf_ahora(res, request.args.get("puesto") or "")
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"quien-esta-en-que-coche-{ahora_iso()[:10]}.pdf")
 
 
 @bp_personal.route("/api/ots/<int:ot_id>/hojas", methods=["GET"])
