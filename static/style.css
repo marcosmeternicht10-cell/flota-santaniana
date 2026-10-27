@@ -7670,3 +7670,42 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
   .ca-cli-arch { flex-wrap: wrap; }
   .ca-largo { display: none; }
 }
+
+/* Personal de taller: en qué coche está cada uno */
+@media (min-width: 761px) { .pt-fila { grid-template-columns: 44px minmax(170px, 1.7fr) minmax(110px, 1fr) 54px 96px 52px; } }
+@media (max-width: 760px) { .pt-fila > .pt-e:not(:has(.pt-curso)) { visibility: visible; } .pt-fila > .pt-e:has(.pt-ahora-no) { visibility: hidden; } }
+.pt-ahora-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--surface3); color: var(--text); font: 600 12.5px "Inter", sans-serif; white-space: nowrap; }
+.pt-ahora-chip .ti { font-size: 14px; color: var(--muted); }
+.pt-ahora-chip small { font-size: 11px; color: var(--muted); }
+.pt-ahora-chip.proc { background: #E3F2E8; color: #1F6B3A; }
+.pt-ahora-chip.proc .ti { color: #2F7C46; }
+.pt-ahora-no { color: var(--light); }
+.pt-ahora { margin-bottom: 16px; }
+.pt-ahora .pv-card-cab h3 { display: inline-flex; align-items: center; gap: 6px; }
+.pt-ah-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 10px; }
+.pt-ah { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); }
+.pt-ah-cab { display: flex; align-items: center; gap: 10px; }
+.pt-ah-quien { display: flex; flex-direction: column; min-width: 0; }
+.pt-ah-quien b { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pt-ah-quien small { font-size: 11.5px; color: var(--muted); }
+.pt-ah-coche { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "n e" "t t"; gap: 4px 10px; align-items: center; width: 100%; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface2); text-align: left; cursor: pointer; font-family: inherit; color: var(--text); }
+.pt-ah-coche:hover { border-color: var(--brand-blue); }
+.pt-ah-coche.proc { border-color: #9BCDAB; background: #F1F8F3; }
+.pt-ah-n { grid-area: n; display: inline-flex; align-items: center; gap: 5px; }
+.pt-ah-n .ti { font-size: 17px; color: var(--muted); }
+.pt-ah-n b { font: 700 19px var(--display, "Inter"); letter-spacing: .02em; }
+.pt-ah-est { grid-area: e; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 12px; }
+.pt-ah-est em { font-style: normal; font-weight: 600; color: #8A5A00; }
+.pt-ah-est em.proc { color: #1F6B3A; }
+.pt-ah-est small { color: var(--muted); }
+.pt-ah-tr { grid-area: t; display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-2, #4A4A45); }
+.pt-ah-tr span { position: relative; padding-left: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pt-ah-tr span::before { content: ""; position: absolute; left: 2px; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--light); }
+.pt-ah-tr span.proc::before { background: #2F7C46; }
+.pt-ah-tr span.mas { color: var(--muted); padding-left: 12px; }
+.pt-ah-tr span.mas::before { display: none; }
+.pt-ah-libres { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--muted); }
+.pt-ah-libres > span { display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; }
+.pt-ah-libre { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font: 500 12px "Inter", sans-serif; color: var(--text); cursor: pointer; }
+.pt-ah-libre:hover { border-color: var(--brand-blue); }
+.pt-ah-cab .pt-num { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; }

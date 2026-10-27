@@ -19200,6 +19200,40 @@ async function ptTraer() {
     puestos.map(p => `<option ${p === pt.puesto ? "selected" : ""}>${ptEsc(p)}</option>`).join("");
   ptPintar();
 }
+// ─── Ahora: en qué coche está trabajando cada uno (OT abiertas, trabajos sin terminar) ───
+function ptAhoraChip(r) {
+  const a = r.ahora || [];
+  if (!a.length) return `<span class="pt-ahora-no">—</span>`;
+  const t = a.map(x => `${x.coche}: ${x.en_proceso ? x.en_proceso + " en proceso" : ""}${x.en_proceso && x.pendientes ? ", " : ""}${x.pendientes ? x.pendientes + " pendiente" + (x.pendientes === 1 ? "" : "s") : ""}`).join(" · ");
+  return `<span class="pt-ahora-chip ${a[0].en_proceso ? "proc" : ""}" title="${ptEsc(t)}"><i class="ti ti-bus"></i>${ptEsc(a[0].coche)}${a.length > 1 ? `<small>+${a.length - 1}</small>` : ""}</span>`;
+}
+function ptAhoraCard(rk) {
+  const con = rk.filter(r => (r.ahora || []).length);
+  const libres = rk.filter(r => r.activo && !(r.ahora || []).length);
+  if (!con.length && !libres.length) return "";
+  const coches = new Set(con.flatMap(r => r.ahora.map(a => a.coche)));
+  const tarjeta = r => `
+    <div class="pt-ah">
+      <div class="pt-ah-cab">
+        <span class="pt-num">${r.numero}</span>
+        <span class="pt-ah-quien"><b>${ptEsc(r.nombre)}</b><small>${ptEsc(r.puesto || "")}</small></span>
+      </div>
+      ${r.ahora.map(a => `
+        <button type="button" class="pt-ah-coche ${a.en_proceso ? "proc" : ""}" onclick="event.stopPropagation();abrirOT(${a.ots[0]})" title="Abrir la OT #${a.ots.join(", #")}">
+          <span class="pt-ah-n"><i class="ti ti-bus"></i><b>${ptEsc(a.coche || "—")}</b></span>
+          <span class="pt-ah-est">${a.en_proceso ? `<em class="proc">${a.en_proceso} en proceso</em>` : ""}${a.pendientes ? `<em>${a.pendientes} pendiente${a.pendientes === 1 ? "" : "s"}</em>` : ""}<small>OT #${a.ots.join(", #")}</small></span>
+          <span class="pt-ah-tr">${a.trabajos.slice(0, 3).map(t => `<span class="${t.estado === "en_proceso" ? "proc" : ""}">${ptEsc(t.descripcion)}</span>`).join("")}${a.trabajos.length > 3 ? `<span class="mas">y ${a.en_proceso + a.pendientes - 3} más</span>` : ""}</span>
+        </button>`).join("")}
+    </div>`;
+  return `
+    <div class="pv-card pt-ahora">
+      <div class="pv-card-cab"><h3><i class="ti ti-tool"></i> Ahora: quién está en qué coche</h3>
+        <span>${con.length ? `${con.length} persona${con.length === 1 ? "" : "s"} en ${coches.size} coche${coches.size === 1 ? "" : "s"} · trabajos sin terminar de OT abiertas. Tocá un coche para abrir la OT.` : "Nadie tiene trabajos sin terminar en OT abiertas."}</span></div>
+      ${con.length ? `<div class="pt-ah-grid">${con.sort((a, b) => a.numero - b.numero).map(tarjeta).join("")}</div>` : ""}
+      ${libres.length ? `<div class="pt-ah-libres"><span><i class="ti ti-user-pause"></i> Sin nada asignado ahora <b>${libres.length}</b></span>
+        ${libres.sort((a, b) => a.numero - b.numero).map(r => `<button type="button" class="pt-ah-libre" onclick="ptFicha(${r.id})" title="${ptEsc(r.nombre)}${r.puesto ? " · " + ptEsc(r.puesto) : ""}">N°${r.numero} ${ptEsc(r.nombre.split(" ")[0])}</button>`).join("")}</div>` : ""}
+    </div>`;
+}
 function ptBarra(v, max) { return `<span class="pt-bar"><i style="width:${max ? Math.max(v ? 3 : 0, v / max * 100) : 0}%"></i></span>`; }
 function ptPintar() {
   const d = pt.res;
@@ -19222,7 +19256,7 @@ function ptPintar() {
       <span class="pt-quien"><b>${ptEsc(r.nombre)}${r.activo ? "" : ` <em class="pt-baja-tag">de baja</em>`}</b><small>${ptEsc(r.puesto || "—")}${r.turno && !d.turno ? ` · <span class="pt-turno-tag">${PT_TURNO[r.turno] || ""}</span>` : ""}</small></span>
       <span class="pt-t">${ptBarra(r.trabajos, max)}<b>${r.trabajos}</b></span>
       <span class="pt-c num">${r.coches || "—"}</span>
-      <span class="pt-e num">${r.en_curso ? `<span class="pt-curso">${r.en_curso}</span>` : "—"}</span>
+      <span class="pt-e">${ptAhoraChip(r)}</span>
       <span class="pt-u num">${r.ultimo ? ptFC(r.ultimo) : "—"}</span>
     </div>`;
   box.innerHTML = `
@@ -19265,12 +19299,13 @@ function ptPintar() {
         <span class="pv-kpi-ic ${t.sin_numero ? "pe-pronto" : "pe-ok"}"><i class="ti ti-${t.sin_numero ? "user-question" : "checks"}"></i></span><span class="pv-kpi-et">Terminados sin nadie</span>
         <b>${t.sin_numero}</b><span class="pv-kpi-sub">${t.sin_numero ? "falta poner quién lo hizo" : "todo lo terminado tiene a alguien"}</span></div>
     </div>
+    ${ptAhoraCard(rk)}
     ${d.turno ? ptDiaPorDia(d, rk) : ""}
     <div class="pv-cu-grid pt-grid">
       <div class="pv-card">
         <div class="pv-card-cab"><h3>Quién hizo más</h3><span>${pt.puesto ? ptEsc(pt.puesto) + " · " : ""}Tocá a alguien para ver sus trabajos</span></div>
         <div class="pt-tabla" role="table">
-          <div class="pt-fila pt-th" role="row"><span>N°</span><span>Nombre</span><span>Trabajos</span><span class="num">Coches</span><span class="num">En curso</span><span class="num">Último</span></div>
+          <div class="pt-fila pt-th" role="row"><span>N°</span><span>Nombre</span><span>Trabajos</span><span class="num">Coches</span><span>Ahora en</span><span class="num">Último</span></div>
           ${con.map(fila).join("") || `<div class="pt-vacio-r"><i class="ti ti-clipboard-off"></i> Nadie tiene trabajos con número ${per}${d.coche ? " en este coche" : ""}.</div>`}
           ${sin.length ? `<div class="pt-sep" role="row"><i class="ti ti-user-off"></i> Sin trabajos registrados ${per} <span>${sin.length}</span></div>${sin.map(fila).join("")}` : ""}
         </div>
