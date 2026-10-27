@@ -729,7 +729,7 @@ def resumen(desde, hasta, vehiculo_id=None, turno=""):
         filas = _filas_trabajo(conn, vehiculo_id)
 
         por = {p["id"]: {"hechos": set(), "en_curso": set(), "coches": {}, "ots": set(),
-                         "tipos": {}, "ultimo": "", "historico": 0, "dia": {}} for p in personas}
+                         "tipos": {}, "ultimo": "", "historico": 0, "dia": {}, "ahora": {}} for p in personas}
         items_hechos, coches_hechos = set(), set()
         for f in filas:
             x = por.get(f["personal_id"])
@@ -752,6 +752,14 @@ def resumen(desde, hasta, vehiculo_id=None, turno=""):
                     coches_hechos.add(f["vehiculo_id"])
             elif f["ot_estado"] != "cerrada":
                 x["en_curso"].add(f["item_id"])
+                # En qué coche está trabajando ahora (OT abierta, trabajo sin terminar)
+                c = _coche(f)
+                a = x["ahora"].setdefault(c, {"coche": c, "vehiculo_id": f["vehiculo_id"], "ots": set(),
+                                              "en_proceso": 0, "pendientes": 0, "trabajos": []})
+                a["ots"].add(f["ot_id"])
+                a["en_proceso" if f["estado"] == "en_proceso" else "pendientes"] += 1
+                a["trabajos"].append({"descripcion": f["descripcion"] or "", "estado": f["estado"] or "pendiente",
+                                      "ot_id": f["ot_id"]})
 
         ranking = []
         for p in personas:
@@ -759,6 +767,10 @@ def resumen(desde, hasta, vehiculo_id=None, turno=""):
             if not p["activo"] and not x["hechos"] and not x["en_curso"]:
                 continue
             top = sorted(x["coches"].items(), key=lambda kv: (-kv[1], kv[0]))
+            # Primero el coche donde tiene algo «en proceso», después el que más pendientes tiene
+            ahora = sorted(x["ahora"].values(), key=lambda a: (-a["en_proceso"], -a["pendientes"], a["coche"]))
+            ahora = [{**a, "ots": sorted(a["ots"]),
+                      "trabajos": sorted(a["trabajos"], key=lambda t: t["estado"] != "en_proceso")[:8]} for a in ahora]
             ranking.append({
                 "id": p["id"], "numero": p["numero"], "nombre": p["nombre"], "puesto": p["puesto"] or "",
                 "activo": p["activo"], "edad": p["edad_actual"],
@@ -766,6 +778,7 @@ def resumen(desde, hasta, vehiculo_id=None, turno=""):
                 "trabajos": len(x["hechos"]), "en_curso": len(x["en_curso"]), "ots": len(x["ots"]),
                 "coches": len(x["coches"]), "coches_top": [{"coche": c, "n": n} for c, n in top[:3]],
                 "tipos": x["tipos"], "ultimo": x["ultimo"], "historico": x["historico"],
+                "ahora": ahora,
             })
         ranking.sort(key=lambda r: (-r["trabajos"], -r["en_curso"], r["numero"]))
 
