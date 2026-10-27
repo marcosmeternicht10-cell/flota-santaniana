@@ -1720,10 +1720,14 @@ def pdf_hojas(ot, hojas, en_blanco=False):
         trozos.append(actual)
         cap = _cap_ultima(g)
         ult = trozos[-1]
-        if sum(_lineas_item(i) for i in ult) > cap and len(ult) > 1:
+        if sum(_lineas_item(i) for i in ult) > cap:
+            # Lo que no entra con el pie se queda en una página de solo detalle;
+            # la última se lleva los últimos trabajos que sí le entran (o ninguno)
             nueva = []
-            while len(ult) > 1 and sum(_lineas_item(i) for i in ult) > cap:
+            while ult and sum(_lineas_item(i) for i in nueva) + _lineas_item(ult[-1]) <= cap:
                 nueva.insert(0, ult.pop())
+            if not ult:
+                trozos.pop()
             trozos.append(nueva)
         for k, tz in enumerate(trozos):
             paginas.append((g, tz, k, len(trozos)))
@@ -1841,17 +1845,21 @@ def pdf_hojas(ot, hojas, en_blanco=False):
         y += h_det + 10
 
         if k == total_k - 1:
-            # ── Materiales (lo que se anotó en la OT para sus trabajos) ──
-            c.setStrokeColor(NAVY)
-            c.rect(M, H - y - h_mat, aw, h_mat, stroke=1, fill=0)
-            c.setFillColor(SUAVE)
-            c.rect(M + 0.5, H - y - 22, 100, 21.5, stroke=0, fill=1)
-            texto(M + 8, y + 15, "Materiales:", "I7", 10.5, NAVY)
-            renglones(M, y + 22, aw, n_mat, 22)
+            # ── Materiales y Observaciones, uno al lado del otro (las observaciones
+            #    las pidieron los técnicos: lo que vieron, lo que quedó, etc.) ──
+            mitad = (aw - 10) / 2
+            for x0, titulo, w_tit in ((M, "Materiales:", 100), (M + mitad + 10, "Observaciones:", 118)):
+                c.setStrokeColor(NAVY)
+                c.setLineWidth(1)
+                c.rect(x0, H - y - h_mat, mitad, h_mat, stroke=1, fill=0)
+                c.setFillColor(SUAVE)
+                c.rect(x0 + 0.5, H - y - 22, w_tit, 21.5, stroke=0, fill=1)
+                texto(x0 + 8, y + 15, titulo, "I7", 10.5, NAVY)
+                renglones(x0, y + 22, mitad, n_mat, 22)
             for i, m in enumerate(mats):
                 c.setFillColor(NAVY)
                 c.circle(M + 15, H - (y + 22 + i * 22 + 13), 2, fill=1, stroke=0)
-                texto(M + 26, y + 22 + i * 22 + 17, cortar(m, "I5", 11, aw - 40), "I5", 11, TINTA)
+                texto(M + 26, y + 22 + i * 22 + 17, cortar(m, "I5", 11, mitad - 34), "I5", 11, TINTA)
             y += h_mat + 12
 
             # ── Horarios: dos tandas. Cada momento (inicio, intermedio y fin)
