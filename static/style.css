@@ -7889,3 +7889,25 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
 .pt-ah-turnos { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 10px; background: var(--info-bg); font-size: 12px; color: var(--azul-oscuro); }
 .pt-ah-turnos > span { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 .pt-ah-turnos small { color: var(--muted); }
+
+/* Por qué quedó pendiente: motivo corto + explicación larga */
+.ot-mot-det { margin-top: 6px; padding: 8px 10px; border-left: 3px solid var(--warning-bd, #F0D59D); border-radius: 0 8px 8px 0; background: var(--surface2); font-size: 12.5px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; max-width: 640px; }
+.ot-mot.fuerte .ot-mot-det { border-left-color: var(--danger-bd, #F3B3BC); }
+.ot-mot-ed2 { display: flex; flex-direction: column; gap: 10px; }
+.ot-mot-f .ot-mot-in { flex: none; min-width: 0; height: 38px; box-shadow: none; border-color: var(--border-strong, #C9D1DB); }
+.ot-mot-modal .rv-modal-tit p { white-space: normal; }
+.ot-mot-modal .rv-modal-pie > .ot-mot-btns { width: 100%; }
+.ot-mot-f { display: flex; flex-direction: column; gap: 4px; }
+.ot-mot-f > span { font-size: 12px; font-weight: 700; color: var(--text); }
+.ot-mot-f > span small { font-weight: 500; color: var(--muted); }
+.ot-mot-f input, .ot-mot-f textarea { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border-strong, #C9D1DB); background: var(--surface); font: 500 13px/1.45 "Inter", sans-serif; color: var(--text); }
+.ot-mot-f input { height: 36px; }
+.ot-mot-f textarea { resize: vertical; min-height: 84px; }
+.ot-mot-f input:focus, .ot-mot-f textarea:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30, 90, 150, .12); }
+.ot-mot-cuenta { align-self: flex-end; font-size: 11px; color: var(--muted); }
+.ot-mot-cuenta:empty { display: none; }
+.ot-mot-ed2 .ot-mot-sug { margin-top: -2px; }
+.ot-mot-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; justify-content: flex-end; }
+.ot-mot-btns .ot-mot-quitar { margin-right: auto; color: var(--danger, #C21F38); }
+.ot-mot-ayuda { font-size: 11px; color: var(--light, #9AA6B4); }
+@media (max-width: 760px) { .ot-mot-ayuda { display: none; } }

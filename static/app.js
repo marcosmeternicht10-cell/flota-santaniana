@@ -6992,17 +6992,21 @@ function otFilaItem(ot, it, idx, modo) {
 }
 
 // ─── El motivo de lo pendiente: lo escribe el taller, se ofrecen los ya usados ───
+// Dos partes: el MOTIVO corto (agrupa en los filtros: «Falta el repuesto») y la
+// EXPLICACIÓN, en varios renglones, para contar bien lo que pasó.
 function otMotivoCaja(it, fuerte) {
-  const m = (it.motivo_pendiente || "").trim();
+  const m = (it.motivo_pendiente || "").trim(), det = (it.motivo_detalle || "").trim();
   const puede = OT_PUEDE_MOTIVO();
   let dentro;
-  if (m) dentro = `<button type="button" class="ot-mot-chip" ${puede ? `onclick="otMotivoEditar(this)" title="Cambiar el motivo"` : "disabled"}><i class="ti ti-tag"></i><span>${trEsc(m)}</span>${puede ? '<i class="ti ti-pencil ot-mot-lapiz"></i>' : ""}</button>`;
+  if (m) dentro = `<button type="button" class="ot-mot-chip" ${puede ? `onclick="otMotivoEditar(this)" title="Cambiar el motivo o la explicación"` : "disabled"}><i class="ti ti-tag"></i><span>${trEsc(m)}</span>${puede ? '<i class="ti ti-pencil ot-mot-lapiz"></i>' : ""}</button>
+      ${det ? `<div class="ot-mot-det">${trEsc(det)}</div>`
+        : puede ? `<button type="button" class="ot-mot-link" onclick="otMotivoEditar(this, true)"><i class="ti ti-align-left"></i> Explicar qué pasó</button>` : ""}`;
   else if (!puede) dentro = fuerte ? `<span class="ot-mot-chip falta"><i class="ti ti-alert-triangle"></i><span>Sin motivo</span></span>` : "";
   else if (fuerte) dentro = `<button type="button" class="ot-mot-chip falta" onclick="otMotivoEditar(this)"><i class="ti ti-alert-triangle"></i><span>¿Por qué quedó pendiente?</span></button>`;
   else dentro = `<button type="button" class="ot-mot-link" onclick="otMotivoEditar(this)"><i class="ti ti-tag"></i> Motivo, si queda pendiente</button>`;
   return `<div class="ot-mot${fuerte ? " fuerte" : ""}" data-iid="${it.id}">${dentro}</div>`;
 }
-async function otMotivoEditar(btn) {
+async function otMotivoEditar(btn, alDetalle) {
   const caja = btn.closest(".ot-mot");
   const ot = window._otActual;
   const it = ((ot && ot.items) || []).find(x => String(x.id) === caja.dataset.iid);
@@ -7011,58 +7015,86 @@ async function otMotivoEditar(btn) {
     const r = await api("/api/ot_motivos");
     window._otMotivos = (r && r.motivos) || [];
   }
-  const actual = (it.motivo_pendiente || "").trim();
-  caja.classList.add("editando");
-  caja.innerHTML = `
-    <div class="ot-mot-ed">
-      <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="¿Por qué quedó? Ej: falta el repuesto" aria-label="Motivo de pendiente" autocomplete="off">
-      <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
-      ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar</button>` : ""}
-      <button type="button" class="icon-btn ot-mot-no" title="Cancelar" aria-label="Cancelar"><i class="ti ti-x"></i></button>
-    </div>
-    <div class="ot-mot-sug"></div>`;
-  const inp = caja.querySelector(".ot-mot-in"), sug = caja.querySelector(".ot-mot-sug");
+  const actual = (it.motivo_pendiente || "").trim(), detActual = (it.motivo_detalle || "").trim();
+  // Una ventana propia: hay lugar para escribir bien lo que pasó
+  const o = rvModal({
+    titulo: "¿Por qué quedó pendiente?", icono: "message-report", ancho: 620, clase: "ot-mot-modal",
+    sub: `<b>${trEsc(it.descripcion || "")}</b>${ot && ot.n_interno ? ` · coche ${trEsc(ot.n_interno)}` : ""}`,
+    cuerpo: `
+      <div class="ot-mot-ed2">
+        <label class="ot-mot-f"><span>Motivo <small>corto, para agrupar en los filtros</small></span>
+          <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="Ej: falta el repuesto" aria-label="Motivo" autocomplete="off"></label>
+        <div class="ot-mot-sug"></div>
+        <label class="ot-mot-f"><span>Explicación <small>lo que pasó, con todas las palabras que hagan falta</small></span>
+          <textarea class="ot-mot-det-in" rows="7" maxlength="2000" placeholder="Ej: se pidió el repuesto a Compras el 20/10. El proveedor dice que llega el lunes; mientras tanto el coche puede salir porque no afecta la seguridad." aria-label="Explicación">${trEsc(detActual)}</textarea>
+          <small class="ot-mot-cuenta"></small></label>
+      </div>`,
+    pie: `<div class="ot-mot-btns">
+        ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar el motivo</button>` : ""}
+        <span class="ot-mot-ayuda">Ctrl + Enter guarda</span>
+        <button type="button" class="btn btn-ghost ot-mot-no">Cancelar</button>
+        <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
+      </div>`,
+  });
+  const inp = o.querySelector(".ot-mot-in"), sug = o.querySelector(".ot-mot-sug"), ta = o.querySelector(".ot-mot-det-in");
+  const cuenta = o.querySelector(".ot-mot-cuenta");
+  const contar = () => {
+    cuenta.textContent = ta.value.length > 1500 ? `${ta.value.length} de 2000` : "";
+    ta.style.height = "auto"; ta.style.height = Math.min(420, Math.max(150, ta.scrollHeight + 2)) + "px";
+  };
   const pintarSug = () => {
     const q = acNorm(inp.value);
-    const lista = window._otMotivos.filter(m => m.motivo !== actual && (!q || acNorm(m.motivo).includes(q))).slice(0, 8);
+    const lista = window._otMotivos.filter(m => acNorm(m.motivo) !== q && (!q || acNorm(m.motivo).includes(q))).slice(0, 10);
     sug.innerHTML = lista.length
       ? `<span class="ot-mot-sug-t">Ya usados:</span>` + lista.map(m => `<button type="button" class="ot-mot-s" data-m="${trEsc(m.motivo)}">${trEsc(m.motivo)}${m.pendientes ? `<small title="Trabajos pendientes con este motivo">${m.pendientes}</small>` : ""}</button>`).join("")
       : (window._otMotivos.length ? "" : `<span class="ot-mot-sug-t">Escribilo con tus palabras: la próxima vez aparece acá para elegirlo.</span>`);
-    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => otMotivoGuardar(caja, it, b.dataset.m));
+    // Elegir uno de los ya usados lo pone y pasa a la explicación
+    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => { inp.value = b.dataset.m; pintarSug(); ta.focus(); });
   };
-  pintarSug();
+  const cerrar = () => o.remove();
+  const guardar = () => otMotivoGuardar(o, caja, it, inp.value, ta.value);
+  pintarSug(); contar();
   inp.addEventListener("input", pintarSug);
-  inp.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); otMotivoGuardar(caja, it, inp.value); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); otMotivoCerrar(caja, it); }
-  });
-  caja.querySelector(".ot-mot-ok").onclick = () => otMotivoGuardar(caja, it, inp.value);
-  caja.querySelector(".ot-mot-no").onclick = () => otMotivoCerrar(caja, it);
-  const q = caja.querySelector(".ot-mot-quitar");
-  if (q) q.onclick = () => otMotivoGuardar(caja, it, "");
-  inp.focus();
-  inp.select();
+  ta.addEventListener("input", contar);
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ta.focus(); } });
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); guardar(); } });
+  o.querySelector(".ot-mot-ok").onclick = guardar;
+  o.querySelector(".ot-mot-no").onclick = cerrar;
+  const q = o.querySelector(".ot-mot-quitar");
+  if (q) q.onclick = () => otMotivoGuardar(o, caja, it, "", "");
+  setTimeout(() => {
+    if (alDetalle || actual) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    else { inp.focus(); inp.select(); }
+  }, 60);
 }
 function otMotivoCerrar(caja, it) {
   caja.outerHTML = otMotivoCaja(it, caja.classList.contains("fuerte"));
 }
-async function otMotivoGuardar(caja, it, motivo) {
+async function otMotivoGuardar(o, caja, it, motivo, detalle) {
   motivo = String(motivo || "").replace(/\s+/g, " ").trim();
-  if (motivo === (it.motivo_pendiente || "").trim()) { otMotivoCerrar(caja, it); return; }
-  caja.querySelectorAll("button, input").forEach(x => x.disabled = true);
+  detalle = String(detalle ?? "").replace(/\r/g, "").trim();
+  if (detalle && !motivo) {
+    toast("Poné también el motivo corto (arriba), así se puede agrupar", "error");
+    o.querySelector(".ot-mot-in")?.focus();
+    return;
+  }
+  if (motivo === (it.motivo_pendiente || "").trim() && detalle === (it.motivo_detalle || "").trim()) { o.remove(); return; }
+  o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = true);
   const r = await api(`/api/ot_items/${it.id}/motivo`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo })
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo, detalle })
   });
   if (!r || !r.ok) {
     toast((r && r.msg) || "No se pudo guardar el motivo", "error");
-    caja.querySelectorAll("button, input").forEach(x => x.disabled = false);
+    o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = false);
     return;
   }
   it.motivo_pendiente = r.motivo || "";
+  it.motivo_detalle = r.detalle || "";
   window._otMotivos = r.motivos || window._otMotivos;
-  otMotivoCerrar(caja, it);
+  o.remove();
+  if (document.body.contains(caja)) otMotivoCerrar(caja, it);
   otRefrescarCabeceras();
-  toast(r.motivo ? "Motivo anotado" : "Motivo quitado", "success");
+  toast(r.motivo ? (r.detalle ? "Motivo y explicación guardados" : "Motivo anotado") : "Motivo quitado", "success");
 }
 // Después de cambiar un estado o un motivo: los contadores de arriba al día
 function otRefrescarCabeceras() {
