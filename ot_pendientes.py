@@ -12,7 +12,9 @@ motivo.
   marcar_atrasados(lista)         a cada fila de la lista de OTs: cuántos
                                   trabajos de días anteriores siguen sin hacer,
                                   desde cuándo y por qué
-  PATCH /api/ot_items/<id>/motivo {"motivo": "Falta repuesto"}  ("" lo quita)
+  PATCH /api/ot_items/<id>/motivo {"motivo": "Falta repuesto", "detalle": "..."}  ("" lo quita)
+                                  El motivo es corto (agrupa); el detalle es la
+                                  explicación larga, en varios renglones.
   GET   /api/ot_motivos           los motivos ya usados, el más usado primero
 
 Enganche en app.py:
@@ -31,7 +33,8 @@ from hora_local import hoy, ahora_iso
 
 bp_ot_pend = Blueprint("ot_pendientes", __name__)
 
-MAX_MOTIVO = 80
+MAX_MOTIVO = 80          # el motivo corto (agrupa en los filtros)
+MAX_DETALLE = 2000       # la explicación: lo que pasó, con todas las palabras que hagan falta
 SIN_MOTIVO = "Sin motivo"
 
 # La fecha del trabajo: el día en que entró a la OT (o la apertura, si es viejo)
@@ -61,7 +64,7 @@ def _agregar_columna(conn, tabla, col, tipo):
 def init_ot_pendientes():
     conn = get_connection()
     try:
-        for col in ("motivo_pendiente", "motivo_el", "motivo_por"):
+        for col in ("motivo_pendiente", "motivo_el", "motivo_por", "motivo_detalle"):
             _agregar_columna(conn, "ot_items", col, "TEXT DEFAULT ''")
     finally:
         conn.close()
@@ -113,9 +116,17 @@ def motivos_usados(conn=None):
             conn.close()
 
 
-def poner_motivo(item_id, motivo, quien=""):
+def _detalle_limpio(s):
+    """La explicación respeta los renglones; se sacan los espacios de más."""
+    lineas = [re.sub(r"[ \t]+", " ", l).strip() for l in str(s or "").replace("\r", "").split("\n")]
+    txt = re.sub(r"\n{3,}", "\n\n", "\n".join(lineas)).strip()
+    return txt[:MAX_DETALLE]
+
+
+def poner_motivo(item_id, motivo, quien="", detalle=None):
     """Anota por qué quedó pendiente el trabajo. Si ese motivo ya se escribió
-    antes (con otras mayúsculas o sin tilde) se usa la forma de siempre."""
+    antes (con otras mayúsculas o sin tilde) se usa la forma de siempre. El
+    detalle es la explicación larga (si no viene, no se toca)."""
     motivo = _limpio(motivo)
     conn = get_connection()
     try:
@@ -126,6 +137,10 @@ def poner_motivo(item_id, motivo, quien=""):
             motivo = _formas(conn).get(_clave(motivo), motivo)
         conn.execute("UPDATE ot_items SET motivo_pendiente=?, motivo_el=?, motivo_por=? WHERE id=?",
                      (motivo, ahora_iso() if motivo else "", (quien or "")[:80] if motivo else "", item_id))
+        if detalle is not None or not motivo:
+            # Sin motivo no queda explicación suelta
+            conn.execute("UPDATE ot_items SET motivo_detalle=? WHERE id=?",
+                         (_detalle_limpio(detalle) if motivo else "", item_id))
         conn.commit()
         return motivo, None
     finally:
@@ -213,10 +228,21 @@ def api_motivo(item_id):
     if not _puede():
         return _no()
     d = request.get_json(silent=True) or {}
-    motivo, err = poner_motivo(item_id, d.get("motivo"), session.get("nombre") or session.get("usuario") or "")
+    if d.get("detalle") and not str(d.get("motivo") or "").strip():
+        return _no("Poné también el motivo corto (para agruparlo), además de la explicación", 400)
+    motivo, err = poner_motivo(item_id, d.get("motivo"), session.get("nombre") or session.get("usuario") or "",
+                               d.get("detalle") if "detalle" in d else None)
     if err:
         return _no(err, 404)
-    return jsonify({"ok": True, "motivo": motivo, "motivos": motivos_usados()})
+    detalle = ""
+    if motivo:
+        conn = get_connection()
+        try:
+            r = conn.execute("SELECT motivo_detalle FROM ot_items WHERE id=?", (item_id,)).fetchone()
+            detalle = (r["motivo_detalle"] if r else "") or ""
+        finally:
+            conn.close()
+    return jsonify({"ok": True, "motivo": motivo, "detalle": detalle, "motivos": motivos_usados()})
 
 
 @bp_ot_pend.route("/api/ot_motivos", methods=["GET"])
