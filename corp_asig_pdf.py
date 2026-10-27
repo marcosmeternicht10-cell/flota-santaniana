@@ -185,7 +185,9 @@ def _dibujar(info, c, alto):
             i += 1
         h.linea(M, y, M + AW, y, LINEA, 0.7)
         y += 6
-    nc = [t for t in c["tramos"] if t["estado"] == "no_corre"]
+    # Solo se avisa de los que suelen correr ese día y no corren (un feriado,
+    # por ejemplo); los quitados porque no se hacen ese día no hacen falta
+    nc = [t for t in c["tramos"] if t["estado"] == "no_corre" and t.get("esperado", True)]
     if nc:
         txt = "NO CORREN ESTE DÍA: " + " · ".join(f"{t.get('corto') or t['tramo']} {t.get('hora') or ''}".strip() for t in nc)
         for ln in h.partir(txt, "I6", 6.6, AW - 8):

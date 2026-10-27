@@ -4,10 +4,11 @@ corp_asignacion.py — La asignación diaria de corporativos (La Santaniana)
 Así como el tráfico arma las salidas de cada día, acá se arma quién cubre
 cada tramo de los clientes corporativos y con qué coche:
 
-  · Los tramos del día salen del catálogo de cada cliente (el mismo que usa el
-    chofer para rendir) y del historial: se proponen los que de verdad corren
-    ese día de la semana (los administrativos no aparecen el sábado, por
-    ejemplo). Los demás quedan a mano por si hace falta uno.
+  · Todos los días aparecen TODOS los tramos del catálogo de cada cliente (el
+    mismo que usa el chofer para rendir), también los fines de semana: el que
+    no se hace se quita a mano (queda como «no corre» y no cuenta como
+    faltante). Con el historial se marca cuáles no suelen correr ese día de la
+    semana, y se pueden quitar todos esos de una vez.
   · Cada tramo lo hace un chofer completo, o se divide: el entrante uno y el
     saliente otro (igual que en la rendición). Si un día no corre, se marca.
     Los servicios variables se agregan aparte.
@@ -354,11 +355,10 @@ def _armar(fecha, dia, filas, act, rends, horarios=None):
         fijos = C.tramos_fijos(cliente)
         for idx, t in sorted(enumerate(fijos), key=lambda x: _orden_tramo(x[1], x[0], horarios.get((cliente, x[1])))):
             mis = [f for f in por_tramo.get((cliente, t), []) if f["lado"] != "variable"]
+            # Todos los tramos, todos los días: el que no se hace se quita a mano.
+            # «esperado» solo avisa si suele correr ese día de la semana.
             esperado = corre(cliente, t, w, act, con_hist)
             h = horarios.get((cliente, t))
-            if not esperado and not mis and not h:
-                otros.append({"tramo": t, **info_tramo(t)})
-                continue
             tr = _armar_tramo(cliente, t, mis, esperado, h)
             tramos.append(tr)
             todos_slots += tr["slots"]
@@ -876,6 +876,32 @@ def no_corre(fecha, d, quien=""):
         conn.close()
 
 
+def quitar_varios(fecha, d, quien=""):
+    """Quita de una vez los tramos de un cliente que no tienen nada asignado
+    (los que no suelen correr ese día). Los que tienen chofer o coche no se tocan."""
+    cli = d.get("cliente")
+    tramos = d.get("tramos") or []
+    if not isinstance(tramos, list) or not tramos:
+        raise Error("No hay tramos para quitar")
+    conn = get_connection()
+    try:
+        dia_id = _crear_dia(conn, fecha, quien)
+        ya = {(f["cliente"], f["tramo"]) for f in _filas(conn, dia_id) if f["lado"] != "variable"}
+        n = 0
+        for t in tramos[:200]:
+            c2, t2 = _tramo_ok(cli, t)
+            if (c2, t2) in ya:
+                continue
+            conn.execute("""INSERT INTO corp_asig (dia_id, cliente, tramo, lado, nota, actualizado_el, actualizado_por)
+                            VALUES (?,?,?,'no_corre','',?,?)""", (dia_id, c2, t2, ahora_iso(), quien[:80]))
+            n += 1
+        _marcar(conn, dia_id)
+        conn.commit()
+        return n
+    finally:
+        conn.close()
+
+
 def agregar_tramo(fecha, d, quien=""):
     """Un tramo que no suele correr ese día pero hoy sí: se agrega vacío
     (queda como completo sin chofer hasta que se asigne)."""
@@ -947,8 +973,8 @@ def borrar_fila(fid):
 
 
 def copiar(fecha, desde, quien="", reemplazar=False, con_variables=False):
-    """Trae la asignación de otro día. Solo los tramos que corren el día de
-    destino; lo demás se cuenta como salteado."""
+    """Trae la asignación de otro día tal cual, también los tramos quitados
+    (copiar el sábado pasado trae los quitados del sábado)."""
     if desde == fecha:
         raise Error("Elegí otro día para copiar")
     conn = get_connection()
@@ -963,15 +989,10 @@ def copiar(fecha, desde, quien="", reemplazar=False, con_variables=False):
             return {"necesita_confirmar": True, "ya_tiene": len(ya)}
         for f in ya:
             conn.execute("DELETE FROM corp_asig WHERE id=?", (f["id"],))
-        act, con_hist = _actividad(conn, fecha)
-        w = date.fromisoformat(fecha).weekday()
         copiadas, salteadas = 0, set()
         ahora = ahora_iso()
         for f in filas:
             if f["lado"] == "variable" and not con_variables:
-                continue
-            if f["lado"] != "variable" and not corre(f["cliente"], f["tramo"], w, act, con_hist):
-                salteadas.add((f["cliente"], f["tramo"]))
                 continue
             conn.execute("""INSERT INTO corp_asig (dia_id, cliente, tramo, lado, chofer_usuario, chofer_nombre, coche,
                                                    hora, detalle, nota, actualizado_el, actualizado_por)
@@ -1262,6 +1283,11 @@ def datos_para_pdf(fecha, version=None, cliente=None):
                              (dia["id"], int(version))).fetchone()
             if v:
                 info["clientes"] = _dia_desde_foto(json.loads(v["datos"]), fecha)
+                # Si suele correr ese día sale del historial (la versión no lo guarda)
+                esp = {(t["cliente"], t["tramo"]): t.get("esperado", True) for c in d["clientes"] for t in c["tramos"]}
+                for c in info["clientes"]:
+                    for t in c["tramos"]:
+                        t["esperado"] = esp.get((t["cliente"], t["tramo"]), True)
                 info.update(version=v["version"], borrador=False, publicado_el=v["publicado_el"],
                             publicado_por=v["publicado_por"], cambios=json.loads(v["cambios"] or "[]"))
                 info["resumen"] = _resumen_de(info["clientes"])
@@ -1465,6 +1491,13 @@ def api_dividir(fecha):
 def api_no_corre(fecha):
     no_corre(fecha, request.get_json(silent=True) or {}, _quien())
     return _respuesta(fecha)
+
+
+@bp_corp_asig.route("/api/corp/asig/dia/<fecha>/quitar_varios", methods=["POST"])
+@_cambio
+def api_quitar_varios(fecha):
+    n = quitar_varios(fecha, request.get_json(silent=True) or {}, _quien())
+    return _respuesta(fecha, quitados=n)
 
 
 @bp_corp_asig.route("/api/corp/asig/dia/<fecha>/tramo", methods=["POST"])
