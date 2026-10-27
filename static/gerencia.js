@@ -162,6 +162,7 @@ function htmlOperacion(op) {
       <div>${htmlSalidas(op)}</div>
       <div>${htmlTurismo(op)}</div>
     </div>
+    ${htmlInternacional(op)}
     ${htmlCorporativos(op)}`;
 }
 
@@ -216,10 +217,10 @@ function htmlFranja(op) {
     </div>`;
 }
 
-function filaSalida(s) {
+function filaSalida(s, sinTipo) {
   const tramo = s.origen && s.llega ? `${esc(s.origen)} → ${esc(s.llega)}` : esc(s.destino);
   const extra = [];
-  if (s.tipo === "internacional") extra.push("Internacional");
+  if (s.tipo === "internacional" && sinTipo !== true) extra.push("Internacional");
   if (s.lado === "regreso") extra.push("regreso");
   const der = s.sin_coche
     ? `<span class="g-pill rojo"><i class="ti ti-alert-triangle"></i> ${s.a_confirmar ? "A confirmar" : "Sin coche"}</span>`
@@ -294,6 +295,31 @@ function htmlTurismo(op) {
   return `<div class="g-bloque-cab"><h3>Turismo</h3></div>` + (filas.length
     ? `<ul class="g-lista">${filas.join("")}</ul>`
     : `<div class="g-vacio"><i class="ti ti-beach"></i>No hay servicios de turismo ese día</div>`);
+}
+
+// Buenos Aires (el tráfico internacional) aparte: con la lista de próximas
+// salidas se perdía entre las nacionales
+function htmlInternacional(op) {
+  const t = op.trafico;
+  const sal = (t.salidas || []).filter(s => s.tipo === "internacional");
+  const cargado = (t.planillas || []).some(p => p.tipo === "internacional");
+  const prox = op.internacional_proximo;
+  const cuando = op.es_hoy ? "hoy" : "ese día";
+  let cuerpo;
+  if (sal.length) {
+    const ida = sal.filter(s => s.lado !== "regreso").length, vuelta = sal.length - ida;
+    const det = [ida ? `${num(ida)} de ida` : "", vuelta ? `${num(vuelta)} de regreso` : ""].filter(Boolean).join(" · ");
+    cuerpo = `<p class="g-int-res"><b>${plural(sal.length, "salida", "salidas")}</b> ${cuando}${det ? " · " + det : ""}</p>
+      <ul class="g-lista">${sal.map(s => filaSalida(s, true)).join("")}</ul>`;
+  } else {
+    const msg = !cargado
+      ? `El tráfico internacional de ${cuando} no está cargado.`
+      : `${cap(cuando)} no hay salidas a Buenos Aires.`;
+    cuerpo = `<div class="g-int-vacio"><i class="ti ${cargado ? "ti-calendar-off" : "ti-alert-circle"}"></i><span>${msg}${!cargado ? " Se carga en Tráfico → Internacional." : ""}</span></div>`;
+    if (prox) cuerpo += `<p class="g-int-res">Próximas: <b>${esc(cap(prox.fecha_larga))}</b> · ${plural(prox.salidas.length, "salida", "salidas")}</p>
+      <ul class="g-lista">${prox.salidas.map(s => filaSalida(s, true)).join("")}</ul>`;
+  }
+  return `<div class="g-bloque g-int"><div class="g-bloque-cab"><h3><i class="ti ti-world"></i> Buenos Aires</h3></div>${cuerpo}</div>`;
 }
 
 function htmlCorporativos(op) {

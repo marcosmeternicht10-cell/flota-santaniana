@@ -278,3 +278,11 @@ button.g-kpi:disabled { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   .g-card, .g-esq, .g-act.g-girando .ti { animation: none; }
 }
+
+/* Buenos Aires (tráfico internacional) */
+.g-int .g-bloque-cab h3 { display: inline-flex; align-items: center; gap: 6px; }
+.g-int .g-bloque-cab h3 .ti { color: var(--blue); }
+.g-int-res { margin: 2px 0 6px; font-size: 13.5px; color: var(--muted); }
+.g-int-res b { color: var(--text); }
+.g-int-vacio { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); font-size: 13.5px; color: var(--text-2); }
+.g-int-vacio .ti { font-size: 18px; flex: none; }
