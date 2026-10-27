@@ -128,6 +128,8 @@ def init_plan_preventivo():
                 conn.rollback()
             except Exception:
                 pass
+    # Los técnicos que van a hacer el turno (números del personal, separados por coma)
+    _agregar_columnas(conn, "taller_turnos", [("tecnicos", "TEXT DEFAULT ''")])
     conn.close()
 
 
@@ -1137,10 +1139,42 @@ def vincular_item(item_id, tareas, usuario=""):
 # TURNOS
 # ════════════════════════════════════════════════════════════════════════════
 
+def _tecnicos_ids(lista):
+    out = []
+    for x in lista or []:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            pass
+    return list(dict.fromkeys(out))
+
+
+def _tecnicos_de(conn, texto, cache=None):
+    """'3,20' → [{id, numero, nombre, puesto}] en orden de número."""
+    ids = _ids(texto)
+    if not ids:
+        return []
+    if cache is None:
+        cache = {}
+    falta = [i for i in ids if i not in cache]
+    if falta:
+        mk, pk = _en(falta)
+        try:
+            for r in conn.execute(f"SELECT id, numero, nombre, puesto FROM taller_personal WHERE id IN ({mk})", pk).fetchall():
+                cache[r["id"]] = {"id": r["id"], "numero": r["numero"], "nombre": r["nombre"], "puesto": r["puesto"] or ""}
+        except Exception:
+            pass
+    return sorted([cache[i] for i in ids if i in cache], key=lambda p: p["numero"])
+
+
 def _turno_de(conn, tid):
     r = conn.execute("""SELECT t.*, v.n_interno, v.patente, v.marca, v.modelo FROM taller_turnos t
                         JOIN vehiculos v ON v.id = t.vehiculo_id WHERE t.id=?""", (tid,)).fetchone()
-    return dict(r) if r else None
+    if not r:
+        return None
+    t = dict(r)
+    t["tecnicos_lista"] = _tecnicos_de(conn, t.get("tecnicos"))
+    return t
 
 
 def crear_turno(d, usuario=""):
@@ -1179,9 +1213,10 @@ def crear_turno(d, usuario=""):
         dias = date.fromisoformat(fecha).toordinal() - ctx.hoy_ord
         km_prev = float(ctx.km.get(vid) or 0) + max(0, dias) * float(ctx.km_dia.get(vid, {}).get("valor") or 0)
         cur = conn.execute("""INSERT INTO taller_turnos (vehiculo_id, fecha, hora, tareas, notas, estado,
-                              km_previsto, creado_por, creado_el) VALUES (?,?,?,?,?,'agendado',?,?,?)""",
+                              km_previsto, creado_por, creado_el, tecnicos) VALUES (?,?,?,?,?,'agendado',?,?,?,?)""",
                            (vid, fecha, str(d.get("hora") or "")[:5], ",".join(str(x) for x in tareas),
-                            str(d.get("notas") or "")[:300], round(km_prev), usuario, ahora_iso()))
+                            str(d.get("notas") or "")[:300], round(km_prev), usuario, ahora_iso(),
+                            ",".join(str(x) for x in _tecnicos_ids(d.get("tecnicos")))))
         conn.commit()
         tid = cur.lastrowid
         return {"ok": True, "turno": _turno_de(conn, tid)}
@@ -1225,6 +1260,8 @@ def actualizar_turno(tid, d, usuario=""):
                 cambios[k] = str(d[k] or "")[:300]
         if "tareas" in d:
             cambios["tareas"] = ",".join(str(int(x)) for x in (d["tareas"] or []))
+        if "tecnicos" in d:
+            cambios["tecnicos"] = ",".join(str(x) for x in _tecnicos_ids(d["tecnicos"]))
         if "estado" in d:
             if d["estado"] not in ESTADOS_TURNO:
                 return {"ok": False, "msg": "Estado inválido."}
@@ -1294,7 +1331,50 @@ def abrir_ot_de_turno(tid, usuario=""):
     conn.execute("UPDATE taller_turnos SET estado='en_taller', ot_id=?, fecha=? WHERE id=?", (ot_id, _hoy_txt(), tid))
     conn.commit()
     conn.close()
-    return {"ok": True, "ot_id": ot_id, "sumada": bool(abierta)}
+    # Los técnicos que se asignaron al agendar quedan puestos en cada trabajo
+    tecs = _ids(t.get("tecnicos"))
+    if tecs and nuevos:
+        try:
+            import personal_taller
+            for iid in nuevos:
+                personal_taller.asignar(iid, tecs, quien=usuario)
+        except Exception:
+            pass
+    return {"ok": True, "ot_id": ot_id, "sumada": bool(abierta), "tecnicos": len(tecs)}
+
+
+def turnos_por_tecnico(dias=14):
+    """{personal_id: [turno, ...]} de los turnos agendados desde hoy hasta
+    `dias` días adelante (para avisarle a cada técnico con anticipación)."""
+    hoy = _hoy_txt()
+    hasta = date.fromordinal(date.fromisoformat(hoy).toordinal() + dias).isoformat()
+    conn = get_connection()
+    try:
+        filas = conn.execute("""SELECT t.id, t.fecha, t.hora, t.tareas, t.notas, t.tecnicos, v.n_interno, v.patente
+                                FROM taller_turnos t JOIN vehiculos v ON v.id = t.vehiculo_id
+                                WHERE t.estado='agendado' AND t.fecha >= ? AND t.fecha <= ?
+                                  AND COALESCE(t.tecnicos,'') <> '' ORDER BY t.fecha, t.hora""", (hoy, hasta)).fetchall()
+        nombres = {}
+        ids = sorted({x for r in filas for x in _ids(r["tareas"])})
+        if ids:
+            mk, pk = _en(ids)
+            for r in conn.execute(f"SELECT id, tarea FROM tareas_plan WHERE id IN ({mk})", pk).fetchall():
+                nombres[r["id"]] = r["tarea"]
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        filas = []
+    finally:
+        conn.close()
+    out = {}
+    for r in filas:
+        t = {"id": r["id"], "fecha": r["fecha"], "hora": r["hora"] or "", "coche": r["n_interno"] or r["patente"] or "",
+             "tareas": [nombres[x] for x in _ids(r["tareas"]) if x in nombres], "notas": r["notas"] or ""}
+        for pid in _ids(r["tecnicos"]):
+            out.setdefault(pid, []).append(t)
+    return out
 
 
 def cumplir_turno(tid, d, usuario=""):
@@ -1336,6 +1416,9 @@ def agenda(desde, hasta):
             for r in conn.execute(f"SELECT id, tarea FROM tareas_plan WHERE id IN ({mk})", pk).fetchall():
                 nombres[r["id"]] = r["tarea"]
         hoy = _hoy_txt()
+        cache_tec = {}
+        for t in turnos:
+            t["tecnicos_lista"] = _tecnicos_de(conn, t.get("tecnicos"), cache_tec)
         dias = {}
         d0 = date.fromisoformat(desde).toordinal()
         d1 = date.fromisoformat(hasta).toordinal()

@@ -787,6 +787,14 @@ def resumen(desde, hasta, vehiculo_id=None, turno=""):
                 "ahora": ahora,
             })
         ranking.sort(key=lambda r: (-r["trabajos"], -r["en_curso"], r["numero"]))
+        # Los turnos del preventivo que tiene agendados (para avisarle con anticipación)
+        try:
+            import plan_preventivo
+            agendados = plan_preventivo.turnos_por_tecnico()
+        except Exception:
+            agendados = {}
+        for r in ranking:
+            r["turnos"] = agendados.get(r["id"], [])[:6]
 
         # Lo terminado en el período, con o sin número
         sql = f"""SELECT i.id, i.descripcion, i.tipo, i.tecnico_otro, {FECHA_TRABAJO} AS fecha,
