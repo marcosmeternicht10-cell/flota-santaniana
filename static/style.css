@@ -7870,3 +7870,22 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
   .oh-mano { grid-template-columns: minmax(0, 1fr); }
   .oh-agregar { margin-left: 0; width: 100%; }
 }
+
+/* Agenda del preventivo: técnicos de cada turno */
+.pv-tec-fila { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 5px; }
+.pv-tec { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--info-bg); color: var(--azul-oscuro); font: 600 11.5px "Inter", sans-serif; white-space: nowrap; }
+.pv-tec .ti { font-size: 12px; }
+.pv-tec.on { padding-right: 3px; }
+.pv-tec button { border: 0; background: transparent; color: inherit; cursor: pointer; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; padding: 0; }
+.pv-tec button:hover { background: rgba(0,0,0,.08); }
+.pv-tec-cambiar { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 2px 4px; border-radius: 6px; }
+.pv-tec-cambiar:hover { color: var(--brand-blue); background: var(--surface2); }
+.pv-tec-add { margin-top: 5px; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; border: 1px dashed var(--border-strong, #C9D1DB); background: transparent; color: var(--brand-blue); font: 600 11.5px "Inter", sans-serif; cursor: pointer; }
+.pv-tec-add:hover { border-color: var(--brand-blue); }
+.pv-tec-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pv-tec-sel { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); font: 500 12.5px "Inter", sans-serif; color: var(--brand-blue); cursor: pointer; max-width: 100%; }
+.pv-ag-tec-box { margin-top: 12px; }
+.pv-dia-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.pt-ah-turnos { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 10px; background: var(--info-bg); font-size: 12px; color: var(--azul-oscuro); }
+.pt-ah-turnos > span { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.pt-ah-turnos small { color: var(--muted); }

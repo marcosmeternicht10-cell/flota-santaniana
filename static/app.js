@@ -18560,7 +18560,10 @@ function pvDiaPanel(d) {
           <span>${d.cupo === 0 ? "El taller no trabaja" : `${d.ocupados} de ${d.cupo} lugares${libres > 0 ? ` · ${libres} libre${libres === 1 ? "" : "s"}` : libres === 0 ? " · lleno" : ` · ${-libres} de más`}`}${d.especial ? " · cupo especial" : ""}
             ${puede ? `<button class="pv-link" onclick="pvCupoDia('${d.fecha}', ${d.cupo})">cambiar</button>` : ""}</span>
         </div>
-        ${puede && d.fecha >= hoy ? `<button class="btn btn-primary btn-sm" onclick="pvAgendar(null, '${d.fecha}')"><i class="ti ti-plus"></i> Agendar</button>` : ""}
+        <div class="pv-dia-btns">
+          ${act.length ? `<button class="btn btn-ghost btn-sm" onclick="pvAvisoDia('${d.fecha}')" title="Mandar los turnos del día con sus técnicos por WhatsApp"><i class="ti ti-brand-whatsapp"></i> Avisar</button>` : ""}
+          ${puede && d.fecha >= hoy ? `<button class="btn btn-primary btn-sm" onclick="pvAgendar(null, '${d.fecha}')"><i class="ti ti-plus"></i> Agendar</button>` : ""}
+        </div>
       </div>
       ${d.turnos.length ? d.turnos.map(t => pvTurnoCard(t)).join("") : `<div class="pv-dia-vacio">${d.cupo ? "Sin turnos ese día" : "Sin turnos"}</div>`}
     </div>`;
@@ -18592,10 +18595,81 @@ function pvTurnoCard(t) {
       <div class="pv-tc-info">
         <div class="pv-tc-l1"><b onclick="pvAbrirCoche(${t.vehiculo_id}, true)">${pvEsc(t.patente)}</b>${t.hora ? `<span class="pv-tc-hora"><i class="ti ti-clock"></i>${t.hora}</span>` : ""}${pvTurnoChip(t, true, true)}</div>
         <small>${t.tareas_nombres.length ? pvEsc(t.tareas_nombres.length >= 3 ? `${t.tareas_nombres.length} tareas: ${t.tareas_nombres.slice(0, 3).join(", ")}…` : t.tareas_nombres.join(", ")) : "Lo que le toque"}${t.notas ? ` · ${pvEsc(t.notas)}` : ""}${t.motivo ? ` · ${pvEsc(t.motivo)}` : ""}</small>
+        ${pvTurnoTecs(t, puede)}
       </div>
       <div class="pv-tc-btns">${btns}</div>
     </div>`;
 }
+// ─── Técnicos del turno: se asignan al agendar (o después) y pasan a la OT ───
+function pvTecCorto(p) { return `N°${p.numero} ${pvEsc(String(p.nombre || "").split(" ")[0])}`; }
+function pvTurnoTecs(t, puede) {
+  const ls = t.tecnicos_lista || [];
+  const editable = puede && t.estado === "agendado";
+  if (!ls.length) return editable ? `<button type="button" class="pv-tec-add" onclick="pvTecnicosTurno(${t.id})"><i class="ti ti-user-plus"></i> Asignar técnico</button>` : "";
+  return `<div class="pv-tec-fila">${ls.map(p => `<span class="pv-tec" title="${pvEsc(p.nombre)}${p.puesto ? " · " + pvEsc(p.puesto) : ""}"><i class="ti ti-user"></i>${pvTecCorto(p)}</span>`).join("")}
+    ${editable ? `<button type="button" class="pv-tec-cambiar" onclick="pvTecnicosTurno(${t.id})" title="Cambiar los técnicos" aria-label="Cambiar los técnicos"><i class="ti ti-pencil"></i></button>` : ""}</div>`;
+}
+// En el modal de agendar: chips de los elegidos + desplegable para sumar
+function pvTecPintar(o) {
+  const box = o.querySelector("#pv-ag-tecs");
+  if (!box) return;
+  const ls = pt.lista || [], sel = o._tecs || [];
+  const elegidos = sel.map(id => ls.find(p => p.id === id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
+  const libres = ls.filter(p => p.activo && !sel.includes(p.id));
+  box.innerHTML = `${elegidos.map(p => `<span class="pv-tec on">${pvTecCorto(p)}<button type="button" onclick="pvTecSacar(this, ${p.id})" aria-label="Sacar a ${pvEsc(p.nombre)}"><i class="ti ti-x"></i></button></span>`).join("")}
+    <select class="pv-tec-sel" onchange="pvTecSumar(this)" aria-label="Agregar técnico">
+      <option value="">${elegidos.length ? "+ Otro técnico" : "+ Elegir técnico"}</option>
+      ${libres.map(p => `<option value="${p.id}">N°${p.numero} ${pvEsc(p.nombre)}${p.puesto ? " · " + pvEsc(p.puesto) : ""}</option>`).join("")}
+    </select>`;
+}
+function pvTecSumar(sel) {
+  const o = sel.closest(".modal-overlay"), id = +sel.value;
+  if (!id) return;
+  o._tecs = [...(o._tecs || []), id];
+  pvTecPintar(o);
+}
+function pvTecSacar(btn, id) {
+  const o = btn.closest(".modal-overlay");
+  o._tecs = (o._tecs || []).filter(x => x !== id);
+  pvTecPintar(o);
+}
+// Cambiar los técnicos de un turno ya agendado
+async function pvTecnicosTurno(tid) {
+  await ptCargarLista();
+  const t = ((pv.agenda && pv.agenda.dias) || []).flatMap(d => d.turnos).find(x => x.id === tid);
+  if (!t) return;
+  const o = rvModal({
+    titulo: `Técnicos del turno · coche ${pvEsc(t.n_interno || t.patente)}`, icono: "users", ancho: 480,
+    sub: `${pvFL(t.fecha)}${t.hora ? " a las " + t.hora : ""}. Cuando el coche llegue, sus trabajos ya salen con estos técnicos.`,
+    cuerpo: `<div class="pv-tec-chips" id="pv-ag-tecs"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="pv-tec-ok"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+  o._tecs = (t.tecnicos_lista || []).map(p => p.id);
+  pvTecPintar(o);
+  o.querySelector("#pv-tec-ok").onclick = async ev => {
+    ev.target.disabled = true;
+    const r = await pvPost(`/api/prev/turnos/${tid}`, { tecnicos: o._tecs }, "PATCH");
+    if (!r.ok) { ev.target.disabled = false; toast(r.msg || "No se pudo guardar", "error"); return; }
+    o.remove();
+    toast(o._tecs.length ? `Turno del ${pvF(t.fecha)}: ${o._tecs.length} técnico${o._tecs.length === 1 ? "" : "s"}` : "El turno quedó sin técnico", "success");
+    pvRefrescarDespuesDeTurno();
+  };
+}
+// Avisar: el día con sus turnos y técnicos, listo para mandar por WhatsApp
+function pvAvisoDia(fecha) {
+  const d = ((pv.agenda && pv.agenda.dias) || []).find(x => x.fecha === fecha);
+  if (!d) return;
+  const ts = d.turnos.filter(t => t.estado === "agendado" || t.estado === "en_taller");
+  if (!ts.length) { toast("Ese día no tiene turnos para avisar", "error"); return; }
+  const txt = `*Taller · turnos del ${pvFL(fecha)}*\n\n` + ts.map(t =>
+    `${t.hora ? t.hora + " · " : ""}*Coche ${t.n_interno || t.patente}*` +
+    (t.tareas_nombres.length ? `\n${t.tareas_nombres.join(", ")}` : "") +
+    `\n👷 ${(t.tecnicos_lista || []).length ? t.tecnicos_lista.map(p => `N°${p.numero} ${p.nombre}`).join(", ") : "sin técnico asignado"}` +
+    (t.notas ? `\n📝 ${t.notas}` : "")).join("\n\n");
+  window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+}
+
 function pvMenu(btn) {
   const m = btn.closest(".pv-menu");
   const abierto = m.classList.contains("on");
@@ -18657,11 +18731,18 @@ async function pvAgendarCoche(o, vid) {
       <label class="rv-f" style="flex:.8"><span>Hora (opcional)</span><input id="pv-ag-h" type="time"></label>
     </div>
     <div class="pv-ag-dia" id="pv-ag-dia"></div>
+    <div class="pv-ag-tec-box">
+      <div class="pv-check-tit"><span>¿Quién lo hace? <small>(opcional: así ya sabe con anticipación)</small></span></div>
+      <div class="pv-tec-chips" id="pv-ag-tecs"></div>
+    </div>
     ${f.fecha_sugerida ? `<p class="pv-nota"><i class="ti ti-sparkles"></i> ${!f.proximo ? "Sin datos para calcular cuándo le toca." : f.proximo.km_restantes < 0 ? "Está vencido: conviene que entre cuanto antes." : `Le toca ≈ ${pvFL(f.proximo.fecha_estimada)}.`} Primer día con lugar: <button class="pv-link" onclick="pvAgendarUsar('${f.fecha_sugerida}')">${pvFL(f.fecha_sugerida)}</button></p>` : ""}
     ${f.tareas.length ? `
       <div class="pv-check-tit"><span>¿Qué se le hace? <small>(lo que le toca ya viene marcado)</small></span><button class="pv-link" onclick="pvMarcarTodas(this)">marcar todas</button></div>
       <div class="pv-checks">${tareas.map(t => pvCheckTarea(t, pre.has(t.tarea_id))).join("")}</div>` : `<p class="pv-nota"><i class="ti ti-info-circle"></i> El coche no tiene plan: el turno queda sin tareas.</p>`}
     <label class="rv-f" style="margin-top:10px"><span>Notas</span><input id="pv-ag-n" placeholder="ej: viene después del servicio de la mañana"></label>`;
+  o._tecs = o._tecs || [];
+  await ptCargarLista();
+  pvTecPintar(o);
   o.querySelector("#pv-ag-ok").disabled = false;
   pvAgendarDia(o.querySelector("#pv-ag-f"));
 }
@@ -18692,7 +18773,7 @@ async function pvAgendarGuardar(btn, forzar) {
   if (!f) { toast("Elegí el coche", "error"); return; }
   const tareas = [...o.querySelectorAll(".pv-checks input:checked")].map(c => Number(c.value));
   const body = { vehiculo_id: f.vehiculo_id, fecha: o.querySelector("#pv-ag-f").value, hora: o.querySelector("#pv-ag-h").value,
-                 notas: o.querySelector("#pv-ag-n").value, tareas, forzar: !!forzar };
+                 notas: o.querySelector("#pv-ag-n").value, tareas, forzar: !!forzar, tecnicos: o._tecs || [] };
   if (!body.fecha) { toast("Elegí el día", "error"); return; }
   btn.disabled = true;
   const r = await pvPost("/api/prev/turnos", body);
@@ -18764,7 +18845,7 @@ async function pvTurnoOT(tid) {
   if (!r.ok) { toast(r.msg || "No se pudo abrir la OT", "error"); return; }
   toast(r.ya_estaba ? `La OT #${r.ot_id} ya estaba abierta`
         : r.sumada ? `Lo del turno se sumó a la OT #${r.ot_id}, que el coche ya tenía abierta`
-        : `OT #${r.ot_id} abierta con lo del turno`, "success");
+        : `OT #${r.ot_id} abierta con lo del turno${r.tecnicos ? ` y sus ${r.tecnicos === 1 ? "técnico" : r.tecnicos + " técnicos"}` : ""}`, "success");
   await pvRefrescarDespuesDeTurno();
   abrirOT(r.ot_id);
 }
@@ -19610,8 +19691,8 @@ function ptAhoraChip(r) {
   return `<span class="pt-ahora-chip ${a[0].en_proceso ? "proc" : ""}" title="${ptEsc(t)}"><i class="ti ti-bus"></i>${ptEsc(a[0].coche)}${a.length > 1 ? `<small>+${a.length - 1}</small>` : ""}</span>`;
 }
 function ptAhoraCard(rk) {
-  const con = rk.filter(r => (r.ahora || []).length);
-  const libres = rk.filter(r => r.activo && !(r.ahora || []).length);
+  const con = rk.filter(r => (r.ahora || []).length || (r.turnos || []).length);
+  const libres = rk.filter(r => r.activo && !(r.ahora || []).length && !(r.turnos || []).length);
   if (!con.length && !libres.length) return "";
   const coches = new Set(con.flatMap(r => r.ahora.map(a => a.coche)));
   const tarjeta = r => `
@@ -19626,12 +19707,16 @@ function ptAhoraCard(rk) {
           <span class="pt-ah-est">${a.en_proceso ? `<em class="proc">${a.en_proceso} en proceso</em>` : ""}${a.pendientes ? `<em>${a.pendientes} pendiente${a.pendientes === 1 ? "" : "s"}</em>` : ""}<small>OT #${a.ots.join(", #")}</small></span>
           <span class="pt-ah-tr">${a.trabajos.slice(0, 3).map(t => `<span class="${t.estado === "en_proceso" ? "proc" : ""}">${ptEsc(t.descripcion)}</span>`).join("")}${a.trabajos.length > 3 ? `<span class="mas">y ${a.en_proceso + a.pendientes - 3} más</span>` : ""}</span>
         </button>`).join("")}
+      ${(r.turnos || []).length ? `<div class="pt-ah-turnos"><span><i class="ti ti-calendar-event"></i> Agendado</span>
+        ${r.turnos.map(t => `<div><b>${pvF(t.fecha)}${t.hora ? " " + t.hora : ""}</b> · Coche ${ptEsc(t.coche)}${t.tareas.length ? ` · <small>${ptEsc(t.tareas.slice(0, 2).join(", "))}${t.tareas.length > 2 ? "…" : ""}</small>` : ""}</div>`).join("")}</div>` : ""}
     </div>`;
   return `
     <div class="pv-card pt-ahora">
       <div class="pv-card-cab"><h3><i class="ti ti-tool"></i> Ahora: quién está en qué coche</h3>
         <button type="button" class="btn btn-ghost btn-sm pt-ah-pdf" onclick="ptAhoraPdf()"><i class="ti ti-file-type-pdf"></i> PDF</button>
-        <span>${con.length ? `${con.length} persona${con.length === 1 ? "" : "s"} en ${coches.size} coche${coches.size === 1 ? "" : "s"} · trabajos sin terminar de OT abiertas. Tocá un coche para abrir la OT.` : "Nadie tiene trabajos sin terminar en OT abiertas."}</span></div>
+        <span>${(() => { const n = con.filter(r => (r.ahora || []).length).length, ag = con.filter(r => (r.turnos || []).length).length;
+          return (n ? `${n} persona${n === 1 ? "" : "s"} en ${coches.size} coche${coches.size === 1 ? "" : "s"} · trabajos sin terminar de OT abiertas. Tocá un coche para abrir la OT.` : "Nadie tiene trabajos sin terminar en OT abiertas.")
+            + (ag ? ` · ${ag} con turnos agendados.` : ""); })()}</span></div>
       ${con.length ? `<div class="pt-ah-grid">${con.sort((a, b) => a.numero - b.numero).map(tarjeta).join("")}</div>` : ""}
       ${libres.length ? `<div class="pt-ah-libres"><span><i class="ti ti-user-pause"></i> Sin nada asignado ahora <b>${libres.length}</b></span>
         ${libres.sort((a, b) => a.numero - b.numero).map(r => `<button type="button" class="pt-ah-libre" onclick="ptFicha(${r.id})" title="${ptEsc(r.nombre)}${r.puesto ? " · " + ptEsc(r.puesto) : ""}">N°${r.numero} ${ptEsc(r.nombre.split(" ")[0])}</button>`).join("")}</div>` : ""}
