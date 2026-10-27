@@ -19770,7 +19770,7 @@ function caCuerpo() {
       ${falta ? `<button class="tr-num falta" onclick="caFiltrar('falta')"><b>${falta}</b><span>a completar</span></button>` : r.tramos ? `<span class="tr-num ca-ok"><i class="ti ti-circle-check"></i><span>todo asignado</span></span>` : ""}
       <span class="tr-num"><b>${r.choferes}</b><span>choferes</span></span>
       <span class="tr-num"><b>${r.coches}</b><span>coches</span></span>
-      ${r.no_corre ? `<span class="tr-num"><b>${r.no_corre}</b><span>no corre${r.no_corre === 1 ? "" : "n"}</span></span>` : ""}
+      ${r.no_corre ? `<span class="tr-num"><b>${r.no_corre}</b><span>quitado${r.no_corre === 1 ? "" : "s"}</span></span>` : ""}
     </div>
     ${!hayAlgo && caPuede() ? caVacio() : ""}
     ${ctl && hayAlgo ? caControl(ctl) : ""}
@@ -19836,6 +19836,7 @@ function caCliente(c) {
   const nc = c.tramos.filter(t => t.estado === "no_corre");
   const listos = vis.filter(t => t.estado === "listo").length;
   const puede = caPuede();
+  const sobran = vis.filter(t => !t.esperado && t.estado === "vacio");
   return `
     <section class="ca-cli" data-cli="${caEsc(c.cliente)}">
       <div class="ca-cli-cab">
@@ -19845,14 +19846,16 @@ function caCliente(c) {
           ${vis.length || c.variables.length ? `
             <button class="btn btn-ghost btn-sm" onclick="caVerPdf(caVersionArchivo(), '${caEsc(c.cliente)}')" title="La hoja de ${caEsc(c.cliente)}"><i class="ti ti-file-type-pdf"></i> PDF</button>
             <button class="btn btn-ghost btn-sm" ${caVersionPublicada() ? `onpointerenter="caTraer(caVersionArchivo(), 'imagen', '${caEsc(c.cliente)}')"` : ""} onclick="${caVersionPublicada() ? `caCompartir(caVersionArchivo(), this, '${caEsc(c.cliente)}')` : `caDescargar(caVersionArchivo(), this, '${caEsc(c.cliente)}')`}" title="${caVersionPublicada() ? "Mandar la hoja de " + caEsc(c.cliente) + " al grupo" : "Descargar la hoja de " + caEsc(c.cliente) + " como imagen"}"><i class="ti ti-${caVersionPublicada() ? "brand-whatsapp" : "photo-down"}"></i></button>` : ""}
+          ${puede && sobran.length ? `<button class="btn btn-ghost btn-sm ca-quitar-varios" onclick="caQuitarVarios('${caEsc(c.cliente)}')" title="Los que están vacíos y no suelen correr ${caEsc(caDiaSemana())}"><i class="ti ti-trash"></i> Quitar ${sobran.length}<span class="ca-largo"> que no suele${sobran.length === 1 ? "" : "n"} correr</span></button>` : ""}
           ${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNuevaVariable('${caEsc(c.cliente)}')"><i class="ti ti-plus"></i> Variable</button>` : ""}
         </span>
       </div>
       <div class="ca-filas">
         ${vis.map(t => caFila(t)).join("")}
         ${c.variables.map(s => caVariable(c, s)).join("")}
-        ${nc.map(t => caFilaNoCorre(t)).join("")}
       </div>
+      ${nc.length ? `<details class="ca-quitados"${nc.length <= 3 ? " open" : ""}><summary><i class="ti ti-chevron-right"></i> Quitados de este día <span>${nc.length}</span></summary>
+        <div class="ca-filas">${nc.map(t => caFilaNoCorre(t)).join("")}</div></details>` : ""}
       ${c.otros.length && puede ? `<button class="pv-link ca-otros-btn" onclick="caOtros('${caEsc(c.cliente)}', this)"><i class="ti ti-plus"></i> Otros tramos de ${caEsc(c.cliente)} que no suelen correr este día (${c.otros.length})</button>` : ""}
     </section>`;
 }
@@ -19903,7 +19906,8 @@ function caFila(t) {
       </div>
       <div class="ca-slots mitades">${caMitades(t).map(s => caSlot(t, s)).join("")}</div>
       <div class="ca-acc">
-        ${puede ? `<button class="icon-btn" title="No corre, igualar la salida" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
+        ${puede ? `<button class="icon-btn ca-quitar" title="Quitar de este día (no se hace)" aria-label="Quitar de este día" onclick="caQuitar(this)"><i class="ti ti-trash"></i></button>
+          <button class="icon-btn" title="Horario, igualar la salida, quitar con un motivo" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
       </div>
     </div>`;
 }
@@ -19937,9 +19941,9 @@ function caFilaNoCorre(t) {
     <div class="ca-fila e-no_corre ${caClaseControl(t)}" data-busca="${caEsc(caTexto(t, "no corre"))}" data-estado="no_corre" data-cli="${caEsc(t.cliente)}" data-tramo="${caEsc(t.tramo)}">
       <div class="ca-hora">${t.hora ? `<b>${t.hora}</b>` : `<b class="sin">--:--</b>`}</div>
       <div class="ca-tramo"><b title="${caEsc(t.tramo)}">${caEsc(t.corto)}</b></div>
-      <div class="ca-slots"><div class="ca-nocorre"><i class="ti ti-player-pause"></i> No corre este día${t.nota ? ` · ${caEsc(t.nota)}` : ""}
+      <div class="ca-slots"><div class="ca-nocorre"><i class="ti ti-player-pause"></i> Quitado de este día${t.nota ? ` · ${caEsc(t.nota)}` : ""}
         ${t.control ? `<span class="ca-ctl mal" title="${caEsc(t.control.txt)}"><i class="ti ti-alert-circle"></i><span>${caEsc(t.control.txt)}</span></span>` : ""}</div></div>
-      <div class="ca-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNoCorreBtn(this, false)">Vuelve a correr</button>` : ""}</div>
+      <div class="ca-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNoCorreBtn(this, false)"><i class="ti ti-arrow-back-up"></i> Volver a poner</button>` : ""}</div>
     </div>`;
 }
 
@@ -20156,7 +20160,7 @@ function caMasTramo(btn) {
   const { cliente, tramo, modo } = caFilaDe(btn);
   const items = [{ icono: "clock-edit", html: "<b>Cambiar el horario de este día</b><span>Los demás días sigue el de siempre</span>", fn: () => caHorarioDe(cliente, tramo) }];
   if (modo === "dividido") items.push({ icono: "arrows-join", html: "<b>La salida igual que la entrada</b><span>El mismo chofer y coche hacen las dos</span>", fn: () => caDividir(cliente, tramo, true) });
-  items.push({ icono: "player-pause", html: "<b>No corre este día</b><span>No cuenta como faltante</span>", fn: () => caNoCorre(cliente, tramo, true) });
+  items.push({ icono: "player-pause", html: "<b>Quitar de este día con un motivo</b><span>Ej. feriado en la planta: sale en la hoja como «no corre»</span>", fn: () => caNoCorre(cliente, tramo, true) });
   trMenu(btn, items);
 }
 // ─── Horario de un tramo, solo para este día ───
@@ -20212,7 +20216,30 @@ async function caNoCorre(cliente, tramo, marcar) {
     if (nota === null) return;
   }
   const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/no_corre`, { cliente, tramo, no_corre: marcar, nota });
-  caAplicar(r, marcar ? "Marcado: no corre" : "Vuelve a correr");
+  caAplicar(r, marcar ? "Quitado de este día" : "Volvió a la lista del día");
+}
+// Quitar un tramo que no se hace ese día (sin pedir motivo)
+async function caQuitar(btn) {
+  const { cliente, tramo } = caFilaDe(btn);
+  const c = ca.d.clientes.find(x => x.cliente === cliente), t = c && c.tramos.find(x => x.tramo === tramo);
+  if (t && t.estado !== "vacio") {
+    const quien = (t.slots || []).map(s => [s.chofer_usuario ? caNombre(s.chofer_nombre) : "", s.coche ? "coche " + s.coche : ""].filter(Boolean).join(", ")).filter(Boolean).join(" / ");
+    if (!confirm(`${t.corto} tiene asignado: ${quien}.\n\n¿Quitarlo igual de este día? Se borra lo asignado.`)) return;
+  }
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/no_corre`, { cliente, tramo, no_corre: true, nota: "" });
+  caAplicar(r, `${t ? t.corto : "Tramo"} quitado de este día`);
+}
+function caDiaSemana() {
+  const n = (ca.d && ca.d.nombre_dia || "").split(" ")[0] || "este día";
+  return n === "sábado" || n === "domingo" ? `los ${n}s` : n === "este día" ? n : `los ${n}`;
+}
+async function caQuitarVarios(cliente) {
+  const c = ca.d.clientes.find(x => x.cliente === cliente);
+  const sobran = c ? c.tramos.filter(t => t.estado !== "no_corre" && !t.esperado && t.estado === "vacio") : [];
+  if (!sobran.length) return;
+  if (!confirm(`¿Quitar de este día ${sobran.length} tramo${sobran.length === 1 ? "" : "s"} de ${cliente} que no suele${sobran.length === 1 ? "" : "n"} correr ${caDiaSemana()}?\n\n${sobran.map(t => "· " + t.corto + (t.hora ? " " + t.hora : "")).join("\n")}\n\nEstán vacíos. Si alguno se hace, después lo volvés a poner.`)) return;
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/quitar_varios`, { cliente, tramos: sobran.map(t => t.tramo) });
+  caAplicar(r, r && r.ok ? `${r.quitados} tramo${r.quitados === 1 ? "" : "s"} de ${cliente} quitado${r.quitados === 1 ? "" : "s"}` : "");
 }
 function caOtros(cliente, btn) {
   const c = ca.d.clientes.find(x => x.cliente === cliente);

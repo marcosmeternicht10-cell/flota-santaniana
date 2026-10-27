@@ -7649,3 +7649,24 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
   .bpc-hora { display: none; }
   .bpc-fila > .badge:last-of-type { grid-area: e; justify-self: end; }
 }
+
+/* Asignación de corporativos: todos los tramos todos los días; los que no se hacen se quitan */
+.ca-acc .ca-quitar { color: var(--muted); }
+.ca-acc .ca-quitar:hover { color: var(--danger, #DC2641); background: rgba(220, 38, 65, .08); }
+.ca-quitar-varios { color: var(--danger, #DC2641); }
+.ca-quitados { margin-top: 6px; }
+.ca-quitados > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; padding: 6px 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.ca-quitados > summary::-webkit-details-marker { display: none; }
+.ca-quitados > summary .ti { transition: transform .15s; }
+.ca-quitados[open] > summary .ti { transform: rotate(90deg); }
+.ca-quitados > summary span { min-width: 20px; padding: 0 6px; border-radius: 10px; background: var(--surface2, #EEF1F5); text-align: center; font-size: 12px; }
+/* Dos botones por tramo (quitar y más): la última columna es más ancha */
+.ca-fila:not(.e-no_corre) { grid-template-columns: 64px minmax(150px, 1fr) minmax(330px, 2.3fr) 76px; }
+.ca-acc { gap: 2px; }
+@media (min-width: 1280px) { .ca-fila:not(.e-no_corre) { grid-template-columns: 64px minmax(150px, 1fr) minmax(560px, 3.4fr) 76px; } }
+@media (max-width: 1100px) { .ca-fila:not(.e-no_corre) { grid-template-columns: 58px minmax(120px, 1fr) minmax(0, 2fr) 72px; } }
+@media (max-width: 760px) { .ca-fila:not(.e-no_corre) { grid-template-columns: 52px minmax(0, 1fr) auto; } }
+@media (max-width: 760px) {
+  .ca-cli-arch { flex-wrap: wrap; }
+  .ca-largo { display: none; }
+}
