@@ -6632,12 +6632,31 @@ function otHorasTxt(h) {
 }
 function otHorasFH(v) { return v ? `${v.slice(8, 10)}/${v.slice(5, 7)} ${v.slice(11, 16)}` : ""; }
 function otHorasMin(a, b) { return Math.round((new Date(b) - new Date(a)) / 60000); }
-async function otHorasCargar(ot) {
+async function otHorasCargar(ot, intento = 0) {
   const box = document.getElementById("ot-horas-box");
   if (!box) return;
   box.dataset.ot = ot.id;
-  const r = await api(`/api/ots/${ot.id}/horas`).catch(() => null);
-  if (!r || !r.ok || !document.getElementById("ot-horas-box")) return;
+  // Mientras se trae, la sección ya está a la vista (nunca queda en blanco)
+  if (!box.querySelector(".oh-caja")) box.innerHTML = `<div class="oh-caja oh-cargando"><div class="oh-caja-cab"><h4><i class="ti ti-clock-hour-4"></i> Horas del personal</h4><span><i class="ti ti-loader-2 gira"></i> Trayendo las horas…</span></div></div>`;
+  let r = null;
+  try {
+    const resp = await fetch(`/api/ots/${ot.id}/horas`);
+    if (resp.status === 401) { window.location.href = "/login"; return; }
+    r = await resp.json().catch(() => null);
+  } catch (e) { r = null; }
+  const b2 = document.getElementById("ot-horas-box");
+  if (!b2 || String(b2.dataset.ot) !== String(ot.id)) return;   // ya se abrió otra OT
+  if (!r || !r.ok) {
+    // Si el servidor no respondió bien (se cortó la conexión, estaba ocupado), se reintenta solo
+    if (intento < 3 && !(r && r.msg && /permiso|no existe/i.test(r.msg))) {
+      setTimeout(() => otHorasCargar(ot, intento + 1), 900 * (intento + 1));
+      return;
+    }
+    b2.innerHTML = `<div class="oh-caja"><div class="oh-caja-cab"><h4><i class="ti ti-clock-hour-4"></i> Horas del personal</h4>
+      <span class="oh-error"><i class="ti ti-alert-triangle"></i> No se pudieron traer las horas${r && r.msg ? ": " + trEsc(r.msg) : ""}.</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="otHorasCargar({ id: ${ot.id} })"><i class="ti ti-refresh"></i> Reintentar</button></div></div>`;
+    return;
+  }
   window._otHoras = r;
   if (!pt.lista) await ptCargarLista();
   otHorasPintar();

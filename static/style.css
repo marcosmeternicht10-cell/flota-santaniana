@@ -7852,6 +7852,10 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
 .oh-mano { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; align-items: end; gap: 8px; padding: 8px; border-radius: 10px; background: var(--surface2); }
 .oh-mano[hidden] { display: none; }
 .oh-vacio { padding: 12px; font-size: 13px; color: var(--muted); }
+.oh-cargando .oh-caja-cab { margin-bottom: 0; }
+.oh-cargando .ti-loader-2 { display: inline-block; animation: ohGira 1s linear infinite; }
+@keyframes ohGira { to { transform: rotate(360deg); } }
+.oh-error { color: var(--danger, #C21F38) !important; }
 .oh-badge { background: var(--surface3); }
 .oh-badge.vivo { background: #E3F2E8; color: #1F6B3A; }
 @media (max-width: 760px) {
