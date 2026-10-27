@@ -7709,3 +7709,6 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
 .pt-ah-libre { padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font: 500 12px "Inter", sans-serif; color: var(--text); cursor: pointer; }
 .pt-ah-libre:hover { border-color: var(--brand-blue); }
 .pt-ah-cab .pt-num { flex: none; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 10px; }
+.pt-ahora .pv-card-cab { align-items: center; }
+.pt-ahora .pv-card-cab > span { flex: 1 1 260px; }
+.pt-ah-pdf { order: 3; margin-left: auto; }

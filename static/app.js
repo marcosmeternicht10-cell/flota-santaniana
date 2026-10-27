@@ -19228,12 +19228,14 @@ function ptAhoraCard(rk) {
   return `
     <div class="pv-card pt-ahora">
       <div class="pv-card-cab"><h3><i class="ti ti-tool"></i> Ahora: quién está en qué coche</h3>
+        <button type="button" class="btn btn-ghost btn-sm pt-ah-pdf" onclick="ptAhoraPdf()"><i class="ti ti-file-type-pdf"></i> PDF</button>
         <span>${con.length ? `${con.length} persona${con.length === 1 ? "" : "s"} en ${coches.size} coche${coches.size === 1 ? "" : "s"} · trabajos sin terminar de OT abiertas. Tocá un coche para abrir la OT.` : "Nadie tiene trabajos sin terminar en OT abiertas."}</span></div>
       ${con.length ? `<div class="pt-ah-grid">${con.sort((a, b) => a.numero - b.numero).map(tarjeta).join("")}</div>` : ""}
       ${libres.length ? `<div class="pt-ah-libres"><span><i class="ti ti-user-pause"></i> Sin nada asignado ahora <b>${libres.length}</b></span>
         ${libres.sort((a, b) => a.numero - b.numero).map(r => `<button type="button" class="pt-ah-libre" onclick="ptFicha(${r.id})" title="${ptEsc(r.nombre)}${r.puesto ? " · " + ptEsc(r.puesto) : ""}">N°${r.numero} ${ptEsc(r.nombre.split(" ")[0])}</button>`).join("")}</div>` : ""}
     </div>`;
 }
+function ptAhoraPdf() { window.open(`/api/personal/ahora.pdf?${ptQuery()}${pt.puesto ? `&puesto=${encodeURIComponent(pt.puesto)}` : ""}`, "_blank"); }
 function ptBarra(v, max) { return `<span class="pt-bar"><i style="width:${max ? Math.max(v ? 3 : 0, v / max * 100) : 0}%"></i></span>`; }
 function ptPintar() {
   const d = pt.res;
