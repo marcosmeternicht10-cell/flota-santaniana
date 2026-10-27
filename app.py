@@ -206,6 +206,9 @@ app.register_blueprint(bp_ot_pedidos)
 # Cuándo sale el coche que está en el taller (tráfico, corporativos y turismo)
 from ot_salidas import bp_ot_salidas
 app.register_blueprint(bp_ot_salidas)
+# Servicios de corporativos: el ranking por servicio sacado de las rendiciones
+from corp_servicios import bp_corp_servicios
+app.register_blueprint(bp_corp_servicios)
 # Agencias de venta de pasajes: fichas, contratos con versiones, papeles y vencimientos
 from agencias import bp_agencias, init_agencias
 init_agencias()
