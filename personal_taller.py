@@ -610,6 +610,12 @@ def al_borrar_ot(ot_id):
         conn.commit()
     except Exception:
         _rollback(conn)
+    # Las horas de cada técnico en esa OT
+    try:
+        conn.execute("DELETE FROM ot_horas WHERE ot_id=?", (ot_id,))
+        conn.commit()
+    except Exception:
+        _rollback(conn)
     finally:
         conn.close()
 

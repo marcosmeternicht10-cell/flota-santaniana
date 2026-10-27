@@ -206,6 +206,10 @@ app.register_blueprint(bp_ot_pedidos)
 # Cuándo sale el coche que está en el taller (tráfico, corporativos y turismo)
 from ot_salidas import bp_ot_salidas
 app.register_blueprint(bp_ot_salidas)
+# Hora de inicio y fin de cada técnico en cada OT
+from ot_horas import bp_ot_horas, init_ot_horas
+init_ot_horas()
+app.register_blueprint(bp_ot_horas)
 # Servicios de corporativos: el ranking por servicio sacado de las rendiciones
 from corp_servicios import bp_corp_servicios
 app.register_blueprint(bp_corp_servicios)
