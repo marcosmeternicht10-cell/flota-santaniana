@@ -127,6 +127,22 @@ def trafico_del_dia(conn, f, es_hoy, hora_ahora):
     }
 
 
+def internacional_proximo(conn, f, dias=7):
+    """La próxima fecha (después de f, hasta una semana) con salidas
+    internacionales cargadas en el tráfico, para avisar cuándo sale el próximo
+    a Buenos Aires si ese día no hay."""
+    hasta = (f + timedelta(days=dias)).isoformat()
+    filas = conn.execute("""SELECT DISTINCT d.fecha FROM trafico_dias d JOIN trafico_salidas s ON s.dia_id = d.id
+                            WHERE COALESCE(d.tipo,'nacional') = 'internacional' AND d.fecha > ? AND d.fecha <= ?
+                            ORDER BY d.fecha LIMIT 1""", (f.isoformat(), hasta)).fetchall()
+    if not filas:
+        return None
+    fp = date.fromisoformat(str(filas[0]["fecha"])[:10])
+    t = trafico_del_dia(conn, fp, False, "")
+    sal = [x for x in t["salidas"] if x["tipo"] == "internacional"]
+    return {"fecha": fp.isoformat(), "fecha_larga": fecha_larga(fp), "salidas": sal} if sal else None
+
+
 def turismo_del_dia(f):
     """Los servicios de turismo que salen ese día y los viajes que siguen en curso."""
     try:
@@ -243,13 +259,18 @@ def operacion_del_dia(f):
                        "sin_coche": 0, "internacional": 0, "coches": 0, "salidas": []}
         corp = corporativos_del_dia(conn, f)
         flota = flota_del_dia(conn, f)
+        try:
+            inter_prox = None if trafico["internacional"] else internacional_proximo(conn, f)
+        except Exception:
+            _rollback(conn)
+            inter_prox = None
     finally:
         conn.close()
     return {
         "fecha": f.isoformat(), "fecha_larga": fecha_larga(f), "es_hoy": es_hoy,
         "hora": ah.strftime("%H:%M") if es_hoy else "",
         "trafico": trafico, "turismo": turismo_del_dia(f),
-        "corporativos": corp, "flota": flota,
+        "corporativos": corp, "flota": flota, "internacional_proximo": inter_prox,
     }
 
 
