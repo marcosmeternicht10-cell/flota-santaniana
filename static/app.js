@@ -6543,6 +6543,7 @@ async function abrirOT(otId) {
           <span class="badge">${compl}/${ot.items.length} completados</span>
           <span id="ot-badge-atr">${otBadgeAtrasados(ot)}</span>
           <span id="ot-badge-fac">${otBadgeFacturas(ot)}</span>
+          <span id="ot-badge-horas"></span>
           ${ot.estado_compras ? `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>` : ''}
           ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
         </div>
@@ -6582,6 +6583,7 @@ async function abrirOT(otId) {
             onkeydown="if(event.key==='Enter'){event.preventDefault();agregarItemOT(${ot.id})}"></div>
           <button class="btn btn-ghost" onclick="agregarItemOT(${ot.id})"><i class="ti ti-plus"></i> Agregar</button>
         </div>
+        <div id="ot-horas-box"></div>
         ${varios && ot.id !== numero ? `<button type="button" class="pv-link ot-coche-quitar" onclick="otCocheQuitar()"><i class="ti ti-bus-off"></i> Sacar el ${ot.n_interno ? "coche " + ot.n_interno : ot.patente} de esta OT</button>` : ""}
 
         <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
@@ -6615,6 +6617,142 @@ async function abrirOT(otId) {
   ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
   otSepBuscar(ot);
   otSalidasCargar(ot);
+  window._otHorasExtra = [];
+  otHorasCargar(ot);
+}
+
+// ─── Horas del personal: inicio y fin de cada técnico en esta OT ───
+// Cada técnico puede tener varias tandas (cortó y siguió: el «intermedio» de
+// la hoja). «Empezó ahora» / «Terminó ahora» ponen la hora actual.
+function otHorasPuede() { return ["admin", "taller", "compras"].includes(window.USUARIO_ROL); }
+function otHorasTxt(h) {
+  const m = Math.round((h || 0) * 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h${m % 60 ? " " + String(m % 60).padStart(2, "0") : ""}`;
+}
+function otHorasFH(v) { return v ? `${v.slice(8, 10)}/${v.slice(5, 7)} ${v.slice(11, 16)}` : ""; }
+function otHorasMin(a, b) { return Math.round((new Date(b) - new Date(a)) / 60000); }
+async function otHorasCargar(ot) {
+  const box = document.getElementById("ot-horas-box");
+  if (!box) return;
+  box.dataset.ot = ot.id;
+  const r = await api(`/api/ots/${ot.id}/horas`).catch(() => null);
+  if (!r || !r.ok || !document.getElementById("ot-horas-box")) return;
+  window._otHoras = r;
+  if (!pt.lista) await ptCargarLista();
+  otHorasPintar();
+}
+function otHorasPintar() {
+  const box = document.getElementById("ot-horas-box"), r = window._otHoras;
+  if (!box || !r) return;
+  const puede = otHorasPuede();
+  const extra = window._otHorasExtra || [];
+  const tecs = [...r.tecnicos];
+  extra.forEach(pid => {
+    if (tecs.some(t => t.personal_id === pid)) return;
+    const p = (pt.lista || []).find(x => x.id === pid);
+    if (p) tecs.push({ personal_id: p.id, numero: p.numero, nombre: p.nombre, puesto: p.puesto || "", trabajos: 0, tandas: [], horas: 0, trabajando_desde: "" });
+  });
+  const libres = (pt.lista || []).filter(p => p.activo && !tecs.some(t => t.personal_id === p.id));
+  const badge = document.getElementById("ot-badge-horas");
+  if (badge) badge.innerHTML = r.horas || r.trabajando ? `<span class="badge oh-badge ${r.trabajando ? "vivo" : ""}"><i class="ti ti-clock"></i> ${otHorasTxt(r.horas)}${r.trabajando ? ` · ${r.trabajando} trabajando` : ""}</span>` : "";
+  const tanda = (t, x, i) => {
+    const prev = t.tandas[i - 1];
+    const pausa = prev && prev.fin && x.inicio > prev.fin ? otHorasMin(prev.fin, x.inicio) : 0;
+    return `${pausa ? `<div class="oh-pausa"><i class="ti ti-player-pause"></i> Intermedio: paró ${otHorasTxt(pausa / 60)}</div>` : ""}
+      <div class="oh-tanda ${x.abierta ? "abierta" : ""}">
+        <span class="oh-n">${i + 1}°</span>
+        <label class="oh-campo"><span>Inicio</span>${puede
+          ? `<input type="datetime-local" value="${x.inicio}" onchange="otHorasEditar(${x.id}, {inicio: this.value})" aria-label="Inicio">`
+          : `<b>${otHorasFH(x.inicio)}</b>`}</label>
+        <label class="oh-campo"><span>Fin</span>${puede
+          ? `<input type="datetime-local" value="${x.fin}" onchange="otHorasEditar(${x.id}, {fin: this.value})" aria-label="Fin">`
+          : `<b>${x.fin ? otHorasFH(x.fin) : "—"}</b>`}</label>
+        <span class="oh-dur">${x.abierta ? `<em>trabajando</em>` : otHorasTxt(x.horas)}</span>
+        ${puede ? `<button type="button" class="icon-btn oh-borrar" title="Borrar esta tanda" aria-label="Borrar esta tanda" onclick="otHorasBorrar(${x.id})"><i class="ti ti-trash"></i></button>` : "<span></span>"}
+        ${x.pisa_ots.length ? `<div class="oh-pisa"><i class="ti ti-alert-triangle"></i> Se pisa con sus horas en la OT ${x.pisa_ots.map(o => "#" + o).join(", ")}</div>` : ""}
+      </div>`;
+  };
+  const card = t => {
+    const desde = t.trabajando_desde;
+    const hace = desde ? otHorasMin(desde, r.ahora) : 0;
+    return `
+    <div class="oh-tec ${desde ? "vivo" : ""}" data-pid="${t.personal_id}">
+      <div class="oh-cab">
+        <span class="pt-num">${t.numero}</span>
+        <span class="oh-quien"><b>${trEsc(t.nombre)}</b><small>${trEsc(t.puesto)}${t.trabajos ? ` · ${t.trabajos} trabajo${t.trabajos === 1 ? "" : "s"} en esta OT` : " · sin trabajos asignados acá"}</small></span>
+        <span class="oh-total"><b>${otHorasTxt(t.horas)}</b><small>${t.tandas.length ? `${t.tandas.length} tanda${t.tandas.length === 1 ? "" : "s"}` : "sin horas"}</small></span>
+      </div>
+      ${desde ? `<div class="oh-vivo"><span class="oh-punto"></span><span>Trabajando desde las <b>${desde.slice(11, 16)}</b>${desde.slice(0, 10) !== r.ahora.slice(0, 10) ? ` del ${otHorasFH(desde).slice(0, 5)}` : ""} · hace ${otHorasTxt(hace / 60)}</span></div>` : ""}
+      ${t.tandas.length ? `<div class="oh-tandas">${t.tandas.map((x, i) => tanda(t, x, i)).join("")}</div>` : ""}
+      ${puede ? `<div class="oh-acc">
+        ${desde
+          ? `<button type="button" class="btn btn-sm oh-fin" onclick="otHorasAccion('terminar', ${t.personal_id}, this)"><i class="ti ti-player-stop"></i> Terminó ahora</button>`
+          : `<button type="button" class="btn btn-sm btn-primary" onclick="otHorasAccion('empezar', ${t.personal_id}, this)"><i class="ti ti-player-play"></i> Empezó ahora</button>`}
+        <button type="button" class="btn btn-ghost btn-sm" onclick="otHorasMano(${t.personal_id})"><i class="ti ti-pencil"></i> Cargar a mano</button>
+      </div>
+      <div class="oh-mano" id="oh-mano-${t.personal_id}" hidden>
+        <label class="oh-campo"><span>Inicio</span><input type="datetime-local" id="oh-mi-${t.personal_id}"></label>
+        <label class="oh-campo"><span>Fin</span><input type="datetime-local" id="oh-mf-${t.personal_id}"></label>
+        <button type="button" class="btn btn-primary btn-sm" onclick="otHorasGuardarMano(${t.personal_id}, this)"><i class="ti ti-check"></i> Guardar</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('oh-mano-${t.personal_id}').hidden=true">Cancelar</button>
+      </div>` : ""}
+    </div>`;
+  };
+  box.innerHTML = `
+    <div class="oh-caja">
+      <div class="oh-caja-cab">
+        <h4><i class="ti ti-clock-hour-4"></i> Horas del personal</h4>
+        <span>${r.horas ? `<b>${otHorasTxt(r.horas)}</b> en total en esta OT` : "Inicio y fin de cada técnico en esta OT"}${r.trabajando ? ` · <b class="oh-vivo-t">${r.trabajando} trabajando ahora</b>` : ""}</span>
+        ${puede && libres.length ? `<select class="oh-agregar" onchange="otHorasSumar(this)" aria-label="Agregar otro técnico">
+          <option value="">+ Agregar otro técnico</option>
+          ${libres.map(p => `<option value="${p.id}">N°${p.numero} ${trEsc(p.nombre)}</option>`).join("")}</select>` : ""}
+      </div>
+      ${tecs.length ? `<div class="oh-grid">${tecs.map(card).join("")}</div>`
+        : `<div class="oh-vacio"><i class="ti ti-user-question"></i> Todavía no hay técnicos en esta OT. Poné el número en la columna <b>Técnico</b> de cada trabajo, o agregá uno acá.</div>`}
+    </div>`;
+}
+function otHorasSumar(sel) {
+  const pid = +sel.value;
+  if (!pid) return;
+  window._otHorasExtra = [...(window._otHorasExtra || []), pid];
+  otHorasPintar();
+}
+async function otHorasMandar(url, metodo, cuerpo) {
+  const r = await api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo || {}) }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return false; }
+  window._otHoras = r;
+  otHorasPintar();
+  if (r.msg) toast(r.msg, "success");
+  return true;
+}
+function otHorasOt() { const b = document.getElementById("ot-horas-box"); return b ? b.dataset.ot : ""; }
+async function otHorasAccion(accion, pid, btn) {
+  if (btn) btn.disabled = true;
+  const ok = await otHorasMandar(`/api/ots/${otHorasOt()}/horas/${accion}`, "POST", { personal_id: pid });
+  if (!ok && btn) btn.disabled = false;
+}
+function otHorasMano(pid) {
+  const m = document.getElementById(`oh-mano-${pid}`);
+  if (!m) return;
+  m.hidden = !m.hidden;
+  const r = window._otHoras, hoy = (r && r.ahora || "").slice(0, 10);
+  const i = document.getElementById(`oh-mi-${pid}`), f = document.getElementById(`oh-mf-${pid}`);
+  if (!i.value) i.value = hoy + "T07:00";
+  if (!f.value && r) f.value = r.ahora;
+  if (!m.hidden) i.focus();
+}
+async function otHorasGuardarMano(pid, btn) {
+  const i = document.getElementById(`oh-mi-${pid}`).value, f = document.getElementById(`oh-mf-${pid}`).value;
+  if (!i) { toast("Poné la fecha y hora de inicio", "error"); return; }
+  btn.disabled = true;
+  const ok = await otHorasMandar(`/api/ots/${otHorasOt()}/horas/agregar`, "POST", { personal_id: pid, inicio: i, fin: f });
+  if (!ok) btn.disabled = false;
+}
+function otHorasEditar(hid, campos) { otHorasMandar(`/api/ot_horas/${hid}`, "PATCH", campos); }
+function otHorasBorrar(hid) {
+  if (!confirm("¿Borrar esta tanda de horas?")) return;
+  otHorasMandar(`/api/ot_horas/${hid}`, "DELETE");
 }
 
 // ─── Cuándo sale el coche: tráfico, corporativos y turismo ───
@@ -19303,6 +19441,9 @@ async function ptGuardar(iid, aviso) {
   const box = document.getElementById(`pt-${iid}`);
   if (box) { box.classList.remove("ok"); void box.offsetWidth; box.classList.add("ok"); }
   if (aviso) toast(aviso, "success");
+  // Las horas del personal de la OT abierta suman o sacan a ese técnico
+  const hb = document.getElementById("ot-horas-box");
+  if (hb && hb.dataset.ot) { clearTimeout(window._otHorasT); window._otHorasT = setTimeout(() => otHorasCargar({ id: +hb.dataset.ot }), 400); }
   return true;
 }
 function ptElegir(iid, pid) {
