@@ -643,3 +643,65 @@ body.boleteria #content { overflow: visible; }
   .al-pa-ir small { display: none; }
   .al-pa-ir.auto, .al-pa-barra .al-sec { flex: 1 1 calc(50% - 6px); height: 40px; }
 }
+
+/* ═══ Consultar pasaje (mostrador) ═══ */
+.al-cons-busca { display: flex; align-items: center; gap: 10px; max-width: 760px; padding: 6px 6px 6px 16px; border-radius: 16px; background: var(--al-panel); border: 1.5px solid var(--al-borde); }
+.al-cons-busca:focus-within { border-color: #8CBDEB; }
+.al-cons-busca > .ti { font-size: 22px; color: var(--al-txt2); }
+.al-cons-busca input { flex: 1; min-width: 0; height: 48px; border: 0; background: transparent; color: var(--al-txt); font: inherit; font-size: 20px; font-weight: 700; outline: none; }
+.al-cons-busca input::placeholder { color: #737B86; font-weight: 500; font-size: 17px; }
+.al .al-cons-busca input:focus-visible { outline: none; }
+.al-cons-busca .al-btn-r { height: 48px; flex: none; }
+.al-cons-ayuda { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 0; max-width: 760px; color: var(--al-txt2); font-size: 13px; line-height: 1.45; }
+.al-cons-ayuda .ti { font-size: 18px; flex: none; }
+.al-cons-ayuda b { color: var(--al-txt); }
+.al-cons-quien { margin: 22px 0 0; font-size: 18px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.al-cons-quien .ti { color: var(--al-txt2); }
+.al-cons-t { margin: 14px 0 10px; font-size: 26px; }
+.al-cons-nada { margin: 16px 0; color: var(--al-txt2); }
+.al-cons-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 460px), 1fr)); gap: 14px; }
+.al-cons-card { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; border-radius: 18px; background: var(--al-panel); border: 2px solid transparent; }
+.al-cons-card.vendido:not(.pasado) { border-color: #3E7A55; }
+.al-cons-card.anulado, .al-cons-card.devuelto, .al-cons-card.liberada, .al-cons-card.vencida { opacity: .82; }
+.al-cons-card.pasado { opacity: .7; }
+.al-cons-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.al-cons-nro { font-size: 13.5px; color: var(--al-txt2); }
+.al-cons-nro b { color: var(--al-txt); font-size: 15px; letter-spacing: .02em; }
+.al-cons-pnom { flex-basis: 100%; font-weight: 700; }
+.al-cons-viaje { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 16px; align-items: center; }
+.al-cons-dia { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 70px; padding: 8px 0; border-radius: 14px; background: var(--al-txt); color: var(--al-fondo); line-height: 1; }
+.al-cons-dia b { font-size: 34px; }
+.al-cons-dia span { font-weight: 800; text-transform: uppercase; font-size: 13px; margin-top: 2px; }
+.al-cons-dia small { font-size: 11px; margin-top: 4px; }
+.al-cons-ruta { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.al-cons-ruta > div { display: flex; align-items: center; gap: 10px; }
+.al-cons-ruta b { font-size: 24px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.al-cons-ruta > div span { margin-left: auto; font-size: 24px; }
+.al-cons-ruta .pt { width: 11px; height: 11px; border-radius: 50%; border: 2.5px solid var(--al-txt); flex: none; }
+.al-cons-ruta .pt.lleno { background: var(--al-txt); }
+.al-cons-ruta small { color: var(--al-txt2); font-size: 12.5px; padding-left: 21px; }
+.al-cons-as { display: flex; flex-direction: column; align-items: center; min-width: 76px; padding: 8px 10px; border-radius: 14px; background: var(--al-fondo); }
+.al-cons-as small { font-size: 11px; color: var(--al-txt2); font-weight: 700; text-transform: uppercase; }
+.al-cons-as b { font-size: 34px; line-height: 1; }
+.al-cons-as span { font-size: 11.5px; color: var(--al-txt2); }
+.al-cons-pie { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12.5px; color: var(--al-txt2); }
+.al-cons-pie .al-link { margin-left: auto; }
+.al-cons-canal .ti { color: #8CBDEB; }
+.al-cons-ya { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; background: #3A3322; color: #F5DFA8; font-size: 13.5px; line-height: 1.45; }
+.al-cons-ya .ti { font-size: 18px; flex: none; color: #F5C26B; }
+.al-cons-ya.rojo { background: #3D2427; color: #FFC9CE; }
+.al-cons-ya.rojo .ti { color: #FF8790; }
+.al-cons-acc { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.al-cons-dar { height: 50px; font-size: 16px; }
+.al-cons-pas { margin-top: 18px; }
+.al-cons-pas summary { cursor: pointer; color: var(--al-txt2); font-weight: 700; padding: 6px 0; }
+.al-cons-pas .al-cons-lista { margin-top: 10px; }
+@media (max-width: 560px) {
+  .al-cons-busca { flex-wrap: wrap; padding: 6px 10px; }
+  .al-cons-busca .al-btn-r { width: 100%; }
+  .al-cons-busca input { font-size: 18px; }
+  .al-cons-viaje { grid-template-columns: auto minmax(0, 1fr); }
+  .al-cons-as { grid-column: 1 / -1; flex-direction: row; gap: 10px; justify-content: center; }
+  .al-cons-ruta b, .al-cons-ruta > div span { font-size: 18px; }
+  .al-cons-acc > * { flex: 1 1 auto; }
+}

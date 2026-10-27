@@ -40,14 +40,14 @@ const AL_PRECIO_OTRO = { CO: 100000, CA: 120000 };
 const AL_DUR = { "COP|09:00": 485, "COP|11:30": 485, "COP|17:00": 320, "COP|23:00": 321, "LOT|23:15": 355 };
 const AL_RESERVA_MIN = 60;            // la reserva vence una hora antes de la salida
 const AL_RETENCION = 0.1;             // devolución: se retiene el 10 % (de ejemplo)
-const AL_VISTAS = [["vender", "ticket", "Vender"], ["pasajes", "receipt", "Pasajes"], ["manifiesto", "list-details", "Manifiesto"],
+const AL_VISTAS = [["vender", "ticket", "Vender"], ["consultar", "qrcode", "Consultar"], ["pasajes", "receipt", "Pasajes"], ["manifiesto", "list-details", "Manifiesto"],
                    ["caja", "cash-register", "Caja"]];
 // Las tarifas y los planos de asientos se editan en Controles (administración): el que vende no los ve
 const AL_PVACIO = () => ({ tipoDoc: "CI", doc: "", nombre: "", apellidos: "", nombres: "", sexo: "", nac: "", nacionalidad: "", residencia: "" });
 const AL_LOGO = `<svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>`;
 
 function alEsAgencia() { return window.USUARIO_ROL === "agencia" || !!al.comoAgencia; }
-function alVistasPermitidas() { return alEsAgencia() ? ["vender", "pasajes", "caja"] : AL_VISTAS.map(v => v[0]); }
+function alVistasPermitidas() { return alEsAgencia() ? ["vender", "consultar", "pasajes", "caja"] : AL_VISTAS.map(v => v[0]); }
 const al = {
   comoAgencia: false,
   vista: "vender", cor: "", lado: "ida", dia: 0, dep: 0, sube: 0, baja: -1, sel: null,
@@ -56,7 +56,7 @@ const al = {
   ocup: {}, miCaja: 0, reservas: 0, conocido: null, pasLista: [],
   liq: { agencia: "", hasta: "", soloEf: false, prev: null },
   buscaHits: [], buscaSel: 0,
-  pas: { q: "", estado: "" }, man: { clave: "" }, caja: { fecha: "", vendedor: "" },
+  pas: { q: "", estado: "" }, cons: { q: "", res: null, buscando: false }, man: { clave: "" }, caja: { fecha: "", vendedor: "" },
   ultimo: null, vuelta: null, ver: null, verK: "", x: { menor: null, bultos: 0 },
   rec: { desde: "", hasta: "", por: "servicio" }, ctl: { vista: "servicios", umbral: 75, clave: "", q: "" },
   servEst: {}, credito: null,
@@ -444,6 +444,7 @@ function alRender(animar) {
   if (!document.getElementById("al-raiz") && !content) return;
   if (!alVistasPermitidas().includes(al.vista)) al.vista = "vender";
   const v = al.vista;
+  if (v === "consultar") return alVistaConsultar(animar);
   if (v === "pasajes") return alVistaPasajes(animar);
   if (v === "manifiesto") return alVistaManifiesto(animar);
   if (v === "caja") return alVistaCaja(animar);
@@ -1478,6 +1479,109 @@ function alExcesoArt(v, eq) {
   </article>`;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CONSULTAR PASAJE: el que compró online (o perdió el boleto) viene a la
+// boletería con la cédula o con la captura / el PDF: se busca y se le entrega
+// impreso. Queda registrado quién lo entregó y cuándo.
+// ════════════════════════════════════════════════════════════════════════════
+function alVistaConsultar(animar) {
+  content.innerHTML = alShell(`
+    <div class="al-vista al-cons">
+      <div class="al-v-cab"><h1 class="al-d">Consultar pasaje</h1><span>Para el que compró online o perdió el boleto: buscalo y entregáselo impreso.</span></div>
+      <form class="al-cons-busca" onsubmit="event.preventDefault();alConsBuscar()" role="search">
+        <i class="ti ti-search" aria-hidden="true"></i>
+        <input id="al-cons-q" type="search" autocomplete="off" value="${trEsc(al.cons.q)}" placeholder="Cédula, documento o número de boleto" aria-label="Cédula, documento o número de boleto">
+        <button type="submit" class="al-btn-r"><i class="ti ti-search"></i> Buscar</button>
+      </form>
+      <p class="al-cons-ayuda"><i class="ti ti-qrcode" aria-hidden="true"></i> <span>En la captura o el PDF, el número de boleto está arriba (<b>001-001-0001234</b>) y abajo hay un código QR. Con lector de códigos, apuntá al QR y busca solo.</span></p>
+      <div id="al-cons-res" aria-live="polite">${alConsResHTML()}</div>
+    </div>`, animar);
+  const q = document.getElementById("al-cons-q");
+  if (q) { q.focus(); q.select(); }
+}
+async function alConsBuscar() {
+  const q = (document.getElementById("al-cons-q") || {}).value || "";
+  al.cons.q = q.trim();
+  if (!al.cons.q) { al.cons.res = null; return alConsPintar(); }
+  al.cons.buscando = true; alConsPintar();
+  const r = await api(`/api/alpha/consulta?q=${encodeURIComponent(al.cons.q)}`).catch(() => null);
+  al.cons.buscando = false;
+  al.cons.res = r && r.ventas ? r : { ventas: [], error: true };
+  if (al.vista !== "consultar") return;
+  alConsPintar();
+  const q2 = document.getElementById("al-cons-q");
+  if (q2) q2.select();   // el próximo pasajero se busca sin borrar
+}
+function alConsPintar() { const b = document.getElementById("al-cons-res"); if (b) b.innerHTML = alConsResHTML(); }
+function alConsResHTML() {
+  const c = al.cons;
+  if (c.buscando) return `<div class="al-vacio"><i class="ti ti-loader-2 al-gira"></i><b>Buscando…</b></div>`;
+  if (!c.res) return "";
+  if (c.res.error) return `<div class="al-vacio"><i class="ti ti-wifi-off"></i><b>No se pudo buscar</b><span>Revisá la conexión y probá de nuevo.</span></div>`;
+  const vs = c.res.ventas || [];
+  if (!vs.length) return `<div class="al-vacio"><i class="ti ti-ticket-off"></i><b>No hay pasajes con «${trEsc(c.q)}»</b>
+    <span>Revisá el número. Si compró online, pedile la captura o el PDF con el número de boleto.${alEsAgencia() ? " Desde tu agencia ves solo los pasajes que vendió tu agencia." : ""}</span></div>`;
+  const vienen = vs.filter(v => !v.pasado), pasados = vs.filter(v => v.pasado);
+  const mismo = vs.every(v => v.doc === vs[0].doc);
+  const quien = vs[0].nombre && mismo ? `<p class="al-cons-quien"><i class="ti ti-user" aria-hidden="true"></i> <b>${trEsc(vs[0].nombre)}</b> · ${vs[0].mig ? trEsc(vs[0].tipoDoc) : "CI"} ${trEsc(vs[0].doc)}</p>` : "";
+  return `${quien}
+    ${vienen.length ? `<h2 class="al-cons-t al-d">${vienen.length === 1 ? "Próximo viaje" : `Próximos viajes (${vienen.length})`}</h2><div class="al-cons-lista">${vienen.map(v => alConsTarjeta(v, !mismo)).join("")}</div>`
+      : `<p class="al-cons-nada">No tiene viajes por delante.</p>`}
+    ${pasados.length ? `<details class="al-cons-pas"><summary>Viajes que ya pasaron (${pasados.length})</summary><div class="al-cons-lista">${pasados.map(v => alConsTarjeta(v, !mismo)).join("")}</div></details>` : ""}`;
+}
+function alConsTarjeta(v, conNombre) {
+  const e = v._estado || alEstado(v), d = alDeISO(v.fecha);
+  const entregas = v.entregas || [], ue = entregas[entregas.length - 1];
+  const reimp = v.reimpresiones || [];
+  const estTxt = { vendido: "Pagado", reserva: "Reserva sin pagar", vencida: "Reserva vencida", anulado: "Anulado: no viaja", devuelto: "Devuelto: no viaja", liberada: "Liberado: no viaja" }[e] || (AL_ESTADOS[e] || e);
+  const canal = v.canal === "online" ? `<span class="al-cons-canal"><i class="ti ti-world" aria-hidden="true"></i> Comprado online</span>`
+    : `<span class="al-cons-canal">Vendido${v.vendedor && !alEsAgencia() ? " por " + trEsc(v.vendedor) : ""}${v.vendido_en ? " el " + alDM(v.vendido_en.slice(0, 10)) : ""}</span>`;
+  const pdf = `<button type="button" class="al-sec" onclick="alBajarPDF(${v.nro}, true)"><i class="ti ti-file-type-pdf"></i> Ver PDF</button>`;
+  let accion = "";
+  if (e === "vendido" && !v.pasado) {
+    accion = ue
+      ? `<div class="al-cons-ya"><i class="ti ti-alert-triangle" aria-hidden="true"></i><span>Ya se le entregó impreso el <b>${alDM(ue.el.slice(0, 10))} a las ${ue.el.slice(11, 16)}</b>${ue.por ? ` (${trEsc(ue.por)})` : ""}. Si lo perdió, imprimilo de nuevo: sale marcado «REIMPRESIÓN».</span></div>
+         <div class="al-cons-acc">${pdf}<button type="button" class="al-btn-r" onclick="alReimprimir(${v.nro})"><i class="ti ti-printer"></i> Imprimir de nuevo</button></div>`
+      : `<div class="al-cons-acc">${pdf}<button type="button" class="al-btn-r al-cons-dar" onclick="alConsEntregar(${v.nro}, this)"><i class="ti ti-printer"></i> Entregar boleto impreso</button></div>`;
+  } else if (e === "reserva" && !v.pasado) {
+    accion = `<div class="al-cons-ya"><i class="ti ti-clock" aria-hidden="true"></i><span>Está reservado pero <b>no está pagado</b>. Vence el ${alDM(v.vence.slice(0, 10))} a las ${v.vence.slice(11, 16)}: cobralo para entregarle el boleto.</span></div>
+      <div class="al-cons-acc"><button type="button" class="al-btn-r" onclick="alIrAReserva(${v.nro})"><i class="ti ti-cash"></i> Cobrar la reserva</button></div>`;
+  } else if (["anulado", "devuelto", "liberada", "vencida"].includes(e)) {
+    accion = `<div class="al-cons-ya rojo"><i class="ti ti-ban" aria-hidden="true"></i><span>Este pasaje <b>no sirve para viajar</b>. Si tiene que viajar, hay que venderle uno nuevo.</span></div>`;
+  }
+  return `<article class="al-cons-card ${e} ${v.pasado ? "pasado" : ""}">
+    <div class="al-cons-cab">
+      <span class="al-est ${e}">${estTxt}</span>
+      <span class="al-cons-nro">Boleto <b>001-001-${alNro(v.nro)}</b></span>
+      ${(conNombre || v.por === "boleto") && v.nombre ? `<span class="al-cons-pnom">${trEsc(v.nombre)} · ${v.mig ? trEsc(v.tipoDoc) : "CI"} ${trEsc(v.doc)}</span>` : ""}
+    </div>
+    <div class="al-cons-viaje">
+      <div class="al-cons-dia"><b class="al-d">${d.getDate()}</b><span>${AL_MESES[d.getMonth()].slice(0, 3)}</span><small>${AL_DIAS[d.getDay()]}</small></div>
+      <div class="al-cons-ruta">
+        <div><i class="pt lleno" aria-hidden="true"></i><b class="al-d">${trEsc(v.origen || "")}</b><span class="al-d">${trEsc(v.sale || v.hora || "")}</span></div>
+        <div><i class="pt" aria-hidden="true"></i><b class="al-d">${trEsc(v.destino || "")}</b><span class="al-d">${trEsc(v.llega || "")}</span></div>
+        ${v.tramo ? `<small>Servicio ${trEsc(v.tramo)}</small>` : ""}
+      </div>
+      <div class="al-cons-as"><small>${v.asiento === "P" ? "Pasaje" : "Asiento"}</small><b class="al-d">${v.asiento === "P" ? "PARADO" : trEsc(String(v.asiento))}</b>${v.asDesc && v.asDesc.piso && !/^(asiento|planta)/i.test(v.asDesc.piso) ? `<span>${trEsc(v.asDesc.piso)}</span>` : ""}</div>
+    </div>
+    <div class="al-cons-pie">${canal}${reimp.length ? `<span>Reimpreso ${reimp.length} ${reimp.length === 1 ? "vez" : "veces"}</span>` : ""}${v.menor ? "<span>Con un menor en brazos</span>" : ""}${alBultosDe(v) ? `<span>${alBultosDe(v)} bulto${alBultosDe(v) === 1 ? "" : "s"}</span>` : ""}
+      <button type="button" class="al-link" onclick="alHistorial(${v.nro})">Historial</button></div>
+    ${accion}
+  </article>`;
+}
+async function alConsEntregar(nro, btn) {
+  if (btn) btn.disabled = true;
+  const r = await alPost(`/api/alpha/ventas/${nro}/entrega`, {});
+  if (!r) { if (btn) btn.disabled = false; return; }
+  const v = r.venta; alGuardarVenta(v);
+  const c = alImp();
+  alMandarImprimir(alDocTicket(`Boleto ${alNro(nro)}`, alBoletoArts(v, c.copias.length ? c.copias : ["original"])), `Boleto ${alNro(nro)}`);
+  toast(`Boleto ${alNro(nro)} entregado a ${v.nombre || "el pasajero"}`, "success");
+  // La tarjeta pasa a figurar como entregada
+  ((al.cons.res && al.cons.res.ventas) || []).forEach((x, i, l) => { if (x.nro === nro) l[i] = Object.assign({}, x, { entregas: v.entregas }); });
+  alConsPintar();
+}
+
 // ─── Buscar un boleto (en lo que ya está en pantalla o en el servidor) ───
 function alVentaLocal(nro) {
   const de = l => (l || []).find(x => x && x.nro === nro);
@@ -1600,6 +1704,7 @@ async function alHistorial(nro) {
     add(c.el, "arrows-exchange", `Cambiado. Antes: ${alDM(c.antes.fecha)} ${c.antes.sale || ""}, ${c.antes.origen || ""} → ${c.antes.destino || ""}, ${c.antes.asiento === "P" ? "parado" : "asiento " + c.antes.asiento}${dif ? ` · diferencia ${dif.monto < 0 ? "−" : ""}${alGs(Math.abs(dif.monto))}` : ""}`, c.por);
   });
   (v.reimpresiones || []).forEach((r, i) => add(r.el, "printer", `Reimpresión N.º ${i + 1}${r.copias && r.copias.length ? ": " + r.copias.join(", ") : ""}`, r.por));
+  (v.entregas || []).forEach(r => add(r.el, "hand-finger", "Se entregó impreso en el mostrador", r.por));
   (v.equipaje || []).forEach(q => add(q.el, "luggage", `Equipaje: ${[q.bultos ? `${q.bultos} ${q.bultos === 1 ? "bulto" : "bultos"}` : "", q.kg ? `${fmtNum(q.kg)} kg` : "", q.monto ? `cobró ${alGs(q.monto)}` : "sin cargo"].filter(Boolean).join(", ")}${q.nota ? ` (${q.nota})` : ""}`, q.por));
   (v.transbordos || []).forEach(t => add(t.el, "arrows-shuffle", `Transbordo (${t.motivo}). Antes: ${alDM(t.antes.fecha)} ${t.antes.sale || t.antes.hora || ""}${t.antes.coche ? ", coche " + t.antes.coche : ""}, ${t.antes.asiento === "P" ? "parado" : "asiento " + t.antes.asiento}`, t.por));
   if (v.embarque) add(v.embarque.el, v.embarque.estado === "subio" ? "bus" : "user-x", v.embarque.estado === "subio" ? "Subió al coche" : "No se presentó", v.embarque.por);
