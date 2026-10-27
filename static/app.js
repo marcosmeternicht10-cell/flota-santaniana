@@ -213,6 +213,7 @@ function irA(sec) {
     corp_historial: renderCorpHistorial,
     corp_empresas: renderCorpEmpresas,
     corp_cargas: renderCorpCargas,
+    corp_servicios: renderCorpServicios,
     mantenimientos: renderMantenimientos,
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
@@ -4680,7 +4681,7 @@ if (window.USUARIO_ROL === "compras") {
   // El auditor controla: todo lo de rendiciones corporativas más lo suyo de
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible", "corp_asignacion",
-                            "corp_resumen", "corp_historial", "corp_empresas",
+                            "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios",
                             "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
@@ -14783,6 +14784,247 @@ function verGraficoControl(vid) {
 const COLOR_TALLER = "#1E5A96";
 const COLORES_EMBLEMA = ["#B97D0A", "#0F8A7E", "#6D4BB0", "#DC2641", "#2F7C46", "#5B6B7F", "#C2410C", "#0E7490"];
 const COLOR_SIN_DATO = "#C8C7C1";
+
+// ════════════════════════════════════════════════════════════════════════════
+// SERVICIOS DE CORPORATIVOS: como Servicios del tráfico, sacado de lo que
+// rinden los choferes. Lo principal es el ranking por servicio (cada tramo de
+// cada empresa): cuántas veces se hizo, pasajeros, km, plata y suspendidos.
+// ════════════════════════════════════════════════════════════════════════════
+const cs = { preset: "30", desde: "", hasta: "", cliente: "", orden: "servicios", q: "", abierto: "", d: null, seq: 0 };
+const CS_PRESETS = [["7", "Últimos 7 días"], ["30", "Últimos 30 días"], ["mes", "Este mes"], ["mes_pasado", "Mes pasado"], ["90", "3 meses"]];
+const CS_ORDENES = [
+  ["servicios", "Más hechos", r => [-r.servicios, -r.pasajeros]],
+  ["pasajeros", "Más pasajeros", r => [-r.pasajeros, -r.servicios]],
+  ["costo", "Más plata", r => [-r.costo, -r.servicios]],
+  ["costo_pasajero", "Más caros por pasajero", r => [-(r.costo_pasajero || 0), -r.servicios]],
+  ["suspendidos", "Más suspendidos", r => [-r.suspendidos, -r.servicios]],
+];
+const CS_COLORES = ["#1E5A96", "#2F7C46", "#B8740F", "#8B3FA6", "#C21F38", "#3B8EA5", "#6E6D66"];
+function csColor(cli) {
+  const l = (cs.d && cs.d.clientes_disponibles) || [];
+  const i = l.indexOf(cli);
+  return CS_COLORES[(i < 0 ? l.length : i) % CS_COLORES.length];
+}
+function csISO(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function csPeriodo(k) {
+  const hoy = new Date(trHoy() + "T12:00");
+  if (k === "mes") return [csISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1)), csISO(hoy)];
+  if (k === "mes_pasado") return [csISO(new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1)), csISO(new Date(hoy.getFullYear(), hoy.getMonth(), 0))];
+  const d = new Date(hoy); d.setDate(d.getDate() - (+k - 1));
+  return [csISO(d), csISO(hoy)];
+}
+function csGs(n) { return "Gs. " + fmtNum(Math.round(n || 0)); }
+function csDec(n) { return String(n ?? 0).replace(".", ","); }
+function csFC(f) { return f ? `${f.slice(8, 10)}/${f.slice(5, 7)}` : ""; }
+function csQuery() {
+  return new URLSearchParams({ desde: cs.desde, hasta: cs.hasta, ...(cs.cliente ? { cliente: cs.cliente } : {}) }).toString();
+}
+
+async function renderCorpServicios() {
+  status("Servicios de corporativos: lo que se hizo, sacado de las rendiciones");
+  if (!cs.desde) [cs.desde, cs.hasta] = csPeriodo(cs.preset);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-chart-histogram"></i> Servicios de corporativos</h1>
+      <p>Lo que se hizo de verdad, sacado de lo que rinden los choferes: el ranking por servicio, por empresa, día por día, choferes y coches</p>
+      <div class="page-actions"><button class="btn btn-ghost" onclick="csPdf()"><i class="ti ti-file-type-pdf"></i> PDF del ranking</button></div>
+    </div>
+    <div class="section cs-raiz">
+      <div class="cs-filtros" id="cs-filtros"></div>
+      <div id="cs-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  csFiltros();
+  csCargar();
+}
+function csFiltros() {
+  const f = $("#cs-filtros");
+  if (!f) return;
+  const clis = (cs.d && cs.d.clientes_disponibles) || [];
+  f.innerHTML = `
+    <div class="cs-fila-f">
+      <div class="cs-chips" role="group" aria-label="Período">
+        ${CS_PRESETS.map(([k, t]) => `<button class="chip ${cs.preset === k ? "activo" : ""}" onclick="csElegirPeriodo('${k}')">${t}</button>`).join("")}
+      </div>
+      <label class="cs-fechas ${cs.preset === "custom" ? "on" : ""}"><i class="ti ti-calendar"></i>
+        <input type="date" id="cs-desde" value="${cs.desde}" max="${trHoy()}" onchange="csFechas()" aria-label="Desde">
+        <span>al</span>
+        <input type="date" id="cs-hasta" value="${cs.hasta}" max="${trHoy()}" onchange="csFechas()" aria-label="Hasta"></label>
+    </div>
+    ${clis.length ? `<div class="cs-chips" role="group" aria-label="Empresa">
+      <button class="chip ${!cs.cliente ? "activo" : ""}" onclick="csElegirCliente('')">Todas las empresas</button>
+      ${clis.map(c => `<button class="chip ${cs.cliente === c ? "activo" : ""}" onclick="csElegirCliente('${trEsc(c)}')"><i class="cs-punto" style="background:${csColor(c)}"></i>${trEsc(c)}</button>`).join("")}
+    </div>` : ""}`;
+}
+function csElegirPeriodo(k) { cs.preset = k; [cs.desde, cs.hasta] = csPeriodo(k); csFiltros(); csCargar(); }
+function csFechas() {
+  const d = $("#cs-desde").value, h = $("#cs-hasta").value;
+  if (!d || !h) return;
+  cs.preset = "custom"; cs.desde = d <= h ? d : h; cs.hasta = d <= h ? h : d;
+  csFiltros(); csCargar();
+}
+function csElegirCliente(c) { cs.cliente = c; cs.abierto = ""; csFiltros(); csCargar(); }
+function csPdf() { window.open(`/api/corp/servicios/pdf?${csQuery()}&orden=${cs.orden}`, "_blank"); }
+
+async function csCargar() {
+  const seq = ++cs.seq;
+  const box = $("#cs-cuerpo");
+  if (box && cs.d) box.classList.add("cargando");
+  const d = await api(`/api/corp/servicios/panel?${csQuery()}`).catch(() => null);
+  if (seq !== cs.seq || !$("#cs-cuerpo")) return;
+  $("#cs-cuerpo").classList.remove("cargando");
+  if (!d || d.error) { $("#cs-cuerpo").innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>No se pudieron traer los servicios</div>`; return; }
+  const antes = (cs.d && cs.d.clientes_disponibles || []).join("|");
+  cs.d = d;
+  if (antes !== d.clientes_disponibles.join("|")) csFiltros();
+  csPintar();
+}
+
+function csDelta(v, alReves) {
+  if (v == null) return "";
+  const sube = v > 0, bien = alReves ? !sube : sube;
+  return `<span class="cs-delta ${v === 0 ? "" : bien ? "bien" : "mal"}"><i class="ti ti-arrow-${sube ? "up" : v < 0 ? "down" : "right"}"></i>${csDec(Math.abs(v))} %</span>`;
+}
+function csPintar() {
+  const d = cs.d, box = $("#cs-cuerpo");
+  if (!d || !box) return;
+  const t = d.totales, dl = d.deltas;
+  if (!d.hay_datos) {
+    box.innerHTML = `<div class="empty"><i class="ti ti-clipboard-off"></i>No hay servicios rendidos ${cs.cliente ? `de ${trEsc(cs.cliente)} ` : ""}en este período.${d.primer_dia ? ` El primero que hay cargado es del ${csFC(d.primer_dia)}/${d.primer_dia.slice(0, 4)}.` : ""}</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="pv-kpis cs-kpis">
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-azul"><i class="ti ti-route"></i></span><span class="pv-kpi-et">Servicios hechos ${csDelta(dl.servicios)}</span>
+        <b>${fmtNum(t.servicios)}</b><span class="pv-kpi-sub">${t.a_medias ? `${t.a_medias} a medias (una sola mitad) · ` : ""}en ${t.dias} día${t.dias === 1 ? "" : "s"}</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-ok"><i class="ti ti-users"></i></span><span class="pv-kpi-et">Pasajeros ${csDelta(dl.pasajeros)}</span>
+        <b>${fmtNum(t.pasajeros)}</b><span class="pv-kpi-sub">${csDec(t.pasajeros_prom)} por servicio</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-sd"><i class="ti ti-road"></i></span><span class="pv-kpi-et">Km recorridos ${csDelta(dl.km)}</span>
+        <b>${fmtNum(t.km)}</b><span class="pv-kpi-sub">de los servicios con km cargado</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-pronto"><i class="ti ti-cash"></i></span><span class="pv-kpi-et">Lo que costó ${csDelta(dl.costo, true)}</span>
+        <b>${csGs(t.costo)}</b><span class="pv-kpi-sub">${t.costo_pasajero ? `${csGs(t.costo_pasajero)} por pasajero` : "lo que se le paga al chofer"}${t.suspendidos ? ` · ${t.suspendidos} suspendido${t.suspendidos === 1 ? "" : "s"}` : ""}</span></div>
+    </div>
+    <p class="cs-comp">Comparado con el período anterior del mismo largo (${csFC(d.anterior.desde)} al ${csFC(d.anterior.hasta)}: ${fmtNum(d.anterior.servicios)} servicios, ${fmtNum(d.anterior.pasajeros)} pasajeros).</p>
+    <div class="pv-card cs-rank-card" id="cs-ranking">${csRankingHTML()}</div>
+    <div class="cs-dos">
+      <div class="pv-card">${csClientesHTML()}</div>
+      <div class="pv-card">${csSerieHTML()}</div>
+    </div>
+    <div class="cs-dos">
+      <div class="pv-card">${csGenteHTML()}</div>
+      <div class="pv-card">${csCochesHTML()}</div>
+    </div>`;
+}
+
+// ─── El ranking por servicio ───
+function csRankingHTML() {
+  const d = cs.d;
+  const [, nombre, clave] = CS_ORDENES.find(o => o[0] === cs.orden) || CS_ORDENES[0];
+  const cmp = (a, b) => { const x = clave(a), y = clave(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const q = cs.q.trim().toLowerCase();
+  const todos = [...d.ranking].sort(cmp);
+  const lista = todos.filter(r => !q || `${r.corto} ${r.tramo} ${r.cliente} ${r.choferes_top.map(c => c.nombre).join(" ")}`.toLowerCase().includes(q));
+  const valor = r => cs.orden === "pasajeros" ? r.pasajeros : cs.orden === "costo" ? r.costo : cs.orden === "costo_pasajero" ? (r.costo_pasajero || 0) : cs.orden === "suspendidos" ? r.suspendidos : r.servicios;
+  const max = Math.max(1, ...todos.map(valor));
+  const fila = r => {
+    const pos = todos.indexOf(r) + 1, abierto = cs.abierto === `${r.cliente}|${r.tramo}`;
+    const v = valor(r);
+    const vTxt = cs.orden === "costo" ? csGs(v) : cs.orden === "costo_pasajero" ? (r.costo_pasajero ? csGs(v) : "—") : fmtNum(v);
+    return `
+    <div class="cs-r ${abierto ? "abierto" : ""} ${pos <= 3 ? "top" : ""}" role="row" tabindex="0" onclick="csAbrir('${trEsc(r.cliente)}|${trEsc(r.tramo).replace(/'/g, "\\'")}')" onkeydown="if(event.key==='Enter')this.click()">
+      <span class="cs-pos ${pos <= 3 ? "p" + pos : ""}">${pos}</span>
+      <span class="cs-srv"><b>${trEsc(r.corto)}${r.hora ? ` <small>${trEsc(r.hora)}</small>` : ""}</b>
+        <span class="cs-cli" style="--c:${csColor(r.cliente)}">${trEsc(r.cliente)}</span>${r.variable ? `<span class="cs-tag">variable</span>` : ""}</span>
+      <span class="cs-bar"><i style="width:${max ? Math.max(v ? 2 : 0, v / max * 100) : 0}%;background:${csColor(r.cliente)}"></i><b>${vTxt}</b></span>
+      <span class="num">${fmtNum(r.servicios)}${r.a_medias ? `<small>${r.a_medias} a medias</small>` : ""}</span>
+      <span class="num">${fmtNum(r.pasajeros)}<small>${csDec(r.pasajeros_prom)} prom.</small></span>
+      <span class="num cs-hide-m">${r.km ? fmtNum(r.km) : "—"}</span>
+      <span class="num">${fmtNum(r.costo)}<small>${r.costo_pasajero ? fmtNum(r.costo_pasajero) + "/pas." : ""}</small></span>
+      <span class="num ${r.suspendidos ? "cs-susp" : ""}">${r.suspendidos || "—"}</span>
+    </div>
+    ${abierto ? csDetalleHTML(r) : ""}`;
+  };
+  return `
+    <div class="pv-card-cab"><h3><i class="ti ti-trophy"></i> Ranking por servicio</h3><span>${d.ranking.length} servicio${d.ranking.length === 1 ? "" : "s"} distinto${d.ranking.length === 1 ? "" : "s"}${cs.cliente ? ` de ${trEsc(cs.cliente)}` : ""} · tocá uno para ver quién lo hace</span></div>
+    <div class="cs-rank-ctl">
+      <div class="cs-chips" role="group" aria-label="Ordenar por">${CS_ORDENES.map(([k, t]) => `<button class="chip ${cs.orden === k ? "activo" : ""}" onclick="cs.orden='${k}';csRepintarRanking()">${t}</button>`).join("")}</div>
+      <label class="cs-busca"><i class="ti ti-search"></i><input type="search" id="cs-q" value="${trEsc(cs.q)}" placeholder="Buscar servicio, empresa o chofer" oninput="cs.q=this.value;csRepintarRanking(true)" aria-label="Buscar servicio"></label>
+    </div>
+    <div class="cs-tabla" role="table">
+      <div class="cs-r cs-th" role="row"><span>#</span><span>Servicio</span><span>${trEsc(nombre)}</span><span class="num">Veces</span><span class="num">Pasajeros</span><span class="num cs-hide-m">Km</span><span class="num">Costo (Gs.)</span><span class="num">Susp.</span></div>
+      ${lista.map(fila).join("") || `<div class="cs-vacio"><i class="ti ti-search-off"></i> Ningún servicio con «${trEsc(cs.q)}»</div>`}
+    </div>`;
+}
+function csDetalleHTML(r) {
+  const maxC = Math.max(1, ...r.choferes_top.map(c => c.n)), maxB = Math.max(1, ...r.coches_top.map(c => c.n));
+  return `<div class="cs-det">
+    <div><h4>Quién lo hace <small>${r.choferes} chofer${r.choferes === 1 ? "" : "es"}</small></h4>
+      ${r.choferes_top.map(c => `<div class="cs-mini"><span>${trEsc(c.nombre)}</span><i><b style="width:${c.n / maxC * 100}%"></b></i><em>${c.n}</em></div>`).join("") || "<p>—</p>"}</div>
+    <div><h4>Con qué coches <small>${r.coches} coche${r.coches === 1 ? "" : "s"}</small></h4>
+      ${r.coches_top.map(c => `<div class="cs-mini"><span>${trEsc(c.coche)}</span><i><b style="width:${c.n / maxB * 100}%"></b></i><em>${c.n}</em></div>`).join("") || "<p>—</p>"}</div>
+    <div><h4>Resumen</h4>
+      <p>${r.completos} completo${r.completos === 1 ? "" : "s"}${r.a_medias ? `, ${r.a_medias} a medias (se rindió una sola mitad)` : ""}${r.suspendidos ? `, ${r.suspendidos} suspendido${r.suspendidos === 1 ? "" : "s"} (${r.pct_suspendido} %)` : ""}.</p>
+      <p>${r.km_prom ? `${fmtNum(r.km_prom)} km por servicio. ` : ""}${r.ultimo ? `Último: ${csFC(r.ultimo)}.` : ""}</p>
+      <p class="cs-det-tramo">${trEsc(r.tramo)}</p></div>
+  </div>`;
+}
+function csAbrir(k) { cs.abierto = cs.abierto === k ? "" : k; csRepintarRanking(); }
+function csRepintarRanking(foco) {
+  const box = $("#cs-ranking");
+  if (!box) return;
+  const inp = $("#cs-q"), pos = inp ? inp.selectionStart : 0;
+  box.innerHTML = csRankingHTML();
+  if (foco) { const n = $("#cs-q"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
+}
+
+// ─── Por empresa ───
+function csClientesHTML() {
+  const pc = cs.d.por_cliente;
+  return `<div class="pv-card-cab"><h3>Por empresa</h3><span>servicios y lo que costó</span></div>
+    ${pc.map(c => `<div class="cs-emp">
+      <div class="cs-emp-cab"><b><i class="cs-punto" style="background:${csColor(c.cliente)}"></i>${trEsc(c.cliente)}</b><span>${fmtNum(c.servicios)} servicios · ${csDec(c.pct)} %</span></div>
+      <div class="cs-emp-bar"><i style="width:${c.pct}%;background:${csColor(c.cliente)}"></i></div>
+      <div class="cs-emp-sub">${c.tramos} tramo${c.tramos === 1 ? "" : "s"} · ${fmtNum(c.pasajeros)} pasajeros (${csDec(c.pasajeros_prom)} prom.) · ${csGs(c.costo)}${c.costo_pasajero ? ` · ${csGs(c.costo_pasajero)}/pas.` : ""}${c.suspendidos ? ` · <span class="cs-susp">${c.suspendidos} susp.</span>` : ""}</div>
+    </div>`).join("")}`;
+}
+
+// ─── Día por día (por semana si el período es largo) ───
+function csSerieHTML() {
+  let s = cs.d.serie, por = "día";
+  if (s.length > 62) {
+    por = "semana";
+    const sem = [];
+    s.forEach((x, i) => {
+      if (i % 7 === 0) sem.push({ fecha: x.fecha, dia: "", total: 0, por_cliente: {} });
+      const w = sem[sem.length - 1];
+      w.total += x.total;
+      Object.entries(x.por_cliente).forEach(([c, n]) => { w.por_cliente[c] = (w.por_cliente[c] || 0) + n; });
+    });
+    s = sem;
+  }
+  const max = Math.max(1, ...s.map(x => x.total));
+  const clis = cs.d.clientes_disponibles.filter(c => !cs.cliente || c === cs.cliente);
+  const prom = s.filter(x => x.total).length ? Math.round(s.reduce((a, x) => a + x.total, 0) / s.filter(x => x.total).length) : 0;
+  return `<div class="pv-card-cab"><h3>${por === "día" ? "Día por día" : "Semana por semana"}</h3><span>${prom} servicios por ${por} en promedio</span></div>
+    <div class="cs-serie" style="--n:${s.length}">
+      ${s.map(x => `<div class="cs-col" title="${por === "día" ? `${x.dia} ${csFC(x.fecha)}` : `Semana del ${csFC(x.fecha)}`}: ${x.total} servicio${x.total === 1 ? "" : "s"}${Object.entries(x.por_cliente).map(([c, n]) => `\n${c}: ${n}`).join("")}">
+        <div class="cs-pila" style="height:${x.total / max * 100}%">${clis.map(c => x.por_cliente[c] ? `<i style="flex:${x.por_cliente[c]};background:${csColor(c)}"></i>` : "").join("")}</div>
+        ${s.length <= 31 ? `<small class="${x.dia === "sáb" || x.dia === "dom" ? "fin" : ""}">${por === "día" ? x.fecha.slice(8, 10) : csFC(x.fecha)}</small>` : ""}
+      </div>`).join("")}
+    </div>
+    ${s.length > 31 ? `<div class="cs-serie-pie"><span>${csFC(s[0].fecha)}</span><span>${csFC(s[s.length - 1].fecha)}</span></div>` : ""}`;
+}
+
+// ─── Choferes y coches ───
+function csGenteHTML() {
+  const ch = cs.d.choferes.slice(0, 12), max = Math.max(1, ...ch.map(c => c.servicios));
+  return `<div class="pv-card-cab"><h3>Choferes que más servicios hacen</h3><span>${cs.d.choferes.length} chofer${cs.d.choferes.length === 1 ? "" : "es"} · una mitad cuenta 0,5</span></div>
+    ${ch.map((c, i) => `<div class="cs-mini grande"><span><em class="cs-n">${i + 1}</em>${trEsc(c.nombre)}<small>${c.tramos} tramo${c.tramos === 1 ? "" : "s"} · ${trEsc(c.clientes.join(", "))}${c.suspendidos ? ` · ${c.suspendidos} susp.` : ""}</small></span><i><b style="width:${c.servicios / max * 100}%"></b></i><em>${csDec(c.servicios)}</em></div>`).join("")}`;
+}
+function csCochesHTML() {
+  const co = cs.d.coches.slice(0, 12), max = Math.max(1, ...co.map(c => c.servicios));
+  return `<div class="pv-card-cab"><h3>Coches más usados</h3><span>${cs.d.coches.length} coche${cs.d.coches.length === 1 ? "" : "s"} en corporativos</span></div>
+    ${co.map((c, i) => `<div class="cs-mini grande"><span><em class="cs-n">${i + 1}</em>Coche ${trEsc(c.coche)}<small>${c.km ? fmtNum(c.km) + " km · " : ""}${trEsc(c.clientes.join(", "))}</small></span><i><b style="width:${c.servicios / max * 100}%"></b></i><em>${csDec(c.servicios)}</em></div>`).join("")}`;
+}
 
 async function renderCorpCargas() {
   status("Cargas");
