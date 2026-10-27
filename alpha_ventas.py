@@ -694,6 +694,13 @@ def accion_venta(vid, accion, d):
             if dif:
                 pago = d.get("pago") if d.get("pago") in PAGOS and dif > 0 else "efectivo"
                 _mov(conn, v, "cambio", dif, pago, d.get("recibe") if dif > 0 else None, ahora)
+        elif accion == "entrega":
+            # Se le da el boleto en papel al que lo compró online (o lo perdió)
+            if v["estado"] != "vendido":
+                return None, "Solo se entrega impreso un boleto pagado"
+            datos["entregas"] = (datos.get("entregas") or []) + [{"el": ahora, "por": _vendedor()}]
+            conn.execute("UPDATE alpha_ventas SET datos=?, actualizado_el=? WHERE id=?",
+                         (json.dumps(datos, ensure_ascii=False), ahora, v["id"]))
         elif accion == "reimpresion":
             if v["estado"] != "vendido":
                 return None, "Solo se reimprime un boleto vendido"
@@ -1015,6 +1022,63 @@ def listar(q="", estado="", fecha="", servicio="", limite=300):
             x = _salida(f); x["movs"] = movs.get(f["id"], [])
             out.append(x)
         return {"ventas": out, "total": total, "cuenta": cuenta}
+    finally:
+        conn.close()
+
+
+def _que_busca(q):
+    """Lo que escribe (o lee el lector de QR) el de la boletería: el código del
+    PDF (ALPHA-0001234), el número del boleto (001-001-0001234 o 1234) o el
+    documento del pasajero. Devuelve (número de boleto, documento normalizado,
+    si es seguro que es un número de boleto)."""
+    t = str(q or "").strip().upper()
+    m = re.search(r"ALPHA\W*(\d{1,9})", t) or re.fullmatch(r"0*01\W?0*01\W?(\d{1,9})", t)
+    if m:
+        return int(m.group(1)), "", True
+    dig = re.sub(r"\D", "", t)
+    nro = int(dig) if dig and len(dig) <= 9 else None
+    return nro, re.sub(r"[^0-9A-Z]", "", t), False
+
+
+def consulta(q, limite=30):
+    """Los pasajes de un pasajero (por documento) o el boleto con ese número,
+    los viajes que vienen primero. Para el que compró online y quiere el boleto
+    en papel."""
+    nro, doc, seguro = _que_busca(q)
+    if not nro and len(doc) < 3:
+        return {"ventas": [], "q": q}
+    conn = get_connection()
+    try:
+        filas, vistos = [], set()
+        if nro:
+            for r in conn.execute("SELECT * FROM alpha_ventas WHERE id=?", (nro,)).fetchall():
+                filas.append((dict(r), "boleto"))
+        if not seguro and len(doc) >= 3:
+            limpio = "UPPER(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(doc,''),'.',''),'-',''),' ',''),'/',''))"
+            for r in conn.execute(f"SELECT * FROM alpha_ventas WHERE {limpio} = ? ORDER BY fecha DESC, id DESC",
+                                  (doc,)).fetchall():
+                filas.append((dict(r), "documento"))
+        ahora = ahora_iso().replace(" ", "T")
+        hoy = ahora[:10]
+        out = []
+        for f, por in filas:
+            if f["id"] in vistos or f["estado"] == "bloqueado" or not _es_mia(f):
+                continue
+            vistos.add(f["id"])
+            x = _salida(f)
+            x["_estado"] = "vencida" if f["estado"] == "reserva" and (f.get("vence") or "") <= ahora else f["estado"]
+            x["por"] = por
+            # Ya pasó si salió (hoy a una hora que ya fue) o si la fecha quedó atrás
+            hora = str(x.get("sale") or x.get("hora") or "")[:5]
+            x["pasado"] = (f["fecha"] or "") < hoy or (bool(re.fullmatch(r"\d\d:\d\d", hora))
+                                                       and f"{f['fecha']}T{hora}" < ahora[:16])
+            out.append(x)
+        # Primero los viajes que vienen (el más cercano arriba), después los pasados
+        out.sort(key=lambda x: (x["pasado"], x["fecha"] if not x["pasado"] else "", x.get("sale") or x.get("hora") or ""))
+        pas = [x for x in out if x["pasado"]]
+        pas.sort(key=lambda x: x["fecha"], reverse=True)
+        out = [x for x in out if not x["pasado"]] + pas
+        return {"ventas": out[:limite], "total": len(out), "q": q}
     finally:
         conn.close()
 
@@ -1677,7 +1741,14 @@ def pdf_boleto(v, cfg_boleto, descuentos):
     if cfg_boleto.get("leyenda"):
         nota += " " + cfg_boleto["leyenda"]
     parrafo(nota, 7.5)
-    baja(2 * mm)
+    baja(3 * mm)
+    # El QR con el código del boleto: en la boletería se lee y sale el pasaje
+    ops.append(("qr", f"ALPHA-{int(d['nro']):07d}", W / 2 - 12 * mm, y[0], 24 * mm))
+    baja(25 * mm)
+    txt(W / 2, f"ALPHA-{int(d['nro']):07d}", "Helvetica-Bold", 9, "c")
+    baja(4 * mm)
+    txt(W / 2, "Con este código retirás el boleto impreso en la boletería", "Helvetica", 6.5, "c")
+    baja(5 * mm)
     ops.append(("barra", y[0], 10 * mm))
     txt(M, "Original", "Helvetica-Bold", 13, "l", (1, 1, 1), dy=6.8 * mm)
     txt(W - M, "para el pasajero", "Helvetica", 8, "r", (1, 1, 1), dy=6.5 * mm)
@@ -1712,6 +1783,16 @@ def pdf_boleto(v, cfg_boleto, descuentos):
             _, x, yt, w, h = op
             c.setFillColorRGB(0, 0, 0)
             c.rect(x, H - yt - h, w, h, stroke=0, fill=1)
+        elif k == "qr":
+            from reportlab.graphics.barcode import qr as _qr
+            from reportlab.graphics.shapes import Drawing
+            from reportlab.graphics import renderPDF
+            _, valor, x, yt, lado = op
+            w = _qr.QrCodeWidget(valor)
+            b = w.getBounds()
+            dr = Drawing(lado, lado, transform=[lado / (b[2] - b[0]), 0, 0, lado / (b[3] - b[1]), 0, 0])
+            dr.add(w)
+            renderPDF.draw(dr, c, x, H - yt - lado)
         elif k == "barra":
             _, yt, h = op
             c.setFillColorRGB(0, 0, 0)
@@ -1784,7 +1865,7 @@ def api_accion(vid, accion):
     if not _rol():
         return _no()
     if accion not in ("cobrar", "liberar", "anular", "devolver", "cambiar", "reimpresion", "equipaje", "embarque",
-                      "desbloquear"):
+                      "desbloquear", "entrega"):
         return _no("No sé qué hacer con eso", 400)
     d = request.get_json(silent=True) or {}
     v, err = accion_venta(vid, accion, d)
@@ -1792,7 +1873,8 @@ def api_accion(vid, accion):
         return _no(err, 409 if "tomado" in err else 400)
     if accion != "embarque":     # el embarque se marca uno por uno: no llena la auditoría
         nombres = {"cobrar": "cobró la reserva", "liberar": "liberó la reserva", "anular": "anuló", "devolver": "devolvió",
-                   "cambiar": "cambió", "reimpresion": "reimprimió el boleto", "equipaje": "agregó equipaje al boleto"}
+                   "cambiar": "cambió", "reimpresion": "reimprimió el boleto", "equipaje": "agregó equipaje al boleto",
+                   "entrega": "entregó impreso en el mostrador el boleto"}
         if accion == "desbloquear":
             _auditar(f"Alpha: desbloqueó el asiento {v.get('asiento')}", f"{v.get('fecha')} {v.get('sale') or v.get('hora')} {v.get('tramo')}")
         else:
@@ -1842,6 +1924,14 @@ def api_bloquear():
         return _no(err, 409)
     _auditar(f"Alpha: bloqueó el asiento {v.get('asiento')}", f"{v.get('fecha')} {v.get('sale') or v.get('hora')} {v.get('tramo')}: {v.get('motivo')}")
     return jsonify({"ok": True, "venta": v})
+
+
+@bp_alpha_ventas.route("/api/alpha/consulta", methods=["GET"])
+def api_consulta():
+    """Consultar un pasaje: por documento, número de boleto o el código del PDF."""
+    if not _rol():
+        return _no()
+    return jsonify(consulta(request.args.get("q", "")))
 
 
 @bp_alpha_ventas.route("/api/alpha/pasajero", methods=["GET"])
