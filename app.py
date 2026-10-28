@@ -449,6 +449,19 @@ def proteger_rutas():
                 return jsonify({"error": "Sin permiso"}), 403
             return redirect("/gerencia")
 
+    # Contabilidad: acceso aislado al módulo financiero. No alcanza con ocultar el menú;
+    # también se bloquean por servidor las rutas operativas de flota/taller/compras.
+    if session.get("rol") == "contabilidad":
+        permitido = (
+            p in ("/", "/contabilidad", "/api/logout", "/api/me", "/api/me/permisos", "/api/usuario_actual")
+            or p.startswith("/api/contabilidad/")
+            or p.startswith("/static/")
+        )
+        if not permitido:
+            if p.startswith("/api/"):
+                return jsonify({"error": "Tu usuario solo tiene acceso al módulo de Contabilidad"}), 403
+            return redirect("/contabilidad")
+
     # El rol Compras accede a la app principal pero solo a sus endpoints + lectura básica.
     if session.get("rol") == "compras":
         permitido = (
@@ -500,6 +513,8 @@ def version_assets():
 @app.route("/")
 @login_requerido
 def index():
+    if session.get("rol") == "contabilidad":
+        return redirect("/contabilidad")
     # Los choferes ven solo su pantalla simple de carga de OT
     if session.get("rol") == "chofer":
         return redirect(url_for("pantalla_chofer"))
