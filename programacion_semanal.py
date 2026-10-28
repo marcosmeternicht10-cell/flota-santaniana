@@ -7,10 +7,7 @@ sola; funciona como patrón operativo editable por Tráfico/Administración.
 """
 import csv
 import io
-from datetime import datetime
-
 from flask import Blueprint, Response, jsonify, render_template, request, session
-from db_compat import get_connection
 
 bp_programacion_semanal = Blueprint("programacion_semanal", __name__)
 
@@ -157,56 +154,30 @@ def _ahora():
 
 
 def init_programacion_semanal():
-    conn = get_connection()
-    try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS trafico_programacion_asignaciones (
-                rotacion_id TEXT PRIMARY KEY,
-                unidad TEXT NOT NULL DEFAULT '',
-                actualizado_por TEXT DEFAULT '',
-                actualizado_en TEXT DEFAULT ''
-            )
-        """)
-        conn.commit()
-    finally:
-        conn.close()
+    """No crea tablas: la programación es un patrón recurrente, sin matrícula física."""
+    return None
 
 
-def _asignaciones():
-    conn = get_connection()
-    try:
-        return {
-            str(r["rotacion_id"]): {
-                "unidad": str(r["unidad"] or ""),
-                "actualizado_por": str(r["actualizado_por"] or ""),
-                "actualizado_en": str(r["actualizado_en"] or ""),
-            }
-            for r in conn.execute(
-                "SELECT rotacion_id, unidad, actualizado_por, actualizado_en FROM trafico_programacion_asignaciones"
-            ).fetchall()
-        }
-    finally:
-        conn.close()
+def _rotaciones_programadas():
+    """Ciclos lógicos de continuidad. No equivalen a números internos de coche."""
+    return [
+        {**rot, "codigo": f"R{i:02d}", "tipo": "Ciclo de continuidad"}
+        for i, rot in enumerate(ROTACIONES, start=1)
+    ]
 
 
-def _rotaciones_con_asignacion(asignaciones=None):
-    asignaciones = asignaciones if asignaciones is not None else _asignaciones()
+def _servicios_programados():
+    """Añade el código de ciclo lógico a cada servicio sin identificar un coche físico."""
+    ciclos = {r['id']: r for r in _rotaciones_programadas()}
     out = []
-    for rot in ROTACIONES:
-        a = asignaciones.get(rot["id"], {})
-        out.append({**rot, "unidad": a.get("unidad", ""), "actualizado_por": a.get("actualizado_por", ""),
-                    "actualizado_en": a.get("actualizado_en", "")})
+    for servicio in SERVICIOS:
+        ciclo = ciclos[servicio['rotacion_id']]
+        out.append({
+            **servicio,
+            'rotacion_codigo': ciclo['codigo'],
+            'rotacion_nombre': ciclo['nombre'],
+        })
     return out
-
-
-def _servicios_con_unidad(asignaciones=None):
-    asignaciones = asignaciones if asignaciones is not None else _asignaciones()
-    out = []
-    for s in SERVICIOS:
-        a = asignaciones.get(s["rotacion_id"], {})
-        out.append({**s, "unidad": a.get("unidad", "")})
-    return out
-
 
 def _denegado():
     return jsonify({"ok": False, "msg": "Sin permiso para acceder a la programación semanal."}), 403
@@ -216,13 +187,11 @@ def _denegado():
 def pagina_programacion_semanal():
     if not _puede_ver():
         return ("Sin permiso para acceder a la programación semanal.", 403)
-    asignaciones = _asignaciones()
     return render_template(
         "programacion_semanal.html",
         dias=DIAS, reglas=REGLAS,
-        rotaciones=_rotaciones_con_asignacion(asignaciones),
-        servicios=_servicios_con_unidad(asignaciones),
-        puede_editar=_puede_editar(),
+        rotaciones=_rotaciones_programadas(),
+        servicios=_servicios_programados(),
     )
 
 
@@ -230,72 +199,30 @@ def pagina_programacion_semanal():
 def api_programacion_semanal():
     if not _puede_ver():
         return _denegado()
-    asignaciones = _asignaciones()
     return jsonify({
         "ok": True,
         "dias": DIAS,
         "reglas": REGLAS,
-        "rotaciones": _rotaciones_con_asignacion(asignaciones),
-        "servicios": _servicios_con_unidad(asignaciones),
-        "puede_editar": _puede_editar(),
+        "rotaciones": _rotaciones_programadas(),
+        "servicios": _servicios_programados(),
+        "asignacion_fisica": False,
+        "criterio_asignacion": "orden_de_llegada_fifo",
     })
-
-
-@bp_programacion_semanal.route("/api/trafico/programacion-semanal/asignaciones/<rotacion_id>", methods=["PUT"])
-def api_guardar_asignacion(rotacion_id):
-    if not _puede_editar():
-        return _denegado()
-    if rotacion_id not in _ROTACION_IDS:
-        return jsonify({"ok": False, "msg": "Rotación desconocida."}), 404
-    data = request.get_json(silent=True) or {}
-    unidad = " ".join(str(data.get("unidad") or "").split())[:40]
-    quien = str(session.get("nombre") or session.get("usuario") or "?")[:120]
-    conn = get_connection()
-    try:
-        conn.execute("""
-            INSERT INTO trafico_programacion_asignaciones
-                (rotacion_id, unidad, actualizado_por, actualizado_en)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (rotacion_id) DO UPDATE SET
-                unidad=excluded.unidad,
-                actualizado_por=excluded.actualizado_por,
-                actualizado_en=excluded.actualizado_en
-        """, (rotacion_id, unidad, quien, _ahora()))
-        conn.commit()
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        return jsonify({"ok": False, "msg": "No se pudo guardar la asignación. Revisá la conexión e intentá de nuevo."}), 500
-    finally:
-        conn.close()
-    try:
-        from database import registrar_auditoria
-        registrar_auditoria(
-            usuario=quien, rol=session.get("rol") or "",
-            accion="Actualizó unidad de programación semanal",
-            categoria="Tráfico",
-            detalle=f"Rotación {rotacion_id}: {unidad or 'sin asignar'}",
-        )
-    except Exception:
-        pass
-    return jsonify({"ok": True, "rotacion_id": rotacion_id, "unidad": unidad})
 
 
 @bp_programacion_semanal.route("/api/trafico/programacion-semanal.csv", methods=["GET"])
 def exportar_programacion_semanal():
     if not _puede_ver():
         return _denegado()
-    filas = _servicios_con_unidad()
+    filas = _servicios_programados()
     salida = io.StringIO()
     salida.write("\ufeff")
     writer = csv.writer(salida, delimiter=";")
-    writer.writerow(["Día", "Lado", "Hora", "Servicio", "Unidad asignada", "Rotación", "Continuidad / observaciones", "Orden de llegada"])
+    writer.writerow(["Día", "Lado", "Hora", "Servicio", "Ciclo", "Continuidad", "Observaciones", "Orden de llegada"])
     for s in filas:
         writer.writerow([
-            s["dia"], s["lado"], s["hora"], s["servicio"], s["unidad"],
-            s["rotacion_id"], s["nota"], s["orden_llegada"] or "",
+            s["dia"], s["lado"], s["hora"], s["servicio"], s["rotacion_codigo"],
+            s["rotacion_nombre"], s["nota"], s["orden_llegada"] or "",
         ])
     return Response(
         salida.getvalue(), mimetype="text/csv; charset=utf-8",
