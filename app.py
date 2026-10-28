@@ -502,7 +502,8 @@ def version_assets():
             os.path.join(app.static_folder, "alpha.css"),
             os.path.join(app.static_folder, "controles.js"),
             os.path.join(app.static_folder, "gerencia.js"),
-            os.path.join(app.static_folder, "gerencia.css"),\n            os.path.join(app.static_folder, "contabilidad.css"),
+            os.path.join(app.static_folder, "gerencia.css"),
+            os.path.join(app.static_folder, "contabilidad.css"),
         ]
         ultima = max(os.path.getmtime(a) for a in archivos if os.path.exists(a))
         return str(int(ultima))  # timestamp como número de versión
