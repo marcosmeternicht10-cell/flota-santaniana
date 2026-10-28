@@ -148,6 +148,20 @@ def report():
  s=io.StringIO();s.write("\ufeff");w=csv.writer(s,delimiter=";");w.writerow(["ID","Fecha","Beneficiario","Concepto","Importe Gs.","Método","Cuenta","Estado","Solicitado por","Autorizado por","Pagado por"])
  for r in data:w.writerow([r.get(k,"") for k in ("id","fecha","beneficiario","concepto","importe","metodo","cuenta","estado","solicitado_por","autorizado_por","realizado_por")])
  return Response(s.getvalue(),mimetype="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=contabilidad_pagos.csv"})
+@bp_contabilidad.route("/api/contabilidad/movimientos.csv")
+def export_movimientos():
+ if not allowed():return denied()
+ data=rows("SELECT fecha,tipo,cuenta,metodo,concepto,referencia,importe,usuario FROM contabilidad_movimientos ORDER BY fecha DESC,id DESC")
+ s=io.StringIO();s.write("\\ufeff");w=csv.writer(s,delimiter=";");w.writerow(["Fecha","Tipo","Caja / banco","Método","Concepto","Referencia","Importe Gs.","Usuario"])
+ for r in data:w.writerow([r.get(k,"") for k in ("fecha","tipo","cuenta","metodo","concepto","referencia","importe","usuario")])
+ return Response(s.getvalue(),mimetype="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=contabilidad_movimientos.csv"})
+@bp_contabilidad.route("/api/contabilidad/facturas.csv")
+def export_facturas():
+ if not allowed():return denied()
+ data=rows("SELECT numero,proveedor,ruc,concepto,categoria,fecha_emision,fecha_vencimiento,importe,saldo,estado,creado_por,autorizado_por FROM contabilidad_facturas ORDER BY id DESC")
+ s=io.StringIO();s.write("\\ufeff");w=csv.writer(s,delimiter=";");w.writerow(["N.º factura","Proveedor","RUC","Concepto","Categoría","Emisión","Vencimiento","Importe Gs.","Saldo Gs.","Estado","Registrada por","Autorizada por"])
+ for r in data:w.writerow([r.get(k,"") for k in ("numero","proveedor","ruc","concepto","categoria","fecha_emision","fecha_vencimiento","importe","saldo","estado","creado_por","autorizado_por")])
+ return Response(s.getvalue(),mimetype="text/csv; charset=utf-8",headers={"Content-Disposition":"attachment; filename=contabilidad_facturas.csv"})
 @bp_contabilidad.route("/api/contabilidad/auditoria")
 def audit_list():
  if not allowed():return denied()
