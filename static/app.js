@@ -8458,10 +8458,11 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", agencia: "Agencia", gerente: "Gerente" };
+const LABEL_ROL = { admin: "Administración", contabilidad: "Contabilidad", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", agencia: "Agencia", gerente: "Gerente" };
 
 // Los roles que se pueden asignar, en un solo lugar para no repetirlos
 const ROLES_DISPONIBLES = [
+  ["contabilidad", "Contabilidad y tesorería"],
   ["taller", "Taller (operación)"],
   ["admin", "Administración (todo)"],
   ["compras", "Compras / Depósito"],

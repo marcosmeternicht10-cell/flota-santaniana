@@ -40,6 +40,9 @@ GRUPOS_SECCIONES = [
         ("historial_carga", "Historial por coche"),
         ("personal", "Personal de taller"),
     ]),
+    ("Contabilidad", [
+        ("contabilidad", "Contabilidad y tesorería"),
+    ]),
     ("Compras", [
         ("compras", "Compras / Depósito"),
         ("repuestos", "Inventario Repuestos"),
@@ -87,6 +90,7 @@ MODULOS_API = [
      ("/api/servicios",)),
     ({"comb_rendicion"},
      ("/api/comb_rend",)),
+    ({"contabilidad"}, ("/api/contabilidad",)),
     ({"compras", "repuestos", "proveedores"},
      ("/api/compras", "/api/repuestos")),
     ({"agencias"},

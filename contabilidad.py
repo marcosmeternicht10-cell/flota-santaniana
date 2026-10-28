@@ -70,7 +70,7 @@ def approve_invoice(i):
  c=get_connection()
  try:
   cur=c.execute("UPDATE contabilidad_facturas SET estado='autorizada',autorizado_por=?,autorizado_en=? WHERE id=? AND estado='pendiente'",(session.get("nombre") or session.get("usuario"),datetime.now().isoformat(timespec="seconds"),i))
-  if cur.rowcount!=1:return jsonify({"error":"Factura inexistente o ya procesada."}),409
+  if not c.execute("SELECT id FROM contabilidad_facturas WHERE id=? AND estado='autorizada'",(i,)).fetchone():return jsonify({"error":"Factura inexistente o ya procesada."}),409
   audit(c,"autorizar factura","factura",i);c.commit();return jsonify({"ok":True})
  finally:c.close()
 @bp_contabilidad.route("/api/contabilidad/pagos",methods=["GET","POST"])
@@ -96,7 +96,7 @@ def approve_payment(i):
  c=get_connection()
  try:
   cur=c.execute("UPDATE contabilidad_pagos SET estado='autorizado',autorizado_por=?,autorizado_en=? WHERE id=? AND estado='pendiente'",(session.get("nombre") or session.get("usuario"),datetime.now().isoformat(timespec="seconds"),i))
-  if cur.rowcount!=1:return jsonify({"error":"Orden inexistente o ya procesada."}),409
+  if not c.execute("SELECT id FROM contabilidad_pagos WHERE id=? AND estado='autorizado'",(i,)).fetchone():return jsonify({"error":"Orden inexistente o ya procesada."}),409
   audit(c,"autorizar orden","pago",i);c.commit();return jsonify({"ok":True})
  finally:c.close()
 @bp_contabilidad.route("/api/contabilidad/pagos/<int:i>/pagar",methods=["POST"])
