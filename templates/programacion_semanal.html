@@ -35,7 +35,7 @@
     <div>
       <div class="eyebrow">La Santaniana · Tráfico internacional</div>
       <h1>Programación semanal de servicios</h1>
-      <p class="sub">Patrón recurrente de lunes a domingo. Asigná una unidad real a cada rotación una sola vez: el sistema la refleja en todos los servicios vinculados.</p>
+      <p class="sub">Patrón recurrente de lunes a domingo. Las unidades siguen la rotación y el orden de llegada (FIFO); los códigos R01–R17 representan continuidad de servicios, no números físicos de coches.</p>
     </div>
     <div class="actions">
       <a class="btn" href="/">← Volver al sistema</a>
@@ -47,27 +47,23 @@
   <section class="stats">
     <div class="stat"><span>Servicios semanales</span><strong id="totalServicios">{{ servicios|length }}</strong></div>
     <div class="stat"><span>Rotaciones de unidades</span><strong>{{ rotaciones|length }}</strong></div>
-    <div class="stat"><span>Rotaciones asignadas</span><strong id="totalAsignadas">0</strong></div>
-    <div class="stat"><span>Pendientes de unidad</span><strong id="totalPendientes">0</strong></div>
+    <div class="stat"><span>Criterio de asignación</span><strong style="font-size:22px">FIFO</strong></div>
+    <div class="stat"><span>Identificación de coche</span><strong style="font-size:22px">No requerida</strong></div>
   </section>
 
   <div class="layout">
     <section class="panel">
-      <h2>Unidades por rotación</h2>
-      <p class="hint">Ingresá el número interno real del coche. Cada código representa una continuidad de servicios; al guardar, se actualizarán todos los movimientos de esa rotación. Solo Tráfico/Administración puede modificarlo.</p>
+      <h2>Ciclos de continuidad</h2>
+      <p class="hint">Cada código enlaza los servicios que corresponden a la misma rotación operativa. No hace falta cargar el número interno del coche: el tráfico asigna la unidad física por disponibilidad y orden de llegada.</p>
       <div id="rotaciones">
         {% for r in rotaciones %}
-        <div class="rotation" data-rotation="{{ r.id }}">
-          <div class="rname">{{ r.nombre }}</div>
+        <div class="rotation" data-rotation="{{ r.codigo }}">
+          <div class="rname"><span class="pill">{{ r.codigo }}</span> {{ r.nombre }}</div>
           <div class="rdetail">{{ r.detalle }}</div>
-          <div class="assign">
-            <input type="text" maxlength="40" value="{{ r.unidad }}" data-unit-input="{{ r.id }}" placeholder="N.º interno del coche" {% if not puede_editar %}disabled{% endif %}>
-            {% if puede_editar %}<button class="save" data-save="{{ r.id }}">Guardar</button>{% endif %}
-          </div>
-          {% if r.actualizado_en %}<div class="small-note">Última edición: {{ r.actualizado_en }} · {{ r.actualizado_por }}</div>{% endif %}
         </div>
         {% endfor %}
       </div>
+      <div class="small-note">Regla FIFO: la primera unidad que llega a Asunción es la primera en salir. Los retornos tienen prioridad según el orden de llegada especificado abajo.</div>
     </section>
 
     <section class="panel">
@@ -81,19 +77,20 @@
         <select id="fLado" aria-label="Filtrar por sentido">
           <option value="">Ida y vuelta</option><option value="Ida">Ida</option><option value="Vuelta">Vuelta</option>
         </select>
-        <select id="fUnidad" aria-label="Filtrar por asignación">
-          <option value="">Todas las unidades</option><option value="asignada">Con unidad</option><option value="pendiente">Sin unidad</option>
+        <select id="fCiclo" aria-label="Filtrar por ciclo">
+          <option value="">Todos los ciclos</option>
+          {% for r in rotaciones %}<option value="{{ r.codigo }}">{{ r.codigo }} · {{ r.nombre }}</option>{% endfor %}
         </select>
       </div>
       <div class="tablewrap">
         <table>
-          <thead><tr><th>Día</th><th>Sentido</th><th>Hora</th><th>Servicio</th><th>Unidad</th><th>Continuidad / observaciones</th></tr></thead>
+          <thead><tr><th>Día</th><th>Sentido</th><th>Hora</th><th>Servicio</th><th>Ciclo</th><th>Continuidad / observaciones</th></tr></thead>
           <tbody id="tablaServicios">
           {% for s in servicios %}
-            <tr data-dia="{{ s.dia_id }}" data-lado="{{ s.lado }}" data-unidad="{% if s.unidad %}asignada{% else %}pendiente{% endif %}">
+            <tr data-dia="{{ s.dia_id }}" data-lado="{{ s.lado }}" data-ciclo="{{ s.rotacion_codigo }}">
               <td class="day">{{ s.dia }}</td><td><span class="pill">{{ s.lado }}</span></td><td class="time">{{ s.hora }}{% if s.orden_llegada %}<div class="order">Llegada {{ s.orden_llegada }}.ª</div>{% endif %}</td>
-              <td><div class="service">{{ s.servicio }}</div><div class="small-note">{{ s.rotacion_id }}</div></td>
-              <td class="unit-cell">{% if s.unidad %}<span class="unit">{{ s.unidad }}</span>{% else %}<span class="empty">Sin asignar</span>{% endif %}</td>
+              <td><div class="service">{{ s.servicio }}</div></td>
+              <td><span class="pill">{{ s.rotacion_codigo }}</span><div class="small-note">{{ s.rotacion_nombre }}</div></td>
               <td class="note">{{ s.nota }}</td>
             </tr>
           {% endfor %}
@@ -114,58 +111,19 @@
 
 <script>
 (function(){
-  var puedeEditar = {{ 'true' if puede_editar else 'false' }};
   var fDia = document.getElementById('fDia');
   var fLado = document.getElementById('fLado');
-  var fUnidad = document.getElementById('fUnidad');
+  var fCiclo = document.getElementById('fCiclo');
   function filtrar(){
-    var dia=fDia.value, lado=fLado.value, unidad=fUnidad.value;
+    var dia=fDia.value, lado=fLado.value, ciclo=fCiclo.value;
     document.querySelectorAll('#tablaServicios tr').forEach(function(tr){
-      var ok=(dia==='0'||tr.dataset.dia===dia)&&(!lado||tr.dataset.lado===lado)&&(!unidad||tr.dataset.unidad===unidad);
+      var ok=(dia==='0'||tr.dataset.dia===dia)&&(!lado||tr.dataset.lado===lado)&&(!ciclo||tr.dataset.ciclo===ciclo);
       tr.hidden=!ok;
     });
   }
-  fDia.addEventListener('change',filtrar); fLado.addEventListener('change',filtrar); fUnidad.addEventListener('change',filtrar);
-
-  function toast(msg){
-    var el=document.getElementById('toast'); el.textContent=msg; el.style.display='block';
-    window.clearTimeout(el._timer); el._timer=window.setTimeout(function(){el.style.display='none';},3200);
-  }
-  function actualizarContadores(){
-    var inputs=Array.prototype.slice.call(document.querySelectorAll('[data-unit-input]'));
-    var n=inputs.filter(function(i){return i.value.trim()!=='';}).length;
-    document.getElementById('totalAsignadas').textContent=n;
-    document.getElementById('totalPendientes').textContent=inputs.length-n;
-  }
-  function actualizarFilas(rotId, unidad){
-    document.querySelectorAll('#tablaServicios tr').forEach(function(tr){
-      var small=tr.querySelector('.small-note');
-      if(!small||small.textContent.trim()!==rotId)return;
-      var td=tr.querySelector('.unit-cell');
-      td.textContent='';
-      if(unidad){var span=document.createElement('span');span.className='unit';span.textContent=unidad;td.appendChild(span);tr.dataset.unidad='asignada';}
-      else{var span2=document.createElement('span');span2.className='empty';span2.textContent='Sin asignar';td.appendChild(span2);tr.dataset.unidad='pendiente';}
-    });
-    filtrar();
-  }
-  if(puedeEditar){
-    document.querySelectorAll('[data-save]').forEach(function(btn){
-      btn.addEventListener('click',async function(){
-        var id=btn.dataset.save, input=document.querySelector('[data-unit-input="'+id+'"]'), valor=input.value.trim();
-        btn.disabled=true; btn.textContent='Guardando…';
-        try{
-          var resp=await fetch('/api/trafico/programacion-semanal/asignaciones/'+encodeURIComponent(id),{
-            method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({unidad:valor})
-          });
-          var data=await resp.json();
-          if(!resp.ok||!data.ok)throw new Error(data.msg||'No se pudo guardar.');
-          input.value=data.unidad; actualizarFilas(id,data.unidad); actualizarContadores(); toast('Rotación guardada: '+id+(data.unidad?' → unidad '+data.unidad:' → sin asignar'));
-        }catch(e){toast(e.message||'Error al guardar la unidad.');}
-        finally{btn.disabled=false;btn.textContent='Guardar';}
-      });
-    });
-  }
-  actualizarContadores();
+  fDia.addEventListener('change',filtrar);
+  fLado.addEventListener('change',filtrar);
+  fCiclo.addEventListener('change',filtrar);
 })();
 </script>
 </body>
