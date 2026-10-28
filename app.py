@@ -210,6 +210,10 @@ app.register_blueprint(bp_ot_salidas)
 from ot_horas import bp_ot_horas, init_ot_horas
 init_ot_horas()
 app.register_blueprint(bp_ot_horas)
+
+from compras_motivo import bp_compras_motivo, init_compras_motivo
+init_compras_motivo()
+app.register_blueprint(bp_compras_motivo)
 # Servicios de corporativos: el ranking por servicio sacado de las rendiciones
 from corp_servicios import bp_corp_servicios
 app.register_blueprint(bp_corp_servicios)
