@@ -71,6 +71,11 @@ app = Flask(__name__)
 # Clave secreta para las sesiones (en producción se toma de variable de entorno)
 app.secret_key = os.environ.get("SECRET_KEY", "la-santaniana-flota-2026-cambiar-esto")
 
+# ─── Módulo de Contabilidad y Tesorería ─────────────────────────────────────
+from contabilidad import bp_contabilidad, init_contabilidad
+init_contabilidad(app)
+app.register_blueprint(bp_contabilidad)
+
 # ─── Módulo de Inventario de Repuestos ───────────────────────────────────────
 # Se engancha como blueprint aparte (repuestos_db.py + repuestos_routes.py).
 # init_repuestos_module crea las tablas del inventario al arrancar.
@@ -484,7 +489,7 @@ def version_assets():
             os.path.join(app.static_folder, "alpha.css"),
             os.path.join(app.static_folder, "controles.js"),
             os.path.join(app.static_folder, "gerencia.js"),
-            os.path.join(app.static_folder, "gerencia.css"),
+            os.path.join(app.static_folder, "gerencia.css"),\n            os.path.join(app.static_folder, "contabilidad.css"),
         ]
         ultima = max(os.path.getmtime(a) for a in archivos if os.path.exists(a))
         return str(int(ultima))  # timestamp como número de versión

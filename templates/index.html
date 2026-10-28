@@ -106,6 +106,13 @@
           <i class="ti ti-users"></i> Personal de taller
         </button>
 
+        {% if rol == 'admin' or rol == 'contabilidad' %}
+        <div class="nav-section">Contabilidad</div>
+        <button class="nav-item" onclick="window.location.href='/contabilidad'">
+          <i class="ti ti-calculator"></i> Contabilidad y tesorería
+        </button>
+        {% endif %}
+
         <div class="nav-section">Compras</div>
         <button class="nav-item" data-sec="compras">
           <i class="ti ti-shopping-cart"></i> Compras / Depósito
