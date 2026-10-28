@@ -170,6 +170,11 @@ from trafico import bp_trafico, init_trafico
 init_trafico()
 app.register_blueprint(bp_trafico)
 
+# ─── Programación semanal de servicios internacionales ──────────────────────
+from programacion_semanal import bp_programacion_semanal, init_programacion_semanal
+init_programacion_semanal()
+app.register_blueprint(bp_programacion_semanal)
+
 # Alpha (venta de pasajes, maqueta): los servicios salen del tráfico
 from alpha import bp_alpha, init_alpha
 init_alpha()
