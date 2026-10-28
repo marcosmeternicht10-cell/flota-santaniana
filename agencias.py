@@ -181,6 +181,7 @@ def init_agencias():
         importar_delta()
     except Exception as e:
         print(f"[agencias] no se pudo importar el listado de Delta: {e}")
+    aplicar_comision_general()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -188,6 +189,38 @@ def init_agencias():
 # ════════════════════════════════════════════════════════════════════════════
 
 TANDA_DELTA = "delta-ads-2026-10-28"
+COMISION_GENERAL = 10          # todos los agencieros cobran el 10 % del pasaje
+TANDA_COMISION = "comision-10-2026-10-28"
+
+
+def aplicar_comision_general():
+    """Una sola vez: pone el 10 % a todos los contratos que ya estaban cargados
+    (los del listado de Delta venían sin comisión). Después cada agencia se
+    puede cambiar a mano en su contrato."""
+    conn = get_connection()
+    try:
+        if conn.execute("SELECT 1 FROM agencias_cargas WHERE tanda=?", (TANDA_COMISION,)).fetchone():
+            return 0
+        ahora = ahora_iso()
+        n = conn.execute("SELECT COUNT(*) AS n FROM agencia_contratos WHERE COALESCE(anulado,0)=0").fetchone()["n"] or 0
+        conn.execute("""UPDATE agencia_contratos SET comision_tipo='porcentaje', comision=?,
+                              nota=REPLACE(COALESCE(nota,''), '. Falta cargar la comisión.', ?),
+                              actualizado_el=?, actualizado_por='Comisión general 10 %'
+                              WHERE COALESCE(anulado,0)=0""",
+                           (COMISION_GENERAL, f". Comisión general del {COMISION_GENERAL:g}%.", ahora))
+        conn.execute("INSERT INTO agencias_cargas (tanda, aplicada_el) VALUES (?, ?) ON CONFLICT (tanda) DO NOTHING",
+                     (TANDA_COMISION, ahora))
+        conn.commit()
+        if n:
+            print(f"[agencias] comisión general del {COMISION_GENERAL}%: {n} contratos")
+        return n
+    except Exception as e:
+        _rollback(conn)
+        print(f"[agencias] no se pudo poner la comisión general: {e}")
+        return 0
+    finally:
+        conn.close()
+
 
 
 def importar_delta(forzar=False):
@@ -226,10 +259,10 @@ def importar_delta(forzar=False):
             hasta = str(a.get("hasta") or "")[:10]
             conn.execute("""INSERT INTO agencia_contratos (agencia_id, tipo, desde, hasta, comision_tipo, comision,
                             comisiones_ruta, tope_sin_depositar, nota, creado_el, creado_por, actualizado_el, actualizado_por)
-                            VALUES (?,'contrato',?,?,'porcentaje',0,'[]',?,?,?,?,?,?)""",
-                         (aid, hoy, hasta if hasta > hoy else "", float(a.get("tope") or 0),
+                            VALUES (?,'contrato',?,?,'porcentaje',?,'[]',?,?,?,?,?,?)""",
+                         (aid, hoy, hasta if hasta > hoy else "", COMISION_GENERAL, float(a.get("tope") or 0),
                           "Condiciones traídas de Delta: tope de crédito" + (" y vencimiento" if hasta > hoy else "")
-                          + ". Falta cargar la comisión.", ahora, "Listado de Delta", ahora, "Listado de Delta"))
+                          + f". Comisión general del {COMISION_GENERAL:g}%.", ahora, "Listado de Delta", ahora, "Listado de Delta"))
             ya_cod.add(cod)
             ya_nom.add(_norm(nom))
             nuevas += 1
