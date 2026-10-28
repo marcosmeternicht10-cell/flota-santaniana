@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Programación semanal | La Santaniana</title>
+  <style>
+    :root{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172033;background:#f5f7fb;font-synthesis:none}
+    *{box-sizing:border-box}body{margin:0}.wrap{max-width:1500px;margin:auto;padding:28px}
+    header{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:22px}
+    .eyebrow{font-size:12px;font-weight:800;letter-spacing:.12em;color:#63708a;text-transform:uppercase}
+    h1{font-size:clamp(25px,3vw,36px);letter-spacing:-.04em;margin:6px 0}.sub{color:#63708a;margin:0;max-width:760px;line-height:1.5}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}.btn{display:inline-flex;align-items:center;justify-content:center;border:1px solid #d8deea;background:#fff;border-radius:10px;padding:10px 14px;color:#172033;text-decoration:none;font-weight:700;cursor:pointer;font-size:13px}
+    .btn.primary{background:#172033;color:#fff;border-color:#172033}.btn:disabled{opacity:.5;cursor:wait}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:20px 0}.stat,.panel{background:white;border:1px solid #e1e6ef;border-radius:16px;box-shadow:0 5px 20px #16233b08}
+    .stat{padding:16px}.stat span{color:#69758b;font-size:12px;font-weight:700}.stat strong{display:block;font-size:28px;margin-top:7px;letter-spacing:-.04em}
+    .layout{display:grid;grid-template-columns:minmax(320px,.8fr) minmax(0,1.5fr);gap:16px;align-items:start}
+    .panel{padding:18px;min-width:0}.panel h2{font-size:18px;margin:0 0 5px}.hint{font-size:12px;color:#6e7990;line-height:1.5;margin:0 0 16px}
+    .rotation{padding:13px 0;border-top:1px solid #edf0f5}.rotation:first-of-type{border-top:0}.rname{font-size:13px;font-weight:800;line-height:1.4}.rdetail{font-size:12px;color:#68748b;line-height:1.45;margin:4px 0 9px}
+    .assign{display:flex;gap:7px}.assign input{min-width:0;flex:1;border:1px solid #d8deea;border-radius:9px;padding:9px 10px;font:inherit;font-size:13px}
+    .save{border:0;border-radius:9px;background:#e7efff;color:#1e4ca1;font-weight:800;padding:9px 11px;cursor:pointer}.unit{font-weight:800;color:#174c3a}.pill{display:inline-block;border-radius:999px;background:#eff3f8;color:#56637a;font-size:11px;font-weight:800;padding:4px 8px}
+    .filters{display:flex;gap:9px;flex-wrap:wrap;margin:15px 0}.filters select{border:1px solid #d8deea;border-radius:10px;background:white;padding:10px;font:inherit;font-size:13px}
+    .tablewrap{overflow:auto;border:1px solid #e6eaf1;border-radius:12px}table{width:100%;border-collapse:collapse;min-width:740px;font-size:13px}th{text-align:left;background:#f6f8fb;color:#65718a;font-size:11px;letter-spacing:.04em;text-transform:uppercase}
+    th,td{padding:12px 11px;border-bottom:1px solid #edf0f5;vertical-align:top}tbody tr:last-child td{border-bottom:0}.day{font-weight:800;white-space:nowrap}.time{font-weight:800;white-space:nowrap}.service{font-weight:700;min-width:170px}.note{font-size:12px;color:#68748b;line-height:1.5;min-width:220px}.empty{color:#9aa3b4}.order{display:inline-block;border-radius:6px;padding:3px 6px;background:#edf4ff;color:#2b5ca6;font-size:10px;font-weight:900;white-space:nowrap}
+    .rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:16px}.rule{background:white;border:1px solid #e1e6ef;border-radius:12px;padding:13px}.rule b{display:block;font-size:12px;margin-bottom:5px}.rule p{font-size:12px;color:#68748b;line-height:1.5;margin:0}
+    .toast{position:fixed;right:20px;bottom:20px;padding:12px 16px;background:#172033;color:#fff;border-radius:10px;box-shadow:0 10px 28px #0002;font-size:13px;display:none;z-index:5;max-width:calc(100vw - 40px)}
+    .small-note{font-size:11px;color:#7c879a;line-height:1.5;margin-top:12px}
+    @media(max-width:950px){.layout{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.wrap{padding:17px}.rules{grid-template-columns:1fr}}
+    @media print{body{background:white}.wrap{max-width:none;padding:0}.actions,.filters,.assign,.save{display:none!important}.layout{display:block}.panel,.stat,.rule{box-shadow:none;break-inside:avoid}.layout>.panel:first-child{display:none}.stats{margin:10px 0}.tablewrap{overflow:visible;border:0}table{min-width:0;font-size:9px}th,td{padding:6px 5px}.note{min-width:0;font-size:9px}.rules{grid-template-columns:repeat(2,minmax(0,1fr))}header{margin-bottom:10px}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow">La Santaniana · Tráfico internacional</div>
+      <h1>Programación semanal de servicios</h1>
+      <p class="sub">Patrón recurrente de lunes a domingo. Asigná una unidad real a cada rotación una sola vez: el sistema la refleja en todos los servicios vinculados.</p>
+    </div>
+    <div class="actions">
+      <a class="btn" href="/">← Volver al sistema</a>
+      <a class="btn" href="/api/trafico/programacion-semanal.csv">Exportar CSV</a>
+      <button class="btn primary" onclick="window.print()">Imprimir programación</button>
+    </div>
+  </header>
+
+  <section class="stats">
+    <div class="stat"><span>Servicios semanales</span><strong id="totalServicios">{{ servicios|length }}</strong></div>
+    <div class="stat"><span>Rotaciones de unidades</span><strong>{{ rotaciones|length }}</strong></div>
+    <div class="stat"><span>Rotaciones asignadas</span><strong id="totalAsignadas">0</strong></div>
+    <div class="stat"><span>Pendientes de unidad</span><strong id="totalPendientes">0</strong></div>
+  </section>
+
+  <div class="layout">
+    <section class="panel">
+      <h2>Unidades por rotación</h2>
+      <p class="hint">Ingresá el número interno real del coche. Cada código representa una continuidad de servicios; al guardar, se actualizarán todos los movimientos de esa rotación. Solo Tráfico/Administración puede modificarlo.</p>
+      <div id="rotaciones">
+        {% for r in rotaciones %}
+        <div class="rotation" data-rotation="{{ r.id }}">
+          <div class="rname">{{ r.nombre }}</div>
+          <div class="rdetail">{{ r.detalle }}</div>
+          <div class="assign">
+            <input type="text" maxlength="40" value="{{ r.unidad }}" data-unit-input="{{ r.id }}" placeholder="N.º interno del coche" {% if not puede_editar %}disabled{% endif %}>
+            {% if puede_editar %}<button class="save" data-save="{{ r.id }}">Guardar</button>{% endif %}
+          </div>
+          {% if r.actualizado_en %}<div class="small-note">Última edición: {{ r.actualizado_en }} · {{ r.actualizado_por }}</div>{% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Servicios por día</h2>
+      <p class="hint">La tabla conserva las continuidades entregadas para la programación. Los servicios de un mismo código de rotación muestran la misma unidad asignada.</p>
+      <div class="filters">
+        <select id="fDia" aria-label="Filtrar por día">
+          <option value="0">Todos los días</option>
+          {% for d in dias %}<option value="{{ d.id }}">{{ d.nombre }}</option>{% endfor %}
+        </select>
+        <select id="fLado" aria-label="Filtrar por sentido">
+          <option value="">Ida y vuelta</option><option value="Ida">Ida</option><option value="Vuelta">Vuelta</option>
+        </select>
+        <select id="fUnidad" aria-label="Filtrar por asignación">
+          <option value="">Todas las unidades</option><option value="asignada">Con unidad</option><option value="pendiente">Sin unidad</option>
+        </select>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Día</th><th>Sentido</th><th>Hora</th><th>Servicio</th><th>Unidad</th><th>Continuidad / observaciones</th></tr></thead>
+          <tbody id="tablaServicios">
+          {% for s in servicios %}
+            <tr data-dia="{{ s.dia_id }}" data-lado="{{ s.lado }}" data-unidad="{% if s.unidad %}asignada{% else %}pendiente{% endif %}">
+              <td class="day">{{ s.dia }}</td><td><span class="pill">{{ s.lado }}</span></td><td class="time">{{ s.hora }}{% if s.orden_llegada %}<div class="order">Llegada {{ s.orden_llegada }}.ª</div>{% endif %}</td>
+              <td><div class="service">{{ s.servicio }}</div><div class="small-note">{{ s.rotacion_id }}</div></td>
+              <td class="unit-cell">{% if s.unidad %}<span class="unit">{{ s.unidad }}</span>{% else %}<span class="empty">Sin asignar</span>{% endif %}</td>
+              <td class="note">{{ s.nota }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="small-note">La rotación es semanal y recurrente. Antes de publicar el tráfico diario, verificá disponibilidad física, ubicación real, mantenimiento y habilitación del coche.</div>
+    </section>
+  </div>
+
+  <section class="rules">
+    {% for regla in reglas %}
+    <div class="rule"><b>{{ regla.titulo }}</b><p>{{ regla.detalle }}</p></div>
+    {% endfor %}
+  </section>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+  var puedeEditar = {{ 'true' if puede_editar else 'false' }};
+  var fDia = document.getElementById('fDia');
+  var fLado = document.getElementById('fLado');
+  var fUnidad = document.getElementById('fUnidad');
+  function filtrar(){
+    var dia=fDia.value, lado=fLado.value, unidad=fUnidad.value;
+    document.querySelectorAll('#tablaServicios tr').forEach(function(tr){
+      var ok=(dia==='0'||tr.dataset.dia===dia)&&(!lado||tr.dataset.lado===lado)&&(!unidad||tr.dataset.unidad===unidad);
+      tr.hidden=!ok;
+    });
+  }
+  fDia.addEventListener('change',filtrar); fLado.addEventListener('change',filtrar); fUnidad.addEventListener('change',filtrar);
+
+  function toast(msg){
+    var el=document.getElementById('toast'); el.textContent=msg; el.style.display='block';
+    window.clearTimeout(el._timer); el._timer=window.setTimeout(function(){el.style.display='none';},3200);
+  }
+  function actualizarContadores(){
+    var inputs=Array.prototype.slice.call(document.querySelectorAll('[data-unit-input]'));
+    var n=inputs.filter(function(i){return i.value.trim()!=='';}).length;
+    document.getElementById('totalAsignadas').textContent=n;
+    document.getElementById('totalPendientes').textContent=inputs.length-n;
+  }
+  function actualizarFilas(rotId, unidad){
+    document.querySelectorAll('#tablaServicios tr').forEach(function(tr){
+      var small=tr.querySelector('.small-note');
+      if(!small||small.textContent.trim()!==rotId)return;
+      var td=tr.querySelector('.unit-cell');
+      td.textContent='';
+      if(unidad){var span=document.createElement('span');span.className='unit';span.textContent=unidad;td.appendChild(span);tr.dataset.unidad='asignada';}
+      else{var span2=document.createElement('span');span2.className='empty';span2.textContent='Sin asignar';td.appendChild(span2);tr.dataset.unidad='pendiente';}
+    });
+    filtrar();
+  }
+  if(puedeEditar){
+    document.querySelectorAll('[data-save]').forEach(function(btn){
+      btn.addEventListener('click',async function(){
+        var id=btn.dataset.save, input=document.querySelector('[data-unit-input="'+id+'"]'), valor=input.value.trim();
+        btn.disabled=true; btn.textContent='Guardando…';
+        try{
+          var resp=await fetch('/api/trafico/programacion-semanal/asignaciones/'+encodeURIComponent(id),{
+            method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({unidad:valor})
+          });
+          var data=await resp.json();
+          if(!resp.ok||!data.ok)throw new Error(data.msg||'No se pudo guardar.');
+          input.value=data.unidad; actualizarFilas(id,data.unidad); actualizarContadores(); toast('Rotación guardada: '+id+(data.unidad?' → unidad '+data.unidad:' → sin asignar'));
+        }catch(e){toast(e.message||'Error al guardar la unidad.');}
+        finally{btn.disabled=false;btn.textContent='Guardar';}
+      });
+    });
+  }
+  actualizarContadores();
+})();
+</script>
+</body>
+</html>
