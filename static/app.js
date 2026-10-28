@@ -21840,7 +21840,7 @@ function agVisibles() {
     if (["mal", "ojo", "ok"].includes(ag.filtro) && a.nivel !== ag.filtro) return false;
     if (ag.ciudad && a.ciudad !== ag.ciudad) return false;
     if (w.length) {
-      const t = caNorm([a.nombre, a.razon_social, a.ruc, a.representante, a.ciudad, a.lugar, a.direccion].join(" "));
+      const t = caNorm([a.nombre, a.codigo, a.razon_social, a.ruc, a.representante, a.ciudad, a.lugar, a.direccion].join(" "));
       if (!w.every(x => t.includes(x))) return false;
     }
     return true;
@@ -21980,7 +21980,7 @@ function agPintarFicha() {
       <div class="ag-fcab-t">
         <span class="ag-nivel n-${f.nivel}"><i class="ti ti-${nivelIc}"></i>${nivelTxt}</span>
         <h2>${agEsc(a.nombre)}</h2>
-        <p>${[a.razon_social, a.ruc ? "RUC " + a.ruc : "", a.ciudad].filter(Boolean).map(agEsc).join(" · ") || "Sin razón social ni RUC cargados"}</p>
+        <p>${[a.codigo ? "Código " + a.codigo : "", a.razon_social, a.ruc ? "RUC " + a.ruc : "", a.ciudad].filter(Boolean).map(agEsc).join(" · ") || "Sin razón social ni RUC cargados"}</p>
         ${a.estado !== "activa" ? `<p class="ag-fcab-estado"><i class="ti ti-${a.estado === "baja" ? "archive" : "player-pause"}"></i> ${a.estado === "baja" ? "Dada de baja" : "Suspendida"} el ${agFechaLarga(a.estado_el)}${a.estado_motivo ? ": " + agEsc(a.estado_motivo) : ""}</p>` : ""}
       </div>
       <div class="ag-fcab-acc">
@@ -22342,6 +22342,7 @@ function agFormAgencia(id, foco) {
     cuerpo: `
       <div class="agc-form">
         ${campo("nombre", "Nombre de la agencia *", `maxlength="120" ${foco === "ubicacion" ? "" : "autofocus"}`, "ag-f-2")}
+        ${campo("codigo", "Código en Delta", `maxlength="12" placeholder="Ej: A61"`)}
         ${campo("razon_social", "Razón social", `maxlength="160"`)}
         ${campo("ruc", "RUC", `maxlength="30" placeholder="80012345-6"`)}
         ${campo("representante", "Representante", `maxlength="120"`)}
@@ -22397,7 +22398,7 @@ function agFormAgencia(id, foco) {
   };
   o.querySelector("#agf-ok").onclick = async () => {
     const d = {};
-    ["nombre", "razon_social", "ruc", "representante", "ci_representante", "telefono", "whatsapp", "email", "ciudad", "lugar",
+    ["nombre", "codigo", "razon_social", "ruc", "representante", "ci_representante", "telefono", "whatsapp", "email", "ciudad", "lugar",
      "direccion", "ubicacion", "nota"].forEach(k => d[k] = o.querySelector("#agf-" + k).value);
     if (!d.nombre.trim()) { toast("Poné el nombre de la agencia", "error"); o.querySelector("#agf-nombre").focus(); return; }
     const b = o.querySelector("#agf-ok");
