@@ -7911,3 +7911,18 @@ a.ag-ubic-mapa:hover .ag-ubic-abrir, a.ag-ubic-mapa:focus-visible .ag-ubic-abrir
 .ot-mot-btns .ot-mot-quitar { margin-right: auto; color: var(--danger, #C21F38); }
 .ot-mot-ayuda { font-size: 11px; color: var(--light, #9AA6B4); }
 @media (max-width: 760px) { .ot-mot-ayuda { display: none; } }
+
+/* Compras: por qué no se trae todavía el repuesto */
+.cmp-mot { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--warning-bd, #F0D59D); border-left: 4px solid var(--warning, #B7791F); border-radius: 10px; background: var(--warning-bg, #FFF8E6); }
+.cmp-mot-cab { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.cmp-mot-t { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--warning, #8A5A00); }
+.cmp-mot-m { font-size: 14px; color: var(--text); }
+.cmp-mot-ed { margin-left: auto; }
+.cmp-mot-det { margin-top: 6px; font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cmp-mot-meta { display: block; margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+.cmp-mot-meta:empty { display: none; }
+.cmp-mot-falta { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 14px; padding: 10px 12px; border: 1px dashed var(--border-strong, #C9D1DB); border-radius: 10px; background: transparent; color: var(--muted); font: 600 13px "Inter", sans-serif; text-align: left; cursor: pointer; }
+.cmp-mot-falta span { margin-left: auto; color: var(--brand-blue); }
+.cmp-mot-falta:hover { border-color: var(--brand-blue); color: var(--text); background: var(--info-bg); }
+#ot-cmp-mot-box .cmp-mot, #ot-cmp-mot-box .cmp-mot-falta { margin: 0 0 16px; }
+.cmp-mot-nada { display: flex; align-items: center; gap: 8px; border-left-width: 1px; background: var(--surface2); border-color: var(--border); color: var(--muted); font-size: 12.5px; }

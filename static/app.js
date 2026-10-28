@@ -5629,7 +5629,7 @@ async function renderCompras() {
         <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab] || ""} (${lista.length})</div>
         ${lista.length === 0
           ? `<div class="empty"><i class="ti ti-shopping-cart-off"></i>No hay pedidos en esta etapa.</div>`
-          : lista.map(o => tarjetaCompra(o)).join("")}
+          : `<div class="cmp-lista">${lista.map(o => tarjetaCompra(o)).join("")}</div>`}
       `}
     </div>`;
 
@@ -5711,11 +5711,123 @@ function tarjetaCompra(o) {
           </tbody>
         </table></div>
         ${o.estado_compras !== "en_espera" ? `<div style="text-align:right;margin-top:8px;font-weight:700;color:var(--brand-blue)">Total: ${gs(totalPresup)}</div>` : ''}
+        ${cmpMotivoCaja(o)}
         <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
           ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${o.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
           ${acciones}</div>
       </div>
     </div>`;
+}
+
+// ─── Por qué no se trae todavía el repuesto (Compras) ───
+// Compras lo anota en la tarjeta (En espera / Presupuestadas): un motivo corto
+// para agrupar y la explicación larga. El taller lo ve en la OT.
+const CMP_MOT_ETAPAS = ["en_espera", "presupuestado"];
+function cmpMotHace(el) {
+  if (!el) return "";
+  const d = Math.floor((Date.now() - new Date(el)) / 86400000);
+  const f = `${el.slice(8, 10)}/${el.slice(5, 7)} ${el.slice(11, 16)}`;
+  return d >= 1 ? `${f} · hace ${d} día${d === 1 ? "" : "s"}` : f;
+}
+function cmpMotivoCaja(o, puede = true) {
+  if (!CMP_MOT_ETAPAS.includes(o.estado_compras)) return "";
+  const m = (o.compras_motivo || "").trim(), det = (o.compras_motivo_detalle || "").trim();
+  if (!m) return puede
+    ? `<button type="button" class="cmp-mot-falta" onclick="cmpMotivoEditar(${o.id})"><i class="ti ti-message-question"></i> ¿Por qué no se trae todavía el repuesto? <span>Anotalo</span></button>`
+    : "";
+  return `<div class="cmp-mot">
+      <div class="cmp-mot-cab">
+        <span class="cmp-mot-t"><i class="ti ti-hand-stop"></i> No se trae todavía</span>
+        <b class="cmp-mot-m">${trEsc(m)}</b>
+        ${puede ? `<button type="button" class="btn btn-ghost btn-sm cmp-mot-ed" onclick="cmpMotivoEditar(${o.id})"><i class="ti ti-pencil"></i> Cambiar</button>` : ""}
+      </div>
+      ${det ? `<div class="cmp-mot-det">${trEsc(det)}</div>` : ""}
+      <small class="cmp-mot-meta">${o.compras_motivo_por ? `Anotó ${trEsc(o.compras_motivo_por)} · ` : ""}${cmpMotHace(o.compras_motivo_el)}</small>
+    </div>`;
+}
+async function cmpMotivoEditar(otId, alGuardar) {
+  const [act, lis] = await Promise.all([
+    api(`/api/compras/${otId}/motivo`).catch(() => null),
+    api("/api/compras/motivos").catch(() => null),
+  ]);
+  if (!act || !act.ok) { toast((act && act.msg) || "No se pudo abrir", "error"); return; }
+  const motivos = (lis && lis.motivos) || [];
+  const actual = act.motivo || "", detActual = act.detalle || "";
+  const o = rvModal({
+    titulo: "¿Por qué no se trae todavía?", icono: "message-question", ancho: 620, clase: "ot-mot-modal",
+    sub: `OT #${act.ot_id} · el taller lo ve en la OT, así sabe en qué está el repuesto`,
+    cuerpo: `
+      <div class="ot-mot-ed2">
+        <label class="ot-mot-f"><span>Motivo <small>corto, para agrupar</small></span>
+          <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="Ej: sin stock en el proveedor" aria-label="Motivo" autocomplete="off"></label>
+        <div class="ot-mot-sug"></div>
+        <label class="ot-mot-f"><span>Explicación <small>qué pasa y para cuándo se espera</small></span>
+          <textarea class="ot-mot-det-in" rows="7" maxlength="2000" placeholder="Ej: el proveedor de Asunción no tiene el kit de embrague; lo trae de Ciudad del Este el jueves. Se pidió otra cotización a Repuestos Paraguay por si acaso." aria-label="Explicación">${trEsc(detActual)}</textarea>
+          <small class="ot-mot-cuenta"></small></label>
+      </div>`,
+    pie: `<div class="ot-mot-btns">
+        ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar el motivo</button>` : ""}
+        <span class="ot-mot-ayuda">Ctrl + Enter guarda</span>
+        <button type="button" class="btn btn-ghost ot-mot-no">Cancelar</button>
+        <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
+      </div>`,
+  });
+  const inp = o.querySelector(".ot-mot-in"), sug = o.querySelector(".ot-mot-sug"), ta = o.querySelector(".ot-mot-det-in");
+  const cuenta = o.querySelector(".ot-mot-cuenta");
+  const contar = () => {
+    cuenta.textContent = ta.value.length > 1500 ? `${ta.value.length} de 2000` : "";
+    ta.style.height = "auto"; ta.style.height = Math.min(420, Math.max(150, ta.scrollHeight + 2)) + "px";
+  };
+  const pintarSug = () => {
+    const q = acNorm(inp.value);
+    const l = motivos.filter(m => acNorm(m.motivo) !== q && (!q || acNorm(m.motivo).includes(q))).slice(0, 10);
+    sug.innerHTML = l.length ? `<span class="ot-mot-sug-t">Elegí uno:</span>` + l.map(m =>
+      `<button type="button" class="ot-mot-s" data-m="${trEsc(m.motivo)}">${trEsc(m.motivo)}${m.ahora ? `<small title="OTs en Compras con este motivo">${m.ahora}</small>` : ""}</button>`).join("") : "";
+    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => { inp.value = b.dataset.m; pintarSug(); ta.focus(); });
+  };
+  const guardar = async (motivo, detalle) => {
+    motivo = String(motivo || "").replace(/\s+/g, " ").trim();
+    detalle = String(detalle || "").replace(/\r/g, "").trim();
+    if (detalle && !motivo) { toast("Poné también el motivo corto (arriba)", "error"); inp.focus(); return; }
+    if (motivo === actual && detalle === detActual) { o.remove(); return; }
+    o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = true);
+    const r = await api(`/api/compras/${otId}/motivo`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo, detalle })
+    }).catch(() => null);
+    if (!r || !r.ok) {
+      toast((r && r.msg) || "No se pudo guardar", "error");
+      o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = false);
+      return;
+    }
+    o.remove();
+    toast(r.motivo ? "Motivo guardado: el taller lo ve en la OT" : "Motivo quitado", "success");
+    if (alGuardar) alGuardar(r);
+    else if (document.querySelector(".cmp-lista")) renderCompras();
+  };
+  pintarSug(); contar();
+  inp.addEventListener("input", pintarSug);
+  ta.addEventListener("input", contar);
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ta.focus(); } });
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); guardar(inp.value, ta.value); } });
+  o.querySelector(".ot-mot-ok").onclick = () => guardar(inp.value, ta.value);
+  o.querySelector(".ot-mot-no").onclick = () => o.remove();
+  const q = o.querySelector(".ot-mot-quitar");
+  if (q) q.onclick = () => guardar("", "");
+  setTimeout(() => { if (actual) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } else inp.focus(); }, 60);
+}
+// En la OT: lo que anotó Compras (solo mientras el repuesto no salió)
+async function otCmpMotivoCargar(ot) {
+  const box = document.getElementById("ot-cmp-mot-box");
+  if (!box || !CMP_MOT_ETAPAS.includes(ot.estado_compras)) return;
+  const r = await api(`/api/compras/${ot.id}/motivo`).catch(() => null);
+  if (!r || !r.ok || !document.body.contains(box)) return;
+  const o = { id: ot.id, estado_compras: r.estado_compras, compras_motivo: r.motivo, compras_motivo_detalle: r.detalle,
+              compras_motivo_el: r.el, compras_motivo_por: r.por };
+  if (!o.compras_motivo && !r.puede) {
+    box.innerHTML = `<div class="cmp-mot cmp-mot-nada"><i class="ti ti-shopping-cart"></i> En Compras: todavía no anotaron por qué no se trae el repuesto.</div>`;
+    return;
+  }
+  box.innerHTML = cmpMotivoCaja(o, r.puede).replace(/cmpMotivoEditar\((\d+)\)/g, "cmpMotivoEditar($1, () => otCmpMotivoCargar(window._otActual))");
 }
 
 // Modal para cargar/editar precios del presupuesto: el precio por unidad de
@@ -6552,6 +6664,7 @@ async function abrirOT(otId) {
         <div id="ot-sal-box"></div>
         <div id="pv-ot-box"></div>
         <div id="ot-dep-box" class="ot-dep"></div>
+        <div id="ot-cmp-mot-box"></div>
 
         ${ot.fotos && ot.fotos.length ? `
           <div style="margin-bottom:18px">
@@ -6617,6 +6730,7 @@ async function abrirOT(otId) {
   ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
   otSepBuscar(ot);
   otSalidasCargar(ot);
+  otCmpMotivoCargar(ot);
   window._otHorasExtra = [];
   otHorasCargar(ot);
 }
@@ -22419,7 +22533,7 @@ function agFormContrato(modo, cid) {
   const vivas = f.versiones.filter(v => !v.anulado);
   const base = cid ? f.versiones.find(v => v.id === cid) : (f.vigente || vivas[0] || null);
   const hoy = f.hoy;
-  const x = base ? { ...base } : { comision_tipo: "porcentaje", comision: "", rutas: [], deposito_frec: "", garantia_tipo: "" };
+  const x = base ? { ...base } : { comision_tipo: "porcentaje", comision: 10, rutas: [], deposito_frec: "", garantia_tipo: "" };
   let tipo = modo === "corregir" ? base.tipo : modo;
   if (modo === "renovacion") {
     const desde = base && base.hasta ? agMasDias(base.hasta, 1) : hoy;
