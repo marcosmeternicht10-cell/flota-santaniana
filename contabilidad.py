@@ -108,6 +108,10 @@ def pay(i):
  try:
   p=c.execute("SELECT * FROM contabilidad_pagos WHERE id=? AND estado='autorizado'",(i,)).fetchone()
   if not p:return jsonify({"error":"Solo se puede registrar una orden autorizada."}),409
+  if p["factura_id"]:
+   factura=c.execute("SELECT saldo,estado FROM contabilidad_facturas WHERE id=?",(p["factura_id"],)).fetchone()
+   if not factura or factura["estado"] not in ("autorizada","pagada") or int(factura["saldo"])<int(p["importe"]):
+    return jsonify({"error":"El saldo actual de la factura ya no alcanza para este pago. Revisá las órdenes vinculadas."}),409
   cuenta=(request.form.get("cuenta") or p["cuenta"] or "Caja general").strip()
   saldo=c.execute("SELECT COALESCE(SUM(CASE WHEN tipo='ingreso' THEN importe ELSE -importe END),0) s FROM contabilidad_movimientos WHERE cuenta=?",(cuenta,)).fetchone()["s"]
   if int(saldo)<int(p["importe"]):return jsonify({"error":"Saldo insuficiente en la cuenta. Registrá primero el saldo inicial."}),400
