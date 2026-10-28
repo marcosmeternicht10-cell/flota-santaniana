@@ -156,13 +156,94 @@ def init_agencias():
             subido_por TEXT DEFAULT '')""",
         "CREATE INDEX IF NOT EXISTS ix_agcontr_ag ON agencia_contratos (agencia_id)",
         "CREATE INDEX IF NOT EXISTS ix_agdoc_ag ON agencia_documentos (agencia_id)",
+        """CREATE TABLE IF NOT EXISTS agencias_cargas (
+            tanda TEXT PRIMARY KEY,
+            aplicada_el TEXT DEFAULT '')""",
     ):
         try:
             conn.execute(sql)
             conn.commit()
         except Exception:
             _rollback(conn)
+    # El código con que la agencia figura en Delta (A61, ACD…)
+    try:
+        if USE_POSTGRES:
+            conn.execute("ALTER TABLE agencias ADD COLUMN IF NOT EXISTS codigo TEXT DEFAULT ''")
+        else:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(agencias)").fetchall()}
+            if "codigo" not in cols:
+                conn.execute("ALTER TABLE agencias ADD COLUMN codigo TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        _rollback(conn)
     conn.close()
+    try:
+        importar_delta()
+    except Exception as e:
+        print(f"[agencias] no se pudo importar el listado de Delta: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LISTADO DE DELTA: las agencias activas de ADS (se carga una sola vez)
+# ════════════════════════════════════════════════════════════════════════════
+
+TANDA_DELTA = "delta-ads-2026-10-28"
+
+
+def importar_delta(forzar=False):
+    """Carga las agencias del listado de Delta (agencias_delta.json) con su
+    contrato: el tope de crédito y, si lo tiene, el vencimiento. Se hace una
+    sola vez; las que ya existen (mismo código o mismo nombre) no se tocan."""
+    import os
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agencias_delta.json")
+    if not os.path.exists(ruta):
+        return 0
+    conn = get_connection()
+    try:
+        if not forzar and conn.execute("SELECT 1 FROM agencias_cargas WHERE tanda=?", (TANDA_DELTA,)).fetchone():
+            return 0
+        lista = json.load(open(ruta, encoding="utf-8")).get("agencias") or []
+        ya_cod, ya_nom = set(), set()
+        for r in conn.execute("SELECT nombre, COALESCE(codigo,'') AS codigo FROM agencias").fetchall():
+            ya_nom.add(_norm(r["nombre"]))
+            if r["codigo"]:
+                ya_cod.add(r["codigo"].strip().upper())
+        ahora, hoy = ahora_iso(), _hoy()
+        nuevas = 0
+        for a in lista:
+            cod, nom = str(a.get("codigo") or "").strip().upper(), _limpio(a.get("nombre"), 120)
+            if not nom or cod in ya_cod or _norm(nom) in ya_nom:
+                continue
+            est = a.get("estado") if a.get("estado") in ESTADOS_AGENCIA else "activa"
+            cur = conn.execute("""INSERT INTO agencias (nombre, codigo, representante, telefono, ciudad, estado, estado_motivo,
+                                  estado_el, nota, creado_el, creado_por, actualizado_el, actualizado_por)
+                                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                               (nom, cod, _limpio(a.get("representante"), 120), _limpio(a.get("telefono"), 40),
+                                _limpio(a.get("ciudad"), 80), est, _limpio(a.get("motivo"), 200),
+                                hoy if est != "activa" else "", _texto(a.get("nota"), 800),
+                                ahora, "Listado de Delta", ahora, "Listado de Delta"))
+            aid = cur.lastrowid
+            hasta = str(a.get("hasta") or "")[:10]
+            conn.execute("""INSERT INTO agencia_contratos (agencia_id, tipo, desde, hasta, comision_tipo, comision,
+                            comisiones_ruta, tope_sin_depositar, nota, creado_el, creado_por, actualizado_el, actualizado_por)
+                            VALUES (?,'contrato',?,?,'porcentaje',0,'[]',?,?,?,?,?,?)""",
+                         (aid, hoy, hasta if hasta > hoy else "", float(a.get("tope") or 0),
+                          "Condiciones traídas de Delta: tope de crédito" + (" y vencimiento" if hasta > hoy else "")
+                          + ". Falta cargar la comisión.", ahora, "Listado de Delta", ahora, "Listado de Delta"))
+            ya_cod.add(cod)
+            ya_nom.add(_norm(nom))
+            nuevas += 1
+        conn.execute("INSERT INTO agencias_cargas (tanda, aplicada_el) VALUES (?, ?) ON CONFLICT (tanda) DO NOTHING",
+                     (TANDA_DELTA, ahora))
+        conn.commit()
+        if nuevas:
+            print(f"[agencias] listado de Delta: {nuevas} agencias cargadas")
+        return nuevas
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -532,7 +613,7 @@ def _leer_todo(conn, agencia_id=None):
 
 
 def _fila_lista(ag, ev):
-    return {k: ag.get(k) for k in ("id", "nombre", "razon_social", "ruc", "representante", "telefono", "whatsapp",
+    return {k: ag.get(k) for k in ("id", "nombre", "codigo", "razon_social", "ruc", "representante", "telefono", "whatsapp",
                                     "email", "direccion", "ciudad", "lugar", "ubicacion_link", "lat", "lng",
                                     "estado", "estado_motivo")} | ev
 
@@ -685,7 +766,7 @@ def avisos(hoy=None):
 # CAMBIOS
 # ════════════════════════════════════════════════════════════════════════════
 
-CAMPOS_AGENCIA = {"nombre": 120, "razon_social": 160, "ruc": 30, "representante": 120, "ci_representante": 30,
+CAMPOS_AGENCIA = {"nombre": 120, "codigo": 12, "razon_social": 160, "ruc": 30, "representante": 120, "ci_representante": 30,
                   "telefono": 40, "whatsapp": 40, "email": 120, "direccion": 200, "ciudad": 80, "lugar": 160}
 
 
