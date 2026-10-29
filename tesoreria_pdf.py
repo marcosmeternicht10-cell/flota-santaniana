@@ -356,9 +356,10 @@ def _dibujar(d, c, total_pag):
             for m in mats:
                 if m is None:
                     tx(1, ym + 12, "—", "I5", 8.4, GRIS2)
-                    tx(2, ym + 12, "Precio del trabajo (sin materiales anotados)", "I4", 8, GRIS)
+                    detalle_trabajo = "Precio del trabajo (sin materiales anotados)"
                     if t.get("proveedor"):
-                        tx(2, ym + 12, L.cortar("Proveedor: " + t["proveedor"], "I5", 7.4, cols[2][1] - 14), "I5", 7.4, GRIS)
+                        detalle_trabajo += " · Prov: " + t["proveedor"]
+                    tx(2, ym + 12, L.cortar(detalle_trabajo, "I4", 7.7, cols[2][1] - 14), "I4", 7.7, GRIS)
                     tx(3, ym + 12, "—", "I5", 8.4, GRIS2)
                     tx(4, ym + 12, _gs(t["precio"]) if t["precio"] else "—", "D6", 10, TINTA)
                 else:
