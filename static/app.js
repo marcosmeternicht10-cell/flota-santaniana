@@ -227,6 +227,8 @@ function irA(sec) {
     alpha: () => typeof renderAlpha === "function" ? renderAlpha()
       : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/alpha.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
     // Controles vive en static/controles.js (usa los datos de Alpha)
+    cajas: () => typeof renderCajas === "function" ? renderCajas()
+      : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/cajas.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
     controles: () => typeof renderControles === "function" ? renderControles()
       : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/controles.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
   };
@@ -4667,13 +4669,13 @@ if (["admin", "taller"].includes(window.USUARIO_ROL)) {
 }
 if (window.USUARIO_ROL === "compras") {
   // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
-  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal"];
+  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal", "cajas"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesCompras.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Compras" && t !== "Taller") s.style.display = "none";
+    if (t !== "Compras" && t !== "Taller" && t !== "Tesorería") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="compras"]')?.classList.add("active");
   renderCompras();
@@ -4682,13 +4684,13 @@ if (window.USUARIO_ROL === "compras") {
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible", "corp_asignacion",
                             "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios",
-                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias"];
+                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias", "cajas"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación" && t !== "Comercial") s.style.display = "none";
+    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación" && t !== "Comercial" && t !== "Tesorería") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="corp_resumen"]')?.classList.add("active");
   renderCorpResumen();
