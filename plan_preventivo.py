@@ -1269,7 +1269,7 @@ def actualizar_turno(tid, d, usuario=""):
                 return {"ok": False, "msg": "Estado inválido."}
             cambios["estado"] = d["estado"]
             cambios["cerrado_el"] = ahora_iso() if d["estado"] in ("cumplido", "cancelado", "ausente") else ""
-    if cambios:
+        if cambios:
             sets = ", ".join(f"{k}=?" for k in cambios)
             conn.execute(f"UPDATE taller_turnos SET {sets} WHERE id=?", list(cambios.values()) + [tid])
             conn.commit()
