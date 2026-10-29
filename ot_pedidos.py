@@ -40,7 +40,7 @@ from hora_local import hoy, ahora_iso
 bp_ot_pedidos = Blueprint("ot_pedidos", __name__)
 
 PK = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
-ESTADOS = ("nuevo", "espera", "aceptado", "descartado")
+ESTADOS = ("nuevo", "espera", "agendado", "aceptado", "descartado")
 PRIORIDADES = ("urgente", "alta", "normal", "baja")
 MOTIVOS_DESCARTE = ["Repetido", "Ya está hecho", "No es una falla", "No corresponde al taller", "No se encontró la falla"]
 DIAS_REPETIDO = 60
@@ -155,6 +155,8 @@ def init_ot_pedidos():
         # Lo que escribió el chofer, si el encargado lo corrigió
         for col in ("descripcion_original", "editado_por", "editado_el"):
             _agregar_columna(conn, "ot_pedidos", col, "TEXT DEFAULT ''")
+        _agregar_columna(conn, "ot_pedidos", "turno_id", "INTEGER")
+        _agregar_columna(conn, "ot_pedidos", "fecha_mantenimiento", "TEXT DEFAULT ''")
     finally:
         conn.close()
 
@@ -640,6 +642,8 @@ def decidir(ids, accion, prioridad="", motivo="", revisar_el="", nota=""):
                 WHERE p.id IN ({m})""", ids).fetchall()]
         if not pedidos:
             return False, "Esos pedidos ya no existen", None
+        if any(p.get("estado") == "agendado" for p in pedidos):
+            return False, "Este pedido ya tiene un turno en la agenda. Gestioná la fecha desde Plan Preventivo.", None
         res = None
         if accion == "aceptar":
             ya = [p for p in pedidos if p["estado"] == "aceptado"]
@@ -920,7 +924,8 @@ def reportes_del_chofer(chofer, limite=20):
     try:
         filas = [dict(r) for r in conn.execute("""
             SELECT r.id AS reporte_id, r.fecha, r.creado_el, v.patente, v.n_interno,
-                   p.descripcion, p.estado, p.motivo, p.revisar_el, i.estado AS estado_item, p.ot_id
+                   p.descripcion, p.estado, p.motivo, p.revisar_el, p.fecha_mantenimiento,
+                   i.estado AS estado_item, p.ot_id
             FROM ot_pedido_reportes r JOIN ot_pedidos p ON p.reporte_id = r.id
             JOIN vehiculos v ON v.id = r.vehiculo_id
             LEFT JOIN ot_items i ON i.id = p.item_id
@@ -938,12 +943,12 @@ def reportes_del_chofer(chofer, limite=20):
             est = "resuelto" if f["estado_item"] == "completado" else "en_taller"
         elif f["estado"] == "descartado":
             est = "no_se_hace"
-        elif f["estado"] == "espera":
+        elif f["estado"] in ("espera", "agendado"):
             est = "mas_adelante"
         else:
             est = "en_revision"
         r["problemas"].append({"txt": f["descripcion"], "estado": est, "motivo": f["motivo"] or "",
-                               "ot_id": f["ot_id"]})
+                               "ot_id": f["ot_id"], "fecha_mantenimiento": f["fecha_mantenimiento"] or ""})
     return list(reps.values())[:limite]
 
 
@@ -983,6 +988,100 @@ def api_decidir():
     if not ok:
         return _no(msg, 400)
     return jsonify({"ok": True, "msg": msg, "resultado": res, "pendientes": pendientes()})
+
+
+def sincronizar_turno(turno_id, fecha=None, estado=None):
+    """Mantiene sincronizada la fecha o la cancelación de un turno vinculado a un pedido."""
+    conn = get_connection()
+    try:
+        if estado == "cancelado":
+            conn.execute("""UPDATE ot_pedidos
+                            SET estado='espera', turno_id=NULL, fecha_mantenimiento='', revisar_el='',
+                                nota='Turno cancelado; pendiente de reagendar', decidido_por='', decidido_el=''
+                            WHERE turno_id=? AND estado='agendado'""", (int(turno_id),))
+        elif fecha:
+            conn.execute("""UPDATE ot_pedidos SET fecha_mantenimiento=?
+                            WHERE turno_id=? AND estado='agendado'""", (str(fecha)[:10], int(turno_id)))
+        conn.commit()
+    except Exception:
+        _rollback(conn)
+        raise
+    finally:
+        conn.close()
+
+
+@bp_ot_pedidos.route("/api/ot_pedidos/<int:pid>/agendar", methods=["POST"])
+def api_agendar_pedido(pid):
+    if not _puede_ver():
+        return _no()
+    d = request.get_json(silent=True) or {}
+    fecha = str(d.get("fecha") or "")[:10]
+    try:
+        date.fromisoformat(fecha)
+    except ValueError:
+        return _no("Elegí una fecha válida para el mantenimiento.", 400)
+    if fecha < hoy():
+        return _no("La fecha del mantenimiento no puede estar en el pasado.", 400)
+
+    conn = get_connection()
+    try:
+        fila = conn.execute("""SELECT p.*, r.chofer FROM ot_pedidos p
+                               JOIN ot_pedido_reportes r ON r.id=p.reporte_id WHERE p.id=?""", (pid,)).fetchone()
+        if not fila:
+            return _no("Ese pedido ya no existe.", 404)
+        p = dict(fila)
+    finally:
+        conn.close()
+    if p["estado"] not in ("nuevo", "espera"):
+        return _no("Solo se pueden agendar pedidos nuevos o en espera.", 400)
+
+    # El turno se crea en la agenda real del Plan Preventivo. No se adjuntan
+    # tareas periódicas automáticamente: la falla reportada es el trabajo a revisar.
+    import plan_preventivo
+    nota_turno = f"Pedido de OT #{pid}: {p['descripcion']}"[:300]
+    creado = plan_preventivo.crear_turno({
+        "vehiculo_id": int(p["vehiculo_id"]), "fecha": fecha,
+        "hora": str(d.get("hora") or "")[:5], "tareas": [],
+        "sin_tareas": True, "notas": nota_turno,
+    }, _quien())
+    if not creado.get("ok"):
+        return jsonify(creado), 409 if creado.get("duplicado") or creado.get("lleno") else 400
+
+    turno = creado["turno"]
+    tid = int(turno["id"])
+    actualizado = False
+    conn = get_connection()
+    try:
+        cur = conn.execute("""UPDATE ot_pedidos
+                              SET estado='agendado', turno_id=?, fecha_mantenimiento=?,
+                                  decidido_por=?, decidido_el=?
+                              WHERE id=? AND estado IN ('nuevo','espera')""",
+                           (tid, fecha, _quien()[:80], ahora_iso(), pid))
+        actualizado = cur.rowcount == 1
+        if actualizado:
+            conn.commit()
+        else:
+            _rollback(conn)
+    except Exception:
+        _rollback(conn)
+    finally:
+        conn.close()
+    if not actualizado:
+        try:
+            plan_preventivo.borrar_turno(tid)
+        except Exception:
+            pass
+        return _no("El pedido cambió mientras se agendaba. Actualizá la lista y volvé a intentarlo.", 409)
+
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=_quien() or "?", rol=session.get("rol") or "",
+                            accion=f"Agendó el pedido de OT #{pid}", categoria="Órdenes de Trabajo",
+                            detalle=f"Turno #{tid} · {fecha} · {p['descripcion']}"[:200])
+    except Exception:
+        pass
+    return jsonify({"ok": True, "msg": f"Pedido agendado para {fecha[8:10]}/{fecha[5:7]}/{fecha[:4]}.",
+                    "turno_id": tid, "fecha_mantenimiento": fecha})
 
 
 @bp_ot_pedidos.route("/api/ot_pedidos/<int:pid>", methods=["PATCH"])
