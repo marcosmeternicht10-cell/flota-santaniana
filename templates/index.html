@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
   <link rel="stylesheet" href="/static/style.css?v={{ v }}">
   <link rel="stylesheet" href="/static/alpha.css?v={{ v }}">
+  <link rel="stylesheet" href="/static/cajas.css?v={{ v }}">
 </head>
 <body>
   <!-- Botón hamburguesa (solo visible en celular) -->
@@ -122,6 +123,11 @@
         </button>
         <button class="nav-item" data-sec="proveedores">
           <i class="ti ti-address-book"></i> Proveedores
+        </button>
+
+        <div class="nav-section">Tesorería</div>
+        <button class="nav-item" data-sec="cajas">
+          <i class="ti ti-cash-register"></i> Cajas
         </button>
 
         <div class="nav-section">Reportes</div>
@@ -246,5 +252,6 @@
   <script src="/static/pedidos-fecha.js?v={{ v }}"></script>
   <script src="/static/alpha.js?v={{ v }}"></script>
   <script src="/static/controles.js?v={{ v }}"></script>
+  <script src="/static/cajas.js?v={{ v }}"></script>
 </body>
 </html>
