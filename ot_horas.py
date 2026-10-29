@@ -295,6 +295,11 @@ def api_horas(ot_id):
         return jsonify({"ok": True, **horas_de_ot(ot_id)})
     except Error as e:
         return jsonify({"ok": False, "msg": str(e)}), 404
+    except Exception as e:
+        # Una conexión cortada o la base ocupada: se avisa (la pantalla reintenta sola)
+        import traceback
+        traceback.print_exc()
+        return jsonify({"ok": False, "msg": f"Error del servidor ({type(e).__name__})"}), 500
 
 
 @bp_ot_horas.route("/api/ots/<int:ot_id>/horas/<accion>", methods=["POST"])

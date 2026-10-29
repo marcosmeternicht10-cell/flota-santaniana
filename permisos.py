@@ -48,6 +48,9 @@ GRUPOS_SECCIONES = [
         ("repuestos", "Inventario Repuestos"),
         ("proveedores", "Proveedores"),
     ]),
+    ("Tesorería", [
+        ("cajas", "Cajas (débitos y créditos)"),
+    ]),
     ("Reportes", [
         ("gerencial", "Reporte gerencial"),
         ("oee", "OEE de flota"),
@@ -95,6 +98,8 @@ MODULOS_API = [
      ("/api/compras", "/api/repuestos")),
     ({"agencias"},
      ("/api/agencias",)),
+    ({"cajas"},
+     ("/api/cajas",)),
     ({"gerencial", "oee"},
      ("/api/reporte_gerencial", "/api/exportar_reporte_gerencial",
       "/api/dossier", "/api/oee")),

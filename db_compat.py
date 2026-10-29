@@ -189,8 +189,21 @@ class _ConnectionWrapper:
                 # Si la conexión murió (la cortó Supabase), reemplazarla y
                 # reintentar UNA vez con una conexión fresca.
                 if isinstance(e, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+                    # La muerta se descarta del pool (si no, queda «prestada» para
+                    # siempre y después de unas cuantas el pool se agota y todo va
+                    # por conexiones nuevas, lentas). La nueva sale del pool.
                     try:
-                        self._conn = psycopg2.connect(DATABASE_URL)
+                        _get_pool().putconn(self._conn, close=True)
+                    except Exception:
+                        try:
+                            self._conn.close()
+                        except Exception:
+                            pass
+                    try:
+                        try:
+                            self._conn = _get_pool().getconn()
+                        except Exception:
+                            self._conn = psycopg2.connect(DATABASE_URL)
                         cur = self.cursor()
                         cur.execute(sql, params)
                         return cur
