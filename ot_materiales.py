@@ -65,6 +65,7 @@ def _agregar_columna(conn, tabla, col, tipo):
 def init_ot_materiales():
     conn = get_connection()
     _agregar_columna(conn, "ordenes_trabajo", "ot_grupo", "INTEGER")
+    _agregar_columna(conn, "ot_items", "proveedor_compras", "TEXT DEFAULT ''")
     nueva = not _existe_tabla(conn, "ot_materiales")
     conn.execute(f"""
         CREATE TABLE IF NOT EXISTS ot_materiales (
@@ -80,6 +81,7 @@ def init_ot_materiales():
         )
     """)
     conn.commit()
+    _agregar_columna(conn, "ot_materiales", "proveedor", "TEXT DEFAULT ''")
     for sql in ("CREATE INDEX IF NOT EXISTS ix_otmat_item ON ot_materiales (item_id)",
                 "CREATE INDEX IF NOT EXISTS ix_otmat_ot ON ot_materiales (ot_id)",
                 "CREATE INDEX IF NOT EXISTS ix_ot_grupo ON ordenes_trabajo (ot_grupo)"):
@@ -283,7 +285,7 @@ def materiales_de_items(conn, item_ids):
     out = {i: [] for i in item_ids}
     try:
         filas = conn.execute(f"""
-            SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit
+            SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor
             FROM ot_materiales WHERE item_id IN ({marcas(item_ids)}) ORDER BY orden, id
         """, item_ids).fetchall()
     except Exception:
