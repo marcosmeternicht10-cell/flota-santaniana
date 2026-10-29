@@ -121,7 +121,8 @@ def datos_pedido(ot_id, usuario=""):
             n_trab += 1
             n_mat += len(mats)
             trabajos.append({"descripcion": it.get("descripcion") or "", "tecnico": it.get("tecnico") or "",
-                             "materiales": mats, "precio": precio, "estado_pago": ep})
+                             "materiales": mats, "precio": precio, "proveedor": it.get("proveedor_compras") or "",
+                             "estado_pago": ep})
         salida.append({"n_interno": c.get("n_interno") or "", "patente": c.get("patente") or "",
                        "marca": c.get("marca") or "", "modelo": c.get("modelo") or "",
                        "km": c.get("km") or 0, "trabajos": trabajos,
@@ -270,9 +271,7 @@ def _dibujar(d, c, total_pag):
         x += aw * a
     y += 50
 
-    proveedor = d.get("proveedor") or "No especificado"
-    L.texto(M, y + 2, L.cortar("PROVEEDOR: " + proveedor, "I6", 8.5, aw),
-            "I6", 8.5, NAVY if d.get("proveedor") else GRIS)
+    L.texto(M, y + 2, "PROVEEDOR INDICADO EN CADA RENGLÓN DEL DETALLE", "I6", 8.2, GRIS)
     y += 16
 
     # El monto, grande, en números y en letras
@@ -358,11 +357,16 @@ def _dibujar(d, c, total_pag):
                 if m is None:
                     tx(1, ym + 12, "—", "I5", 8.4, GRIS2)
                     tx(2, ym + 12, "Precio del trabajo (sin materiales anotados)", "I4", 8, GRIS)
+                    if t.get("proveedor"):
+                        tx(2, ym + 12, L.cortar("Proveedor: " + t["proveedor"], "I5", 7.4, cols[2][1] - 14), "I5", 7.4, GRIS)
                     tx(3, ym + 12, "—", "I5", 8.4, GRIS2)
                     tx(4, ym + 12, _gs(t["precio"]) if t["precio"] else "—", "D6", 10, TINTA)
                 else:
                     tx(1, ym + 12, _cant(m.get("cantidad")), "D6", 10, TINTA)
-                    tx(2, ym + 12, L.cortar(m.get("descripcion") or "", "I5", 8.4, cols[2][1] - 14), "I5", 8.4, TINTA)
+                    detalle_mat = m.get("descripcion") or ""
+                    if m.get("proveedor"):
+                        detalle_mat += " · Prov: " + m["proveedor"]
+                    tx(2, ym + 12, L.cortar(detalle_mat, "I5", 8.1, cols[2][1] - 14), "I5", 8.1, TINTA)
                     pu = float(m.get("precio_unit") or 0)
                     tx(3, ym + 12, _miles(pu) if pu else "—", "I5", 8.4, TINTA if pu else GRIS2)
                     tx(4, ym + 12, _miles(m.get("subtotal")) if pu else "—", "D6", 10, TINTA if pu else GRIS2)
