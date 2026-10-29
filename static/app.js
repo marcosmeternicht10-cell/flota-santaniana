@@ -7251,7 +7251,7 @@ function otItemEstadoCambio(itemId, estado) {
 // decide si pasa a la OT (y con qué prioridad), si espera o si no se hace
 // ════════════════════════════════════════════════════════════════════════════
 const PD_PRIO = { urgente: ["Urgente", "flame"], alta: ["Alta", "arrow-up"], normal: ["Normal", "minus"], baja: ["Baja", "arrow-down"] };
-const PD_TABS = [["nuevo", "Nuevos", "inbox"], ["espera", "En espera", "clock-pause"], ["aceptado", "Pasados a OT", "clipboard-check"], ["descartado", "Descartados", "circle-x"]];
+const PD_TABS = [["nuevo", "Nuevos", "inbox"], ["espera", "En espera", "clock-pause"], ["agendado", "Agendados", "calendar-check"], ["aceptado", "Pasados a OT", "clipboard-check"], ["descartado", "Descartados", "circle-x"]];
 const PD_TIPO = { correctivo: "Correctivo", preventivo: "Preventivo", neumaticos: "Neumáticos", control: "Control", otro: "Otro" };
 const pd = { estado: "nuevo", q: "", d: null, sel: new Set() };
 
@@ -7370,7 +7370,9 @@ function pdFila(p) {
   const fotos = (p.fotos || []).map(f => `<button type="button" class="pd-foto" onclick="verFotoGrande('/api/ot_pedidos/foto/${f}')" aria-label="Ver la foto"><img src="/api/ot_pedidos/foto/${f}" alt="" loading="lazy"></button>`).join("");
   const rep = (p.repetido || []).length ? `<div class="pd-rep"><i class="ti ti-repeat"></i><span><b>Ya ${p.repetido.length === 1 ? "hubo algo parecido" : `hubo ${p.repetido.length} cosas parecidas`}:</b> ${p.repetido.map(r =>
       `${r.fecha ? r.fecha.slice(8, 10) + "/" + r.fecha.slice(5, 7) : ""} «${trEsc(r.txt)}» ${r.fuente === "ot" ? `(OT${r.ot_id ? " #" + r.ot_id : ""}, ${r.estado === "completado" ? "hecho" : "pendiente"})` : `(pedido${r.estado === "descartado" ? ", descartado" : r.estado === "espera" ? ", en espera" : r.estado === "aceptado" ? ", pasado a OT" : ""})`}`).join(" · ")}</span></div>` : "";
-  const estadoTxt = pd.estado === "aceptado"
+  const agendadoTxt = `<div class="pd-dec espera"><i class="ti ti-calendar-check"></i> Mantenimiento agendado para <b>${p.fecha_mantenimiento ? p.fecha_mantenimiento.slice(8, 10) + "/" + p.fecha_mantenimiento.slice(5, 7) + "/" + p.fecha_mantenimiento.slice(0, 4) : "fecha pendiente"}</b>${p.turno_id ? " · Turno #" + p.turno_id : ""}</div>`;
+  const estadoTxt = pd.estado === "agendado" ? agendadoTxt
+    : pd.estado === "aceptado"
     ? `<div class="pd-dec ok"><i class="ti ti-clipboard-check"></i> En la <button class="pv-link" onclick="abrirOT(${p.ot_id})">OT #${p.ot_id}</button> con prioridad <b>${PD_PRIO[pr]?.[0] || pr}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
     : pd.estado === "descartado"
     ? `<div class="pd-dec no"><i class="ti ti-circle-x"></i> No se hace: <b>${trEsc(p.motivo)}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
@@ -7406,13 +7408,46 @@ function pdFila(p) {
         <div class="pd-prios" role="group" aria-label="Prioridad">${prios}</div>
         <div class="pd-botones">
           <button class="btn btn-primary btn-sm" onclick="pdDecidir([${p.id}], 'aceptar')"><i class="ti ti-clipboard-plus"></i> A la OT</button>
-          ${pd.estado === "nuevo" ? `<button class="btn btn-ghost btn-sm" onclick="pdEsperar([${p.id}])"><i class="ti ti-clock-pause"></i> Esperar</button>`
-                                  : `<button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> A nuevos</button>`}
+          ${pd.estado === "nuevo" ? `<button class="btn btn-ghost btn-sm" onclick="pdEsperar([${p.id}])"><i class="ti ti-clock-pause"></i> Esperar</button>` : ""}
+          <button class="btn btn-ghost btn-sm" onclick="pdAgendar(${p.id})"><i class="ti ti-calendar-plus"></i> Agendar mantenimiento</button>
+          ${pd.estado === "espera" ? `<button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> A nuevos</button>` : ""}
           <button class="btn btn-ghost btn-sm pd-no" onclick="pdDescartar([${p.id}])"><i class="ti ti-circle-x"></i> No se hace</button>
         </div>
       </div>` : pd.estado === "descartado" ? `<div class="pd-acc"><button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> Volver a nuevos</button></div>` : ""}
     </article>`;
 }
+async function pdAgendar(id) {
+  const p = pdBuscar(id);
+  if (!p) return;
+  const base = (pd.d && pd.d.hoy) || new Date().toISOString().slice(0, 10);
+  const d = new Date(base + "T12:00:00");
+  d.setDate(d.getDate() + 1);
+  const manana = d.toISOString().slice(0, 10);
+  const o = rvModal({
+    titulo: "Agendar mantenimiento", icono: "calendar-plus", ancho: 480,
+    sub: "Elegí la fecha de mantenimiento para este pedido.",
+    cuerpo: `<div class="rv-campos"><label class="rv-f"><span>Fecha del mantenimiento *</span><input id="pd-ag-fecha" type="date" min="${base}" value="${manana}" required></label><label class="rv-f"><span>Hora (opcional)</span><input id="pd-ag-hora" type="time"></label></div><p class="pd-ed-ayuda">Se respetan los cupos y las reglas de la agenda del taller.</p><div id="pd-ag-error" class="pd-dec no" hidden></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button><button class="btn btn-primary" onclick="pdAgendarGuardar(this, ${id})"><i class="ti ti-calendar-check"></i> Confirmar fecha</button>`
+  });
+  setTimeout(() => o.querySelector("#pd-ag-fecha")?.focus(), 50);
+}
+
+async function pdAgendarGuardar(btn, id) {
+  const o = btn.closest(".modal-overlay");
+  const fecha = o.querySelector("#pd-ag-fecha").value;
+  const hora = o.querySelector("#pd-ag-hora").value;
+  const err = o.querySelector("#pd-ag-error");
+  if (!fecha) { err.hidden = false; err.textContent = "Elegí la fecha del mantenimiento."; return; }
+  btn.disabled = true;
+  const r = await api(`/api/ot_pedidos/${id}/agendar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha, hora }) });
+  btn.disabled = false;
+  if (!r || !r.ok) { err.hidden = false; err.textContent = (r && r.msg) || "No se pudo agendar el mantenimiento."; return; }
+  o.remove();
+  pd.sel.delete(id);
+  toast(r.msg || "Mantenimiento agendado", "success");
+  await pdCargar();
+}
+
 // Corregir el pedido antes de decidir: el texto (varias líneas = varios
 // pedidos), el tipo, el coche si el chofer eligió mal, y una nota
 async function pdEditar(id) {
