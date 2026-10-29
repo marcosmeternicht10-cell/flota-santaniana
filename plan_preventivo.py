@@ -1277,7 +1277,7 @@ def actualizar_turno(tid, d, usuario=""):
         conn.close()
         # Los pedidos de OT vinculados deben mostrar la fecha nueva o volver a
         # la bandeja si el turno se cancela.
-        if cambios.get("fecha") or cambios.get("estado") == "cancelado":
+        if cambios.get("fecha") or cambios.get("estado") in ("cancelado", "ausente"):
             try:
                 import ot_pedidos
                 ot_pedidos.sincronizar_turno(tid, fecha=turno_actualizado["fecha"],
