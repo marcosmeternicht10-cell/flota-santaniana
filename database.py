@@ -3268,7 +3268,7 @@ def enviar_ot_a_compras(ot_id, nota=""):
     conn.close()
 
 
-def guardar_presupuesto_compras(ot_id, precios_por_item, precios_materiales=None):
+def guardar_presupuesto_compras(ot_id, precios_por_item, precios_materiales=None, proveedores_items=None, proveedores_materiales=None):
     """Compras carga los precios: por unidad de cada material
     (precios_materiales = {material_id: precio}) y, para el trabajo que no
     tiene materiales anotados, el precio del trabajo (precios_por_item =
@@ -3290,13 +3290,24 @@ def guardar_presupuesto_compras(ot_id, precios_por_item, precios_materiales=None
             continue          # su precio es la suma de sus materiales
         conn.execute(f"UPDATE ot_items SET precio_compras=? WHERE id=? AND ot_id IN ({marcas_ids})",
                      [float(precio or 0), int(item_id)] + ids)
+    # Guardar proveedores por renglón, validando que pertenezcan a esta OT.
+    for item_id, proveedor in (proveedores_items or {}).items():
+        conn.execute(f"UPDATE ot_items SET proveedor_compras=? WHERE id=? AND ot_id IN ({marcas_ids})",
+                     [str(proveedor or "").strip()[:160], int(item_id)] + ids)
+    for material_id, proveedor in (proveedores_materiales or {}).items():
+        try:
+            import ot_materiales as om
+            conn.execute(f"UPDATE ot_materiales SET proveedor=? WHERE id=? AND ot_id IN ({marcas_ids})",
+                         [str(proveedor or "").strip()[:160], int(material_id)] + ids)
+        except Exception:
+            pass
     _en_compras(conn, ot_id, "estado_compras='presupuestado', fecha_presupuesto=?", (ahora_iso(),))
     conn.commit()
     conn.close()
 
 
 def guardar_proveedor_compras(ot_id, proveedor):
-    """Guarda el proveedor seleccionado para la compra en toda la OT agrupada."""
+    """Compatibilidad con proveedores globales de órdenes antiguas."""
     conn = get_connection()
     ids = _ids_de_la_ot(conn, ot_id)
     if not ids:
