@@ -5856,24 +5856,22 @@ async function abrirPresupuesto(otId) {
         <td class="center" style="color:var(--lighter)">—</td>
         <td style="color:var(--muted);font-size:12.5px">${it.material_pedido ? trEsc(it.material_pedido) : "Sin materiales anotados: precio del trabajo"}</td>
         <td><input class="pre-in pre-item" data-id="${it.id}" data-q="1" inputmode="numeric" value="${precio(it.precio_compras)}" placeholder="0" oninput="preRecalcular()"></td>
+        <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" style="width:135px;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:8px"></td>
         <td class="num pre-sub">—</td></tr>`;
     return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}">
         ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>` : ""}
         <td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
         <td style="font-size:13px">${trEsc(m.descripcion)}</td>
         <td><input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" inputmode="numeric" value="${precio(m.precio_unit)}" placeholder="0" oninput="preRecalcular()"></td>
+        <td><input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(m.proveedor || "")}" placeholder="Proveedor" style="width:135px;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:8px"></td>
         <td class="num pre-sub">—</td></tr>`).join("");
   };
   overlay.innerHTML = `
     <div class="pre-modal">
       <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
       <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Poné el precio <b>por unidad</b> de cada material: el subtotal sale solo con la cantidad. ${cmpTituloCoches(o)}</p>
-      <label style="display:flex;flex-direction:column;gap:6px;margin:0 0 16px;font-size:12px;font-weight:700;color:var(--muted)">
-        PROVEEDOR
-        <input class="pre-proveedor" type="text" maxlength="160" value="${trEsc(o.proveedor_compras || "")}" placeholder="Nombre del proveedor" autocomplete="organization" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-weight:400">
-      </label>
       <div class="table-wrap"><table class="pre-tabla">
-        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material</th><th class="num">Precio unitario (Gs.)</th><th class="num">Subtotal</th></tr></thead>
+        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material</th><th class="num">Precio unitario (Gs.)</th><th>Proveedor</th><th class="num">Subtotal</th></tr></thead>
         <tbody>${cmpPorCoche(o, fila, 5)}</tbody>
       </table></div>
       <div class="pre-total"><span>Total a pedir a Tesorería</span><b id="pre-total">Gs. 0</b></div>
@@ -5902,7 +5900,10 @@ function preRecalcular() {
 }
 
 async function guardarPresupuesto(otId, btn) {
-  const precios = {}, materiales = {};
+  const precios = {}, materiales = {}, proveedores_items = {}, proveedores_materiales = {};
+  document.querySelectorAll(".pre-modal .pre-prov-in").forEach(inp => {
+    (inp.dataset.kind === "material" ? proveedores_materiales : proveedores_items)[inp.dataset.id] = inp.value.trim().slice(0,160);
+  });
   let alguno = false;
   document.querySelectorAll(".pre-modal .pre-in").forEach(inp => {
     if (!inp.value.trim()) return;
@@ -5912,11 +5913,7 @@ async function guardarPresupuesto(otId, btn) {
   if (!alguno) { toast("Cargá al menos un precio", "error"); return; }
   const r = await api(`/api/compras/${otId}/presupuesto`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      precios,
-      materiales,
-      proveedor: document.querySelector(".pre-modal .pre-proveedor")?.value?.trim() || ""
-    })
+    body: JSON.stringify({ precios, materiales, proveedores_items, proveedores_materiales })
   });
   if (r.ok) {
     toast("Presupuesto guardado", "success");
