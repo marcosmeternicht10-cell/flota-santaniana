@@ -5688,6 +5688,14 @@ function tarjetaCompra(o) {
         </span>
       </div>
       <div class="card-body">
+        ${o.estado_compras === "presupuestado" ? `
+          <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">
+            <label style="display:flex;flex:1;min-width:220px;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:var(--muted)">PROVEEDOR
+              <input class="cmp-proveedor-in" maxlength="160" value="${String(o.proveedor_compras || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}" placeholder="Nombre del proveedor" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)">
+            </label>
+            <button class="btn btn-primary" onclick="guardarProveedorCompra(${o.id}, this)"><i class="ti ti-device-floppy"></i> Guardar proveedor</button>
+          </div>` : o.proveedor_compras ? `
+          <div style="margin-bottom:14px;font-size:13px;color:var(--muted)"><i class="ti ti-building-store"></i> <b>Proveedor:</b> ${trEsc(o.proveedor_compras)}</div>` : ""}
         <div class="table-wrap"><table>
           <thead><tr>
             <th>Trabajo</th><th>Material necesario</th><th>Mecánico</th>
@@ -5787,6 +5795,20 @@ async function guardarPresupuesto(otId, btn) {
     btn.closest(".modal-overlay").remove();
     renderCompras();
   } else toast(r.msg || "Error", "error");
+}
+
+async function guardarProveedorCompra(otId, btn) {
+  const card = btn.closest(".card");
+  const input = card?.querySelector(".cmp-proveedor-in");
+  const proveedor = (input?.value || "").trim();
+  const r = await api(`/api/compras/${otId}/proveedor`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ proveedor })
+  });
+  if (r.ok) {
+    toast(proveedor ? "Proveedor guardado" : "Proveedor quitado", "success");
+    renderCompras();
+  } else toast(r.msg || "No se pudo guardar el proveedor", "error");
 }
 
 // Modal para registrar la entrega con foto obligatoria

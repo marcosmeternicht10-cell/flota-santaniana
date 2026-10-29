@@ -131,6 +131,7 @@ def datos_pedido(ot_id, usuario=""):
         "fecha_apertura": cab.get("fecha_apertura") or "",
         "fecha_pedido": (cab.get("fecha_presupuesto") or "")[:10] or _hoy(),
         "procedencia": cab.get("procedencia") or "",
+        "proveedor": cab.get("proveedor_compras") or "",
         "nota": cab.get("nota_compras") or "",
         "estado_compras": cab.get("estado_compras") or "",
         "coches": salida,
@@ -268,6 +269,11 @@ def _dibujar(d, c, total_pag):
             L.texto(x + 8, y + 36, L.cortar(sub, "I4", 6.8, w - 16), "I4", 6.8, GRIS)
         x += aw * a
     y += 50
+
+    proveedor = d.get("proveedor") or "No especificado"
+    L.texto(M, y + 2, L.cortar("PROVEEDOR: " + proveedor, "I6", 8.5, aw),
+            "I6", 8.5, NAVY if d.get("proveedor") else GRIS)
+    y += 16
 
     # El monto, grande, en números y en letras
     alto = 66

@@ -429,6 +429,7 @@ def inicializar_db():
         ("nota_compras",        "TEXT DEFAULT ''"),
         ("taller_entrega",      "TEXT DEFAULT ''"),  # dónde se entregó: 'Taller propio' o taller externo
         ("recibido_por",        "TEXT DEFAULT ''"),  # quién recibió el material (transfiere responsabilidad)
+        ("proveedor_compras",   "TEXT DEFAULT ''"),  # proveedor elegido para esta compra
     ]:
         if col not in cols_ot:
             try:
@@ -3292,6 +3293,22 @@ def guardar_presupuesto_compras(ot_id, precios_por_item, precios_materiales=None
     _en_compras(conn, ot_id, "estado_compras='presupuestado', fecha_presupuesto=?", (ahora_iso(),))
     conn.commit()
     conn.close()
+
+
+def guardar_proveedor_compras(ot_id, proveedor):
+    """Guarda el proveedor seleccionado para la compra en toda la OT agrupada."""
+    conn = get_connection()
+    ids = _ids_de_la_ot(conn, ot_id)
+    if not ids:
+        conn.close()
+        return False
+    marcas = ",".join("?" * len(ids))
+    nombre = str(proveedor or "").strip()[:160]
+    conn.execute(f"UPDATE ordenes_trabajo SET proveedor_compras=? WHERE id IN ({marcas})",
+                 [nombre] + ids)
+    conn.commit()
+    conn.close()
+    return True
 
 
 def marcar_en_camino_compras(ot_id):

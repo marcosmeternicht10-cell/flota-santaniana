@@ -51,7 +51,7 @@ from database import (
     crear_ot, obtener_ot, obtener_ots, agregar_item_ot, actualizar_item_ot,
     eliminar_item_ot, actualizar_ot, cerrar_ot, eliminar_ot,
     agregar_foto_ot, obtener_fotos_ot, contar_fotos_ot, eliminar_foto_ot,
-    enviar_ot_a_compras, guardar_presupuesto_compras, registrar_entrega_compras,
+    enviar_ot_a_compras, guardar_presupuesto_compras, guardar_proveedor_compras, registrar_entrega_compras,
     obtener_evidencia_compras, obtener_ots_compras, marcar_en_camino_compras,
     # Cubiertas auxiliares (trucky):
     asignar_trucky, obtener_truckies_vehiculo, usar_trucky, retirar_trucky,
@@ -2364,6 +2364,24 @@ def api_compras_talleres():
 def api_compras_evidencia(ot_id):
     """Devuelve las fotos de evidencia de entrega."""
     return jsonify(obtener_evidencia_compras(ot_id))
+
+
+@app.route("/api/compras/<int:ot_id>/proveedor", methods=["POST"])
+@compras_requerido
+def api_compras_proveedor(ot_id):
+    """Guarda el proveedor asociado a una OT presupuestada."""
+    if not obtener_ot(ot_id):
+        return jsonify({"ok": False, "msg": "OT no encontrada"}), 404
+    d = request.json or {}
+    proveedor = d.get("proveedor", "")
+    if not isinstance(proveedor, str):
+        return jsonify({"ok": False, "msg": "El proveedor debe ser texto"}), 400
+    proveedor = proveedor.strip()[:160]
+    if not guardar_proveedor_compras(ot_id, proveedor):
+        return jsonify({"ok": False, "msg": "No se pudo guardar el proveedor"}), 400
+    auditar(f"Actualizó proveedor de la OT #{ot_id}", "Compras", proveedor or "Proveedor borrado",
+            referencia=f"compras:{ot_id}")
+    return jsonify({"ok": True, "proveedor": proveedor})
 
 
 @app.route("/api/compras/<int:ot_id>/presupuesto_pdf", methods=["GET"])
