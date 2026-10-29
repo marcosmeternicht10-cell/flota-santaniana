@@ -7314,7 +7314,7 @@ function pdPintar() {
   const abiertos = pd.estado === "nuevo" || pd.estado === "espera";
   if (!d.coches.length) {
     $("#pd-cuerpo").innerHTML = `<div class="pd-vacio"><i class="ti ti-${pd.estado === "nuevo" ? "mood-check" : "inbox-off"}"></i>
-      <b>${pd.q ? "Nada con esa búsqueda" : pd.estado === "nuevo" ? "No hay pedidos para revisar" : pd.estado === "espera" ? "No hay nada en espera" : "Nada en los últimos 45 días"}</b>
+      <b>${pd.q ? "Nada con esa búsqueda" : pd.estado === "nuevo" ? "No hay pedidos para revisar" : pd.estado === "espera" ? "No hay nada en espera" : pd.estado === "agendado" ? "No hay pedidos agendados" : "Nada en los últimos 45 días"}</b>
       <span>${pd.estado === "nuevo" && !pd.q ? "Cuando un chofer reporte algo desde el celular, aparece acá." : ""}</span></div>`;
     pdLote();
     return;
@@ -7445,6 +7445,8 @@ async function pdAgendarGuardar(btn, id) {
   o.remove();
   pd.sel.delete(id);
   toast(r.msg || "Mantenimiento agendado", "success");
+  pd.estado = "agendado";
+  pd.q = "";
   await pdCargar();
 }
 
