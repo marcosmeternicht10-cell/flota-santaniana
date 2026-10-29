@@ -2266,17 +2266,11 @@ def api_compras_presupuesto(ot_id):
     d = request.json or {}
     precios = d.get("precios") or {}            # {item_id: precio} (trabajos sin materiales)
     materiales = d.get("materiales") or {}      # {material_id: precio por unidad}
-    proveedor_presente = "proveedor" in d
-    proveedor = d.get("proveedor", "")
-    if proveedor_presente:
-        if not isinstance(proveedor, str):
-            return jsonify({"ok": False, "msg": "El proveedor debe ser texto"}), 400
-        proveedor = proveedor.strip()[:160]
+    proveedores_items = d.get("proveedores_items") or {}
+    proveedores_materiales = d.get("proveedores_materiales") or {}
     if not precios and not materiales:
         return jsonify({"ok": False, "msg": "Cargá al menos un precio"}), 400
-    guardar_presupuesto_compras(ot_id, precios, materiales)
-    if proveedor_presente and not guardar_proveedor_compras(ot_id, proveedor):
-        return jsonify({"ok": False, "msg": "No se pudo guardar el proveedor"}), 400
+    guardar_presupuesto_compras(ot_id, precios, materiales, proveedores_items, proveedores_materiales)
     ot = obtener_ot(ot_id) or {}
     try:
         from ot_materiales import grupo_ids
