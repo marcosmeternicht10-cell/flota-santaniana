@@ -994,7 +994,7 @@ def sincronizar_turno(turno_id, fecha=None, estado=None):
     """Mantiene sincronizada la fecha o la cancelación de un turno vinculado a un pedido."""
     conn = get_connection()
     try:
-        if estado == "cancelado":
+        if estado in ("cancelado", "ausente"):
             conn.execute("""UPDATE ot_pedidos
                             SET estado='espera', turno_id=NULL, fecha_mantenimiento='', revisar_el='',
                                 nota='Turno cancelado; pendiente de reagendar', decidido_por='', decidido_el=''
