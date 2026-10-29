@@ -1355,6 +1355,10 @@ def abrir_ot_de_turno(tid, usuario=""):
         nuevos = [r["id"] for r in conn.execute("SELECT id FROM ot_items WHERE ot_id=? ORDER BY id", (ot_id,)).fetchall()]
     for iid, tid_tarea in zip(nuevos, ids):
         conn.execute("UPDATE ot_items SET tareas_plan=? WHERE id=?", (str(tid_tarea), iid))
+    if pedido and nuevos:
+        pedido_item = nuevos[len(ids)] if len(nuevos) > len(ids) else nuevos[-1]
+        conn.execute("UPDATE ot_pedidos SET estado=?, ot_id=?, item_id=?, decidido_el=?, motivo=? WHERE id=? AND estado=?",
+                     ("aceptado", ot_id, pedido_item, ahora_iso(), "", pedido["id"], "agendado"))
     # Queda en el día que vino de verdad (si se adelantó, libera el lugar del otro día)
     conn.execute("UPDATE taller_turnos SET estado='en_taller', ot_id=?, fecha=? WHERE id=?", (ot_id, _hoy_txt(), tid))
     conn.commit()
