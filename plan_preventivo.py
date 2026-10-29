@@ -1208,7 +1208,9 @@ def crear_turno(d, usuario=""):
         ctx = _cargar(conn, [vid])
         e = _estado_coche(vid, ctx)
         tareas = [int(x) for x in (d.get("tareas") or [])]
-        if not tareas and e and e.get("proximo"):
+        # Un pedido de chofer es una inspección correctiva/preventiva concreta;
+        # no debe convertirse automáticamente en el próximo service periódico.
+        if not tareas and e and e.get("proximo") and not d.get("sin_tareas"):
             tareas = list(e["proximo"]["ids"])
         dias = date.fromisoformat(fecha).toordinal() - ctx.hoy_ord
         km_prev = float(ctx.km.get(vid) or 0) + max(0, dias) * float(ctx.km_dia.get(vid, {}).get("valor") or 0)
@@ -1267,13 +1269,27 @@ def actualizar_turno(tid, d, usuario=""):
                 return {"ok": False, "msg": "Estado inválido."}
             cambios["estado"] = d["estado"]
             cambios["cerrado_el"] = ahora_iso() if d["estado"] in ("cumplido", "cancelado", "ausente") else ""
-        if cambios:
+    if cambios:
             sets = ", ".join(f"{k}=?" for k in cambios)
             conn.execute(f"UPDATE taller_turnos SET {sets} WHERE id=?", list(cambios.values()) + [tid])
             conn.commit()
-        return {"ok": True, "turno": _turno_de(conn, tid)}
-    finally:
+        turno_actualizado = _turno_de(conn, tid)
         conn.close()
+        # Los pedidos de OT vinculados deben mostrar la fecha nueva o volver a
+        # la bandeja si el turno se cancela.
+        if cambios.get("fecha") or cambios.get("estado") == "cancelado":
+            try:
+                import ot_pedidos
+                ot_pedidos.sincronizar_turno(tid, fecha=turno_actualizado["fecha"],
+                                             estado=cambios.get("estado"))
+            except Exception:
+                pass
+        return {"ok": True, "turno": turno_actualizado}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def borrar_turno(tid):
