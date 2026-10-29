@@ -5868,6 +5868,10 @@ async function abrirPresupuesto(otId) {
     <div class="pre-modal">
       <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
       <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Poné el precio <b>por unidad</b> de cada material: el subtotal sale solo con la cantidad. ${cmpTituloCoches(o)}</p>
+      <label style="display:flex;flex-direction:column;gap:6px;margin:0 0 16px;font-size:12px;font-weight:700;color:var(--muted)">
+        PROVEEDOR
+        <input class="pre-proveedor" type="text" maxlength="160" value="${trEsc(o.proveedor_compras || "")}" placeholder="Nombre del proveedor" autocomplete="organization" style="width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);font:inherit;font-weight:400">
+      </label>
       <div class="table-wrap"><table class="pre-tabla">
         <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material</th><th class="num">Precio unitario (Gs.)</th><th class="num">Subtotal</th></tr></thead>
         <tbody>${cmpPorCoche(o, fila, 5)}</tbody>
@@ -5908,7 +5912,11 @@ async function guardarPresupuesto(otId, btn) {
   if (!alguno) { toast("Cargá al menos un precio", "error"); return; }
   const r = await api(`/api/compras/${otId}/presupuesto`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ precios, materiales })
+    body: JSON.stringify({
+      precios,
+      materiales,
+      proveedor: document.querySelector(".pre-modal .pre-proveedor")?.value?.trim() || ""
+    })
   });
   if (r.ok) {
     toast("Presupuesto guardado", "success");
