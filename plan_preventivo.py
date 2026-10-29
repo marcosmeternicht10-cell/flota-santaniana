@@ -1315,7 +1315,17 @@ def abrir_ot_de_turno(tid, usuario=""):
         vid = t["vehiculo_id"]
         tareas = {x["id"]: x for x in _tareas_del_coche(conn, vid)}
         ids = [x for x in _ids(t["tareas"]) if x in tareas]
-        if not ids:
+        pedido_match = re.search(r"Pedido de OT #(\d+)", str(t.get("notas") or ""))
+        pedido = None
+        if pedido_match:
+            try:
+                import ot_pedidos
+                pedido = conn.execute("SELECT id, descripcion, tipo FROM ot_pedidos WHERE id=?",
+                                      (int(pedido_match.group(1)),)).fetchone()
+                pedido = dict(pedido) if pedido else None
+            except Exception:
+                pedido = None
+        if not ids and not pedido:
             ctx = _cargar(conn, [vid])
             e = _estado_coche(vid, ctx)
             ids = list((e.get("proximo") or {}).get("ids") or [])
@@ -1323,6 +1333,8 @@ def abrir_ot_de_turno(tid, usuario=""):
     finally:
         conn.close()
     items = [{"descripcion": tareas[x]["tarea"], "tipo": "preventivo", "estado": "pendiente", "costo": 0} for x in ids]
+    if pedido:
+        items.append({"descripcion": pedido["descripcion"], "tipo": pedido.get("tipo") or "preventivo", "estado": "pendiente", "costo": 0})
     obs = "Turno del preventivo" + (f" · {t['notas']}" if t.get("notas") else "")
     # Si el coche ya tiene su OT abierta, las tareas del turno se suman ahí
     import ot_unica
