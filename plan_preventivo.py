@@ -1208,7 +1208,9 @@ def crear_turno(d, usuario=""):
         ctx = _cargar(conn, [vid])
         e = _estado_coche(vid, ctx)
         tareas = [int(x) for x in (d.get("tareas") or [])]
-        if not tareas and e and e.get("proximo"):
+        # Un pedido de chofer es una inspección correctiva/preventiva concreta;
+        # no debe convertirse automáticamente en el próximo service periódico.
+        if not tareas and e and e.get("proximo") and not d.get("sin_tareas"):
             tareas = list(e["proximo"]["ids"])
         dias = date.fromisoformat(fecha).toordinal() - ctx.hoy_ord
         km_prev = float(ctx.km.get(vid) or 0) + max(0, dias) * float(ctx.km_dia.get(vid, {}).get("valor") or 0)
@@ -1271,9 +1273,23 @@ def actualizar_turno(tid, d, usuario=""):
             sets = ", ".join(f"{k}=?" for k in cambios)
             conn.execute(f"UPDATE taller_turnos SET {sets} WHERE id=?", list(cambios.values()) + [tid])
             conn.commit()
-        return {"ok": True, "turno": _turno_de(conn, tid)}
-    finally:
+        turno_actualizado = _turno_de(conn, tid)
         conn.close()
+        # Los pedidos de OT vinculados deben mostrar la fecha nueva o volver a
+        # la bandeja si el turno se cancela.
+        if cambios.get("fecha") or cambios.get("estado") in ("cancelado", "ausente"):
+            try:
+                import ot_pedidos
+                ot_pedidos.sincronizar_turno(tid, fecha=turno_actualizado["fecha"],
+                                             estado=cambios.get("estado"))
+            except Exception:
+                pass
+        return {"ok": True, "turno": turno_actualizado}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def borrar_turno(tid):
@@ -1299,7 +1315,17 @@ def abrir_ot_de_turno(tid, usuario=""):
         vid = t["vehiculo_id"]
         tareas = {x["id"]: x for x in _tareas_del_coche(conn, vid)}
         ids = [x for x in _ids(t["tareas"]) if x in tareas]
-        if not ids:
+        pedido_match = re.search(r"Pedido de OT #(\d+)", str(t.get("notas") or ""))
+        pedido = None
+        if pedido_match:
+            try:
+                import ot_pedidos
+                pedido = conn.execute("SELECT id, descripcion, tipo FROM ot_pedidos WHERE id=?",
+                                      (int(pedido_match.group(1)),)).fetchone()
+                pedido = dict(pedido) if pedido else None
+            except Exception:
+                pedido = None
+        if not ids and not pedido:
             ctx = _cargar(conn, [vid])
             e = _estado_coche(vid, ctx)
             ids = list((e.get("proximo") or {}).get("ids") or [])
@@ -1307,6 +1333,8 @@ def abrir_ot_de_turno(tid, usuario=""):
     finally:
         conn.close()
     items = [{"descripcion": tareas[x]["tarea"], "tipo": "preventivo", "estado": "pendiente", "costo": 0} for x in ids]
+    if pedido:
+        items.append({"descripcion": pedido["descripcion"], "tipo": pedido.get("tipo") or "preventivo", "estado": "pendiente", "costo": 0})
     obs = "Turno del preventivo" + (f" · {t['notas']}" if t.get("notas") else "")
     # Si el coche ya tiene su OT abierta, las tareas del turno se suman ahí
     import ot_unica
@@ -1327,6 +1355,10 @@ def abrir_ot_de_turno(tid, usuario=""):
         nuevos = [r["id"] for r in conn.execute("SELECT id FROM ot_items WHERE ot_id=? ORDER BY id", (ot_id,)).fetchall()]
     for iid, tid_tarea in zip(nuevos, ids):
         conn.execute("UPDATE ot_items SET tareas_plan=? WHERE id=?", (str(tid_tarea), iid))
+    if pedido and nuevos:
+        pedido_item = nuevos[len(ids)] if len(nuevos) > len(ids) else nuevos[-1]
+        conn.execute("UPDATE ot_pedidos SET estado=?, ot_id=?, item_id=?, decidido_el=?, motivo=? WHERE id=? AND estado=?",
+                     ("aceptado", ot_id, pedido_item, ahora_iso(), "", pedido["id"], "agendado"))
     # Queda en el día que vino de verdad (si se adelantó, libera el lugar del otro día)
     conn.execute("UPDATE taller_turnos SET estado='en_taller', ot_id=?, fecha=? WHERE id=?", (ot_id, _hoy_txt(), tid))
     conn.commit()
