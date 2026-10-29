@@ -5641,8 +5641,8 @@ function setComprasTab(t) { comprasTab = t; renderCompras(); }
 // El material de un trabajo, renglón por renglón ("2 × Filtro de aceite")
 function cmpMateriales(it) {
   const mats = it.materiales || [];
-  if (!mats.length) return it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—";
-  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}</div>`).join("");
+  if (!mats.length) return `${it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—"}${it.proveedor_compras ? `<div class="cmp-mat" style="color:var(--muted)">Proveedor: ${trEsc(it.proveedor_compras)}</div>` : ""}`;
+  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}${m.proveedor ? `<div style="color:var(--muted);font-size:11.5px;margin:2px 0 5px 30px">Proveedor: ${trEsc(m.proveedor)}</div>` : ""}</div>`).join("");
 }
 // Los trabajos de la OT agrupados por coche (si la OT tiene varios)
 function cmpPorCoche(o, fila, columnas) {
@@ -5696,14 +5696,7 @@ function tarjetaCompra(o) {
         </span>
       </div>
       <div class="card-body">
-        ${o.estado_compras === "presupuestado" ? `
-          <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">
-            <label style="display:flex;flex:1;min-width:220px;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:var(--muted)">PROVEEDOR
-              <input class="cmp-proveedor-in" maxlength="160" value="${String(o.proveedor_compras || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}" placeholder="Nombre del proveedor" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)">
-            </label>
-            <button class="btn btn-primary" onclick="guardarProveedorCompra(${o.id}, this)"><i class="ti ti-device-floppy"></i> Guardar proveedor</button>
-          </div>` : o.proveedor_compras ? `
-          <div style="margin-bottom:14px;font-size:13px;color:var(--muted)"><i class="ti ti-building-store"></i> <b>Proveedor:</b> ${trEsc(o.proveedor_compras)}</div>` : ""}
+
         <div class="table-wrap"><table>
           <thead><tr>
             <th>Trabajo</th><th>Material necesario</th><th>Mecánico</th>
