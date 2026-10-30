@@ -5930,11 +5930,13 @@ async function abrirPresupuesto(otId) {
 function preResumen() {
   const ms = Object.values(pre.mats);
   const dep = ms.filter(m => m.origen === "deposito").length;
-  const sin = ms.filter(m => !m.repuesto).length;
+  const sin = ms.filter(m => !m.repuesto && m.origen !== "suelto").length;
+  const suel = ms.filter(m => m.origen === "suelto").length;
   const hay = ms.filter(m => m.repuesto && m.origen !== "deposito" && m.disponible >= m.cantidad && m.cantidad > 0).length;
   return `<span><i class="ti ti-building-warehouse"></i> <b>${dep}</b> del depósito</span>
     <span><i class="ti ti-shopping-cart"></i> <b>${ms.length - dep}</b> a comprar</span>
     ${hay ? `<span class="pre-ojo"><i class="ti ti-alert-circle"></i> <b>${hay}</b> se compra${hay === 1 ? "" : "n"} pero hay en el depósito</span>` : ""}
+    ${suel ? `<span class="pre-gris"><i class="ti ti-shopping-bag"></i> <b>${suel}</b> compra${suel === 1 ? "" : "s"} suelta${suel === 1 ? "" : "s"}</span>` : ""}
     ${sin ? `<span class="pre-gris"><i class="ti ti-link-off"></i> <b>${sin}</b> sin enganchar al inventario</span>` : ""}`;
 }
 
@@ -5950,6 +5952,10 @@ function preCeldasMat(m) {
     repHtml = `<div class="pre-rep ${dep ? "dep" : ""}">
         <button type="button" class="pre-rep-chip" onclick="preBuscarRep(${m.id})" title="Cambiar el repuesto">
           <i class="ti ti-package"></i> <b>${trEsc(r.codigo)}</b> ${trEsc(r.descripcion)}${r.marca ? ` · ${trEsc(r.marca)}` : ""}</button>
+        <div class="pre-acc">
+          <button type="button" onclick="preBuscarRep(${m.id})"><i class="ti ti-replace"></i> Cambiar repuesto</button>
+          <button type="button" onclick="preVincular(${m.id}, 0)"><i class="ti ti-link-off"></i> Desenganchar</button>
+        </div>
         <div class="pre-stock ${d.disponible > 0 ? (alcanza ? "ok" : "poco") : "no"}">
           ${d.disponible > 0 ? `Hay ${preCant(d.disponible)}${unidad} en el depósito${r.ubicacion ? ` · ${trEsc(r.ubicacion)}` : ""}${d.apartado_otras ? ` <small>(${preCant(d.apartado_otras)} apartado para otras OTs)</small>` : ""}` : "Sin stock en el depósito"}
         </div>
@@ -5965,6 +5971,15 @@ function preCeldasMat(m) {
             ${s.motivo === "aprendido" ? `<i class="ti ti-star-filled bz-estrella" title="Ya se eligió antes para algo parecido"></i>` : ""}<b>${trEsc(s.codigo)}</b> ${trEsc(s.descripcion.slice(0, 38))}${s.descripcion.length > 38 ? "…" : ""} <em class="${+s.stock_actual > 0 ? "ok" : ""}">${+s.stock_actual > 0 ? "hay " + preCant(s.stock_actual) : "sin stock"}</em></button>`).join("")}</div>` : ""}
         <button type="button" class="pre-link" onclick="preBuscarRep(${m.id})"><i class="ti ti-search"></i> Buscar en el inventario</button>
       </div>`;
+    if (d.origen === "suelto") repHtml = `<div class="pre-rep">
+        <div class="pre-suelto"><i class="ti ti-shopping-bag"></i> Compra suelta: no va al inventario
+          <button type="button" onclick="preVincular(${m.id}, 0)" title="Volver a buscarlo en el inventario">Deshacer</button></div>
+      </div>`;
+    else repHtml = repHtml.replace(/<\/div>$/, `<div class="pre-noesta">
+          <span><i class="ti ti-help-circle"></i> ¿No está en el inventario?</span>
+          <button type="button" class="pre-btn-crear" onclick="preCrearRep(${m.id})"><i class="ti ti-plus"></i> Crear repuesto nuevo</button>
+          <button type="button" onclick="preVincular(${m.id}, 0, 'suelto')" title="Se compra igual, pero no se carga en el inventario"><i class="ti ti-shopping-bag"></i> Compra suelta</button>
+        </div></div>`);
   }
   // Proveedor: los que venden ese repuesto, con su precio; o cualquiera del directorio
   const provs = (r && d.proveedores) || [];
@@ -5981,12 +5996,12 @@ function preCeldasMat(m) {
       <input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Nombre del proveedor" autocomplete="off" oninput="preProvBuscar(this)" ${actual && !enLista ? "" : "hidden"}>`;
   else provHtml = `<input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)">`;
   const costo = r ? (+r.costo_unitario || 0) / (d.en_contenido && +r.contenido ? +r.contenido : 1) : 0;
-  return `<td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
-    <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(m.descripcion)}</div>${repHtml}</td>
+  return `<td class="center"><b>${otMatCantTxt(d.cantidad ?? m.cantidad)}</b></td>
+    <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(d.descripcion || m.descripcion)}${d.stock_aplicado ? "" : `<button type="button" class="pre-editar" onclick="preEditarMat(${m.id})" title="Corregir el nombre o la cantidad"><i class="ti ti-pencil"></i> Corregir</button>`}</div>${repHtml}</td>
     <td class="pre-prov-td">${provHtml}</td>
     <td>${dep
-      ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" value="0" disabled title="Sale del depósito: no se pide plata"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
-      : `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" inputmode="numeric" value="${d.precio_unit ? preMil(d.precio_unit) : ""}" placeholder="0" oninput="preRecalcular()">${costo && r ? `<div class="pre-costo">último costo ${preMil(costo)}</div>` : ""}`}</td>
+      ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" value="0" disabled title="Sale del depósito: no se pide plata"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
+      : `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" inputmode="numeric" value="${d.precio_unit ? preMil(d.precio_unit) : ""}" placeholder="0" oninput="preRecalcular()">${costo && r ? `<div class="pre-costo">último costo ${preMil(costo)}</div>` : ""}`}</td>
     <td class="num pre-sub">—</td>`;
 }
 const preCant = q => { q = +q || 0; return Number.isInteger(q) ? String(q) : q.toFixed(2).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","); };
@@ -6107,15 +6122,100 @@ function preBuscarRep(mid) {
         <span class="pre-br-cod">${trEsc(x.codigo)}</span>
         <span class="pre-br-desc"><b>${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
         <span class="pre-br-stock ${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""}` : "sin stock"}<small>${x.ubicacion ? trEsc(x.ubicacion) : ""}</small></span>
-      </button>`).join("") : "") + (l.length ? "" : `<p class="pre-busca-vacio">No está en el inventario. Se puede comprar igual: escribí el proveedor a mano. Si se va a comprar seguido, cargalo en <b>Inventario Repuestos</b>.</p>`);
+      </button>`).join("") : "") + `<div class="pre-busca-nuevo"><span>${l.length ? "¿Ninguno es?" : "No está en el inventario."}</span>
+      <button type="button" class="btn btn-primary btn-sm" data-crear><i class="ti ti-plus"></i> Crear «${trEsc(q.slice(0, 40))}» en el inventario</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-suelto><i class="ti ti-shopping-bag"></i> Compra suelta</button></div>`;
     res.querySelectorAll("button[data-id]").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
     res.querySelector(".bz-quisiste button")?.addEventListener("click", e => { inp.value = e.target.dataset.q; buscar(); inp.focus(); });
+    res.querySelector("[data-crear]").onclick = () => { o.remove(); preCrearRep(mid, q); };
+    res.querySelector("[data-suelto]").onclick = async () => { o.remove(); await preVincular(mid, 0, "suelto"); };
   };
   inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(buscar, 220); });
   inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button[data-id]")?.click(); } });
   const desv = o.querySelector("#pre-desv");
   if (desv) desv.onclick = async () => { o.remove(); await preVincular(mid, 0); };
   setTimeout(() => { inp.focus(); inp.select(); buscar(); }, 60);
+}
+// Corregir lo que escribió el taller (nombre y cantidad del material)
+function preEditarMat(mid) {
+  const d = pre.mats[mid];
+  if (!d) return;
+  const o = rvModal({
+    titulo: "Corregir material", icono: "pencil", ancho: 460,
+    sub: "Lo que pidió el taller, bien escrito. Así después se encuentra en el inventario.",
+    cuerpo: `<div class="pre-form">
+      <label class="pre-f-full">Qué es<input name="descripcion" maxlength="200" value="${trEsc(d.descripcion || "")}"></label>
+      <label>Cantidad<input name="cantidad" inputmode="decimal" value="${preCant(d.cantidad)}"></label></div>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" data-ok><i class="ti ti-check"></i> Guardar</button></div>`,
+  });
+  const f = n => o.querySelector(`[name=${n}]`);
+  const ok = async btn => {
+    btn.disabled = true;
+    const r = await api(`/api/compras/${pre.ot.id}/material/${mid}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ descripcion: f("descripcion").value, cantidad: f("cantidad").value })
+    }).catch(() => null);
+    btn.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+    o.remove();
+    toast("Material corregido", "success");
+    await preRefrescar(mid);
+  };
+  o.querySelector("[data-ok]").onclick = e => ok(e.currentTarget);
+  o.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ok(o.querySelector("[data-ok]")); } }));
+  setTimeout(() => f("descripcion").select(), 60);
+}
+// Dar de alta un repuesto que no está en el inventario, desde el mismo presupuesto
+let _preCats = null;
+async function preCrearRep(mid, texto) {
+  const d = pre.mats[mid];
+  if (!d) return;
+  if (!_preCats) _preCats = await api("/api/repuestos/categorias").catch(() => null) || ["Filtros", "Varios"];
+  const desc = (texto && texto.length > (d.descripcion || "").length ? texto : d.descripcion || "").trim();
+  const desc1 = desc.charAt(0).toUpperCase() + desc.slice(1);
+  const n = sin => (sin || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const adivina = n(desc).includes("filtro") ? "Filtros" : /aceite|lubric|grasa|refriger|aditiv/.test(n(desc)) ? "Lubricantes y aditivos"
+    : /correa|manguera/.test(n(desc)) ? "Correas y mangueras" : /ruleman|rodamiento/.test(n(desc)) ? "Rulemanes / rodamientos"
+    : /freno|embrague|pastilla|cinta/.test(n(desc)) ? "Embragues / frenos" : /lampara|foco|fusible|rele|bateria|cable|electr/.test(n(desc)) ? "Eléctricos"
+    : /tornillo|tuerca|arandela|bulon|perno/.test(n(desc)) ? "Tornillería / ferretería" : "Varios";
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  const precioEscrito = tr && tr.querySelector(".pre-mat:not([disabled])")?.value.trim();
+  const provEscrito = (tr && tr.querySelector(".pre-prov-in")?.value.trim()) || d.proveedor || "";
+  const o = rvModal({
+    titulo: "Crear repuesto nuevo", icono: "package", ancho: 560, clase: "pre-crear",
+    sub: "Queda cargado en Inventario Repuestos (con stock 0) y enganchado a este material. Cuando llegue, entra al stock solo.",
+    cuerpo: `<div class="pre-form">
+      <label class="pre-f-full">Descripción *<input name="descripcion" maxlength="200" value="${trEsc(desc1)}" placeholder="Ej: Filtro de combustible"></label>
+      <label>Código del fabricante<input name="codigo" maxlength="60" placeholder="Si no tiene, queda INT-…"></label>
+      <label>Marca<input name="marca" maxlength="80" placeholder="Ej: Mann, Fleetguard"></label>
+      <label>Categoría<select name="categoria">${_preCats.map(c => `<option ${c === adivina ? "selected" : ""}>${trEsc(c)}</option>`).join("")}</select></label>
+      <label>Unidad<select name="unidad">${[["u", "unidad"], ["lt", "litro"], ["kg", "kilo"], ["m", "metro"], ["juego", "juego"], ["par", "par"]].map(([v, t]) => `<option value="${v}" ${v === (/litro|\(l\)|\blts?\b/.test(n(desc)) ? "lt" : "u") ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="pre-f-full">Para qué vehículo / aplicación<input name="aplicacion" maxlength="120" placeholder="Ej: Scania K310, Mercedes O500"></label>
+      <label class="pre-f-full">Proveedor<input name="proveedor" class="pre-prov-in" maxlength="160" value="${trEsc(provEscrito)}" placeholder="A quién se le compra" autocomplete="off" oninput="preProvBuscar(this)"></label>
+      <label>Precio unitario (Gs.)<input name="precio" inputmode="numeric" value="${trEsc(precioEscrito || "")}" placeholder="0" onblur="this.value = preNum(this.value) ? preMil(preNum(this.value)) : ''"></label>
+    </div>
+    <p class="pre-crear-nota"><i class="ti ti-info-circle"></i> Revisá que no esté con otro nombre: buscalo antes por código o marca.</p>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" data-ok><i class="ti ti-check"></i> Crear y enganchar</button></div>`,
+  });
+  const f = nm => o.querySelector(`[name=${nm}]`);
+  o.querySelector("[data-ok]").onclick = async e => {
+    const btn = e.currentTarget;
+    if (!f("descripcion").value.trim()) { toast("Escribí la descripción", "error"); f("descripcion").focus(); return; }
+    btn.disabled = true;
+    const body = { material_id: mid, precio: preNum(f("precio").value) };
+    ["descripcion", "codigo", "marca", "categoria", "unidad", "aplicacion", "proveedor"].forEach(k => body[k] = f(k).value);
+    const r = await api(`/api/compras/${pre.ot.id}/crear_repuesto`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).catch(() => null);
+    btn.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo crear", "error"); return; }
+    o.remove();
+    toast(r.msg, "success");
+    await preRefrescar(mid);
+  };
+  setTimeout(() => f("codigo").focus(), 60);
 }
 
 const preNum = v => parseFloat(String(v || "").replace(/\./g, "").replace(/,/g, ".").replace(/[^\d.]/g, "")) || 0;
