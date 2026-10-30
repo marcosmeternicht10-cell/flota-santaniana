@@ -5644,7 +5644,7 @@ function setComprasTab(t) { comprasTab = t; renderCompras(); }
 function cmpMateriales(it) {
   const mats = it.materiales || [];
   if (!mats.length) return `${it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—"}${it.proveedor_compras ? `<div class="cmp-mat" style="color:var(--muted)">Proveedor: ${trEsc(it.proveedor_compras)}</div>` : ""}`;
-  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}${m.proveedor ? `<div style="color:var(--muted);font-size:11.5px;margin:2px 0 5px 30px">Proveedor: ${trEsc(m.proveedor)}</div>` : ""}</div>`).join("");
+  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}${m.origen === "deposito" ? ` <span class="cmp-tag dep"><i class="ti ti-building-warehouse"></i> del depósito</span>` : m.repuesto_id ? ` <span class="cmp-tag inv" title="Enganchado con el inventario"><i class="ti ti-package"></i></span>` : ""}${m.proveedor ? `<div style="color:var(--muted);font-size:11.5px;margin:2px 0 5px 30px">Proveedor: ${trEsc(m.proveedor)}</div>` : ""}${m.stock_nota ? `<div class="cmp-stock-nota ${/^No /.test(m.stock_nota) ? "mal" : ""}">${trEsc(m.stock_nota)}</div>` : ""}</div>`).join("");
 }
 // Los trabajos de la OT agrupados por coche (si la OT tiene varios)
 function cmpPorCoche(o, fila, columnas) {
@@ -5675,10 +5675,12 @@ function tarjetaCompra(o) {
   } else if (o.estado_compras === "presupuestado") {
     acciones = `
       <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir para Tesorería</button>
+      <button class="btn btn-ghost" onclick="cmpPedirProveedores(${o.id})"><i class="ti ti-truck-delivery"></i> Pedir a proveedores</button>
       <button class="btn btn-ghost" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-edit"></i> Editar precios</button>
       <button class="btn btn-primary" onclick="abrirFirma(${o.id})"><i class="ti ti-writing-sign"></i> Firma de Tesorería</button>`;
   } else if (o.estado_compras === "en_camino") {
     acciones = `
+      <button class="btn btn-ghost" onclick="cmpPedirProveedores(${o.id})"><i class="ti ti-truck-delivery"></i> Pedir a proveedores</button>
       <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
       <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package"></i> Registrar entrega</button>`;
   } else {
@@ -5833,44 +5835,87 @@ async function otCmpMotivoCargar(ot) {
   box.innerHTML = cmpMotivoCaja(o, r.puede).replace(/cmpMotivoEditar\((\d+)\)/g, "cmpMotivoEditar($1, () => otCmpMotivoCargar(window._otActual))");
 }
 
+// Lo que hay que comprar, agrupado por proveedor: con su teléfono y el texto
+// listo para mandarle por WhatsApp.
+async function cmpPedirProveedores(otId) {
+  const r = await api(`/api/compras/${otId}/por_proveedor`).catch(() => null);
+  if (!r || !r.ok) { toast("No se pudo armar el pedido", "error"); return; }
+  const texto = g => `Buenas${g.contacto ? " " + g.contacto.split(" ")[0] : ""}, de La Santaniana. Necesitamos:\n` +
+    g.renglones.map(x => `• ${preCant(x.cantidad)} × ${x.descripcion}${x.codigo_prov || x.codigo ? ` (cód. ${x.codigo_prov || x.codigo})` : ""}`).join("\n") +
+    `\nOT #${otId}. ¿Tienen y a qué precio? Gracias.`;
+  const wa = tel => { let d = String(tel || "").replace(/\D/g, ""); if (!d) return ""; if (d.startsWith("0")) d = "595" + d.slice(1); else if (!d.startsWith("595")) d = "595" + d; return d.length >= 11 ? d : ""; };
+  window._cmpPed = r.grupos.map(texto);
+  const o = rvModal({
+    titulo: `Pedir a proveedores — OT #${otId}`, icono: "truck-delivery", ancho: 760, clase: "cmp-ped",
+    sub: `Lo que se compra, separado por proveedor${r.del_deposito ? ` · ${r.del_deposito} material${r.del_deposito === 1 ? "" : "es"} sale${r.del_deposito === 1 ? "" : "n"} del depósito` : ""}`,
+    cuerpo: r.grupos.length ? r.grupos.map((g, i) => `
+      <div class="cmp-ped-g ${g.proveedor ? "" : "sin"}">
+        <div class="cmp-ped-cab">
+          <div><b>${g.proveedor ? trEsc(g.fantasia || g.proveedor) : "Sin proveedor elegido"}</b>
+            <small>${[g.fantasia && g.proveedor, g.contacto, g.telefono, g.ruc && "RUC " + g.ruc].filter(Boolean).map(trEsc).join(" · ")}</small></div>
+          <span class="cmp-ped-tot">${g.total ? gs(g.total) : ""}</span>
+        </div>
+        <table class="cmp-ped-t"><tbody>${g.renglones.map(x => `<tr>
+          <td class="q">${preCant(x.cantidad)}</td>
+          <td>${trEsc(x.descripcion)}${x.codigo_prov || x.codigo ? `<small>cód. ${trEsc(x.codigo_prov || x.codigo)}</small>` : ""}</td>
+          <td class="c">${x.coche ? "coche " + trEsc(x.coche) : ""}</td>
+          <td class="num">${x.precio ? preMil(x.precio) : "—"}</td></tr>`).join("")}</tbody></table>
+        ${g.proveedor ? `<div class="cmp-ped-acc">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(window._cmpPed[${i}]).then(()=>toast('Pedido copiado','success'))"><i class="ti ti-copy"></i> Copiar pedido</button>
+          ${wa(g.telefono) ? `<a class="btn btn-sm cmp-wa" target="_blank" rel="noopener" href="https://wa.me/${wa(g.telefono)}?text=${encodeURIComponent(texto(g))}"><i class="ti ti-brand-whatsapp"></i> Mandar por WhatsApp</a>` : `<span class="cmp-ped-sintel">Sin teléfono: cargalo en Proveedores</span>`}
+        </div>` : `<div class="cmp-ped-sintel">Elegí el proveedor en «Editar precios».</div>`}
+      </div>`).join("") : `<div class="empty"><i class="ti ti-building-warehouse"></i>No hay nada para comprar: todo sale del depósito.</div>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button></div>`,
+  });
+}
+
 // Modal para cargar/editar precios del presupuesto: el precio por unidad de
 // cada material (el subtotal y el total se ven al escribir). El trabajo que no
 // tiene materiales anotados lleva un solo precio, como antes.
+// Presupuesto conectado con el depósito y los proveedores: cada material se
+// engancha con su repuesto del inventario. Si hay stock, puede salir del
+// depósito (no se le pide plata a Tesorería); si se compra, se elige el
+// proveedor entre los que lo venden, con su último precio.
+const pre = { ot: null, mats: {} };
+const preMil = v => Math.round(+v || 0).toLocaleString("es-PY").replace(/,/g, ".");
 async function abrirPresupuesto(otId) {
-  const ots = await api("/api/compras/ots");
+  const [ots, det] = await Promise.all([api("/api/compras/ots"), api(`/api/compras/${otId}/repuestos`).catch(() => null)]);
   const o = ots.find(x => x.id === otId);
   if (!o) return;
+  pre.ot = o;
+  pre.mats = {};
+  ((det && det.materiales) || []).forEach(m => pre.mats[m.id] = m);
   const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
+  overlay.className = "modal-overlay pre-overlay";
   overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
-  const precio = v => v ? String(Math.round(v)) : "";
+  const precio = v => v ? preMil(v) : "";
   const fila = it => {
     const mats = it.materiales || [];
     if (!mats.length) return `<tr class="pre-trab">
         <td><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>
         <td class="center" style="color:var(--lighter)">—</td>
         <td style="color:var(--muted);font-size:12.5px">${it.material_pedido ? trEsc(it.material_pedido) : "Sin materiales anotados: precio del trabajo"}</td>
+        <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" list="pre-prov-dl" oninput="preProvBuscar(this)"></td>
         <td><input class="pre-in pre-item" data-id="${it.id}" data-q="1" inputmode="numeric" value="${precio(it.precio_compras)}" placeholder="0" oninput="preRecalcular()"></td>
-        <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" style="width:135px;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:8px"></td>
         <td class="num pre-sub">—</td></tr>`;
-    return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}">
+    return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}" data-mid="${m.id}">
         ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>` : ""}
-        <td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
-        <td style="font-size:13px">${trEsc(m.descripcion)}</td>
-        <td><input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" inputmode="numeric" value="${precio(m.precio_unit)}" placeholder="0" oninput="preRecalcular()"></td>
-        <td><input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(m.proveedor || "")}" placeholder="Proveedor" style="width:135px;max-width:100%;box-sizing:border-box;padding:8px;border:1px solid var(--border);border-radius:8px"></td>
-        <td class="num pre-sub">—</td></tr>`).join("");
+        ${preCeldasMat(m)}</tr>`).join("");
   };
+  const conRep = Object.values(pre.mats).filter(m => m.repuesto).length, total = Object.keys(pre.mats).length;
   overlay.innerHTML = `
-    <div class="pre-modal">
+    <div class="pre-modal pre-modal-rep">
       <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
-      <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Poné el precio <b>por unidad</b> de cada material: el subtotal sale solo con la cantidad. ${cmpTituloCoches(o)}</p>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px">${cmpTituloCoches(o)} · Enganchá cada material con su repuesto del inventario: si hay en el depósito sale de ahí, y si se compra elegís el proveedor con su último precio.</p>
+      ${total ? `<div class="pre-resumen" id="pre-resumen">${preResumen()}</div>` : ""}
       <div class="table-wrap"><table class="pre-tabla">
-        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material</th><th class="num">Precio unitario (Gs.)</th><th>Proveedor</th><th class="num">Subtotal</th></tr></thead>
-        <tbody>${cmpPorCoche(o, fila, 5)}</tbody>
+        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material y repuesto</th><th>Proveedor</th><th class="num">Precio unitario (Gs.)</th><th class="num">Subtotal</th></tr></thead>
+        <tbody>${cmpPorCoche(o, fila, 6)}</tbody>
       </table></div>
+      <datalist id="pre-prov-dl"></datalist>
       <div class="pre-total"><span>Total a pedir a Tesorería</span><b id="pre-total">Gs. 0</b></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+      <div class="pre-pie">
+        <span class="pre-pie-n">${total ? `${conRep} de ${total} materiales enganchados con el inventario` : ""}</span>
         <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
         <button class="btn btn-primary" onclick="guardarPresupuesto(${o.id}, this)"><i class="ti ti-check"></i> Guardar presupuesto</button>
       </div>
@@ -5878,7 +5923,168 @@ async function abrirPresupuesto(otId) {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   document.body.appendChild(overlay);
   preRecalcular();
-  overlay.querySelector(".pre-in")?.focus();
+  overlay.querySelector(".pre-in:not([disabled])")?.focus();
+}
+
+function preResumen() {
+  const ms = Object.values(pre.mats);
+  const dep = ms.filter(m => m.origen === "deposito").length;
+  const sin = ms.filter(m => !m.repuesto).length;
+  const hay = ms.filter(m => m.repuesto && m.origen !== "deposito" && m.disponible >= m.cantidad && m.cantidad > 0).length;
+  return `<span><i class="ti ti-building-warehouse"></i> <b>${dep}</b> del depósito</span>
+    <span><i class="ti ti-shopping-cart"></i> <b>${ms.length - dep}</b> a comprar</span>
+    ${hay ? `<span class="pre-ojo"><i class="ti ti-alert-circle"></i> <b>${hay}</b> se compra${hay === 1 ? "" : "n"} pero hay en el depósito</span>` : ""}
+    ${sin ? `<span class="pre-gris"><i class="ti ti-link-off"></i> <b>${sin}</b> sin enganchar al inventario</span>` : ""}`;
+}
+
+// Las celdas de un material (cantidad, material+repuesto, proveedor, precio, subtotal)
+function preCeldasMat(m) {
+  const d = pre.mats[m.id] || m;
+  const r = d.repuesto, dep = d.origen === "deposito";
+  const q = +d.cantidad || +m.cantidad || 0;
+  const unidad = d.en_contenido ? " " + (d.unidad_material || "litros") : (r && r.unidad && r.unidad !== "u" ? " " + r.unidad : "");
+  let repHtml;
+  if (r) {
+    const alcanza = d.disponible >= q;
+    repHtml = `<div class="pre-rep ${dep ? "dep" : ""}">
+        <button type="button" class="pre-rep-chip" onclick="preBuscarRep(${m.id})" title="Cambiar el repuesto">
+          <i class="ti ti-package"></i> <b>${trEsc(r.codigo)}</b> ${trEsc(r.descripcion)}${r.marca ? ` · ${trEsc(r.marca)}` : ""}</button>
+        <div class="pre-stock ${d.disponible > 0 ? (alcanza ? "ok" : "poco") : "no"}">
+          ${d.disponible > 0 ? `Hay ${preCant(d.disponible)}${unidad} en el depósito${r.ubicacion ? ` · ${trEsc(r.ubicacion)}` : ""}${d.apartado_otras ? ` <small>(${preCant(d.apartado_otras)} apartado para otras OTs)</small>` : ""}` : "Sin stock en el depósito"}
+        </div>
+        ${d.disponible > 0 || dep ? `<div class="pre-origen" role="group" aria-label="De dónde sale">
+          <button type="button" class="${dep ? "" : "on"}" onclick="preOrigen(${m.id}, '')"><i class="ti ti-shopping-cart"></i> Se compra</button>
+          <button type="button" class="${dep ? "on" : ""}" ${!alcanza && !dep ? `title="No alcanza para ${preCant(q)}"` : ""} onclick="preOrigen(${m.id}, 'deposito')"><i class="ti ti-building-warehouse"></i> Del depósito</button>
+        </div>` : ""}
+      </div>`;
+  } else {
+    const sug = d.sugerencias || [];
+    repHtml = `<div class="pre-rep">
+        ${sug.length ? `<div class="pre-sug"><span>¿Es alguno de estos?</span>${sug.slice(0, 3).map(s => `<button type="button" onclick="preVincular(${m.id}, ${s.id})" title="${trEsc(s.descripcion)}">
+            <b>${trEsc(s.codigo)}</b> ${trEsc(s.descripcion.slice(0, 38))}${s.descripcion.length > 38 ? "…" : ""} <em class="${+s.stock_actual > 0 ? "ok" : ""}">${+s.stock_actual > 0 ? "hay " + preCant(s.stock_actual) : "sin stock"}</em></button>`).join("")}</div>` : ""}
+        <button type="button" class="pre-link" onclick="preBuscarRep(${m.id})"><i class="ti ti-search"></i> Buscar en el inventario</button>
+      </div>`;
+  }
+  // Proveedor: los que venden ese repuesto, con su precio; o cualquiera del directorio
+  const provs = (r && d.proveedores) || [];
+  const actual = (d.proveedor || "").trim();
+  const enLista = provs.some(p => p.proveedor.toLowerCase() === actual.toLowerCase());
+  let provHtml;
+  if (dep) provHtml = `<span class="pre-dep-txt"><i class="ti ti-building-warehouse"></i> No se compra</span>`;
+  else if (provs.length) provHtml = `
+      <select class="pre-prov-sel" data-mid="${m.id}" onchange="preProvElegir(this)" aria-label="Proveedor">
+        <option value="">Elegí proveedor…</option>
+        ${provs.map(p => `<option value="${trEsc(p.proveedor)}" data-precio="${p.precio}" ${p.proveedor.toLowerCase() === actual.toLowerCase() ? "selected" : ""}>${trEsc(p.fantasia || p.proveedor)}${p.precio ? ` — ${preMil(p.precio)}` : ""}${p.mas_barato ? " ★ más barato" : ""}</option>`).join("")}
+        <option value="__otro" ${actual && !enLista ? "selected" : ""}>Otro proveedor…</option>
+      </select>
+      <input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Nombre del proveedor" list="pre-prov-dl" oninput="preProvBuscar(this)" ${actual && !enLista ? "" : "hidden"}>`;
+  else provHtml = `<input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Proveedor" list="pre-prov-dl" oninput="preProvBuscar(this)">`;
+  const costo = r ? (+r.costo_unitario || 0) / (d.en_contenido && +r.contenido ? +r.contenido : 1) : 0;
+  return `<td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
+    <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(m.descripcion)}</div>${repHtml}</td>
+    <td class="pre-prov-td">${provHtml}</td>
+    <td>${dep
+      ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" value="0" disabled title="Sale del depósito: no se pide plata"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
+      : `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" inputmode="numeric" value="${d.precio_unit ? preMil(d.precio_unit) : ""}" placeholder="0" oninput="preRecalcular()">${costo && r ? `<div class="pre-costo">último costo ${preMil(costo)}</div>` : ""}`}</td>
+    <td class="num pre-sub">—</td>`;
+}
+const preCant = q => { q = +q || 0; return Number.isInteger(q) ? String(q) : q.toFixed(2).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","); };
+
+// Vuelve a dibujar un material sin perder lo que ya se escribió en los otros
+function preRepintar(mid) {
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  if (!tr) return;
+  const primero = tr.querySelector("td[rowspan]");
+  const cab = primero ? primero.outerHTML : "";
+  tr.innerHTML = cab + preCeldasMat({ id: mid, ...pre.mats[mid] });
+  const res = document.getElementById("pre-resumen");
+  if (res) res.innerHTML = preResumen();
+  const n = document.querySelector(".pre-pie-n"), ms = Object.values(pre.mats);
+  if (n) n.textContent = `${ms.filter(m => m.repuesto).length} de ${ms.length} materiales enganchados con el inventario`;
+  preRecalcular();
+}
+async function preRefrescar(mid) {
+  // guarda lo escrito en este material antes de pedir de nuevo
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  const precioIn = tr && tr.querySelector(".pre-mat:not([disabled])"), provIn = tr && tr.querySelector(".pre-prov-in");
+  const det = await api(`/api/compras/${pre.ot.id}/repuestos`).catch(() => null);
+  if (!det || !det.ok) return;
+  det.materiales.forEach(m => {
+    const viejo = pre.mats[m.id];
+    pre.mats[m.id] = m;
+    if (m.id === mid && viejo) {
+      if (precioIn && precioIn.value.trim()) m.precio_unit = preNum(precioIn.value);
+      if (provIn && provIn.value.trim()) m.proveedor = provIn.value.trim();
+    }
+  });
+  preRepintar(mid);
+}
+async function preVincular(mid, rid, origen = "") {
+  const r = await api(`/api/compras/${pre.ot.id}/vincular`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ material_id: mid, repuesto_id: rid, origen })
+  }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo enganchar", "error"); return; }
+  await preRefrescar(mid);
+}
+function preOrigen(mid, origen) {
+  const d = pre.mats[mid];
+  if (!d || !d.repuesto) return;
+  if (origen === "deposito" && d.disponible < d.cantidad && !confirm(`En el depósito hay ${preCant(d.disponible)} y se necesitan ${preCant(d.cantidad)}. ¿Sale igual del depósito?`)) return;
+  preVincular(mid, d.repuesto.id, origen);
+}
+function preProvElegir(sel) {
+  const mid = sel.dataset.mid, tr = sel.closest("tr");
+  const inp = tr.querySelector(".pre-prov-in"), precio = tr.querySelector(".pre-mat");
+  if (sel.value === "__otro") { inp.hidden = false; inp.value = ""; inp.focus(); return; }
+  inp.hidden = true;
+  inp.value = sel.value;
+  const p = +sel.selectedOptions[0]?.dataset.precio || 0;
+  if (p && precio && !precio.disabled) { precio.value = preMil(p); preRecalcular(); }
+  if (pre.mats[mid]) pre.mats[mid].proveedor = sel.value;
+}
+let _preProvT;
+function preProvBuscar(inp) {
+  clearTimeout(_preProvT);
+  const q = inp.value.trim();
+  if (q.length < 2) return;
+  _preProvT = setTimeout(async () => {
+    const l = await api(`/api/repuestos/proveedores?q=${encodeURIComponent(q)}&limite=12`).catch(() => null);
+    const dl = document.getElementById("pre-prov-dl");
+    const arr = Array.isArray(l) ? l : ((l && (l.proveedores || l.lista)) || []);
+    if (dl) dl.innerHTML = arr.map(p => `<option value="${trEsc(p.nombre)}">${trEsc(p.fantasia || p.ruc || "")}</option>`).join("");
+  }, 200);
+}
+// Buscar el repuesto en el inventario
+function preBuscarRep(mid) {
+  const d = pre.mats[mid];
+  const o = rvModal({
+    titulo: "¿Qué repuesto es?", icono: "package", ancho: 640, clase: "pre-busca",
+    sub: `${trEsc(d ? d.descripcion : "")} · buscá por código, descripción, marca o aplicación`,
+    cuerpo: `<label class="pre-busca-in"><i class="ti ti-search"></i><input placeholder="Ej: filtro aceite, 1873016, Mann…" value="${trEsc(d ? (d.descripcion || "").split(/\s+/).slice(0, 2).join(" ") : "")}" autocomplete="off"></label>
+      <div class="pre-busca-res"></div>`,
+    pie: `<div class="pre-pie">${d && d.repuesto ? `<button type="button" class="pv-link" style="margin-right:auto;color:var(--danger)" id="pre-desv">Desenganchar</button>` : ""}
+      <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`,
+  });
+  const inp = o.querySelector("input"), res = o.querySelector(".pre-busca-res");
+  let t;
+  const buscar = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { res.innerHTML = `<p class="pre-busca-vacio">Escribí al menos dos letras.</p>`; return; }
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    const l = (r && r.lista) || [];
+    res.innerHTML = l.length ? l.map(x => `<button type="button" data-id="${x.id}">
+        <span class="pre-br-cod">${trEsc(x.codigo)}</span>
+        <span class="pre-br-desc"><b>${trEsc(x.descripcion)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
+        <span class="pre-br-stock ${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""}` : "sin stock"}<small>${x.ubicacion ? trEsc(x.ubicacion) : ""}</small></span>
+      </button>`).join("") : `<p class="pre-busca-vacio">No está en el inventario. Se puede comprar igual: escribí el proveedor a mano. Si se va a comprar seguido, cargalo en <b>Inventario Repuestos</b>.</p>`;
+    res.querySelectorAll("button").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
+  };
+  inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(buscar, 220); });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button")?.click(); } });
+  const desv = o.querySelector("#pre-desv");
+  if (desv) desv.onclick = async () => { o.remove(); await preVincular(mid, 0); };
+  setTimeout(() => { inp.focus(); inp.select(); buscar(); }, 60);
 }
 
 const preNum = v => parseFloat(String(v || "").replace(/\./g, "").replace(/,/g, ".").replace(/[^\d.]/g, "")) || 0;
@@ -5901,6 +6107,7 @@ async function guardarPresupuesto(otId, btn) {
   });
   let alguno = false;
   document.querySelectorAll(".pre-modal .pre-in").forEach(inp => {
+    if (inp.disabled) { materiales[inp.dataset.id] = 0; alguno = true; return; }   // sale del depósito
     if (!inp.value.trim()) return;
     (inp.classList.contains("pre-mat") ? materiales : precios)[inp.dataset.id] = preNum(inp.value);
     alguno = true;
@@ -6033,6 +6240,9 @@ async function confirmarEntrega(otId, btn) {
   });
   if (r.ok) {
     toast(`Entregado en ${taller} — recibió ${recibe}`, "success");
+    const st = r.stock || {};
+    if (st.problemas && st.problemas.length) setTimeout(() => toast("Inventario: " + st.problemas.join(" · "), "error"), 600);
+    else if (st.movidos) setTimeout(() => toast(`Inventario al día: ${st.movidos} repuesto${st.movidos === 1 ? "" : "s"} movido${st.movidos === 1 ? "" : "s"} (entraron y salieron para la OT)`, "success"), 600);
     btn.closest(".modal-overlay").remove();
     renderCompras();
   } else { toast(r.msg || "Error", "error"); btn.disabled = false; }
