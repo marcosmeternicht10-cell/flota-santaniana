@@ -283,22 +283,21 @@ def materiales_de_items(conn, item_ids):
     if not item_ids:
         return {}
     out = {i: [] for i in item_ids}
-    try:
-        filas = conn.execute(f"""
-            SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor,
-                   repuesto_id, COALESCE(origen,'') AS origen, COALESCE(stock_nota,'') AS stock_nota
-            FROM ot_materiales WHERE item_id IN ({marcas(item_ids)}) ORDER BY orden, id
-        """, item_ids).fetchall()
-    except Exception:
-        _rollback(conn)
-        try:   # sin las columnas del depósito (todavía no se crearon)
-            filas = conn.execute(f"""
-                SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor
-                FROM ot_materiales WHERE item_id IN ({marcas(item_ids)}) ORDER BY orden, id
-            """, item_ids).fetchall()
+    base = "id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor"
+    deposito = ", repuesto_id, COALESCE(origen,'') AS origen, COALESCE(stock_nota,'') AS stock_nota"
+    entrega = (", COALESCE(entregado_el,'') AS entregado_el, COALESCE(precio_presup,0) AS precio_presup,"
+               " COALESCE(factura,'') AS factura")
+    filas = None
+    # Con todas las columnas; si alguna todavía no existe, con menos
+    for cols in (base + deposito + entrega, base + deposito, base):
+        try:
+            filas = conn.execute(f"SELECT {cols} FROM ot_materiales WHERE item_id IN ({marcas(item_ids)}) ORDER BY orden, id",
+                                 item_ids).fetchall()
+            break
         except Exception:
             _rollback(conn)
-            return out
+    if filas is None:
+        return out
     for f in filas:
         d = dict(f)
         d["cantidad"] = float(d.get("cantidad") or 0)

@@ -41,6 +41,10 @@ COLUMNAS = [
     ("origen", "TEXT DEFAULT ''"),            # '' = se compra · 'deposito' = sale del depósito
     ("stock_aplicado", "INTEGER DEFAULT 0"),  # 1 cuando ya se movió el stock al entregar
     ("stock_nota", "TEXT DEFAULT ''"),        # qué pasó al mover el stock (o por qué no se pudo)
+    ("entregado_el", "TEXT DEFAULT ''"),      # cuándo llegó y se entregó (vacío = pendiente)
+    ("entregado_por", "TEXT DEFAULT ''"),
+    ("precio_presup", "REAL DEFAULT 0"),      # el precio del presupuesto (precio_unit queda con el real)
+    ("factura", "TEXT DEFAULT ''"),           # número de factura del proveedor
 ]
 PALABRAS_VACIAS = {"de", "del", "la", "el", "los", "las", "para", "con", "y", "x", "un", "una", "por", "en", "a"}
 
@@ -64,6 +68,23 @@ def init_compras_repuestos():
                 if col not in ya:
                     conn.execute(f"ALTER TABLE ot_materiales ADD COLUMN {col} {tipo}")
         conn.commit()
+        # Trabajos sin materiales (precio del trabajo): también se reciben
+        try:
+            import ot_materiales as om
+            om._agregar_columna(conn, "ot_items", "entregado_el", "TEXT DEFAULT ''")
+        except Exception:
+            _rollback(conn)
+        # Lo que ya estaba entregado antes de esto queda como entregado
+        try:
+            conn.execute("""UPDATE ot_materiales SET entregado_el = COALESCE(NULLIF(o.fecha_entrega,''), 'antes')
+                            FROM ordenes_trabajo o WHERE o.id = ot_materiales.ot_id AND o.estado_compras='entregado'
+                            AND COALESCE(ot_materiales.entregado_el,'')=''""" if USE_POSTGRES else
+                         """UPDATE ot_materiales SET entregado_el = COALESCE((SELECT NULLIF(o.fecha_entrega,'') FROM ordenes_trabajo o
+                                WHERE o.id = ot_materiales.ot_id AND o.estado_compras='entregado'), '')
+                            WHERE COALESCE(entregado_el,'')='' AND ot_id IN (SELECT id FROM ordenes_trabajo WHERE estado_compras='entregado')""")
+            conn.commit()
+        except Exception:
+            _rollback(conn)
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS ix_otmat_rep ON ot_materiales (repuesto_id)")
             conn.commit()
@@ -99,7 +120,9 @@ def _materiales(conn, ids):
     return [dict(r) for r in conn.execute(f"""
         SELECT x.id, x.item_id, x.ot_id, x.descripcion, x.cantidad, x.precio_unit, x.proveedor,
                x.repuesto_id, COALESCE(x.origen,'') AS origen, COALESCE(x.stock_aplicado,0) AS stock_aplicado,
-               COALESCE(x.stock_nota,'') AS stock_nota, i.descripcion AS trabajo
+               COALESCE(x.stock_nota,'') AS stock_nota, i.descripcion AS trabajo,
+               COALESCE(x.entregado_el,'') AS entregado_el, COALESCE(x.precio_presup,0) AS precio_presup,
+               COALESCE(x.factura,'') AS factura
         FROM ot_materiales x LEFT JOIN ot_items i ON i.id = x.item_id
         WHERE x.ot_id IN ({m}) ORDER BY x.ot_id, x.item_id, x.orden, x.id""", ids).fetchall()]
 
@@ -269,16 +292,18 @@ def _num_txt(q):
     return str(int(q)) if q == int(q) else f"{q:.2f}".rstrip("0").rstrip(".").replace(".", ",")
 
 
-def al_entregar(ot_id, usuario=""):
+def al_entregar(ot_id, usuario="", solo=None):
     """Al entregar: lo del depósito sale para la OT; lo comprado entra al
     inventario (con su costo y proveedor) y sale para la OT. Lo que no
-    alcanza no frena la entrega: queda anotado en el material."""
+    alcanza no frena la entrega: queda anotado en el material.
+    solo = los materiales que se entregan ahora (None = todos)."""
     import repuestos_db as rdb
     import ot_inventario as oti
     conn = get_connection()
     try:
         ids = _ids(conn, ot_id)
-        mats = [x for x in _materiales(conn, ids) if x["repuesto_id"] and not x["stock_aplicado"]]
+        mats = [x for x in _materiales(conn, ids) if x["repuesto_id"] and not x["stock_aplicado"]
+                and (solo is None or x["id"] in solo)]
     finally:
         conn.close()
     hechos, problemas = 0, []
@@ -319,6 +344,203 @@ def al_entregar(ot_id, usuario=""):
               aplicado=True)
         hechos += 1
     return {"movidos": hechos, "problemas": problemas}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# RECEPCIÓN: qué llegó, a qué precio, con qué factura (y lo que falta)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _num_gs(v):
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v or "").strip().replace(".", "").replace(",", ".")
+    try:
+        return float(t or 0)
+    except ValueError:
+        return 0.0
+
+
+def _hoy():
+    try:
+        from hora_local import ahora_iso
+        return ahora_iso()
+    except Exception:
+        from datetime import datetime
+        return datetime.now().isoformat(timespec="seconds")
+
+
+def recibir(ot_id, d, usuario=""):
+    """Registra lo que llegó y se entrega al taller. Lo que no se marca queda
+    pendiente y la OT sigue «en camino». Con la factura de cada proveedor
+    se carga el pago en Tesorería.
+      d = {materiales: [{id, precio}], items: [{id, precio}],
+           facturas: [{proveedor, numero, monto, dias, tesoreria}],
+           taller_entrega, recibido_por, foto}
+    Sin 'materiales' ni 'items': se entrega todo lo pendiente (como antes)."""
+    recibe = re.sub(r"\s+", " ", str(d.get("recibido_por") or "")).strip()[:120]
+    if not recibe:
+        return {"ok": False, "msg": "Indicá quién recibió el material"}
+    taller = re.sub(r"\s+", " ", str(d.get("taller_entrega") or "Taller propio")).strip()[:120] or "Taller propio"
+    foto = d.get("foto")
+    if foto and len(foto) > 800000:
+        return {"ok": False, "msg": "La foto es muy grande"}
+    ahora = _hoy()
+    todo = "materiales" not in d and "items" not in d
+    sel_m = {int(x.get("id")): x for x in d.get("materiales") or [] if str(x.get("id") or "").isdigit()}
+    sel_i = {int(x.get("id")): x for x in d.get("items") or [] if str(x.get("id") or "").isdigit()}
+    facturas = {}
+    for f in d.get("facturas") or []:
+        for nom in (f.get("nombres") or [f.get("proveedor") or ""]):
+            facturas[_norm(nom or "").strip()] = f
+    conn = get_connection()
+    entregados, tocados = [], set()
+    try:
+        ids = _ids(conn, ot_id)
+        m = ",".join("?" * len(ids))
+        items = {r["id"]: dict(r) for r in conn.execute(
+            f"SELECT id, ot_id, COALESCE(estado_pago,'') AS estado_pago, COALESCE(entregado_el,'') AS entregado_el, "
+            f"COALESCE(proveedor_compras,'') AS proveedor_compras FROM ot_items WHERE ot_id IN ({m})", ids).fetchall()}
+        mats = _materiales(conn, ids)
+        con_mat = {x["item_id"] for x in mats}
+        for x in mats:
+            if x["entregado_el"] or x["stock_aplicado"]:
+                continue
+            if items.get(x["item_id"], {}).get("estado_pago") == "espera":
+                continue                      # Tesorería todavía no lo cubrió
+            if not todo and x["id"] not in sel_m:
+                continue
+            sets, vals = ["entregado_el=?", "entregado_por=?"], [ahora, recibe]
+            p = sel_m.get(x["id"], {}).get("precio")
+            if x["origen"] != "deposito" and p not in (None, ""):
+                p = _num_gs(p)
+                if p >= 0 and abs(p - float(x["precio_unit"] or 0)) > 0.5:
+                    if not float(x["precio_presup"] or 0):
+                        sets.append("precio_presup=?")
+                        vals.append(float(x["precio_unit"] or 0))
+                    sets.append("precio_unit=?")
+                    vals.append(p)
+            fac = facturas.get(_norm(x["proveedor"] or "").strip())
+            if fac and str(fac.get("numero") or "").strip():
+                sets.append("factura=?")
+                vals.append(str(fac["numero"]).strip()[:40])
+            conn.execute(f"UPDATE ot_materiales SET {', '.join(sets)} WHERE id=?", vals + [x["id"]])
+            entregados.append(x["id"])
+            tocados.add(x["item_id"])
+        import ot_materiales as om
+        for iid in tocados:
+            om.resumir_item(conn, iid)
+        # Trabajos sin materiales (precio del trabajo)
+        n_items = 0
+        for iid, it in items.items():
+            if iid in con_mat or it["entregado_el"] or it["estado_pago"] == "espera":
+                continue
+            if not todo and iid not in sel_i:
+                continue
+            p = sel_i.get(iid, {}).get("precio")
+            if p not in (None, ""):
+                conn.execute("UPDATE ot_items SET precio_compras=?, entregado_el=? WHERE id=?", (_num_gs(p), ahora, iid))
+            else:
+                conn.execute("UPDATE ot_items SET entregado_el=? WHERE id=?", (ahora, iid))
+            n_items += 1
+        if foto:
+            conn.execute("INSERT INTO compras_evidencia (ot_id, datos, nombre, fecha) VALUES (?,?,?,?)",
+                         (ot_id, foto, "entrega.jpg", ahora))
+        conn.commit()
+    except Exception as e:
+        _rollback(conn)
+        conn.close()
+        return {"ok": False, "msg": f"No se pudo registrar: {e}"}
+    conn.close()
+    if not entregados and not n_items and not todo:
+        return {"ok": False, "msg": "Marcá lo que llegó"}
+    # El stock: lo del depósito sale, lo comprado entra (a su precio real) y sale
+    stock = {"movidos": 0, "problemas": []}
+    try:
+        stock = al_entregar(ot_id, usuario, solo=set(entregados))
+    except Exception as e:
+        stock["problemas"].append(f"No se pudo mover el stock: {e}")
+    # ¿Queda algo por llegar?
+    pend = pendientes(ot_id)
+    conn = get_connection()
+    try:
+        ids = _ids(conn, ot_id)
+        for i in ids:
+            if pend["cantidad"]:
+                conn.execute("UPDATE ordenes_trabajo SET taller_entrega=?, recibido_por=? WHERE id=?", (taller, recibe, i))
+            else:
+                conn.execute("""UPDATE ordenes_trabajo SET estado_compras='entregado', fecha_entrega=?,
+                                taller_entrega=?, recibido_por=? WHERE id=?""", (ahora, taller, recibe, i))
+        conn.commit()
+    finally:
+        conn.close()
+    # Facturas → Tesorería (pago a proveedor)
+    teso = []
+    for f in (d.get("facturas") or []):
+        if not f.get("tesoreria"):
+            continue
+        monto = _num_gs(f.get("monto"))
+        if monto <= 0:
+            continue
+        r = a_tesoreria(f, monto, f"repuestos de la OT #{ot_id}", f"compra:OT:{ot_id}")
+        teso.append(r)
+    return {"ok": True, "entregados": len(entregados) + n_items, "pendientes": pend, "stock": stock, "tesoreria": teso,
+            "msg": ("Entregado. " if not pend["cantidad"] else f"Entregado en parte: faltan {pend['cantidad']}. ")}
+
+
+def pendientes(ot_id):
+    """Lo que falta que llegue (sin contar lo que espera fondos)."""
+    conn = get_connection()
+    try:
+        ids = _ids(conn, ot_id)
+        m = ",".join("?" * len(ids))
+        espera = {r["id"] for r in conn.execute(f"SELECT id FROM ot_items WHERE ot_id IN ({m}) AND estado_pago='espera'", ids).fetchall()}
+        mats = _materiales(conn, ids)
+        con_mat = {x["item_id"] for x in mats}
+        faltan = [x["descripcion"] for x in mats if not x["entregado_el"] and not x["stock_aplicado"] and x["item_id"] not in espera]
+        for r in conn.execute(f"""SELECT id, descripcion FROM ot_items WHERE ot_id IN ({m})
+                                  AND COALESCE(entregado_el,'')='' AND COALESCE(estado_pago,'') <> 'espera'
+                                  AND COALESCE(precio_compras,0) > 0""", ids).fetchall():
+            if r["id"] not in con_mat:
+                faltan.append(r["descripcion"])
+        return {"cantidad": len(faltan), "lista": faltan[:12]}
+    finally:
+        conn.close()
+
+
+def a_tesoreria(f, monto, que, referencia):
+    """La factura del proveedor como pago programado en Tesorería."""
+    from datetime import date, timedelta
+    try:
+        import tesoreria
+    except Exception as e:
+        return {"ok": False, "msg": f"Tesorería no disponible: {e}"}
+    try:
+        dias = max(0, min(180, int(f.get("dias") or 0)))
+    except (TypeError, ValueError):
+        dias = 0
+    prov = re.sub(r"\s+", " ", str(f.get("proveedor") or "")).strip()[:150]
+    num = str(f.get("numero") or "").strip()[:30]
+    ruc = ""
+    try:
+        import repuestos_multi as multi
+        conn = get_connection()
+        try:
+            r = conn.execute("SELECT ruc FROM repuestos_proveedores WHERE clave=?", (multi._clave(prov),)).fetchone()
+            ruc = (r["ruc"] or "") if r else ""
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    vence = (date.today() + timedelta(days=dias)).isoformat()
+    r = tesoreria.guardar_programado({
+        "tipo": "egreso", "monto": monto, "fecha": vence, "concepto": "Repuestos",
+        "descripcion": (f"Factura {num} · " if num else "Factura · ") + que,
+        "contraparte": prov, "ruc": ruc, "doc_numero": num, "medio": "transferencia",
+        "nota": ("Contado" if not dias else f"A {dias} días") + f" · cargado desde Compras ({referencia})",
+    })
+    r["proveedor"] = prov
+    r["vence"] = vence
+    return r
 
 
 def _nota(mid, texto, aplicado):
@@ -531,6 +753,92 @@ def crear_repuesto(ot_id, material_id, d, usuario=""):
         finally:
             conn.close()
     return {"ok": True, "id": rid, "codigo": codigo, "msg": f"Repuesto {codigo} creado en el inventario y enganchado"}
+
+
+def agregar_material(ot_id, d, usuario=""):
+    """Compras agrega un repuesto a un trabajo (aunque el taller no haya
+    anotado nada): del inventario (queda enganchado) o escrito a mano."""
+    try:
+        item_id = int(d.get("item_id") or 0)
+        cant = float(str(d.get("cantidad") or "1").replace(",", "."))
+    except (TypeError, ValueError):
+        return {"ok": False, "msg": "Revisá la cantidad"}
+    if cant <= 0 or cant > 9999:
+        return {"ok": False, "msg": "La cantidad tiene que ser mayor a cero"}
+    rid = int(d.get("repuesto_id") or 0) or None
+    desc = re.sub(r"\s+", " ", str(d.get("descripcion") or "")).strip()[:200]
+    conn = get_connection()
+    try:
+        ids = _ids(conn, ot_id)
+        it = conn.execute(f"SELECT id, ot_id FROM ot_items WHERE id=? AND ot_id IN ({','.join('?' * len(ids))})",
+                          [item_id] + ids).fetchone()
+        if not it:
+            return {"ok": False, "msg": "Ese trabajo no es de esta OT"}
+        if rid:
+            r = conn.execute("SELECT descripcion FROM repuestos WHERE id=?", (rid,)).fetchone()
+            if not r:
+                return {"ok": False, "msg": "Ese repuesto no está en el inventario"}
+            desc = desc or (r["descripcion"] or "").strip()
+        if not desc:
+            return {"ok": False, "msg": "Escribí qué repuesto es"}
+        n = conn.execute("SELECT COALESCE(MAX(orden),0) AS m FROM ot_materiales WHERE item_id=?", (item_id,)).fetchone()
+        try:
+            from hora_local import ahora_iso
+            ahora = ahora_iso()
+        except Exception:
+            ahora = ""
+        cur = conn.execute("""INSERT INTO ot_materiales (item_id, ot_id, descripcion, cantidad, precio_unit, orden,
+                                  registrado_por, registrado_el, repuesto_id, origen)
+                              VALUES (?,?,?,?,0,?,?,?,?,'')""",
+                           (item_id, it["ot_id"], desc, cant, int(n["m"] or 0) + 1, (usuario or "Compras")[:80], ahora, rid))
+        mid = cur.lastrowid or conn.execute("SELECT MAX(id) AS m FROM ot_materiales WHERE item_id=?", (item_id,)).fetchone()["m"]
+        import ot_materiales as om
+        om.resumir_item(conn, item_id)
+        conn.commit()
+    except Exception as e:
+        _rollback(conn)
+        return {"ok": False, "msg": f"No se pudo agregar: {e}"}
+    finally:
+        conn.close()
+    return {"ok": True, "id": mid, "msg": "Repuesto agregado"}
+
+
+def quitar_material(ot_id, mid):
+    conn = get_connection()
+    try:
+        ids = _ids(conn, ot_id)
+        m = conn.execute(f"SELECT id, item_id, stock_aplicado, COALESCE(entregado_el,'') AS ent FROM ot_materiales WHERE id=? AND ot_id IN ({','.join('?' * len(ids))})",
+                         [mid] + ids).fetchone()
+        if not m:
+            return False, "Ese material no es de esta OT"
+        if m["stock_aplicado"] or m["ent"]:
+            return False, "Ese material ya se entregó: no se puede quitar"
+        conn.execute("DELETE FROM ot_materiales WHERE id=?", (mid,))
+        import ot_materiales as om
+        om.resumir_item(conn, m["item_id"])
+        conn.commit()
+        return True, "Material quitado"
+    except Exception as e:
+        _rollback(conn)
+        return False, f"No se pudo quitar: {e}"
+    finally:
+        conn.close()
+
+
+@bp_compras_rep.route("/api/compras/<int:ot_id>/material_nuevo", methods=["POST"])
+def api_material_nuevo_compras(ot_id):
+    if not _puede(True):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    r = agregar_material(ot_id, request.get_json(silent=True) or {}, session.get("nombre") or session.get("usuario") or "")
+    return jsonify(r), (200 if r.get("ok") else 400)
+
+
+@bp_compras_rep.route("/api/compras/<int:ot_id>/material/<int:mid>", methods=["DELETE"])
+def api_quitar_material(ot_id, mid):
+    if not _puede(True):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    ok, msg = quitar_material(ot_id, mid)
+    return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
 
 
 @bp_compras_rep.route("/api/compras/<int:ot_id>/material/<int:mid>", methods=["POST"])

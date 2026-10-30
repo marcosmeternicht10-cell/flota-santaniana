@@ -231,6 +231,10 @@ init_tablero_taller()
 app.register_blueprint(bp_tablero)
 init_compras_repuestos()
 app.register_blueprint(bp_compras_rep)
+# Reposición del depósito: lo que está bajo el mínimo se pide al proveedor
+from compras_reposicion import bp_reposicion, init_compras_reposicion
+init_compras_reposicion()
+app.register_blueprint(bp_reposicion)
 init_cajas()
 app.register_blueprint(bp_cajas)
 init_tesoreria()
@@ -2365,24 +2369,20 @@ def api_compras_entregar(ot_id):
     """Compras entrega el material. Lo obligatorio es QUIÉN recibe (transfiere
     la responsabilidad). La foto de evidencia es opcional pero recomendada."""
     d = request.json or {}
-    recibido_por = (d.get("recibido_por") or "").strip()
-    if not recibido_por:
-        return jsonify({"ok": False, "msg": "Indicá quién recibió el material"}), 400
-    foto = d.get("foto")
-    if foto and len(foto) > 800000:
-        return jsonify({"ok": False, "msg": "La foto es muy grande"}), 400
+    # Lo que llegó (todo o una parte), a qué precio, y la factura de cada
+    # proveedor a Tesorería. Lo del depósito sale y lo comprado entra al
+    # inventario y sale para la OT.
+    import compras_repuestos
+    r = compras_repuestos.recibir(ot_id, d, session.get("nombre") or session.get("usuario") or "")
+    if not r.get("ok"):
+        return jsonify(r), 400
     taller = (d.get("taller_entrega") or "Taller propio").strip()
-    registrar_entrega_compras(ot_id, foto, taller_entrega=taller, recibido_por=recibido_por)
-    auditar(f"Registró la entrega de la OT #{ot_id}", "Compras",
-            f"Entregado en {taller} — recibió {recibido_por}" + (" (con foto)" if foto else ""),
+    pend = r["pendientes"]["cantidad"]
+    auditar(f"Registró la entrega{' parcial' if pend else ''} de la OT #{ot_id}", "Compras",
+            f"Entregado en {taller} — recibió {d.get('recibido_por')}" + (" (con foto)" if d.get("foto") else "")
+            + (f" · faltan {pend}" if pend else "") + (f" · {len(r['tesoreria'])} factura(s) a Tesorería" if r["tesoreria"] else ""),
             referencia=f"compras:{ot_id}")
-    stock = {"movidos": 0, "problemas": []}
-    try:   # lo del depósito sale y lo comprado entra al inventario y sale para la OT
-        import compras_repuestos
-        stock = compras_repuestos.al_entregar(ot_id, session.get("nombre") or session.get("usuario") or "")
-    except Exception as e:
-        stock["problemas"].append(f"No se pudo mover el stock: {e}")
-    return jsonify({"ok": True, "stock": stock})
+    return jsonify(r)
 
 
 @app.route("/api/compras/talleres", methods=["GET"])
