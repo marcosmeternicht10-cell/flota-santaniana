@@ -189,7 +189,7 @@ def detalle(ot_id):
         else:
             d["repuesto"] = None
             d["proveedores"] = []
-            d["sugerencias"] = sugerir(d["descripcion"])
+            d["sugerencias"] = [] if d["origen"] == "suelto" else sugerir(d["descripcion"])
         out.append(d)
     return out
 
@@ -207,7 +207,8 @@ def vincular(ot_id, material_id, repuesto_id, origen):
         rid = int(repuesto_id or 0) or None
         if rid and not conn.execute("SELECT 1 FROM repuestos WHERE id=?", (rid,)).fetchone():
             return False, "Ese repuesto no está en el inventario"
-        origen = "deposito" if (origen == "deposito" and rid) else ""
+        # '' = se compra · 'deposito' = sale del depósito · 'suelto' = se compra y no va al inventario
+        origen = "deposito" if (origen == "deposito" and rid) else ("suelto" if origen == "suelto" and not rid else "")
         sets = "repuesto_id=?, origen=?"
         vals = [rid, origen]
         if origen == "deposito":
@@ -428,6 +429,119 @@ def api_detalle(ot_id):
     if not _puede():
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
     return jsonify({"ok": True, "materiales": detalle(ot_id)})
+
+
+def editar_material(ot_id, material_id, d):
+    """Corregir lo que escribió el taller: la descripción y la cantidad."""
+    desc = re.sub(r"\s+", " ", str(d.get("descripcion") or "")).strip()[:200]
+    try:
+        cant = float(str(d.get("cantidad") or "0").replace(",", "."))
+    except ValueError:
+        cant = 0
+    if not desc:
+        return False, "Escribí qué es el material"
+    if cant <= 0:
+        return False, "La cantidad tiene que ser mayor a cero"
+    conn = get_connection()
+    try:
+        ids = _ids(conn, ot_id)
+        m = conn.execute(f"SELECT id, item_id, stock_aplicado FROM ot_materiales WHERE id=? AND ot_id IN ({','.join('?' * len(ids))})",
+                         [material_id] + ids).fetchone()
+        if not m:
+            return False, "Ese material no es de esta OT"
+        if m["stock_aplicado"]:
+            return False, "Ese material ya se entregó"
+        conn.execute("UPDATE ot_materiales SET descripcion=?, cantidad=? WHERE id=?", (desc, cant, material_id))
+        try:
+            import ot_materiales as om
+            om.resumir_item(conn, m["item_id"])
+        except Exception:
+            pass
+        conn.commit()
+        return True, ""
+    except Exception as e:
+        _rollback(conn)
+        return False, f"No se pudo guardar: {e}"
+    finally:
+        conn.close()
+
+
+def crear_repuesto(ot_id, material_id, d, usuario=""):
+    """Dar de alta en el inventario un repuesto que no estaba, y engancharlo
+    con el material. Si viene proveedor y precio, quedan en su ficha."""
+    import repuestos_db as rdb
+    import repuestos_multi as multi
+    desc = re.sub(r"\s+", " ", str(d.get("descripcion") or "")).strip()[:200]
+    if not desc:
+        return {"ok": False, "msg": "Escribí la descripción del repuesto"}
+    codigo = re.sub(r"\s+", " ", str(d.get("codigo") or "")).strip().upper()[:60]
+    if not codigo:
+        # sin código del fabricante: uno interno, que se puede cambiar después
+        conn = get_connection()
+        try:
+            usados = {str(x["codigo"]).upper() for x in conn.execute("SELECT codigo FROM repuestos WHERE codigo LIKE 'INT-%'").fetchall()}
+        finally:
+            conn.close()
+        n = len(usados) + 1
+        while f"INT-{n:05d}" in usados:
+            n += 1
+        codigo = f"INT-{n:05d}"
+    v = d.get("precio")
+    try:
+        precio = float(v) if isinstance(v, (int, float)) else float(str(v or "0").replace(".", "").replace(",", ".") or 0)
+    except ValueError:
+        precio = 0
+    prov = re.sub(r"\s+", " ", str(d.get("proveedor") or "")).strip()[:160]
+    ok, res = rdb.agregar_repuesto(codigo, desc, categoria=d.get("categoria") or "Varios",
+                                   marca=str(d.get("marca") or "").strip()[:80],
+                                   aplicacion=str(d.get("aplicacion") or "").strip()[:120],
+                                   unidad=d.get("unidad") or "u", costo_unitario=precio, proveedor=prov,
+                                   observaciones=f"Dado de alta desde el presupuesto de la OT #{ot_id}", usuario=usuario)
+    if not ok:
+        return {"ok": False, "msg": res}
+    rid = res
+    if prov:
+        try:
+            multi.agregar(rid, prov, precio=precio)
+        except Exception:
+            pass
+    try:
+        import buscador
+        buscador.olvidar_indice()
+    except Exception:
+        pass
+    ok, msg = vincular(ot_id, material_id, rid, "")
+    if not ok:
+        return {"ok": False, "msg": msg}
+    if prov or precio:
+        conn = get_connection()
+        try:
+            # lo que se puso en la ficha nueva manda sobre lo que estaba escrito
+            if prov:
+                conn.execute("UPDATE ot_materiales SET proveedor=? WHERE id=?", (prov, material_id))
+            if precio:
+                conn.execute("UPDATE ot_materiales SET precio_unit=? WHERE id=?", (precio, material_id))
+            conn.commit()
+        finally:
+            conn.close()
+    return {"ok": True, "id": rid, "codigo": codigo, "msg": f"Repuesto {codigo} creado en el inventario y enganchado"}
+
+
+@bp_compras_rep.route("/api/compras/<int:ot_id>/material/<int:mid>", methods=["POST"])
+def api_editar_material(ot_id, mid):
+    if not _puede(True):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    ok, msg = editar_material(ot_id, mid, request.get_json(silent=True) or {})
+    return jsonify({"ok": ok, "msg": msg or "Material corregido"}), (200 if ok else 400)
+
+
+@bp_compras_rep.route("/api/compras/<int:ot_id>/crear_repuesto", methods=["POST"])
+def api_crear_repuesto(ot_id):
+    if not _puede(True):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    d = request.get_json(silent=True) or {}
+    r = crear_repuesto(ot_id, int(d.get("material_id") or 0), d, session.get("nombre") or session.get("usuario") or "")
+    return jsonify(r), (200 if r.get("ok") else 400)
 
 
 @bp_compras_rep.route("/api/compras/<int:ot_id>/vincular", methods=["POST"])
