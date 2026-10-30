@@ -218,6 +218,7 @@ app.register_blueprint(bp_ot_horas)
 
 from compras_motivo import bp_compras_motivo, init_compras_motivo
 from cajas import bp_cajas, init_cajas
+from tesoreria import bp_teso, init_tesoreria
 from compras_repuestos import bp_compras_rep, init_compras_repuestos
 from buscador import init_buscador
 init_buscador()
@@ -228,6 +229,8 @@ init_compras_repuestos()
 app.register_blueprint(bp_compras_rep)
 init_cajas()
 app.register_blueprint(bp_cajas)
+init_tesoreria()
+app.register_blueprint(bp_teso)
 init_compras_motivo()
 app.register_blueprint(bp_compras_motivo)
 # Servicios de corporativos: el ranking por servicio sacado de las rendiciones
@@ -479,6 +482,7 @@ def proteger_rutas():
             p == "/" or
             p.startswith("/api/compras/") or
             p.startswith("/api/cajas") or        # cajas: débitos y créditos varios
+            p.startswith("/api/teso/") or        # tesorería: flujo, pagos, cheques, conciliación
             p.startswith("/static/") or
             p == "/api/logout" or p == "/api/me" or p == "/api/me/permisos" or
             p.startswith("/api/ots") or          # ver y CREAR OTs (compras carga las órdenes)
