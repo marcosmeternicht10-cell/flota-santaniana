@@ -218,6 +218,9 @@ app.register_blueprint(bp_ot_horas)
 
 from compras_motivo import bp_compras_motivo, init_compras_motivo
 from cajas import bp_cajas, init_cajas
+from compras_repuestos import bp_compras_rep, init_compras_repuestos
+init_compras_repuestos()
+app.register_blueprint(bp_compras_rep)
 init_cajas()
 app.register_blueprint(bp_cajas)
 init_compras_motivo()
@@ -2275,6 +2278,11 @@ def api_compras_presupuesto(ot_id):
     if not precios and not materiales:
         return jsonify({"ok": False, "msg": "Cargá al menos un precio"}), 400
     guardar_presupuesto_compras(ot_id, precios, materiales, proveedores_items, proveedores_materiales)
+    try:   # depósito sin precio y el último precio de cada proveedor en la ficha del repuesto
+        import compras_repuestos
+        compras_repuestos.guardar_presupuesto(ot_id, d, session.get("nombre") or session.get("usuario") or "")
+    except Exception as e:
+        print(f"[compras_repuestos] presupuesto OT {ot_id}: {e}")
     ot = obtener_ot(ot_id) or {}
     try:
         from ot_materiales import grupo_ids
@@ -2354,7 +2362,13 @@ def api_compras_entregar(ot_id):
     auditar(f"Registró la entrega de la OT #{ot_id}", "Compras",
             f"Entregado en {taller} — recibió {recibido_por}" + (" (con foto)" if foto else ""),
             referencia=f"compras:{ot_id}")
-    return jsonify({"ok": True})
+    stock = {"movidos": 0, "problemas": []}
+    try:   # lo del depósito sale y lo comprado entra al inventario y sale para la OT
+        import compras_repuestos
+        stock = compras_repuestos.al_entregar(ot_id, session.get("nombre") or session.get("usuario") or "")
+    except Exception as e:
+        stock["problemas"].append(f"No se pudo mover el stock: {e}")
+    return jsonify({"ok": True, "stock": stock})
 
 
 @app.route("/api/compras/talleres", methods=["GET"])

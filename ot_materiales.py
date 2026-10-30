@@ -285,12 +285,20 @@ def materiales_de_items(conn, item_ids):
     out = {i: [] for i in item_ids}
     try:
         filas = conn.execute(f"""
-            SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor
+            SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor,
+                   repuesto_id, COALESCE(origen,'') AS origen, COALESCE(stock_nota,'') AS stock_nota
             FROM ot_materiales WHERE item_id IN ({marcas(item_ids)}) ORDER BY orden, id
         """, item_ids).fetchall()
     except Exception:
         _rollback(conn)
-        return out
+        try:   # sin las columnas del depósito (todavía no se crearon)
+            filas = conn.execute(f"""
+                SELECT id, item_id, ot_id, descripcion, cantidad, precio_unit, proveedor
+                FROM ot_materiales WHERE item_id IN ({marcas(item_ids)}) ORDER BY orden, id
+            """, item_ids).fetchall()
+        except Exception:
+            _rollback(conn)
+            return out
     for f in filas:
         d = dict(f)
         d["cantidad"] = float(d.get("cantidad") or 0)
