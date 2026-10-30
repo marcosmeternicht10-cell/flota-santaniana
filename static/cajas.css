@@ -261,3 +261,164 @@
   .cj-aj-fila, .cj-aj-nueva, .cj-aj-conc { grid-template-columns: 1fr; }
   .cj-tot-g.ancho { grid-template-columns: 1fr auto; }
 }
+
+/* ════ Tesorería: pestañas, flujo, pagos, cheques, conciliación ════ */
+.cj-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border-strong); overflow-x: auto; }
+.cj-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; border: 0; border-bottom: 3px solid transparent; background: none; font: 600 13.5px "Inter", sans-serif; color: var(--muted); cursor: pointer; white-space: nowrap; margin-bottom: -1px; }
+.cj-tabs button:hover { color: var(--text); }
+.cj-tabs button.on { color: var(--brand-blue, #1E5A96); border-bottom-color: var(--brand-blue, #1E5A96); }
+.cj-tab-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 10.5px; display: inline-grid; place-items: center; }
+.cj-caja-saldo.neg { color: var(--danger); }
+.cj-check { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.cj-aviso.ok { background: var(--success-bg); color: var(--success); }
+.cj-aj-fila { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 140px 90px; }
+.cj-aj-banco { grid-column: 1 / -1; display: grid; grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 6px; padding-bottom: 8px; border-bottom: 1px dashed var(--border); }
+.cj-aj-banco select, .cj-aj-banco input { height: 32px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 8px; font: 500 12.5px "Inter", sans-serif; min-width: 0; background: var(--surface); color: var(--text); }
+.cj-aj-umbral { display: block; font-size: 13px; line-height: 2; }
+.cj-aj-umbral input { width: 130px; height: 32px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 8px; font: 700 13px "Inter", sans-serif; text-align: right; }
+
+.ts-flujo-top { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.ts-kpi { display: flex; flex-direction: column; gap: 2px; padding: 11px 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.ts-kpi span { font-size: 11.5px; color: var(--muted); font-weight: 600; }
+.ts-kpi b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.ts-kpi.grande b { font: 800 24px "Barlow Semi Condensed", "Inter", sans-serif; color: var(--brand-blue, #1E5A96); }
+.ts-kpi small { font-size: 11px; color: var(--muted); }
+.ts-kpi b.neg, .ts-kpi.grande b.neg { color: var(--danger); }
+.ts-kpi b.ing { color: var(--success); }
+.ts-kpi b.egr { color: var(--danger); }
+.ts-kpi.ojo { border-color: var(--warning-bd); background: var(--warning-bg); }
+.ts-alerta { margin-bottom: 12px; font-size: 13px; }
+.ts-flujo-op { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+.ts-cajas-sel { display: flex; flex-wrap: wrap; gap: 6px; }
+.ts-cajas-sel label { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border: 1px solid var(--border); border-radius: 999px; font-size: 12px; cursor: pointer; color: var(--muted); }
+.ts-cajas-sel label.on { border-color: var(--info-bd); background: var(--info-bg); color: var(--text); }
+.ts-cajas-sel small { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ts-graf { margin: 0 0 12px; padding: 10px 8px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.ts-graf svg { width: 100%; height: 200px; display: block; overflow: visible; }
+.ts-graf figcaption { font-size: 11px; color: var(--muted); padding: 2px 6px; }
+.ts-linea { fill: none; stroke: var(--brand-blue, #1E5A96); stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.ts-graf circle { fill: var(--brand-blue, #1E5A96); stroke: var(--surface); stroke-width: 2; }
+.ts-graf circle.neg { fill: var(--danger); }
+.ts-cero { stroke: var(--border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.ts-min { stroke: var(--warning); stroke-width: 1.5; stroke-dasharray: 5 4; vector-effect: non-scaling-stroke; }
+.ts-min-t { font: 600 10px "Inter", sans-serif; fill: var(--warning); }
+.ts-zona-neg { fill: var(--danger-bg); }
+.ts-eje { font: 500 10px "Inter", sans-serif; fill: var(--muted); }
+.ts-semanas tr.neg td { background: var(--danger-bg); }
+.ts-semanas tr.bajo td { background: var(--warning-bg); }
+.ts-semanas b.neg { color: var(--danger); }
+.ts-nota { font-size: 12px; color: var(--muted); margin-top: 10px; display: flex; gap: 6px; align-items: flex-start; }
+.ts-items { display: flex; flex-direction: column; }
+.ts-item { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ts-item .f { font-size: 12px; color: var(--muted); }
+.ts-item .f em { display: block; font-style: normal; color: var(--danger); font-weight: 600; font-size: 11px; }
+.ts-item.ingreso b { color: var(--success); }
+.ts-item.egreso b { color: var(--danger); }
+.ts-item.hab { color: var(--muted); }
+
+.ts-h3 { display: flex; align-items: baseline; gap: 10px; font-size: 14px; margin: 16px 0 8px; }
+.ts-h3 span { font-size: 12px; font-weight: 500; color: var(--muted); }
+.ts-h3.mal { color: var(--danger); }
+.ts-h3.ojo { color: var(--warning); }
+.ts-h3.gris { color: var(--muted); }
+.ts-agenda { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); overflow: hidden; }
+.ts-venc { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--border); border-left: 4px solid transparent; }
+.ts-venc:last-child { border-bottom: 0; }
+.ts-venc.egreso { border-left-color: var(--danger-bd); }
+.ts-venc.ingreso { border-left-color: var(--success-bd); }
+.ts-venc.vencido { background: #FFF7F8; }
+.ts-venc-f b { display: block; font-size: 14px; }
+.ts-venc-f small { font-size: 11px; color: var(--muted); }
+.ts-venc.vencido .ts-venc-f small { color: var(--danger); font-weight: 600; }
+.ts-venc-t { min-width: 0; }
+.ts-venc-t b { display: block; font-size: 13.5px; }
+.ts-venc-t small { font-size: 11.5px; color: var(--muted); }
+.ts-venc-t em { display: inline-flex; align-items: center; gap: 3px; margin-top: 2px; font-style: normal; font-size: 11px; font-weight: 700; }
+.ts-venc-t em.ojo { color: var(--warning); }
+.ts-venc-t em.mal { color: var(--danger); }
+.ts-venc-t em.ok { color: var(--success); }
+.ts-venc-m { font-size: 15px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ts-venc-m.ing { color: var(--success); }
+.ts-venc-m.egr { color: var(--danger); }
+.ts-venc-acc { display: flex; gap: 4px; align-items: center; }
+.ts-aprobar { border: 1px solid var(--warning-bd); background: var(--warning-bg); border-radius: var(--radius-sm); padding: 4px 12px 10px; }
+.ts-aprobar .ts-h3 { margin-top: 8px; }
+.ts-apr-fila { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--warning-bd); }
+.ts-apr-fila span b { display: block; font-size: 13.5px; }
+.ts-apr-fila small { color: var(--muted); font-size: 11.5px; }
+.ts-apr-fila .egr { color: var(--danger); font-variant-numeric: tabular-nums; }
+.ts-apr-acc { display: flex; gap: 6px; }
+.ts-gris { color: var(--muted); }
+
+.ts-cheques { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.ts-cheque { display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); position: relative; }
+.ts-cheque::before { content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--border-strong); }
+.ts-cheque.e-cartera::before, .ts-cheque.e-emitido::before, .ts-cheque.e-entregado::before { background: var(--brand-blue, #1E5A96); }
+.ts-cheque.e-depositado::before { background: var(--warning); }
+.ts-cheque.e-cobrado::before, .ts-cheque.e-debitado::before { background: var(--success); }
+.ts-cheque.e-rechazado::before { background: var(--danger); }
+.ts-cheque.cerrado { opacity: .78; }
+.ts-ch-cab { display: flex; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--muted); }
+.ts-ch-banco { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.ts-ch-tipo { padding: 0 7px; border-radius: 999px; background: var(--surface3); font-size: 10.5px; font-weight: 700; }
+.ts-ch-m { font: 800 22px "Barlow Semi Condensed", "Inter", sans-serif; font-variant-numeric: tabular-nums; }
+.ts-ch-m.ing { color: var(--success); }
+.ts-ch-m.egr { color: var(--danger); }
+.ts-ch-p { font-size: 13px; }
+.ts-ch-f { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+.ts-ch-f b { color: var(--text); }
+.ts-ch-est { display: flex; gap: 8px; align-items: center; }
+.ts-ch-est small { color: var(--muted); font-size: 11.5px; }
+.ts-pill { display: inline-flex; align-items: center; gap: 3px; padding: 1px 8px; border-radius: 999px; background: var(--surface3); color: var(--muted); font-size: 11px; font-weight: 700; }
+.ts-pill.e-cartera, .ts-pill.e-emitido, .ts-pill.e-entregado { background: var(--info-bg); color: var(--info); }
+.ts-pill.e-depositado { background: var(--warning-bg); color: #8A5A00; }
+.ts-pill.e-cobrado, .ts-pill.e-debitado { background: var(--success-bg); color: var(--success); }
+.ts-pill.e-rechazado { background: var(--danger-bg); color: var(--danger); }
+.ts-cheque .cj-aviso { margin: 0; font-size: 12px; padding: 6px 8px; }
+.ts-ch-acc { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin-top: 4px; }
+.ts-ch-hist { font-size: 11.5px; color: var(--muted); }
+.ts-ch-hist summary { cursor: pointer; }
+.ts-ch-hist div { padding: 2px 0; }
+
+.ts-cuentas { display: flex; flex-wrap: wrap; gap: 6px; }
+.ts-cuentas button { display: flex; flex-direction: column; align-items: flex-start; padding: 7px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font: 600 13px "Inter", sans-serif; color: var(--text); cursor: pointer; }
+.ts-cuentas button small { font-weight: 500; font-size: 11px; color: var(--muted); }
+.ts-cuentas button.on { border: 2px solid var(--brand-blue, #1E5A96); padding: 6px 11px; }
+.ts-conc { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ts-conc-col { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); padding: 0 0 4px; max-height: 70vh; overflow: auto; }
+.ts-conc-col .ts-h3 { position: sticky; top: 0; background: var(--surface2); margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--border); z-index: 1; }
+.ts-ext { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.ts-ext .f { color: var(--muted); font-size: 12px; }
+.ts-ext .t { min-width: 0; }
+.ts-ext .t b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ts-ext .t small { color: var(--muted); font-size: 11px; }
+.ts-ext .m { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ts-ext .m.ing { color: var(--success); }
+.ts-ext .m.egr { color: var(--danger); }
+.ts-ext .acc { display: flex; gap: 4px; align-items: center; justify-content: flex-end; min-width: 30px; }
+.ts-ext.e-conciliado { background: #F6FBF7; }
+.ts-ext.e-conciliado .t b { color: var(--muted); }
+.ts-ext.e-ignorado { opacity: .55; }
+.ts-ext.e-pendiente { background: var(--surface); }
+.ts-ok { color: var(--success); }
+.ts-cand { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 14px; }
+.ts-cand button { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--border); background: none; text-align: left; font-family: inherit; font-size: 13px; cursor: pointer; }
+.ts-cand button:hover { background: var(--info-bg); }
+.ts-cand small { display: block; color: var(--muted); font-size: 11px; }
+.ts-cand em { font-style: normal; font-size: 11px; color: var(--muted); }
+.ts-cand em.ok { color: var(--success); font-weight: 700; }
+.ts-cand .ing { color: var(--success); }
+.ts-cand .egr { color: var(--danger); }
+.ts-crear { display: flex; gap: 8px; flex-wrap: wrap; }
+.ts-crear select { flex: 1; min-width: 200px; height: 36px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 8px; font: 500 13px "Inter", sans-serif; }
+label.btn { cursor: pointer; }
+@media (max-width: 1100px) { .ts-flujo-top { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .ts-conc { grid-template-columns: 1fr; }
+  .ts-venc { grid-template-columns: 64px minmax(0, 1fr) auto; }
+  .ts-venc-acc { grid-column: 1 / -1; justify-content: flex-end; }
+  .ts-apr-fila { grid-template-columns: 1fr auto; }
+  .ts-apr-acc { grid-column: 1 / -1; justify-content: flex-end; }
+  .cj-aj-banco { grid-template-columns: 1fr 1fr; }
+  .ts-graf svg { height: 160px; }
+}

@@ -58,20 +58,20 @@ function cjRangoFechas() {
 
 // ─── Pantalla ───────────────────────────────────────────────────────────
 async function renderCajas() {
-  status("Cajas — débitos y créditos varios");
+  status("Tesorería — cajas, flujo de caja, pagos, cheques y conciliación");
   content.innerHTML = `<div class="section"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`;
   const r = await api("/api/cajas").catch(() => null);
   if (!r || !r.ok) { content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>No se pudieron traer las cajas.</div></div>`; return; }
   cj.meta = r;
   cj.cajas = r.cajas;
   let guardada = null;
-  try { guardada = +localStorage.getItem("cj_caja"); } catch (e) { }
+  try { guardada = +localStorage.getItem("cj_caja"); if (!cj.vista) cj.vista = localStorage.getItem("cj_vista") || "movs"; } catch (e) { }
   cj.caja = cj.cajas.find(c => c.id === (cj.caja && cj.caja.id)) || cj.cajas.find(c => c.id === guardada) || cj.cajas[0] || null;
   content.innerHTML = `
     <div class="page-header cj-head">
       <div>
-        <h1><i class="ti ti-cash-register"></i> Cajas</h1>
-        <p>Débitos y créditos varios: lo que se paga y lo que entra, con su factura, el IVA separado y el cierre del día.</p>
+        <h1><i class="ti ti-cash-register"></i> Tesorería</h1>
+        <p>Cajas y cuentas, lo que viene para pagar y cobrar, los cheques y el extracto del banco: la plata de la empresa en un solo lugar.</p>
       </div>
       <div class="cj-head-acc">
         <button class="btn btn-ghost" onclick="cjLibro()"><i class="ti ti-book"></i> Libro IVA</button>
@@ -80,12 +80,40 @@ async function renderCajas() {
       </div>
     </div>
     <div class="section">
+      <div class="cj-tabs" id="cj-tabs" role="tablist"></div>
       <div class="cj-cajas" id="cj-cajas"></div>
       <div id="cj-cuerpo"></div>
     </div>`;
   cjPintarCajas();
-  if (cj.caja) cjCargarMovs();
-  else document.getElementById("cj-cuerpo").innerHTML = `<div class="empty"><i class="ti ti-cash-register"></i>No hay cajas activas.${r.admin ? " Creá una en «Cajas y conceptos»." : ""}</div>`;
+  tsResumen();
+  cjIrVista(cj.vista || "movs");
+}
+// Las pestañas de Tesorería
+const CJ_VISTAS = [["movs", "Movimientos", "list-details"], ["flujo", "Flujo de caja", "chart-line"], ["prog", "Pagos y cobros", "calendar-dollar"],
+                   ["cheques", "Cheques", "file-dollar"], ["conc", "Conciliación", "building-bank"]];
+function cjPintarTabs() {
+  const b = document.getElementById("cj-tabs");
+  if (!b) return;
+  const r = ts.res || {};
+  const badge = { prog: (r.vencidos || 0) + (r.por_aprobar || 0), cheques: r.cheques_avisos || 0, conc: r.extracto_pendiente || 0 };
+  b.innerHTML = CJ_VISTAS.map(([k, t, ic]) => `<button type="button" role="tab" aria-selected="${cj.vista === k}" class="${cj.vista === k ? "on" : ""}" onclick="cjIrVista('${k}')">
+    <i class="ti ti-${ic}"></i> ${t}${badge[k] ? `<span class="cj-tab-n">${badge[k]}</span>` : ""}</button>`).join("");
+}
+function cjIrVista(v) {
+  cj.vista = v;
+  try { localStorage.setItem("cj_vista", v); } catch (e) { }
+  cjPintarTabs();
+  const cards = document.getElementById("cj-cajas");
+  if (cards) cards.style.display = v === "movs" ? "" : "none";
+  const cuerpo = document.getElementById("cj-cuerpo");
+  if (!cuerpo) return;
+  if (v === "movs") {
+    if (cj.caja) cjCargarMovs();
+    else cuerpo.innerHTML = `<div class="empty"><i class="ti ti-cash-register"></i>No hay cajas activas.${cj.meta.admin ? " Creá una en «Cajas y conceptos»." : ""}</div>`;
+    return;
+  }
+  cuerpo.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  ({ flujo: tsFlujo, prog: tsProg, cheques: tsCheques, conc: tsConc })[v]();
 }
 
 function cjPintarCajas() {
@@ -95,9 +123,10 @@ function cjPintarCajas() {
     const sel = cj.caja && c.id === cj.caja.id;
     const atraso = c.sin_cerrar && c.sin_cerrar_desde && c.sin_cerrar_desde < cj.meta.hoy;
     return `<button type="button" class="cj-caja ${sel ? "sel" : ""}" onclick="cjElegirCaja(${c.id})" aria-pressed="${sel}">
-      <span class="cj-caja-nom"><i class="ti ti-building-bank"></i> ${cjEsc(c.nombre)}</span>
-      <span class="cj-caja-saldo">${cjGs(c.saldo)}</span>
-      <span class="cj-caja-sub">Efectivo en caja <b>${cjGs(c.efectivo)}</b></span>
+      <span class="cj-caja-nom"><i class="ti ti-${c.tipo === "banco" ? "building-bank" : "cash-register"}"></i> ${cjEsc(c.nombre)}</span>
+      <span class="cj-caja-saldo ${c.saldo < 0 ? "neg" : ""}">${c.saldo < 0 ? "−" : ""}${cjGs(Math.abs(c.saldo))}</span>
+      ${c.tipo === "banco" ? `<span class="cj-caja-sub">${cjEsc(c.banco || "Banco")}${c.numero_cuenta ? ` · cta. ${cjEsc(c.numero_cuenta)}` : ""}</span>`
+        : `<span class="cj-caja-sub">Efectivo en caja <b>${cjGs(c.efectivo)}</b></span>`}
       <span class="cj-caja-pie ${atraso ? "atraso" : ""}">
         ${c.sin_cerrar
           ? `<i class="ti ti-${atraso ? "alert-triangle" : "lock-open"}"></i> ${c.sin_cerrar} sin cerrar${atraso ? ` desde el ${cjDm(c.sin_cerrar_desde)}` : ""}`
@@ -866,7 +895,16 @@ async function cjAjustes() {
           <input value="${cjEsc(c.responsable || "")}" placeholder="Responsable" aria-label="Responsable" onchange="cjAjCaja(${c.id}, {responsable: this.value})">
           <span class="cj-aj-saldo">${cjGs(c.saldo)}</span>
           <label class="cj-sw"><input type="checkbox" ${c.activa ? "checked" : ""} onchange="cjAjCaja(${c.id}, {activa: this.checked})"> Activa</label>
+          <div class="cj-aj-banco">
+            <select aria-label="Tipo" onchange="tsCuenta(${c.id}, {tipo: this.value})"><option value="caja" ${c.tipo !== "banco" ? "selected" : ""}>Caja (efectivo)</option><option value="banco" ${c.tipo === "banco" ? "selected" : ""}>Cuenta de banco</option></select>
+            <input list="ts-bancos" value="${cjEsc(c.banco || "")}" placeholder="Banco" aria-label="Banco" onchange="tsCuenta(${c.id}, {banco: this.value})">
+            <input value="${cjEsc(c.numero_cuenta || "")}" placeholder="N° de cuenta" aria-label="Número de cuenta" onchange="tsCuenta(${c.id}, {numero_cuenta: this.value})">
+            <input inputmode="numeric" value="${c.saldo_minimo ? cjMil(c.saldo_minimo) : ""}" placeholder="Saldo mínimo (aviso)" aria-label="Saldo mínimo" onchange="tsCuenta(${c.id}, {saldo_minimo: this.value})">
+          </div>
         </div>`).join("")}</div>
+      <datalist id="ts-bancos">${((ts.res && ts.res.bancos) || []).map(b => `<option value="${cjEsc(b)}">`).join("")}</datalist>
+      <h4 class="cj-h4">Aprobación de pagos</h4>
+      <label class="cj-aj-umbral">Los pagos programados de <input inputmode="numeric" value="${cjMil((ts.res && ts.res.config && ts.res.config.umbral_aprobacion) || 5000000)}" onchange="tsUmbral(this.value)" aria-label="Monto desde el que se aprueba"> guaraníes o más necesitan que administración los apruebe antes de pagarse.</label>
       <div class="cj-aj-nueva">
         <input id="cj-nc-n" placeholder="Nombre de la caja nueva (ej: Caja chica Ciudad del Este)">
         <input id="cj-nc-s" inputmode="numeric" placeholder="Saldo con el que arranca (Gs.)">
@@ -892,4 +930,488 @@ async function cjAjNueva() {
   toast(r.msg, "success");
   document.querySelector(".cj-modal")?.closest(".modal-overlay")?.remove();
   cjAjustes();
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  TESORERÍA: flujo de caja, pagos y cobros, cheques y conciliación
+// ════════════════════════════════════════════════════════════════════════
+const ts = { res: null, semanas: 13, habitual: true, sel: null, prog: null, chSent: "recibido", chEst: "abiertos", chQ: "", conCaja: 0 };
+async function tsJson(url, metodo = "POST", cuerpo) {
+  return api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo || {}) }).catch(() => null);
+}
+async function tsResumen() {
+  const r = await api("/api/teso/resumen").catch(() => null);
+  if (r && r.ok) { ts.res = r; cjPintarTabs(); }
+  return r;
+}
+const tsGs = v => (v < 0 ? "−" : "") + cjGs(Math.abs(v));
+const tsDm = f => f ? `${f.slice(8, 10)}/${f.slice(5, 7)}` : "";
+const tsDia = f => { const d = new Date(f + "T12:00:00"); return ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"][d.getDay()] + " " + tsDm(f); };
+function tsCajasOpts(sel, soloBanco) {
+  return (cj.cajas || []).filter(c => !soloBanco || c.tipo === "banco").map(c => `<option value="${c.id}" ${+sel === c.id ? "selected" : ""}>${cjEsc(c.nombre)}${c.tipo === "banco" && c.banco ? " · " + cjEsc(c.banco) : ""}</option>`).join("");
+}
+async function tsCuenta(id, d) {
+  const r = await tsJson(`/api/teso/cuenta/${id}`, "PATCH", d);
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+}
+async function tsUmbral(v) {
+  const r = await tsJson("/api/teso/config", "POST", { umbral_aprobacion: v });
+  if (r && r.ok) { ts.res.config = r.config; toast("Guardado", "success"); }
+}
+
+// ─── Flujo de caja ──────────────────────────────────────────────────────
+async function tsFlujo() {
+  const qs = new URLSearchParams({ semanas: ts.semanas, habitual: ts.habitual ? 1 : 0 });
+  if (ts.sel && ts.sel.length) qs.set("cajas", ts.sel.join(","));
+  const r = await api(`/api/teso/flujo?${qs}`).catch(() => null);
+  const box = document.getElementById("cj-cuerpo");
+  if (!box || cj.vista !== "flujo") return;
+  if (!r || !r.ok) { box.innerHTML = `<div class="empty">No se pudo calcular el flujo.</div>`; return; }
+  ts.flujo = r;
+  const a = r.alerta;
+  const sem = r.semanas;
+  // gráfico: el saldo al final de cada semana
+  const W = 900, H = 200, pad = 34;
+  const vals = [r.saldo_actual, ...sem.map(s => s.final)];
+  const max = Math.max(...vals, r.minimo || 0, 1), min = Math.min(...vals, 0);
+  const x = i => pad + i * ((W - pad * 2) / (vals.length - 1));
+  const y = v => 14 + (H - 40) * (1 - (v - min) / ((max - min) || 1));
+  const linea = vals.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const etiquetas = ["Hoy", ...sem.map(s => tsDm(s.desde))];
+  box.innerHTML = `
+    <div class="ts-flujo-top">
+      <div class="ts-kpi grande"><span>Saldo hoy (cajas y cuentas elegidas)</span><b class="${r.saldo_actual < 0 ? "neg" : ""}">${tsGs(r.saldo_actual)}</b></div>
+      <div class="ts-kpi"><span>Lo más bajo que va a estar</span><b class="${r.minimo_proyectado < 0 ? "neg" : ""}">${tsGs(r.minimo_proyectado)}</b></div>
+      <div class="ts-kpi ${r.vencidos.n ? "ojo" : ""}"><span>Vencido sin pagar/cobrar</span><b>${r.vencidos.n}</b><small>${r.vencidos.n ? `pagar ${cjMil(r.vencidos.egresos)} · cobrar ${cjMil(r.vencidos.ingresos)}` : "todo al día"}</small></div>
+      <div class="ts-kpi"><span>Gasto habitual por semana</span><b>${ts.habitual ? cjGs(r.habitual_semanal) : "—"}</b><small>promedio de las últimas 8 semanas</small></div>
+    </div>
+    ${a ? `<div class="cj-aviso ${a.negativo ? "mal" : "ojo"} ts-alerta"><i class="ti ti-alert-triangle"></i><span><b>La semana del ${tsDm(a.desde)} ${a.negativo ? "la plata no alcanza" : "el saldo baja del mínimo"}:</b> quedaría en ${a.saldo < 0 ? "−" : ""}${cjGs(Math.abs(a.saldo))}. Conviene mover un pago, adelantar un cobro o pedir fondos antes.</span></div>`
+      : `<div class="cj-aviso ok ts-alerta"><i class="ti ti-circle-check"></i><span>En las próximas ${ts.semanas} semanas la plata alcanza${r.minimo ? " y no baja del mínimo" : ""}.</span></div>`}
+    <div class="ts-flujo-op">
+      <div class="cj-seg">${[8, 13, 26].map(n => `<button type="button" class="${ts.semanas === n ? "on" : ""}" onclick="ts.semanas=${n};tsFlujo()">${n} semanas</button>`).join("")}</div>
+      <label class="cj-check"><input type="checkbox" ${ts.habitual ? "checked" : ""} onchange="ts.habitual=this.checked;tsFlujo()"> Contar el gasto habitual</label>
+      <div class="ts-cajas-sel">${r.cajas.map(c => `<label class="${c.sel ? "on" : ""}"><input type="checkbox" ${c.sel ? "checked" : ""} onchange="tsFlujoCaja(${c.id}, this.checked)"> ${cjEsc(c.nombre)} <small>${cjMil(c.saldo)}</small></label>`).join("")}</div>
+    </div>
+    <figure class="ts-graf" aria-label="Saldo proyectado semana por semana">
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+        ${min < 0 ? `<rect x="${pad}" y="${y(0)}" width="${W - pad * 2}" height="${H - 26 - y(0)}" class="ts-zona-neg"/>` : ""}
+        <line x1="${pad}" x2="${W - pad}" y1="${y(0)}" y2="${y(0)}" class="ts-cero"/>
+        ${r.minimo ? `<line x1="${pad}" x2="${W - pad}" y1="${y(r.minimo)}" y2="${y(r.minimo)}" class="ts-min"/><text x="${W - pad}" y="${y(r.minimo) - 4}" class="ts-min-t" text-anchor="end">mínimo ${cjMil(r.minimo)}</text>` : ""}
+        <path d="${linea}" class="ts-linea"/>
+        ${vals.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="5" class="${v < 0 ? "neg" : ""}"><title>${etiquetas[i]}: ${cjGs(v)}</title></circle>`).join("")}
+        ${etiquetas.map((t, i) => (i % (vals.length > 15 ? 2 : 1) === 0 ? `<text x="${x(i)}" y="${H - 6}" text-anchor="middle" class="ts-eje">${t}</text>` : "")).join("")}
+      </svg>
+      <figcaption>Saldo al final de cada semana (Gs.)</figcaption>
+    </figure>
+    <div class="cj-tabla-wrap"><table class="cj-tabla ts-semanas">
+      <thead><tr><th>Semana</th><th class="num">Saldo inicial</th><th class="num">Entra</th><th class="num">Sale</th><th class="num">Saldo final</th><th></th></tr></thead>
+      <tbody>${sem.map((s, i) => `<tr class="${s.final < 0 ? "neg" : r.minimo && s.final < r.minimo ? "bajo" : ""}" onclick="tsSemana(${i})" tabindex="0">
+        <td><b>${tsDm(s.desde)} al ${tsDm(s.hasta)}</b>${i === 0 ? `<small>esta semana</small>` : ""}</td>
+        <td class="num">${cjMil(s.inicial)}</td>
+        <td class="num ing">${s.ingresos ? "+ " + cjMil(s.ingresos) : "—"}</td>
+        <td class="num egr">${s.egresos ? "− " + cjMil(s.egresos) : "—"}${s.habitual ? `<small>${cjMil(s.habitual)} habitual</small>` : ""}</td>
+        <td class="num"><b class="${s.final < 0 ? "neg" : ""}">${s.final < 0 ? "−" : ""}${cjMil(Math.abs(s.final))}</b></td>
+        <td class="cj-ic">${s.items.length ? `${s.items.length} <i class="ti ti-chevron-right"></i>` : ""}</td></tr>`).join("")}</tbody>
+    </table></div>
+    <p class="ts-nota"><i class="ti ti-info-circle"></i> Sale de: los pagos y cobros programados (los vencidos se cuentan en esta semana), los cheques por cobrar y por debitar en su fecha de pago${ts.habitual ? ", y el gasto habitual que no está programado" : ""}.</p>`;
+}
+function tsFlujoCaja(id, on) {
+  const todas = ts.flujo.cajas.map(c => c.id);
+  let sel = ts.sel && ts.sel.length ? [...ts.sel] : [...todas];
+  sel = on ? [...new Set([...sel, id])] : sel.filter(x => x !== id);
+  ts.sel = sel.length === todas.length ? null : sel;
+  tsFlujo();
+}
+function tsSemana(i) {
+  const s = ts.flujo.semanas[i];
+  rvModal({
+    titulo: `Semana del ${tsDm(s.desde)} al ${tsDm(s.hasta)}`, icono: "calendar-week", ancho: 640, clase: "cj-modal",
+    sub: `Empieza con ${tsGs(s.inicial)} y termina con ${s.final < 0 ? "−" : ""}${cjGs(Math.abs(s.final))}`,
+    cuerpo: s.items.length || s.habitual ? `<div class="ts-items">${s.items.map(it => `<div class="ts-item ${it.tipo}">
+        <span class="f">${tsDia(it.fecha)}${it.vencido ? `<em>vencido</em>` : ""}</span>
+        <span class="t"><i class="ti ti-${it.origen === "cheque" ? "file-dollar" : "calendar-dollar"}"></i> ${cjEsc(it.txt)}</span>
+        <b>${it.tipo === "ingreso" ? "+" : "−"} ${cjMil(it.monto)}</b></div>`).join("")}
+        ${s.habitual ? `<div class="ts-item egreso hab"><span class="f">toda la semana</span><span class="t"><i class="ti ti-receipt"></i> Gasto habitual (promedio)</span><b>− ${cjMil(s.habitual)}</b></div>` : ""}</div>`
+      : `<p class="cj-nada">No hay nada programado esta semana.</p>`,
+    pie: `<div class="cj-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove();cjIrVista('prog')">Ver pagos y cobros</button><button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button></div>`,
+  });
+}
+
+// ─── Pagos y cobros programados ─────────────────────────────────────────
+async function tsProg() {
+  const r = await api("/api/teso/programados?dias=60").catch(() => null);
+  const box = document.getElementById("cj-cuerpo");
+  if (!box || cj.vista !== "prog") return;
+  if (!r || !r.ok) { box.innerHTML = `<div class="empty">No se pudieron traer.</div>`; return; }
+  ts.prog = r.programados;
+  const hoy = r.hoy;
+  // la agenda: cada vencimiento (vencidos primero, después los próximos 60 días)
+  const agenda = [];
+  r.programados.forEach(p => [...p.vencidas, ...p.proximas].forEach(f => agenda.push({ p, f })));
+  agenda.sort((a, b) => a.f.localeCompare(b.f) || (a.p.tipo === "egreso" ? -1 : 1));
+  const venc = agenda.filter(x => x.f < hoy);
+  const en7 = agenda.filter(x => x.f >= hoy && (new Date(x.f) - new Date(hoy)) / 864e5 <= 7);
+  const resto = agenda.filter(x => (new Date(x.f) - new Date(hoy)) / 864e5 > 7);
+  const porAprobar = r.programados.filter(p => p.aprobacion === "pendiente");
+  const suma = (l, t) => l.filter(x => x.p.tipo === t).reduce((s, x) => s + x.p.monto, 0);
+  const grupo = (titulo, l, cls) => l.length ? `<h3 class="ts-h3 ${cls}">${titulo} <span>${l.length} · pagar ${cjMil(suma(l, "egreso"))} · cobrar ${cjMil(suma(l, "ingreso"))}</span></h3>
+    <div class="ts-agenda">${l.map(x => tsVenc(x.p, x.f, hoy)).join("")}</div>` : "";
+  box.innerHTML = `
+    <div class="cj-barra">
+      ${cjPuede() ? `<div class="cj-nuevos">
+        <button class="btn cj-btn-egr" onclick="tsProgEditar(null, 'egreso')"><i class="ti ti-calendar-minus"></i> Programar un pago</button>
+        <button class="btn cj-btn-ing" onclick="tsProgEditar(null, 'ingreso')"><i class="ti ti-calendar-plus"></i> Programar un cobro</button></div>` : ""}
+      <div class="cj-acc"><button class="btn btn-ghost" onclick="tsProgLista()"><i class="ti ti-repeat"></i> Todos los programados (${r.programados.length})</button></div>
+    </div>
+    ${porAprobar.length ? `<div class="ts-aprobar"><h3 class="ts-h3 ojo"><i class="ti ti-shield-check"></i> Esperando aprobación <span>${porAprobar.length}</span></h3>
+      ${porAprobar.map(p => `<div class="ts-apr-fila"><span><b>${cjEsc(p.descripcion || p.concepto)}</b><small>${cjEsc(p.contraparte)} · cargó ${cjEsc(p.creado_por)} · ${tsDm(p.fecha)}${p.recurrencia ? " · " + cjEsc(p.recurrencia_txt.toLowerCase()) : ""}</small></span>
+        <b class="egr">${cjGs(p.monto)}</b>
+        ${ts.res && ts.res.admin ? `<span class="ts-apr-acc"><button class="btn btn-sm btn-ghost" onclick="tsAprobar(${p.id}, false)">Rechazar</button><button class="btn btn-sm btn-primary" onclick="tsAprobar(${p.id}, true)"><i class="ti ti-check"></i> Aprobar</button></span>` : `<small class="ts-gris">lo aprueba administración</small>`}</div>`).join("")}</div>` : ""}
+    ${agenda.length ? grupo("Vencidos", venc, "mal") + grupo("Próximos 7 días", en7, "") + grupo("Más adelante", resto, "gris")
+      : `<div class="empty"><i class="ti ti-calendar-dollar"></i>No hay nada programado. Cargá los pagos fijos (sueldos, alquiler, cuotas) y los vencimientos de proveedores: el flujo de caja se arma con eso.</div>`}`;
+}
+function tsVenc(p, f, hoy) {
+  const dias = Math.round((new Date(f) - new Date(hoy)) / 864e5);
+  const bloq = p.tipo === "egreso" && (p.aprobacion === "pendiente" || p.aprobacion === "rechazado");
+  return `<div class="ts-venc ${p.tipo} ${f < hoy ? "vencido" : ""}">
+    <div class="ts-venc-f"><b>${tsDm(f)}</b><small>${dias < 0 ? `hace ${-dias} día${dias === -1 ? "" : "s"}` : dias === 0 ? "hoy" : dias === 1 ? "mañana" : `en ${dias} días`}</small></div>
+    <div class="ts-venc-t"><b>${cjEsc(p.descripcion || p.concepto)}</b><small>${[p.contraparte, p.caja, p.recurrencia ? p.recurrencia_txt : "", p.prioridad === "alta" ? "⚑ prioridad alta" : ""].filter(Boolean).map(cjEsc).join(" · ")}</small>
+      ${p.aprobacion === "pendiente" ? `<em class="ojo"><i class="ti ti-shield"></i> falta aprobación</em>` : p.aprobacion === "rechazado" ? `<em class="mal">rechazado</em>` : p.aprobacion === "aprobado" ? `<em class="ok"><i class="ti ti-shield-check"></i> aprobado</em>` : ""}</div>
+    <b class="ts-venc-m ${p.tipo === "ingreso" ? "ing" : "egr"}">${p.tipo === "ingreso" ? "+" : "−"} ${cjMil(p.monto)}</b>
+    ${cjPuede() ? `<div class="ts-venc-acc">
+      <button class="btn btn-sm ${p.tipo === "ingreso" ? "cj-btn-ing" : "cj-btn-egr"}" ${bloq ? "disabled title='Necesita aprobación'" : ""} onclick="tsCumplir(${p.id}, '${f}')">${p.tipo === "ingreso" ? "Cobrado" : "Pagar"}</button>
+      <button class="icon-btn" title="Más" aria-label="Más opciones" onclick="tsProgEditar(${p.id})"><i class="ti ti-pencil"></i></button></div>` : ""}
+  </div>`;
+}
+function tsProgLista() {
+  const l = ts.prog || [];
+  rvModal({
+    titulo: "Pagos y cobros programados", icono: "repeat", ancho: 760, clase: "cj-modal",
+    sub: "Los fijos que se repiten y los vencimientos cargados",
+    cuerpo: l.length ? `<div class="cj-tabla-wrap"><table class="cj-tabla"><thead><tr><th>Qué</th><th>Cuándo</th><th class="num">Monto</th><th></th></tr></thead><tbody>
+      ${l.map(p => `<tr onclick="this.closest('.modal-overlay').remove();tsProgEditar(${p.id})"><td><b>${cjEsc(p.descripcion || p.concepto)}</b><small>${cjEsc(p.contraparte || "")}${p.caja ? " · " + cjEsc(p.caja) : ""}</small></td>
+        <td>${cjEsc(p.recurrencia_txt)}<small>${p.proximas.length ? "próximo " + tsDm(p.proximas[0]) : ""}${p.vencidas.length ? ` · ${p.vencidas.length} vencido${p.vencidas.length === 1 ? "" : "s"}` : ""}</small></td>
+        <td class="num ${p.tipo === "ingreso" ? "ing" : "egr"}">${p.tipo === "ingreso" ? "+" : "−"} ${cjMil(p.monto)}</td><td class="cj-ic"><i class="ti ti-pencil"></i></td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="cj-nada">Todavía no hay nada programado.</p>`,
+    pie: `<div class="cj-pie"><button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button></div>`,
+  });
+}
+function tsProgEditar(id, tipo) {
+  const p = id ? ts.prog.find(x => x.id === id) : { tipo, fecha: cj.meta.hoy, recurrencia: "", medio: tipo === "ingreso" ? "transferencia" : "transferencia", prioridad: "normal", caja_id: cj.caja ? cj.caja.id : 0, monto: "" };
+  const umbral = (ts.res && ts.res.config && ts.res.config.umbral_aprobacion) || 0;
+  const conc = cjConceptos(p.tipo);
+  const o = rvModal({
+    titulo: id ? (p.tipo === "ingreso" ? "Cobro programado" : "Pago programado") : (p.tipo === "ingreso" ? "Programar un cobro" : "Programar un pago"),
+    icono: p.tipo === "ingreso" ? "calendar-plus" : "calendar-minus", ancho: 640, clase: `cj-modal cj-${p.tipo}`,
+    sub: p.tipo === "egreso" ? `Un vencimiento o un gasto fijo. ${umbral ? `Desde ${cjGs(umbral)} necesita aprobación de administración.` : ""}` : "Lo que te tienen que pagar y cuándo",
+    cuerpo: `<div class="cj-g cj-g-2">
+        <label class="cj-f" style="grid-column:1/-1"><span>Qué es</span><input id="tp-desc" value="${cjEsc(p.descripcion || "")}" placeholder="${p.tipo === "egreso" ? "Ej: sueldos del taller, alquiler del galpón, cuota del camión" : "Ej: cobro del corporativo de Paresa"}"></label>
+        <label class="cj-f"><span>${p.tipo === "egreso" ? "A quién" : "De quién"}</span><input id="tp-cp" value="${cjEsc(p.contraparte || "")}"></label>
+        <label class="cj-f"><span>Monto (Gs.)</span><input id="tp-monto" inputmode="numeric" value="${p.monto ? cjMil(p.monto) : ""}" placeholder="0"></label>
+        <label class="cj-f"><span>${p.recurrencia ? "Primera vez" : "Fecha"}</span><input type="date" id="tp-fecha" value="${p.fecha}"></label>
+        <label class="cj-f"><span>¿Se repite?</span><select id="tp-rec">${cjOpts(ts.res.recurrencias, p.recurrencia || "")}</select></label>
+        <label class="cj-f tp-hasta" ${p.recurrencia ? "" : "hidden"}><span>Hasta <small>vacío = sin fin</small></span><input type="date" id="tp-hasta" value="${p.hasta || ""}"></label>
+        <label class="cj-f"><span>${p.tipo === "egreso" ? "Sale de" : "Entra a"}</span><select id="tp-caja"><option value="0">A elegir al pagar</option>${tsCajasOpts(p.caja_id)}</select></label>
+        <label class="cj-f"><span>Concepto</span><select id="tp-conc"><option value="">—</option>${conc.map(k => `<option value="${k.id}" ${+p.concepto_id === k.id ? "selected" : ""}>${cjEsc(k.nombre)}</option>`).join("")}</select></label>
+        <label class="cj-f"><span>Medio</span><select id="tp-medio">${cjOpts(cj.meta.medios, p.medio)}</select></label>
+        ${p.tipo === "egreso" ? `<label class="cj-f"><span>Prioridad</span><select id="tp-prio">${cjOpts({ alta: "Alta (no se puede atrasar)", normal: "Normal", baja: "Baja (se puede mover)" }, p.prioridad)}</select></label>` : ""}
+        <label class="cj-f"><span>N° de factura <small>opcional</small></span><input id="tp-doc" value="${cjEsc(p.doc_numero || "")}"></label>
+        <label class="cj-f" style="grid-column:1/-1"><span>Nota</span><input id="tp-nota" value="${cjEsc(p.nota || "")}"></label>
+      </div>
+      ${id && p.hechos.length ? `<p class="ts-nota">Ya ${p.tipo === "ingreso" ? "cobrado" : "pagado"}: ${p.hechos.map(tsDm).join(", ")}</p>` : ""}`,
+    pie: `<div class="cj-pie">
+      ${id && cjPuede() ? `<button type="button" class="pv-link cj-anular" onclick="tsProgBorrar(${id})">Borrar</button>` : ""}
+      <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      ${cjPuede() ? `<button type="button" class="btn btn-primary" id="tp-ok"><i class="ti ti-check"></i> Guardar</button>` : ""}</div>`,
+  });
+  o.querySelector("#tp-rec").onchange = e => { o.querySelector(".tp-hasta").hidden = !e.target.value; };
+  const m = o.querySelector("#tp-monto");
+  m.onblur = () => { const n = Math.round(cjNum(m.value)); m.value = n ? cjMil(n) : ""; };
+  o.querySelector("#tp-ok")?.addEventListener("click", async e => {
+    const v = s => o.querySelector(s)?.value || "";
+    const k = cj.meta.conceptos.find(x => x.id === +v("#tp-conc"));
+    e.target.disabled = true;
+    const r = await tsJson(id ? `/api/teso/programados/${id}` : "/api/teso/programados", id ? "PUT" : "POST", {
+      tipo: p.tipo, descripcion: v("#tp-desc"), contraparte: v("#tp-cp"), monto: v("#tp-monto"), fecha: v("#tp-fecha"),
+      recurrencia: v("#tp-rec"), hasta: v("#tp-hasta"), caja_id: v("#tp-caja"), concepto_id: k ? k.id : 0, concepto: k ? k.nombre : "",
+      medio: v("#tp-medio"), prioridad: v("#tp-prio") || "normal", doc_numero: v("#tp-doc"), nota: v("#tp-nota"),
+    });
+    if (!r || !r.ok) { e.target.disabled = false; toast((r && r.msg) || "No se pudo", "error"); return; }
+    toast(r.msg, "success");
+    o.remove();
+    tsResumen();
+    tsProg();
+  });
+  setTimeout(() => o.querySelector("#tp-desc").focus(), 60);
+}
+async function tsProgBorrar(id) {
+  if (!confirm("¿Borrar este pago/cobro programado? Lo que ya se pagó queda en las cajas.")) return;
+  const r = await tsJson(`/api/teso/programados/${id}`, "DELETE");
+  document.querySelector(".cj-modal")?.closest(".modal-overlay")?.remove();
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  tsResumen(); tsProg();
+}
+async function tsAprobar(id, si) {
+  let motivo = "";
+  if (!si) { motivo = prompt("¿Por qué se rechaza?") || ""; if (!motivo) return; }
+  const r = await tsJson(`/api/teso/programados/${id}/aprobar`, "POST", { aprobar: si, motivo });
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  tsResumen(); tsProg();
+}
+function tsCumplir(id, f) {
+  const p = ts.prog.find(x => x.id === id);
+  const ing = p.tipo === "ingreso";
+  const o = rvModal({
+    titulo: ing ? "Registrar el cobro" : "Registrar el pago", icono: ing ? "cash" : "cash-banknote", ancho: 520, clase: `cj-modal cj-${p.tipo}`,
+    sub: `${cjEsc(p.descripcion || p.concepto)} · vencimiento del ${tsDm(f)}`,
+    cuerpo: `<div class="cj-g cj-g-2">
+        <label class="cj-f"><span>${ing ? "Entró a" : "Salió de"}</span><select id="tc-caja">${tsCajasOpts(p.caja_id || (cj.caja && cj.caja.id))}</select></label>
+        <label class="cj-f"><span>Monto (Gs.)</span><input id="tc-monto" inputmode="numeric" value="${cjMil(p.monto)}"></label>
+        <label class="cj-f"><span>Fecha</span><input type="date" id="tc-fecha" value="${cj.meta.hoy}"></label>
+        <label class="cj-f"><span>Medio</span><select id="tc-medio">${cjOpts(cj.meta.medios, p.medio)}</select></label>
+        <label class="cj-f"><span>Comprobante</span><select id="tc-doc">${cjOpts(cj.meta.docs, ing ? "recibo" : "interno")}</select></label>
+        <label class="cj-f"><span>N°</span><input id="tc-docn" value="${cjEsc(p.doc_numero || "")}"></label>
+      </div><p class="ts-nota"><i class="ti ti-info-circle"></i> Se carga como movimiento en esa caja o cuenta. Si es una factura con IVA, cargala después desde Movimientos con su foto.</p>`,
+    pie: `<div class="cj-pie">
+      <button type="button" class="pv-link" onclick="tsSaltar(${id}, '${f}')">Este no se ${ing ? "cobra" : "paga"}</button>
+      <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn ${ing ? "cj-btn-ing" : "cj-btn-egr"}" id="tc-ok"><i class="ti ti-check"></i> ${ing ? "Cobrado" : "Pagado"}</button></div>`,
+  });
+  o.querySelector("#tc-ok").onclick = async e => {
+    const v = s => o.querySelector(s).value;
+    e.target.disabled = true;
+    const r = await tsJson(`/api/teso/programados/${id}/cumplir`, "POST", { fecha: f, caja_id: v("#tc-caja"), monto: cjNum(v("#tc-monto")), fecha_pago: v("#tc-fecha"), medio: v("#tc-medio"), doc_tipo: v("#tc-doc"), doc_numero: v("#tc-docn") });
+    if (!r || !r.ok) { e.target.disabled = false; toast((r && r.msg) || "No se pudo", "error"); return; }
+    toast(r.msg, "success");
+    o.remove();
+    await cjRefrescarCajas(); tsResumen(); tsProg();
+  };
+}
+async function tsSaltar(id, f) {
+  if (!confirm("¿Marcar este vencimiento como que no se paga/cobra? No se carga nada en la caja.")) return;
+  const r = await tsJson(`/api/teso/programados/${id}/cumplir`, "POST", { fecha: f, accion: "saltar" });
+  document.querySelector(".cj-modal")?.closest(".modal-overlay")?.remove();
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  tsResumen(); tsProg();
+}
+
+// ─── Cheques ────────────────────────────────────────────────────────────
+async function tsCheques() {
+  const qs = new URLSearchParams({ sentido: ts.chSent, estado: ts.chEst, q: ts.chQ });
+  const r = await api(`/api/teso/cheques?${qs}`).catch(() => null);
+  const box = document.getElementById("cj-cuerpo");
+  if (!box || cj.vista !== "cheques") return;
+  if (!r || !r.ok) { box.innerHTML = `<div class="empty">No se pudieron traer los cheques.</div>`; return; }
+  ts.ch = r.cheques;
+  const t = r.totales, rec = ts.chSent === "recibido";
+  const est = ts.res.estados_cheque[ts.chSent];
+  box.innerHTML = `
+    <div class="cj-barra">
+      <div class="cj-seg">${[["recibido", "Recibidos (cartera)"], ["emitido", "Emitidos (chequera)"]].map(([k, v]) => `<button type="button" class="${ts.chSent === k ? "on" : ""}" onclick="ts.chSent='${k}';ts.chEst='abiertos';tsCheques()">${v}</button>`).join("")}</div>
+      ${cjPuede() ? `<div class="cj-nuevos"><button class="btn btn-primary" onclick="tsChequeEditar(null)"><i class="ti ti-plus"></i> ${rec ? "Cheque recibido" : "Cheque emitido"}</button></div>` : ""}
+    </div>
+    <div class="ts-flujo-top">
+      <div class="ts-kpi"><span>En cartera (por cobrar)</span><b class="ing">${cjGs(t.cartera)}</b><small>${t.n_cartera} cheque${t.n_cartera === 1 ? "" : "s"}</small></div>
+      <div class="ts-kpi"><span>Emitidos por debitar</span><b class="egr">${cjGs(t.por_debitar)}</b><small>${t.n_por_debitar} cheque${t.n_por_debitar === 1 ? "" : "s"}</small></div>
+      <div class="ts-kpi ${t.avisos ? "ojo" : ""}"><span>Con aviso</span><b>${t.avisos}</b><small>por vencer o para depositar</small></div>
+    </div>
+    <div class="cj-filtros">
+      <select class="cj-sel" onchange="ts.chEst=this.value;tsCheques()" aria-label="Estado"><option value="abiertos" ${ts.chEst === "abiertos" ? "selected" : ""}>Abiertos</option><option value="" ${!ts.chEst ? "selected" : ""}>Todos</option>${Object.entries(est).map(([k, v]) => `<option value="${k}" ${ts.chEst === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <label class="cj-buscar"><i class="ti ti-search"></i><input type="search" value="${cjEsc(ts.chQ)}" placeholder="Número, banco, ${rec ? "librador" : "beneficiario"}" oninput="clearTimeout(ts._q);ts._q=setTimeout(()=>{ts.chQ=this.value;tsCheques()},300)"></label>
+    </div>
+    ${r.cheques.length ? `<div class="ts-cheques">${r.cheques.map(tsChequeCard).join("")}</div>`
+      : `<div class="empty"><i class="ti ti-file-dollar"></i>No hay cheques ${rec ? "recibidos" : "emitidos"} con ese filtro.</div>`}
+    <p class="ts-nota"><i class="ti ti-scale"></i> Cheque de pago diferido (Ley 805/96): la fecha de pago no puede pasar de ${180} días desde la emisión, y hay 30 días después de esa fecha para presentarlo al banco. Si se deposita antes de la fecha de pago, el banco lo rechaza.</p>`;
+}
+function tsChequeCard(c) {
+  const rec = c.sentido === "recibido";
+  const abiertos = ["cartera", "depositado", "emitido", "entregado"].includes(c.estado);
+  const acc = !cjPuede() ? [] : rec
+    ? ({ cartera: [["depositar", "Depositar", "building-bank"], ["cobrar", "Acreditado", "circle-check"], ["endosar", "Endosar", "arrow-forward"], ["rechazar", "Rechazado", "ban"]],
+         depositado: [["cobrar", "Acreditado", "circle-check"], ["rechazar", "Rechazado", "ban"]], cobrado: [["rechazar", "Rechazado", "ban"]] }[c.estado] || [])
+    : ({ emitido: [["entregar", "Entregado", "hand-finger"], ["debitar", "Debitado", "circle-check"], ["anular", "Anular", "x"]],
+         entregado: [["debitar", "Debitado", "circle-check"], ["anular", "Anular", "x"], ["rechazar", "Rechazado", "ban"]], debitado: [["rechazar", "Rechazado", "ban"]] }[c.estado] || []);
+  return `<div class="ts-cheque e-${c.estado} ${abiertos ? "" : "cerrado"}">
+    <div class="ts-ch-cab"><span class="ts-ch-banco"><i class="ti ti-building-bank"></i> ${cjEsc(c.banco || "Banco")} · N° ${cjEsc(c.numero)}</span>
+      <span class="ts-ch-tipo">${c.tipo === "diferido" ? "Diferido" : "Al día"}</span></div>
+    <div class="ts-ch-m ${rec ? "ing" : "egr"}">${cjGs(c.monto)}</div>
+    <div class="ts-ch-p">${rec ? "De" : "A"} <b>${cjEsc(c.persona || "—")}</b>${c.concepto ? ` · ${cjEsc(c.concepto)}` : ""}</div>
+    <div class="ts-ch-f"><span>Emitido ${tsDm(c.fecha_emision)}</span><span><b>Pago ${tsDm(c.fecha_pago)}</b>${abiertos ? ` · ${c.dias > 0 ? `en ${c.dias} días` : c.dias === 0 ? "hoy" : `hace ${-c.dias} días`}` : ""}</span></div>
+    <div class="ts-ch-est"><span class="ts-pill e-${c.estado}">${cjEsc(c.estado_txt)}</span>${c.caja ? `<small>${cjEsc(c.caja)}</small>` : ""}</div>
+    ${c.avisos.map(a => `<div class="cj-aviso ${a.nivel === "info" ? "info" : a.nivel}"><i class="ti ti-${a.nivel === "mal" ? "alert-triangle" : "info-circle"}"></i><span>${cjEsc(a.msg)}</span></div>`).join("")}
+    ${acc.length ? `<div class="ts-ch-acc">${acc.map(([k, t, ic]) => `<button type="button" class="btn btn-sm ${k === "cobrar" || k === "debitar" ? "btn-primary" : "btn-ghost"}" onclick="tsChequeAccion(${c.id}, '${k}')"><i class="ti ti-${ic}"></i> ${t}</button>`).join("")}
+      ${!c.mov_id ? `<button type="button" class="icon-btn" title="Corregir" aria-label="Corregir" onclick="tsChequeEditar(${c.id})"><i class="ti ti-pencil"></i></button>` : ""}</div>` : ""}
+    ${c.historial.length > 1 ? `<details class="ts-ch-hist"><summary>Historial</summary>${c.historial.map(h => `<div>${tsDm(h.el.slice(0, 10))} ${h.el.slice(11, 16)} · ${cjEsc(h.txt)} <small>${cjEsc(h.por)}</small></div>`).join("")}</details>` : ""}
+  </div>`;
+}
+function tsChequeEditar(id) {
+  const c = id ? ts.ch.find(x => x.id === id) : { sentido: ts.chSent, tipo: "diferido", fecha_emision: cj.meta.hoy, fecha_pago: cj.meta.hoy, banco: "", caja_id: 0 };
+  const rec = c.sentido === "recibido";
+  const o = rvModal({
+    titulo: id ? "Corregir cheque" : rec ? "Cheque recibido" : "Cheque emitido", icono: "file-dollar", ancho: 600, clase: "cj-modal",
+    sub: rec ? "Un cheque que nos dieron: queda en cartera hasta que se deposita" : "Un cheque que dimos: se descuenta de la cuenta cuando se debita",
+    cuerpo: `<div class="cj-g cj-g-2">
+        <label class="cj-f"><span>Tipo</span><select id="tq-tipo"><option value="diferido" ${c.tipo === "diferido" ? "selected" : ""}>De pago diferido</option><option value="comun" ${c.tipo === "comun" ? "selected" : ""}>Al día (común)</option></select></label>
+        <label class="cj-f"><span>Banco</span><input id="tq-banco" list="ts-bancos-q" value="${cjEsc(c.banco)}" placeholder="Ej: Itaú"></label>
+        <label class="cj-f"><span>N° de cheque</span><input id="tq-num" value="${cjEsc(c.numero || "")}" inputmode="numeric"></label>
+        <label class="cj-f"><span>Monto (Gs.)</span><input id="tq-monto" inputmode="numeric" value="${c.monto ? cjMil(c.monto) : ""}"></label>
+        <label class="cj-f"><span>${rec ? "Librador (quién lo firma)" : "Beneficiario (a quién)"}</span><input id="tq-pers" value="${cjEsc(c.persona || "")}"></label>
+        <label class="cj-f"><span>RUC / CI</span><input id="tq-ruc" value="${cjEsc(c.ruc || "")}"></label>
+        <label class="cj-f"><span>Fecha de emisión</span><input type="date" id="tq-fe" value="${c.fecha_emision}"></label>
+        <label class="cj-f tq-fp"><span>Fecha de pago</span><input type="date" id="tq-fp" value="${c.fecha_pago}"></label>
+        ${rec ? "" : `<label class="cj-f"><span>Cuenta de la que sale</span><select id="tq-caja"><option value="0">Elegí…</option>${tsCajasOpts(c.caja_id, true) || tsCajasOpts(c.caja_id)}</select></label>`}
+        <label class="cj-f" ${rec ? `style="grid-column:1/-1"` : ""}><span>Por qué</span><input id="tq-conc" value="${cjEsc(c.concepto || "")}" placeholder="${rec ? "Ej: pago del viaje de turismo" : "Ej: repuestos factura 001-001-345"}"></label>
+      </div>
+      <datalist id="ts-bancos-q">${ts.res.bancos.map(b => `<option value="${cjEsc(b)}">`).join("")}</datalist>
+      <div class="cj-aviso info" id="tq-av" hidden></div>`,
+    pie: `<div class="cj-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" id="tq-ok"><i class="ti ti-check"></i> Guardar</button></div>`,
+  });
+  const v = s => o.querySelector(s)?.value || "";
+  const revisar = () => {
+    const dif = v("#tq-tipo") === "diferido";
+    o.querySelector(".tq-fp").hidden = !dif;
+    const av = o.querySelector("#tq-av");
+    if (dif && v("#tq-fe") && v("#tq-fp")) {
+      const d = Math.round((new Date(v("#tq-fp")) - new Date(v("#tq-fe"))) / 864e5);
+      av.hidden = false;
+      av.className = "cj-aviso " + (d > 180 || d < 0 ? "mal" : "info");
+      av.innerHTML = d > 180 ? `<i class="ti ti-alert-triangle"></i><span>A ${d} días: un diferido no puede pasar de 180 días (Ley 805/96).</span>`
+        : d < 0 ? `<i class="ti ti-alert-triangle"></i><span>La fecha de pago es antes de la emisión.</span>`
+        : `<i class="ti ti-info-circle"></i><span>A ${d} días.${rec ? ` Se puede depositar desde el ${tsDm(v("#tq-fp"))} y hasta 30 días después.` : ""}</span>`;
+    } else av.hidden = true;
+  };
+  ["#tq-tipo", "#tq-fe", "#tq-fp"].forEach(s => o.querySelector(s).addEventListener("change", revisar));
+  revisar();
+  const m = o.querySelector("#tq-monto");
+  m.onblur = () => { const n = Math.round(cjNum(m.value)); m.value = n ? cjMil(n) : ""; };
+  o.querySelector("#tq-ok").onclick = async e => {
+    e.target.disabled = true;
+    const r = await tsJson(id ? `/api/teso/cheques/${id}` : "/api/teso/cheques", id ? "PUT" : "POST", {
+      sentido: c.sentido, tipo: v("#tq-tipo"), banco: v("#tq-banco"), numero: v("#tq-num"), monto: v("#tq-monto"), persona: v("#tq-pers"),
+      ruc: v("#tq-ruc"), fecha_emision: v("#tq-fe"), fecha_pago: v("#tq-fp"), caja_id: v("#tq-caja"), concepto: v("#tq-conc"),
+    });
+    if (!r || !r.ok) { e.target.disabled = false; toast((r && r.msg) || "No se pudo", "error"); return; }
+    toast(r.msg, "success");
+    o.remove();
+    tsResumen(); tsCheques();
+  };
+  setTimeout(() => o.querySelector("#tq-banco").focus(), 60);
+}
+function tsChequeAccion(id, accion) {
+  const c = ts.ch.find(x => x.id === id);
+  const titulos = { depositar: "Depositar el cheque", cobrar: "Acreditado en la cuenta", endosar: "Endosar a un tercero", rechazar: "Cheque rechazado",
+                    entregar: "Entregar el cheque", debitar: "Debitado de la cuenta", anular: "Anular el cheque" };
+  const pideCaja = ["depositar", "cobrar"].includes(accion);
+  const pideMotivo = ["rechazar", "anular"].includes(accion);
+  const o = rvModal({
+    titulo: titulos[accion], icono: "file-dollar", ancho: 480, clase: "cj-modal",
+    sub: `${cjEsc(c.banco)} N° ${cjEsc(c.numero)} · ${cjGs(c.monto)} · ${cjEsc(c.persona)}`,
+    cuerpo: `${pideCaja ? `<label class="cj-f"><span>Cuenta</span><select id="ta-caja">${tsCajasOpts(c.caja_id, true) || tsCajasOpts(c.caja_id)}</select></label>` : ""}
+      ${accion === "endosar" ? `<label class="cj-f"><span>¿A quién se le endosó?</span><input id="ta-quien"></label>` : ""}
+      ${pideMotivo ? `<label class="cj-f"><span>Motivo</span><input id="ta-mot" placeholder="${accion === "rechazar" ? "Ej: sin fondos" : "Ej: mal llenado"}"></label>` : ""}
+      ${["cobrar", "debitar", "rechazar"].includes(accion) ? `<label class="cj-f"><span>Fecha</span><input type="date" id="ta-fecha" value="${cj.meta.hoy}"></label>` : ""}
+      ${accion === "cobrar" || accion === "debitar" ? `<p class="ts-nota"><i class="ti ti-info-circle"></i> Se carga el ${accion === "cobrar" ? "ingreso" : "egreso"} en la cuenta.</p>` : ""}
+      ${accion === "rechazar" && (c.estado === "cobrado" || c.estado === "debitado") ? `<p class="ts-nota"><i class="ti ti-info-circle"></i> Como ya estaba ${c.estado}, se carga el movimiento al revés en la cuenta.</p>` : ""}`,
+    pie: `<div class="cj-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" id="ta-ok"><i class="ti ti-check"></i> Confirmar</button></div>`,
+  });
+  o.querySelector("#ta-ok").onclick = async e => {
+    const v = s => o.querySelector(s)?.value || "";
+    e.target.disabled = true;
+    const r = await tsJson(`/api/teso/cheques/${id}/${accion}`, "POST", { caja_id: v("#ta-caja"), a_quien: v("#ta-quien"), motivo: v("#ta-mot"), fecha: v("#ta-fecha") });
+    if (!r || !r.ok) { e.target.disabled = false; toast((r && r.msg) || "No se pudo", "error"); return; }
+    toast(r.msg, "success");
+    o.remove();
+    await cjRefrescarCajas(); tsResumen(); tsCheques();
+  };
+}
+
+// ─── Conciliación bancaria ──────────────────────────────────────────────
+async function tsConc() {
+  const bancos = (cj.cajas || []).filter(c => c.tipo === "banco");
+  const box = document.getElementById("cj-cuerpo");
+  if (!bancos.length) {
+    box.innerHTML = `<div class="empty"><i class="ti ti-building-bank"></i>No hay cuentas de banco.${cj.meta.admin ? ` En «Cajas y conceptos» marcá cuál es una cuenta de banco (o creá una), con su banco y número.` : " Pedile a administración que cargue las cuentas."}</div>`;
+    return;
+  }
+  if (!bancos.some(b => b.id === ts.conCaja)) ts.conCaja = bancos[0].id;
+  const r = await api(`/api/teso/conciliacion/${ts.conCaja}`).catch(() => null);
+  if (!box || cj.vista !== "conc") return;
+  if (!r || !r.ok) { box.innerHTML = `<div class="empty">No se pudo traer la conciliación.</div>`; return; }
+  ts.con = r;
+  const pendE = r.extracto.filter(e => e.estado === "pendiente"), pendM = r.movs.filter(m => !m.extracto_id);
+  const dif = r.saldo_banco == null ? null : Math.round(r.saldo_banco - r.saldo_sistema);
+  box.innerHTML = `
+    <div class="cj-barra">
+      <div class="ts-cuentas">${bancos.map(b => `<button type="button" class="${b.id === ts.conCaja ? "on" : ""}" onclick="ts.conCaja=${b.id};tsConc()"><i class="ti ti-building-bank"></i> ${cjEsc(b.nombre)}<small>${cjEsc(b.banco || "")} ${cjEsc(b.numero_cuenta || "")}</small></button>`).join("")}</div>
+      ${cjPuede() ? `<div class="cj-acc">
+        <label class="btn btn-primary"><i class="ti ti-upload"></i> Subir extracto<input type="file" accept=".xlsx,.csv,.txt" hidden onchange="tsSubirExtracto(this)"></label>
+        <button class="btn btn-ghost" onclick="tsAuto()"><i class="ti ti-wand"></i> Conciliar solo</button></div>` : ""}
+    </div>
+    <div class="ts-flujo-top">
+      <div class="ts-kpi"><span>Saldo según el banco</span><b>${r.saldo_banco == null ? "—" : tsGs(r.saldo_banco)}</b><small>${r.saldo_banco_fecha ? "al " + tsDm(r.saldo_banco_fecha) : "subí un extracto con saldo"}</small></div>
+      <div class="ts-kpi"><span>Saldo en el sistema</span><b>${tsGs(r.saldo_sistema)}</b></div>
+      <div class="ts-kpi ${dif ? "ojo" : ""}"><span>Diferencia</span><b>${dif == null ? "—" : dif === 0 ? "Cuadra" : (dif > 0 ? "+" : "−") + cjMil(Math.abs(dif))}</b><small>${dif ? "la explican las líneas sin conciliar" : ""}</small></div>
+      <div class="ts-kpi ${pendE.length ? "ojo" : ""}"><span>Sin conciliar</span><b>${pendE.length} / ${pendM.length}</b><small>en el banco / en el sistema</small></div>
+    </div>
+    ${r.extracto.length ? `<div class="ts-conc">
+      <div class="ts-conc-col"><h3 class="ts-h3">Extracto del banco <span>${pendE.length} pendiente${pendE.length === 1 ? "" : "s"}</span></h3>
+        ${r.extracto.map(e => `<div class="ts-ext e-${e.estado}" data-id="${e.id}">
+          <span class="f">${tsDm(e.fecha)}</span>
+          <span class="t"><b>${cjEsc(e.descripcion || "—")}</b>${e.referencia ? `<small>ref. ${cjEsc(e.referencia)}</small>` : ""}</span>
+          <b class="m ${e.monto > 0 ? "ing" : "egr"}">${e.monto > 0 ? "+" : "−"} ${cjMil(Math.abs(e.monto))}</b>
+          <span class="acc">${e.estado === "conciliado" ? `<span class="ts-pill e-cobrado" title="${e.como === "auto" ? "conciliado solo" : "a mano"}"><i class="ti ti-link"></i> ${e.como === "auto" ? "solo" : "a mano"}</span>${cjPuede() ? `<button class="icon-btn" title="Desenganchar" aria-label="Desenganchar" onclick="tsExt(${e.id}, 'desconciliar')"><i class="ti ti-unlink"></i></button>` : ""}`
+            : e.estado === "ignorado" ? `<span class="ts-pill">ignorada</span>`
+            : cjPuede() ? `<button class="btn btn-sm btn-ghost" onclick="tsEnganchar(${e.id})"><i class="ti ti-link"></i> Enganchar</button>` : ""}</span>
+        </div>`).join("")}</div>
+      <div class="ts-conc-col"><h3 class="ts-h3">Cargado en el sistema <span>${pendM.length} sin conciliar</span></h3>
+        ${r.movs.map(m => `<div class="ts-ext ${m.extracto_id ? "e-conciliado" : "e-pendiente"}">
+          <span class="f">${tsDm(m.fecha_oper)}</span>
+          <span class="t"><b>${cjEsc(m.contraparte || m.concepto || "—")}</b><small>N° ${m.numero} · ${cjEsc(m.concepto || "")}</small></span>
+          <b class="m ${m.tipo === "ingreso" ? "ing" : "egr"}">${m.tipo === "ingreso" ? "+" : "−"} ${cjMil(m.total_gs)}</b>
+          <span class="acc">${m.extracto_id ? `<i class="ti ti-link ts-ok"></i>` : ""}</span></div>`).join("")}</div>
+    </div>` : `<div class="empty"><i class="ti ti-file-upload"></i>Subí el extracto del banco (Excel .xlsx o .csv, como lo bajás del home banking). Tiene que tener columnas de Fecha y Débito/Crédito o Importe: el sistema las encuentra solo.</div>`}`;
+}
+async function tsSubirExtracto(inp) {
+  const f = inp.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append("archivo", f);
+  const r = await api(`/api/teso/conciliacion/${ts.conCaja}/importar`, { method: "POST", body: fd }).catch(() => null);
+  inp.value = "";
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  tsResumen(); tsConc();
+}
+async function tsAuto() {
+  const r = await tsJson(`/api/teso/conciliacion/${ts.conCaja}/auto`);
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  tsResumen(); tsConc();
+}
+async function tsExt(id, accion, cuerpo) {
+  const r = await tsJson(`/api/teso/extracto/${id}/${accion}`, "POST", cuerpo || {});
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  document.querySelector(".ts-eng")?.closest(".modal-overlay")?.remove();
+  await cjRefrescarCajas(); tsResumen(); tsConc();
+}
+function tsEnganchar(id) {
+  const e = ts.con.extracto.find(x => x.id === id);
+  const signo = e.monto > 0 ? "ingreso" : "egreso";
+  const cand = ts.con.movs.filter(m => !m.extracto_id && m.tipo === signo)
+    .map(m => ({ m, dm: Math.abs(m.total_gs - Math.abs(e.monto)), dd: Math.abs((new Date(m.fecha_oper) - new Date(e.fecha)) / 864e5) }))
+    .sort((a, b) => a.dm - b.dm || a.dd - b.dd).slice(0, 12);
+  const conc = cjConceptos(signo);
+  rvModal({
+    titulo: "Enganchar la línea del banco", icono: "link", ancho: 640, clase: "cj-modal ts-eng",
+    sub: `${tsDm(e.fecha)} · ${cjEsc(e.descripcion)} · ${e.monto > 0 ? "+" : "−"} ${cjMil(Math.abs(e.monto))}`,
+    cuerpo: `<h4 class="cj-h4">¿Con cuál movimiento del sistema?</h4>
+      ${cand.length ? `<div class="ts-cand">${cand.map(({ m, dm, dd }) => `<button type="button" onclick="tsExt(${id}, 'conciliar', {mov_id: ${m.id}})">
+        <span>${tsDm(m.fecha_oper)}</span><span><b>${cjEsc(m.contraparte || m.concepto || "—")}</b><small>N° ${m.numero} · ${cjEsc(m.concepto || "")}</small></span>
+        <b class="${signo === "ingreso" ? "ing" : "egr"}">${cjMil(m.total_gs)}</b>${dm < 1 ? `<em class="ok">mismo monto</em>` : `<em>dif. ${cjMil(dm)}</em>`}</button>`).join("")}</div>`
+        : `<p class="cj-nada">No hay movimientos sin conciliar de ese tipo.</p>`}
+      <h4 class="cj-h4">¿Solo está en el banco? (comisión, interés, débito automático)</h4>
+      <div class="ts-crear"><select id="te-conc"><option value="">${e.monto < 0 ? "Gastos bancarios" : "Ingreso bancario"}</option>${conc.map(k => `<option value="${k.id}">${cjEsc(k.nombre)}</option>`).join("")}</select>
+        <button type="button" class="btn btn-ghost" onclick="const s=document.getElementById('te-conc');const k=cj.meta.conceptos.find(x=>x.id===+s.value);tsExt(${id}, 'crear', {concepto_id: k?k.id:0, concepto: k?k.nombre:''})"><i class="ti ti-plus"></i> Cargarlo y conciliar</button></div>`,
+    pie: `<div class="cj-pie"><button type="button" class="pv-link" onclick="tsExt(${id}, 'ignorar')">Ignorar esta línea</button><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`,
+  });
 }
