@@ -382,6 +382,13 @@ def _tramos_recientes(conn, fecha, dias=DIAS_ATRAS_UBICACION):
                        "origen": o, "llega": de, "destino": f["destino"], "corredor": f["corredor"],
                        "tipo": f["tipo"], "trip1": f["trip1"] or "", "trip2": f["trip2"] or ""})
     tramos.sort(key=lambda t: (t["fecha"], t["hora"], t["id"]))
+    # Internacional: dónde queda de verdad cada unidad y cuándo llega a
+    # Asunción, según la programación semanal (orden de llegada)
+    try:
+        import trafico_programa
+        trafico_programa.ajustar_tramos(conn, tramos)
+    except Exception:
+        pass
     return tramos
 
 
@@ -396,7 +403,8 @@ def ubicaciones(tramos, fecha, hora="00:00", excluir_id=None):
             continue
         donde[t["coche"]] = {"lugar": t["llega"], "desde_fecha": t["fecha"], "desde_hora": t["hora"],
                              "destino": t["destino"], "corredor": t["corredor"], "tipo": t.get("tipo", "nacional"),
-                             "trip1": t["trip1"], "trip2": t["trip2"]}
+                             "trip1": t["trip1"], "trip2": t["trip2"],
+                             "llegada": t.get("llegada") or "", "clase": t.get("clase") or ""}
     return donde
 
 
@@ -523,6 +531,13 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
         idas_rot = (_idas_recientes(conn, (date.fromisoformat(fecha) - timedelta(days=3)).isoformat(), fecha, tipo)
                     if reglas else [])
         viajes_mes = viajes_del_mes(conn, fecha[:7]) if tipo == "internacional" else {}
+        prog_dia, prog_dow = [], date.fromisoformat(fecha).isoweekday()
+        if tipo == "internacional":
+            try:
+                import trafico_programa
+                prog_dia = [r for r in trafico_programa.filas(conn, "internacional") if r["dia"] == prog_dow]
+            except Exception:
+                prog_dia = []
     finally:
         if propia:
             conn.close()
@@ -567,6 +582,10 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
                 r = regla_de_ida(reglas, corr, s, s["llega"])
                 if r:
                     s["rotacion"] = {"txt": _vuelta_txt(r, fecha)}
+                elif tipo == "internacional" and prog_dia:
+                    p = trafico_programa.ida_de(prog_dia, prog_dow, s["hora"])
+                    if p and p.get("sigue"):
+                        s["rotacion"] = {"txt": f"La misma unidad sigue a las {p['sigue']}"}
             else:
                 r, ida = ida_de_regreso(reglas, idas_rot, fecha, corr, s, s["origen"], s["llega"], regresos_dia)
                 if r:
@@ -651,12 +670,14 @@ def _ubicaciones_para_panel(inicio, salidas_dia, flota, tipo="nacional"):
             "destino": u["destino"], "trip1": u["trip1"], "trip2": u["trip2"],
             "modelo": f"{v['marca'] or ''} {v['modelo'] or ''}".strip() if v else "",
             "hoy": sorted(asignados.get(coche, [])),
+            "llegada": u.get("llegada") or "", "clase": u.get("clase") or "",
         })
     if tipo == "internacional":
         orden = sorted(grupos, key=lambda l: (not es_argentina(l), l == "ASU", l))
     else:
         orden = sorted(grupos, key=lambda l: (l == "ASU", l))  # el interior primero: ahí están los regresos
-    return [{"lugar": l, "coches": sorted(grupos[l], key=lambda x: (x["desde_fecha"], x["desde_hora"]))}
+    # En el internacional, los de acá en el orden en que llegaron a Asunción
+    return [{"lugar": l, "coches": sorted(grupos[l], key=lambda x: (x.get("llegada") or f"{x['desde_fecha']}T{x['desde_hora']}"))}
             for l in orden]
 
 
@@ -917,7 +938,29 @@ def ida_de_regreso(reglas, idas, fecha, corredor, s, origen, llega=None, regreso
     Si la regla abarca varias idas (las dos de Villarrica), la primera ida va
     con el primer regreso que le corresponde ese día, la segunda con el
     segundo (regresos = todos los regresos del día, para contar el lugar)."""
-    for r in reglas_de_regreso(reglas, corredor, s, origen, llega, fecha):
+    reglas_r = reglas_de_regreso(reglas, corredor, s, origen, llega, fecha)
+    # Dos regresos a la misma hora que traen idas distintas (el 17:00 con los
+    # dos coches cama del día anterior): el primero con la primera ida, el
+    # segundo con la segunda
+    if regresos and len(reglas_r) > 1 and all(r.get("ida_hora") and r.get("vuelta_hora") for r in reglas_r):
+        hermanos = sorted([x for x in regresos if x.get("hora") == s.get("hora")
+                           and reglas_de_regreso(reglas_r, x.get("corredor") or corredor, x, x.get("origen"), x.get("llega"), fecha)],
+                          key=lambda x: x.get("id") or 0)
+        if len(hermanos) > 1:
+            pares = []
+            for r in reglas_r:
+                f_ida = (date.fromisoformat(fecha) - timedelta(days=int(r["vuelta_dias"] or 0))).isoformat()
+                cands = [i for i in idas if i["fecha"] == f_ida and _mismo_corredor(r, i["corredor"])
+                         and regla_de_ida([r], i["corredor"], i, i["llega"]) is not None]
+                cands.sort(key=lambda i: (_cerca(r["ida_hora"], i["hora"], TOL_IDA) or 0, i["id"]))
+                if cands and all(cands[0]["id"] != p[1]["id"] for p in pares):
+                    pares.append((r, cands[0]))
+            pares.sort(key=lambda p: (_orden_hora(p[1]["hora"]), p[1]["id"]))
+            pos = next((k for k, x in enumerate(hermanos) if x.get("id") == s.get("id")), 0)
+            if pos < len(pares):
+                return pares[pos]
+            return reglas_r[0], None
+    for r in reglas_r:
         f_ida = (date.fromisoformat(fecha) - timedelta(days=int(r["vuelta_dias"] or 0))).isoformat()
         cands = [i for i in idas if i["fecha"] == f_ida and _mismo_corredor(r, i["corredor"])
                  and regla_de_ida([r], i["corredor"], i, i["llega"]) is not None]
@@ -1025,15 +1068,36 @@ def candidatos_para(donde, origen, corredor, fecha, hora, ya_hoy, flota, tomados
         if hora and any(h > hora for h in horas):
             rango += 2
         v = flota.get(coche)
+        llegada = u.get("llegada") or ""
+        viajando = ""
+        if tipo == "internacional" and not es_argentina(origen):
+            # De acá: primero los del internacional, por orden de llegada a Asunción.
+            # A CDE va uno de Asunción; el que está de reserva en Villarrica es
+            # para las salidas de Villarrica.
+            if origen not in ("ASU", "VILLARRICA") and u["lugar"] == "ASU" and rango >= 1:
+                rango -= 1
+            elif u["lugar"] == "VILLARRICA" and origen != "VILLARRICA":
+                rango += 1
+            if u.get("tipo") != "internacional":
+                rango += 1
+            if llegada and hora and llegada > f"{fecha}T{hora}":
+                rango += 2
+                viajando = llegada
         lista.append({
             "coche": coche, "lugar": u["lugar"], "rango": rango,
             "desde_fecha": u["desde_fecha"], "desde_hora": u["desde_hora"], "destino": u["destino"],
             "trip1": u["trip1"], "trip2": u["trip2"],
             "cuando": "hoy" if u["desde_fecha"] == fecha else _cuando(u["desde_fecha"], fecha),
             "modelo": f"{v['marca'] or ''} {v['modelo'] or ''}".strip() if v else "",
-            "ya_hoy": sorted(horas),
+            "ya_hoy": sorted(horas), "llegada": llegada, "clase": u.get("clase") or "", "viajando": viajando,
         })
-    lista.sort(key=lambda c: (c["rango"], c["desde_fecha"], c["desde_hora"], c["coche"]))
+    lista.sort(key=lambda c: (c["rango"], c["llegada"] or f"{c['desde_fecha']}T{c['desde_hora']}", c["coche"]))
+    if tipo == "internacional" and not es_argentina(origen):
+        n = 0
+        for c in lista:
+            if c["rango"] == 0 and c["lugar"] in (origen, "ASU"):
+                n += 1
+                c["turno"] = n
     return lista
 
 
@@ -1094,7 +1158,7 @@ def sugerencias(salida_id):
             c["rango"] = -1
             c["rotacion"] = f"Le toca por rotación: salió {cuando} {ida['hora']}"
             c.pop("reservado", None)
-        cands.sort(key=lambda c: (c["rango"], c["desde_fecha"], c["desde_hora"], c["coche"]))
+        cands.sort(key=lambda c: (c["rango"], c.get("llegada") or f"{c['desde_fecha']}T{c['desde_hora']}", c["coche"]))
     # Desde Asunción hay muchos: se muestran los que llegaron hace más tiempo
     return {"salida": {"id": s["id"], "hora": s["hora"], "destino": s["destino"], "origen": origen},
             "candidatos": cands[:12], "total": len(cands)}
@@ -2188,6 +2252,17 @@ def dia_completo(fecha, tipo="nacional"):
     d["puede_editar"] = _puede_editar()
     d["completables"] = (completar_con_ubicacion(fecha, simular=True, tipo=tipo)
                          if d.get("existe") and d["puede_editar"] else 0)
+    d["completables_idas"] = 0
+    d["programa_dia"] = 0
+    if tipo == "internacional":
+        try:
+            import trafico_programa
+            dow = date.fromisoformat(fecha).isoweekday()
+            d["programa_dia"] = sum(1 for r in trafico_programa.filas(None, "internacional") if r["dia"] == dow)
+            if d.get("existe") and d["puede_editar"]:
+                d["completables_idas"] = trafico_programa.completar_idas(fecha, simular=True)
+        except Exception:
+            pass
     # Cuántas salidas lleva este día de la semana y cuántas hay cargadas
     try:
         import trafico_patron
@@ -2484,9 +2559,16 @@ def api_completar(fecha):
     fecha = _fecha_ok(fecha)
     tipo = _tipo()
     n = completar_con_ubicacion(fecha, tipo=tipo)
-    if n:
-        _auditar(f"Completó {n} regreso(s) del tráfico{_etq(tipo)} del {fecha} con los coches que estaban allá")
-    return _respuesta_dia(fecha, tipo, completadas=n)
+    idas = 0
+    if tipo == "internacional":
+        try:
+            import trafico_programa
+            idas = trafico_programa.completar_idas(fecha)
+        except Exception:
+            idas = 0
+    if n or idas:
+        _auditar(f"Completó {n} regreso(s){f' y {idas} salida(s) por orden de llegada' if idas else ''} del tráfico{_etq(tipo)} del {fecha}")
+    return _respuesta_dia(fecha, tipo, completadas=n + idas, completadas_regresos=n, completadas_idas=idas)
 
 
 @bp_trafico.route("/api/trafico/dia/<fecha>/copiar", methods=["POST"])

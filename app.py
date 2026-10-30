@@ -182,6 +182,10 @@ app.register_blueprint(bp_alpha_ventas)
 from trafico_patron import bp_patron, init_trafico_patron
 init_trafico_patron()
 app.register_blueprint(bp_patron)
+# Programación semanal del internacional: arma el día, las rotaciones y el orden de llegada
+from trafico_programa import bp_programa, init_trafico_programa
+init_trafico_programa()
+app.register_blueprint(bp_programa)
 
 # ─── Servicios ───────────────────────────────────────────────────────────────
 # Cada salida del tráfico es un servicio: los indicadores salen de ahí, sin
