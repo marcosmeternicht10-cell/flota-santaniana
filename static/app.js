@@ -23062,7 +23062,7 @@ async function renderTableroTaller() {
   await ttCargar();
   tt.t = setInterval(() => {
     if (!document.getElementById("tt-cuerpo")) { clearInterval(tt.t); return; }
-    if (tt.d && tt.d.fecha === tt.d.hoy && !document.querySelector(".tt-modal")) ttCargar(true);
+    if (tt.d && tt.d.fecha === tt.d.hoy && !document.querySelector(".tt-modal") && !tt.arr && !document.querySelector(".tt-menu")) ttCargar(true);
   }, 60000);
 }
 async function ttCargar(silencioso) {
@@ -23105,6 +23105,7 @@ function ttPintar() {
       <div class="cump"><span>Cumplimiento</span><b>${t.cumplimiento == null ? "—" : t.cumplimiento + " %"}</b></div>
     </div>
     <div class="tt-ley">${Object.entries(TT_EST).map(([k, v]) => `<span class="tt-ley-i e-${k}"><i class="ti ti-${TT_IC[k]}"></i> ${v}</span>`).join("")}<span class="tt-ley-i plan">PLAN</span></div>
+    ${ttBandeja()}
     <div class="tt-tabla">
       <div class="tt-fila tt-cab"><div class="tt-tec">Técnico</div><div class="tt-et"></div><div class="tt-ots">Órdenes de trabajo</div></div>
       ${lista.length ? lista.map(ttFila).join("") : `<div class="empty"><i class="ti ti-users"></i>No hay técnicos con ese filtro.</div>`}
@@ -23119,7 +23120,7 @@ function ttFila(x) {
         <span class="tt-res">${r.planificadas ? `<b>${r.terminadas}/${r.planificadas}</b> hechas` : x.celdas.length ? "" : "Sin OT"}${r.horas ? ` · ${ttHoras(r.horas)}` : ""}${r.atrasadas ? ` · <em class="mal">${r.atrasadas} atrasada${r.atrasadas === 1 ? "" : "s"}</em>` : ""}${r.trabajando ? ` · <em class="vivo"><span class="tt-punto"></span>trabajando</em>` : ""}</span></div>
     </div>
     <div class="tt-et"><span class="plan">PLAN</span><span class="real">INICIO/FIN</span></div>
-    <div class="tt-ots">
+    <div class="tt-ots" data-pid="${x.id}">
       ${x.celdas.map((c, i) => ttCelda(x, c, i)).join("")}
       ${tt.d.puede ? `<button type="button" class="tt-mas" onclick="ttPlanificar(${x.id})" title="Planificarle una OT"><i class="ti ti-plus"></i><span>Planificar</span></button>` : ""}
     </div>
@@ -23133,7 +23134,8 @@ function ttCelda(x, c, i) {
     ? `<b>${c.real_ini}</b><span>trabajando · ${ttHoras(c.horas)}</span>`
     : c.real_ini ? `<b>${c.real_ini} – ${c.real_fin || "?"}</b><span>${ttHoras(c.horas)}</span>`
     : `<b>—</b><span>${c.trabajos.length ? `${c.hechos}/${c.trabajos.length} trabajos` : ""}</span>`;
-  return `<button type="button" class="tt-celda e-${c.estado}" onclick="ttVer(${x.id}, ${i})" title="${ttEsc(TT_EST[c.estado])}">
+  return `<button type="button" class="tt-celda e-${c.estado}${tt.d.puede ? " movible" : ""}" data-pid="${x.id}" data-i="${i}" data-clave="${ttEsc(c.clave)}"
+    ${tt.d.puede ? `onpointerdown="ttTomar(event, this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();ttVer(${x.id}, ${i})}"` : `onclick="ttVer(${x.id}, ${i})"`} title="${ttEsc(TT_EST[c.estado])}${tt.d.puede ? " · arrastrala para moverla" : ""}">
     <span class="tt-plan ${c.planificado ? "" : "np"}">${plan}</span>
     <span class="tt-real">${real}<em><i class="ti ti-${TT_IC[c.estado]}"></i> ${TT_EST[c.estado]}</em></span>
   </button>`;
@@ -23207,7 +23209,7 @@ async function ttHora(ot_id, pid, accion, btn) {
 }
 
 // ─── Planificarle una OT a un técnico ───────────────────────────────────
-async function ttPlanificar(pid) {
+async function ttPlanificar(pid, otElegida) {
   const x = tt.d.tecnicos.find(t => t.id === pid);
   const o = rvModal({
     titulo: `Planificar a N°${x.numero} ${ttEsc(x.nombre)}`, icono: "calendar-plus", ancho: 720, clase: "tt-modal tt-plan-modal",
@@ -23236,7 +23238,7 @@ async function ttPlanificar(pid) {
       <h4>OT ${sel.id} · coche ${ttEsc(sel.coche)} <small>${ttEsc(sel.vehiculo)}</small></h4>
       <div class="tt-m-horas"><label><span>Empieza</span><input type="time" id="tt-hi"></label><label><span>Termina</span><input type="time" id="tt-hf"></label></div>
       <p class="tt-sub">Trabajos que le tocan <small>(se le asignan; los que ya tienen otro técnico lo siguen teniendo)</small></p>
-      <div class="tt-trab-sel">${sel.trabajos.map(i => `<label><input type="checkbox" value="${i.id}"> <span>${ttEsc(i.descripcion)}${i.tecnico ? `<small>${ttEsc(i.tecnico)}</small>` : ""}</span></label>`).join("")}</div>
+      <div class="tt-trab-sel">${sel.trabajos.map(i => `<label><input type="checkbox" value="${i.id}" ${otElegida && !i.tecnico ? "checked" : ""}> <span>${ttEsc(i.descripcion)}${i.tecnico ? `<small>${ttEsc(i.tecnico)}</small>` : ""}</span></label>`).join("")}</div>
       <label class="tt-m-nota"><span>Nota para el técnico</span><input id="tt-nota" maxlength="300" placeholder="Opcional"></label>`;
     o.querySelector("#tt-ok").disabled = false;
     o.querySelector("#tt-hi").focus();
@@ -23244,6 +23246,7 @@ async function ttPlanificar(pid) {
   const cargar = async () => {
     const r = await api(`/api/taller/tablero/ots?q=${encodeURIComponent(o.querySelector("#tt-q").value)}`).catch(() => null);
     ots = (r && r.ots) || [];
+    if (otElegida && !sel) { sel = ots.find(t => t.id === otElegida) || null; if (sel) elegida(); }
     pintar();
   };
   o.querySelector("#tt-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(cargar, 250); });
@@ -23254,4 +23257,185 @@ async function ttPlanificar(pid) {
   };
   cargar();
   setTimeout(() => o.querySelector("#tt-q").focus(), 60);
+}
+
+// ─── Piezas móviles: arrastrar las OTs entre técnicos ───────────────────
+// Se toma una pieza (con el mouse, o manteniendo apretado en el celular) y se
+// suelta: en otro técnico (se le pasa o la comparten), en otro lugar de la
+// misma fila (el orden en que la hace), o en «Sacar del plan». Las OTs de la
+// bandeja de arriba se sueltan en un técnico para planificárselas.
+function ttBandeja() {
+  const d = tt.d;
+  if (!d.puede || d.fecha < d.hoy) return "";
+  const l = d.por_planificar || [];
+  return `<div class="tt-bandeja">
+    <div class="tt-band-cab"><b><i class="ti ti-inbox"></i> OTs sin técnico (${l.length})</b><span>Arrastralas a un técnico para planificarlas. Las piezas de abajo también se mueven: a otro técnico, a otro lugar de la fila, o al tacho para sacarlas del plan. En el celular, mantené apretado para levantarlas.</span></div>
+    <div class="tt-band-lista">${l.length ? l.map(o => `<button type="button" class="tt-pieza-libre" data-ot="${o.ot_id}" onpointerdown="ttTomar(event, this)" title="${ttEsc(o.trabajos.join(" · "))}">
+        <b>OT ${o.ot_id}</b><span>${o.coche ? "Coche " + ttEsc(o.coche) : ""}</span><small>${o.libres} trabajo${o.libres === 1 ? "" : "s"} sin técnico</small></button>`).join("")
+      : `<span class="tt-band-vacio"><i class="ti ti-circle-check"></i> Todas las OTs abiertas tienen técnico</span>`}
+      <div class="tt-tacho" data-tacho="1"><i class="ti ti-trash"></i> Soltá acá para sacar del plan</div>
+    </div>
+  </div>`;
+}
+function ttTomar(e, el) {
+  if (e.button !== undefined && e.button !== 0) return;
+  const tactil = e.pointerType === "touch";
+  const p0 = { x: e.clientX, y: e.clientY };
+  let arrancado = false, cancelado = false, larga = null;
+  const arrancar = () => {
+    if (arrancado || cancelado) return;
+    arrancado = true;
+    tt.arr = { el, libre: el.classList.contains("tt-pieza-libre"), pid: +el.dataset.pid || 0, clave: el.dataset.clave || "", ot: +el.dataset.ot || 0 };
+    const r = el.getBoundingClientRect();
+    const g = el.cloneNode(true);
+    g.removeAttribute("onpointerdown");
+    g.className = el.className + " tt-fantasma";
+    g.style.width = r.width + "px";
+    g.style.height = r.height + "px";
+    document.body.appendChild(g);
+    tt.arr.g = g;
+    tt.arr.dx = p0.x - r.left;
+    tt.arr.dy = p0.y - r.top;
+    el.classList.add("tt-levantada");
+    document.body.classList.add("tt-arrastrando");
+    if (navigator.vibrate && tactil) navigator.vibrate(15);
+    seguir(p0.x, p0.y);
+  };
+  const seguir = (x, y) => {
+    const a = tt.arr;
+    if (!a) return;
+    a.g.style.transform = `translate(${x - a.dx}px, ${y - a.dy}px) rotate(-2deg)`;
+    a.g.style.visibility = "hidden";
+    const bajo = document.elementFromPoint(x, y);
+    a.g.style.visibility = "";
+    document.querySelectorAll(".tt-ots.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".tt-hueco").forEach(h => h.remove());
+    a.dest = null;
+    const tacho = bajo && bajo.closest(".tt-tacho");
+    if (tacho && !a.libre) { tacho.classList.add("tt-sobre"); a.dest = { tacho: true }; }
+    const fila = bajo && bajo.closest(".tt-ots");
+    if (fila) {
+      fila.classList.add("tt-sobre");
+      const piezas = [...fila.querySelectorAll(".tt-celda:not(.tt-levantada)")];
+      let idx = piezas.length;
+      for (let k = 0; k < piezas.length; k++) {
+        const rr = piezas[k].getBoundingClientRect();
+        if (x < rr.left + rr.width / 2 && y < rr.bottom + 4) { idx = k; break; }
+      }
+      const hueco = document.createElement("span");
+      hueco.className = "tt-hueco";
+      const mas = fila.querySelector(".tt-mas");
+      if (piezas[idx]) piezas[idx].before(hueco); else if (mas) mas.before(hueco); else fila.appendChild(hueco);
+      a.dest = { pid: +fila.dataset.pid, idx };
+    }
+    // que la pantalla acompañe al arrastrar cerca del borde
+    const sc = document.getElementById("content") || document.scrollingElement;
+    clearInterval(tt.scrollT);
+    const borde = 70, alto = window.innerHeight;
+    if (y < borde || y > alto - borde) {
+      const v = y < borde ? -14 : 14;
+      tt.scrollT = setInterval(() => { sc.scrollTop += v; }, 16);
+    }
+  };
+  const alMover = ev => {
+    if (!arrancado) {
+      const dist = Math.hypot(ev.clientX - p0.x, ev.clientY - p0.y);
+      if (tactil) { if (dist > 10) { cancelado = true; limpiar(); } return; }   // en el celular, mover sin esperar = scrollear
+      if (dist > 6) arrancar(); else return;
+    }
+    ev.preventDefault();
+    seguir(ev.clientX, ev.clientY);
+  };
+  const tocarMover = ev => { if (arrancado) ev.preventDefault(); };
+  const soltar = ev => {
+    const a = tt.arr;
+    limpiar();
+    if (!arrancado) {
+      if (cancelado) return;
+      if (el.classList.contains("tt-pieza-libre")) toast("Arrastrala hasta un técnico para planificarla", "");
+      else ttVer(+el.dataset.pid, +el.dataset.i);
+      return;
+    }
+    ttSoltar(a, ev.clientX, ev.clientY);
+  };
+  const limpiar = () => {
+    clearTimeout(larga);
+    clearInterval(tt.scrollT);
+    document.removeEventListener("pointermove", alMover);
+    document.removeEventListener("pointerup", soltar);
+    document.removeEventListener("pointercancel", cancelar);
+    document.removeEventListener("touchmove", tocarMover);
+    if (tt.arr && tt.arr.g) tt.arr.g.remove();
+    el.classList.remove("tt-levantada");
+    document.body.classList.remove("tt-arrastrando");
+    document.querySelectorAll(".tt-ots.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".tt-hueco").forEach(h => h.remove());
+  };
+  const cancelar = () => { cancelado = true; limpiar(); tt.arr = null; };
+  document.addEventListener("pointermove", alMover, { passive: false });
+  document.addEventListener("pointerup", soltar);
+  document.addEventListener("pointercancel", cancelar);
+  document.addEventListener("touchmove", tocarMover, { passive: false });
+  if (tactil) larga = setTimeout(arrancar, 320);    // mantener apretado para levantarla
+}
+function ttSoltar(a, x, y) {
+  tt.arr = null;
+  const dest = a && a.dest;
+  if (!dest) return;
+  const nombre = pid => { const t = tt.d.tecnicos.find(z => z.id === pid); return t ? `N°${t.numero} ${t.nombre.split(" ").slice(0, 2).join(" ")}` : ""; };
+  // de la bandeja a un técnico: se planifica con la OT ya elegida
+  if (a.libre) {
+    if (dest.pid) ttPlanificar(dest.pid, a.ot);
+    return;
+  }
+  const origen = tt.d.tecnicos.find(t => t.id === a.pid);
+  const celda = origen && origen.celdas.find(c => c.clave === a.clave);
+  if (!celda) return;
+  const que = celda.ot_id ? `OT ${celda.ot_id}` : "el turno";
+  if (dest.tacho) {
+    const pend = celda.trabajos.filter(t => t.estado !== "completado").length;
+    ttElegir(x, y, `¿Sacar ${que} a ${nombre(a.pid)}?`, [
+      { txt: "Sacar del plan del día", ic: "calendar-minus", fn: () => ttPost("sacar", { personal_id: a.pid, clave: a.clave }) },
+      ...(pend ? [{ txt: `Sacar y desasignarle ${pend} trabajo${pend === 1 ? "" : "s"}`, ic: "user-minus", peligro: true, fn: () => ttPost("sacar", { personal_id: a.pid, clave: a.clave, desasignar: true }) }] : []),
+    ]);
+    return;
+  }
+  if (dest.pid === a.pid) {
+    // mismo técnico: cambiar el orden
+    const claves = origen.celdas.map(c => c.clave).filter(k => k !== a.clave);
+    const viejo = origen.celdas.findIndex(c => c.clave === a.clave);
+    claves.splice(Math.min(dest.idx, claves.length), 0, a.clave);
+    if (claves.indexOf(a.clave) === viejo) return;
+    ttPost("orden", { personal_id: a.pid, claves }, true);
+    return;
+  }
+  ttElegir(x, y, `${que} → ${nombre(dest.pid)}`, [
+    { txt: `Pasársela (se la saco a ${nombre(a.pid)})`, ic: "arrow-right", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "pasar" }) },
+    { txt: "Que la hagan los dos", ic: "users", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "sumar" }) },
+  ]);
+}
+// Un menú chiquito donde se soltó la pieza
+function ttElegir(x, y, titulo, opciones) {
+  document.querySelector(".tt-menu")?.remove();
+  const m = document.createElement("div");
+  m.className = "tt-menu";
+  m.setAttribute("role", "menu");
+  m.innerHTML = `<b>${ttEsc(titulo)}</b>${opciones.map((o, i) => `<button type="button" role="menuitem" data-i="${i}" class="${o.peligro ? "peligro" : ""}"><i class="ti ti-${o.ic}"></i> ${ttEsc(o.txt)}</button>`).join("")}<button type="button" class="cancelar">Cancelar</button>`;
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(x - 20, window.innerWidth - r.width - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(y + 8, window.innerHeight - r.height - 8)) + "px";
+  const cerrar = () => { m.remove(); document.removeEventListener("pointerdown", afuera, true); document.removeEventListener("keydown", esc); };
+  const afuera = e => { if (!m.contains(e.target)) cerrar(); };
+  const esc = e => { if (e.key === "Escape") cerrar(); };
+  setTimeout(() => { document.addEventListener("pointerdown", afuera, true); document.addEventListener("keydown", esc); }, 0);
+  m.querySelectorAll("button[data-i]").forEach(b => b.onclick = () => { cerrar(); opciones[+b.dataset.i].fn(); });
+  m.querySelector(".cancelar").onclick = cerrar;
+  m.querySelector("button")?.focus();
+}
+async function ttPost(accion, cuerpo, callado) {
+  const r = await ttJson(`/api/taller/tablero/${accion}`, "POST", { fecha: tt.d.fecha, ...cuerpo });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); ttCargar(); return; }
+  if (!callado) toast(r.msg, "success");
+  ttCargar();
 }
