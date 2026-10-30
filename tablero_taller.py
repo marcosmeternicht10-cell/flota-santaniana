@@ -270,8 +270,19 @@ def tablero(fecha=None):
     tot["horas"] = round(tot["horas"], 1)
     tot["cumplimiento"] = round(100 * sum(1 for t in salida for x in t["celdas"] if x["planificado"] and x["estado"] in ("terminado", "tarde")) / tot["planificadas"]) if tot["planificadas"] else None
     d = date.fromisoformat(fecha)
+    # las OTs abiertas que nadie tiene ese día: para arrastrarlas a un técnico
+    por_planificar = []
+    if fecha >= hoy:
+        en_tablero = {x["ot_id"] for t in salida for x in t["celdas"] if x["ot_id"]}
+        for o in ots_abiertas():
+            libres = [i for i in o["trabajos"] if not (i.get("tecnico") or "").strip()]
+            if o["id"] in en_tablero or not libres:
+                continue
+            por_planificar.append({"ot_id": o["id"], "coche": o["coche"], "vehiculo": o["vehiculo"],
+                                   "libres": len(libres), "trabajos": [i["descripcion"] for i in libres[:4]]})
     return {"fecha": fecha, "hoy": hoy, "ahora": ahora, "dia_txt": f"{DIAS[d.weekday()]} {d.day} de {MESES[d.month - 1]} de {d.year}",
-            "tecnicos": salida, "totales": tot, "estados": ESTADOS, "max_celdas": max([len(t["celdas"]) for t in salida] + [0])}
+            "tecnicos": salida, "totales": tot, "estados": ESTADOS, "max_celdas": max([len(t["celdas"]) for t in salida] + [0]),
+            "por_planificar": por_planificar}
 
 
 def _armar_celda(c, ots, turnos, fecha, hoy, ahora):
@@ -421,6 +432,173 @@ def quitar_plan(plan_id):
         return {"ok": True, "msg": "Sacado del plan del día (los trabajos asignados en la OT siguen)"}
     finally:
         conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# MOVER LAS PIEZAS (arrastrar en el tablero)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _celda_de(fecha, pid, clave):
+    for t in tablero(fecha)["tecnicos"]:
+        if t["id"] == pid:
+            for c in t["celdas"]:
+                if c["clave"] == clave:
+                    return c
+    return None
+
+
+def mover(d, quien=""):
+    """Arrastrar una OT de un técnico a otro.
+    modo 'pasar': se la saca a uno y se la da al otro (plan, trabajos sin
+    terminar y el turno de la agenda); 'sumar': la tienen los dos."""
+    fecha = _fecha(d.get("fecha"))
+    try:
+        de, a = int(d.get("de") or 0), int(d.get("a") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "msg": "Faltan datos"}
+    clave = str(d.get("clave") or "")
+    modo = "sumar" if d.get("modo") == "sumar" else "pasar"
+    if not de or not a or de == a or not clave:
+        return {"ok": False, "msg": "Faltan datos"}
+    c = _celda_de(fecha, de, clave)
+    if not c:
+        return {"ok": False, "msg": "Esa OT ya no está en el tablero de ese técnico"}
+    conn = get_connection()
+    try:
+        nombres = {r["id"]: f"N°{r['numero']} {r['nombre']}" for r in conn.execute(
+            "SELECT id, numero, nombre FROM taller_personal WHERE id IN (?,?)", (de, a)).fetchall()}
+        if a not in nombres:
+            return {"ok": False, "msg": "Ese técnico no existe"}
+        # 1) el turno de la agenda (si la pieza viene de ahí)
+        if c["turno_id"]:
+            t = conn.execute("SELECT tecnicos FROM taller_turnos WHERE id=?", (c["turno_id"],)).fetchone()
+            if t:
+                ids = _ids(t["tecnicos"])
+                if modo == "pasar":
+                    ids = [a if x == de else x for x in ids]
+                if a not in ids:
+                    ids.append(a)
+                ids = list(dict.fromkeys(ids))
+                conn.execute("UPDATE taller_turnos SET tecnicos=? WHERE id=?", (",".join(str(x) for x in ids), c["turno_id"]))
+        # 2) el plan del día
+        if c["ot_id"]:
+            orden = conn.execute("SELECT COALESCE(MAX(orden),0)+1 AS n FROM taller_tablero_plan WHERE fecha=? AND personal_id=?",
+                                 (fecha, a)).fetchone()["n"]
+            ya = conn.execute("SELECT id FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?",
+                              (fecha, a, c["ot_id"])).fetchone()
+            if not ya:
+                conn.execute("""INSERT INTO taller_tablero_plan (fecha, personal_id, ot_id, hora_ini, hora_fin, nota, orden,
+                                creado_por, creado_el) VALUES (?,?,?,?,?,?,?,?,?)""",
+                             (fecha, a, c["ot_id"], c["hora_ini"], c["hora_fin"], c["nota"], orden, quien[:80], ahora_iso()))
+            if modo == "pasar":
+                conn.execute("DELETE FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?",
+                             (fecha, de, c["ot_id"]))
+        conn.commit()
+    except Exception as e:
+        _rollback(conn)
+        return {"ok": False, "msg": f"No se pudo mover: {e}"}
+    finally:
+        conn.close()
+    # 3) los trabajos sin terminar que tenía asignados
+    cambiados = 0
+    pendientes = [t["item_id"] for t in c["trabajos"] if t["estado"] != "completado"]
+    if pendientes:
+        import personal_taller
+        conn = get_connection()
+        try:
+            actuales = {}
+            m = ",".join("?" * len(pendientes))
+            for r in conn.execute(f"SELECT item_id, personal_id FROM ot_item_personal WHERE item_id IN ({m})", pendientes).fetchall():
+                actuales.setdefault(r["item_id"], []).append(r["personal_id"])
+        finally:
+            conn.close()
+        for iid in pendientes:
+            ids = actuales.get(iid, [])
+            nuevo = [a if x == de else x for x in ids] if modo == "pasar" else ids + [a]
+            nuevo = list(dict.fromkeys(nuevo))
+            if nuevo != ids:
+                personal_taller.asignar(iid, nuevo, quien=quien)
+                cambiados += 1
+    que = f"OT {c['ot_id']}" if c["ot_id"] else "el turno"
+    msg = (f"{que} pasó a {nombres[a]}" if modo == "pasar" else f"{que} ahora la tienen {nombres.get(de, '')} y {nombres[a]}")
+    if cambiados:
+        msg += f" · {cambiados} trabajo{'s' if cambiados != 1 else ''} reasignado{'s' if cambiados != 1 else ''}"
+    return {"ok": True, "msg": msg}
+
+
+def ordenar(d, quien=""):
+    """El orden de las OTs de un técnico (cuál hace primero)."""
+    fecha = _fecha(d.get("fecha"))
+    try:
+        pid = int(d.get("personal_id") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "msg": "Faltan datos"}
+    claves = [str(x) for x in (d.get("claves") or [])]
+    celdas = {c["clave"]: c for t in tablero(fecha)["tecnicos"] if t["id"] == pid for c in t["celdas"]}
+    conn = get_connection()
+    try:
+        for k, clave in enumerate(claves, start=1):
+            c = celdas.get(clave)
+            if not c or not c["ot_id"]:
+                continue
+            ya = conn.execute("SELECT id FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?",
+                              (fecha, pid, c["ot_id"])).fetchone()
+            if ya:
+                conn.execute("UPDATE taller_tablero_plan SET orden=? WHERE id=?", (k, ya["id"]))
+            else:
+                conn.execute("""INSERT INTO taller_tablero_plan (fecha, personal_id, ot_id, hora_ini, hora_fin, nota, orden,
+                                creado_por, creado_el) VALUES (?,?,?,?,?,?,?,?,?)""",
+                             (fecha, pid, c["ot_id"], c["hora_ini"], c["hora_fin"], c["nota"], k, quien[:80], ahora_iso()))
+        conn.commit()
+    except Exception as e:
+        _rollback(conn)
+        return {"ok": False, "msg": f"No se pudo ordenar: {e}"}
+    finally:
+        conn.close()
+    return {"ok": True, "msg": "Orden guardado"}
+
+
+def sacar(d, quien=""):
+    """Sacar una pieza del técnico: del plan del día y, si se pide, también
+    los trabajos sin terminar que tenía asignados en la OT."""
+    fecha = _fecha(d.get("fecha"))
+    try:
+        pid = int(d.get("personal_id") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "msg": "Faltan datos"}
+    c = _celda_de(fecha, pid, str(d.get("clave") or ""))
+    if not c:
+        return {"ok": False, "msg": "Ya no estaba"}
+    conn = get_connection()
+    try:
+        if c["ot_id"]:
+            conn.execute("DELETE FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?", (fecha, pid, c["ot_id"]))
+        if c["turno_id"]:
+            t = conn.execute("SELECT tecnicos FROM taller_turnos WHERE id=?", (c["turno_id"],)).fetchone()
+            if t:
+                conn.execute("UPDATE taller_turnos SET tecnicos=? WHERE id=?",
+                             (",".join(str(x) for x in _ids(t["tecnicos"]) if x != pid), c["turno_id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    n = 0
+    if d.get("desasignar"):
+        import personal_taller
+        pend = [t["item_id"] for t in c["trabajos"] if t["estado"] != "completado"]
+        if pend:
+            conn = get_connection()
+            try:
+                actuales = {}
+                for r in conn.execute(f"SELECT item_id, personal_id FROM ot_item_personal WHERE item_id IN ({','.join('?' * len(pend))})",
+                                      pend).fetchall():
+                    actuales.setdefault(r["item_id"], []).append(r["personal_id"])
+            finally:
+                conn.close()
+            for iid in pend:
+                if pid in actuales.get(iid, []):
+                    personal_taller.asignar(iid, [x for x in actuales[iid] if x != pid], quien=quien)
+                    n += 1
+    return {"ok": True, "msg": "Sacado del plan" + (f" y de {n} trabajo{'s' if n != 1 else ''}" if n else "")}
 
 
 def ots_abiertas(q=""):
@@ -711,6 +889,24 @@ def api_plan_quitar(plan_id):
     if not _puede_editar():
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
     r = quitar_plan(plan_id)
+    return jsonify(r), (200 if r.get("ok") else 400)
+
+
+@bp_tablero.route("/api/taller/tablero/<accion>", methods=["POST"])
+def api_mover(accion):
+    if accion not in ("mover", "orden", "sacar"):
+        return jsonify({"ok": False, "msg": "No existe"}), 404
+    if not _puede_editar():
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    d = request.get_json(silent=True) or {}
+    r = {"mover": mover, "orden": ordenar, "sacar": sacar}[accion](d, _quien())
+    if r.get("ok") and accion != "orden":
+        try:
+            from database import registrar_auditoria
+            registrar_auditoria(usuario=_quien() or "?", rol=session.get("rol") or "", accion="Tablero del taller",
+                                categoria="OT", detalle=r.get("msg", "")[:200])
+        except Exception:
+            pass
     return jsonify(r), (200 if r.get("ok") else 400)
 
 
