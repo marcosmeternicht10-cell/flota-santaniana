@@ -5953,7 +5953,7 @@ function preCeldasMat(m) {
         <button type="button" class="pre-rep-chip" onclick="preBuscarRep(${m.id})" title="Cambiar el repuesto">
           <i class="ti ti-package"></i> <b>${trEsc(r.codigo)}</b> ${trEsc(r.descripcion)}${r.marca ? ` · ${trEsc(r.marca)}` : ""}</button>
         <div class="pre-acc">
-          <button type="button" onclick="preBuscarRep(${m.id})"><i class="ti ti-replace"></i> Cambiar repuesto</button>
+          <label class="pre-inv"><i class="ti ti-search"></i><input placeholder="¿No es este? Buscar otro en el inventario…" autocomplete="off" data-mid="${m.id}" oninput="preInvBuscar(this)" onfocus="if(this.value.trim().length>1)preInvBuscar(this)"></label>
           <button type="button" onclick="preVincular(${m.id}, 0)"><i class="ti ti-link-off"></i> Desenganchar</button>
         </div>
         <div class="pre-stock ${d.disponible > 0 ? (alcanza ? "ok" : "poco") : "no"}">

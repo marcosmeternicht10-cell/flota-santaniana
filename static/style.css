@@ -8236,3 +8236,6 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .pre-dup button:hover { border-color: var(--brand-blue); }
 .pre-dup button em { font-style: normal; color: var(--muted); font-size: 11.5px; }
 .pre-dup button u { color: var(--brand-blue); font-weight: 600; margin-left: 4px; }
+.pre-acc { align-items: center; }
+.pre-acc .pre-inv { flex: 1 1 240px; max-width: 420px; }
+.pre-acc .pre-inv input { padding: 5px 0; font-size: 12.5px; }
