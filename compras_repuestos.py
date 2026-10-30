@@ -432,25 +432,31 @@ def api_detalle(ot_id):
 
 
 def editar_material(ot_id, material_id, d):
-    """Corregir lo que escribió el taller: la descripción y la cantidad."""
+    """Corregir lo que escribió el taller: la descripción y/o la cantidad
+    (lo que no viene, queda como estaba)."""
+    solo_cant = "descripcion" not in d
     desc = re.sub(r"\s+", " ", str(d.get("descripcion") or "")).strip()[:200]
     try:
         cant = float(str(d.get("cantidad") or "0").replace(",", "."))
     except ValueError:
         cant = 0
-    if not desc:
+    if not solo_cant and not desc:
         return False, "Escribí qué es el material"
     if cant <= 0:
         return False, "La cantidad tiene que ser mayor a cero"
+    if cant > 9999:
+        return False, "Revisá la cantidad"
     conn = get_connection()
     try:
         ids = _ids(conn, ot_id)
-        m = conn.execute(f"SELECT id, item_id, stock_aplicado FROM ot_materiales WHERE id=? AND ot_id IN ({','.join('?' * len(ids))})",
+        m = conn.execute(f"SELECT id, item_id, stock_aplicado, descripcion FROM ot_materiales WHERE id=? AND ot_id IN ({','.join('?' * len(ids))})",
                          [material_id] + ids).fetchone()
         if not m:
             return False, "Ese material no es de esta OT"
         if m["stock_aplicado"]:
             return False, "Ese material ya se entregó"
+        if solo_cant:
+            desc = m["descripcion"] or ""
         conn.execute("UPDATE ot_materiales SET descripcion=?, cantidad=? WHERE id=?", (desc, cant, material_id))
         try:
             import ot_materiales as om
