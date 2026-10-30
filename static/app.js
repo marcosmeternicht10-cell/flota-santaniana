@@ -6212,7 +6212,13 @@ function preCeldasMat(m) {
       <input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Nombre del proveedor" autocomplete="off" oninput="preProvBuscar(this)" ${actual && !enLista ? "" : "hidden"}>`;
   else provHtml = `<input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)">`;
   const costo = r ? (+r.costo_unitario || 0) / (d.en_contenido && +r.contenido ? +r.contenido : 1) : 0;
-  return `<td class="center"><b>${otMatCantTxt(d.cantidad ?? m.cantidad)}</b></td>
+  const qTxt = otMatCantTxt(d.cantidad ?? m.cantidad);
+  const uCant = d.en_contenido ? (d.unidad_material || "litros") : (r && r.unidad && r.unidad !== "u" ? r.unidad : "");
+  return `<td class="center pre-cant-td">${d.stock_aplicado ? `<b>${qTxt}</b>` : `<div class="pre-cant" title="Cantidad: tocá − / + o escribí">
+      <button type="button" onclick="preCantPaso(${m.id}, -1)" aria-label="Uno menos">−</button>
+      <input value="${qTxt}" inputmode="decimal" data-mid="${m.id}" aria-label="Cantidad" onfocus="this.select()" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}" onchange="preCantGuardar(${m.id}, this.value)">
+      <button type="button" onclick="preCantPaso(${m.id}, 1)" aria-label="Uno más">+</button>
+    </div>${uCant ? `<small class="pre-cant-u">${trEsc(uCant)}</small>` : ""}`}</td>
     <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(d.descripcion || m.descripcion)}${d.stock_aplicado ? "" : `<button type="button" class="pre-editar" onclick="preEditarMat(${m.id})" title="Corregir el nombre o la cantidad"><i class="ti ti-pencil"></i> Corregir</button>`}</div>${repHtml}</td>
     <td class="pre-prov-td">${provHtml}</td>
     <td>${dep
@@ -6403,6 +6409,37 @@ function preInvBuscar(inp) {
     const alto = box.offsetHeight;
     box.style.top = (rc.bottom + alto + 8 > innerHeight && rc.top > alto + 8 ? rc.top - alto - 4 : rc.bottom + 4) + "px";
   }, 220);
+}
+// Cantidad del material desde el presupuesto (el taller a veces no la sabe)
+const _preCantT = {};
+function preCantPaso(mid, paso) {
+  const inp = document.querySelector(`.pre-modal .pre-cant input[data-mid="${mid}"]`);
+  if (!inp) return;
+  const v = Math.max(1, Math.round((preCantNum(inp.value) || 0) + paso));
+  inp.value = otMatCantTxt(v);
+  preCantVer(mid, v);
+  clearTimeout(_preCantT[mid]);
+  _preCantT[mid] = setTimeout(() => preCantGuardar(mid, inp.value), 500);
+}
+const preCantNum = v => parseFloat(String(v || "").replace(",", ".").replace(/[^\d.]/g, "")) || 0;
+function preCantVer(mid, q) {
+  // el subtotal cambia al toque, antes de guardar
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  const p = tr && tr.querySelector(".pre-mat");
+  if (p) { p.dataset.q = q; preRecalcular(); }
+}
+async function preCantGuardar(mid, valor) {
+  clearTimeout(_preCantT[mid]);
+  const q = preCantNum(valor);
+  const d = pre.mats[mid];
+  if (!q) { toast("La cantidad tiene que ser mayor a cero", "error"); if (d) preRepintar(mid); return; }
+  if (d && +d.cantidad === q) return;
+  preCantVer(mid, q);
+  const r = await api(`/api/compras/${pre.ot.id}/material/${mid}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cantidad: q })
+  }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar la cantidad", "error"); if (d) preRepintar(mid); return; }
+  await preRefrescar(mid);
 }
 // Corregir lo que escribió el taller (nombre y cantidad del material)
 function preEditarMat(mid) {

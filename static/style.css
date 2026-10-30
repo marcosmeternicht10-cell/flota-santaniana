@@ -8304,3 +8304,12 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 }
 .tr-prog-m .rv-modal-cuerpo > * { flex-shrink: 0; }
 .tr-prog-m .rv-modal-pie { flex-wrap: wrap; }
+
+/* Presupuesto: cantidad editable */
+.pre-cant-td { white-space: nowrap; }
+.pre-cant { display: inline-flex; align-items: stretch; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.pre-cant:focus-within { border-color: var(--brand-blue); box-shadow: 0 0 0 2px var(--info-bg); }
+.pre-cant button { width: 26px; border: 0; background: var(--surface-2, #F4F3EF); color: var(--brand-blue); font: 700 15px "Inter", sans-serif; cursor: pointer; padding: 0; }
+.pre-cant button:hover { background: var(--info-bg); }
+.pre-cant input { width: 40px; border: 0; outline: 0; text-align: center; font: 700 14px "Inter", sans-serif; color: var(--text); padding: 5px 2px; background: none; font-variant-numeric: tabular-nums; }
+.pre-cant-u { display: block; margin-top: 3px; font-size: 10.5px; color: var(--muted); }
