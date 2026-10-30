@@ -221,6 +221,9 @@ from cajas import bp_cajas, init_cajas
 from compras_repuestos import bp_compras_rep, init_compras_repuestos
 from buscador import init_buscador
 init_buscador()
+from tablero_taller import bp_tablero, init_tablero_taller
+init_tablero_taller()
+app.register_blueprint(bp_tablero)
 init_compras_repuestos()
 app.register_blueprint(bp_compras_rep)
 init_cajas()
@@ -481,6 +484,7 @@ def proteger_rutas():
             p.startswith("/api/ots") or          # ver y CREAR OTs (compras carga las órdenes)
             p.startswith("/api/ot_items") or     # asignar el técnico y anotar el material
             p.startswith("/api/personal") or     # el personal de taller (números para la OT)
+            p.startswith("/api/taller/") or      # tablero de control del taller (solo mirar)
             p.startswith("/api/vehiculos") or    # lista de coches para el formulario de OT
             p.startswith("/api/repuestos") or    # inventario del depósito (reponer stock)
             p.startswith("/api/historial_carga") or  # carga de historial retroactivo

@@ -39,6 +39,7 @@ GRUPOS_SECCIONES = [
         ("inventario_neu", "Inventario neumáticos"),
         ("historial_carga", "Historial por coche"),
         ("personal", "Personal de taller"),
+        ("tablero_taller", "Tablero de control (plan vs real)"),
     ]),
     ("Contabilidad", [
         ("contabilidad", "Contabilidad y tesorería"),
