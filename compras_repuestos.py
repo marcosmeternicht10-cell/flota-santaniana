@@ -129,43 +129,15 @@ def en_contenido(descripcion, rep):
 
 def sugerir(descripcion, limite=4):
     """Los repuestos del inventario que más se parecen a lo que pidió el
-    taller ('filtro aceite scania' → los filtros de aceite)."""
-    palabras = _palabras(descripcion)
-    if not palabras:
-        return []
-    conn = get_connection()
+    taller, aunque esté mal escrito ('filto de aseite' → los filtros de
+    aceite). Lo que ya se eligió antes para algo parecido sale primero."""
+    import buscador
     try:
-        # candidatos: los que tienen la palabra más larga en código o descripción
-        clave = max(palabras, key=len)
-        like = f"%{clave}%"
-        filas = conn.execute("""SELECT * FROM repuestos WHERE activo=1 AND
-                                (LOWER(descripcion) LIKE ? OR LOWER(codigo) LIKE ? OR LOWER(codigo_alt) LIKE ?
-                                 OR LOWER(aplicacion) LIKE ?) LIMIT 200""", (like, like, like, like)).fetchall()
-        if len(palabras) > 1 and len(filas) < 200:
-            otras = {r["id"] for r in filas}
-            for p in palabras:
-                if p == clave or len(p) < 4:
-                    continue
-                for r in conn.execute("""SELECT * FROM repuestos WHERE activo=1 AND
-                                         (LOWER(descripcion) LIKE ? OR LOWER(codigo) LIKE ?) LIMIT 80""",
-                                      (f"%{p}%", f"%{p}%")).fetchall():
-                    if r["id"] not in otras:
-                        otras.add(r["id"])
-                        filas.append(r)
-    finally:
-        conn.close()
-    pal = set(palabras)
-    puntos = []
-    for r in filas:
-        texto = set(_palabras(f"{r['codigo']} {r['descripcion']} {r['marca']} {r['aplicacion']}"))
-        comunes = len(pal & texto)
-        # coincidencias parciales (filtros ~ filtro)
-        parcial = sum(1 for p in pal - texto if any(t.startswith(p[:5]) for t in texto if len(p) >= 5))
-        score = comunes + 0.5 * parcial + (0.2 if float(r["stock_actual"] or 0) > 0 else 0)
-        if comunes or parcial:
-            puntos.append((score, r))
-    puntos.sort(key=lambda x: -x[0])
-    return [dict(_repuesto_breve(r), coincide=round(s, 1)) for s, r in puntos[:limite]]
+        res = buscador.buscar_repuestos(descripcion, limite)
+    except Exception as e:
+        print(f"[compras_repuestos] buscador: {e}")
+        return []
+    return [dict(_repuesto_breve(r), coincide=s, motivo=m) for r, s, m in res]
 
 
 def detalle(ot_id):
@@ -242,6 +214,13 @@ def vincular(ot_id, material_id, repuesto_id, origen):
             sets += ", precio_unit=0, proveedor=''"
         conn.execute(f"UPDATE ot_materiales SET {sets} WHERE id=?", vals + [material_id])
         conn.commit()
+        if rid:   # aprende: lo que escribió el taller = este repuesto
+            try:
+                desc = conn.execute("SELECT descripcion FROM ot_materiales WHERE id=?", (material_id,)).fetchone()
+                import buscador
+                buscador.aprender(desc["descripcion"] if desc else "", rid)
+            except Exception:
+                pass
         return True, ""
     except Exception as e:
         _rollback(conn)
@@ -471,10 +450,24 @@ def api_por_proveedor(ot_id):
 def api_buscar():
     if not _puede():
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
-    import repuestos_db as rdb
+    import buscador
     q = (request.args.get("q") or "").strip()
     if len(q) < 2:
         return jsonify({"ok": True, "lista": []})
-    reps = rdb.obtener_repuestos(buscar=q)[:30]
-    reps.sort(key=lambda r: (float(r.get("stock_actual") or 0) <= 0, r.get("descripcion") or ""))
-    return jsonify({"ok": True, "lista": [_repuesto_breve(r) for r in reps[:20]]})
+    res = buscador.buscar_repuestos(q, 25)
+    lista = [dict(_repuesto_breve(r), coincide=s, motivo=m) for r, s, m in res]
+    return jsonify({"ok": True, "lista": lista, "quisiste": buscador.corregir(q) if lista and lista[0]["motivo"] != "exacto" else ""})
+
+
+@bp_compras_rep.route("/api/compras/proveedores_buscar", methods=["GET"])
+def api_proveedores_buscar():
+    """Proveedores aunque esté mal escrito ('dieza' → Diesa S.A.)."""
+    if not _puede():
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    import buscador
+    q = (request.args.get("q") or "").strip()
+    if len(q) < 2:
+        return jsonify({"ok": True, "lista": []})
+    return jsonify({"ok": True, "lista": [{"nombre": p.get("nombre") or "", "fantasia": p.get("fantasia") or "",
+                                           "ruc": p.get("ruc") or "", "telefono": p.get("telefono") or ""}
+                                          for p, s in buscador.buscar_proveedores(q, 12)]})

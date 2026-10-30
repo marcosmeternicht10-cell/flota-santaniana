@@ -58,6 +58,20 @@ def api_repuestos():
     buscar = request.args.get("buscar") or None
     solo_bajos = request.args.get("solo_bajos") in ("1", "true", "si")
     reps = rdb.obtener_repuestos(categoria=categoria, buscar=buscar, solo_bajos=solo_bajos)
+    if buscar and len(reps) < 3:   # mal escrito o abreviado: sumar lo que más se parece
+        try:
+            import buscador
+            ya = {r["id"] for r in reps}
+            for r, s, m in buscador.buscar_repuestos(buscar, 25):
+                if r["id"] in ya or (categoria and r.get("categoria") != categoria):
+                    continue
+                d = rdb._enriquecer(r)
+                if solo_bajos and d["estado_stock"] not in ("bajo", "sin_stock"):
+                    continue
+                d["parecido"] = True
+                reps.append(d)
+        except Exception as e:
+            print(f"[repuestos] buscador: {e}")
     n = multi.conteos()
     for r in reps:
         r["n_proveedores"] = n.get(r["id"], 1 if r.get("proveedor") else 0)
@@ -68,10 +82,19 @@ def api_repuestos():
 def api_proveedores():
     """Busca en el directorio de proveedores (nombre, RUC o número)."""
     a = request.args
-    return jsonify(rdb.obtener_proveedores(
+    res = rdb.obtener_proveedores(
         a.get("q"), min(int(a.get("limite") or 30), 100),
         pagina=int(a.get("pagina") or 0), letra=a.get("letra") or "",
-        solo_uso=a.get("uso") in ("1", "true")))
+        solo_uso=a.get("uso") in ("1", "true"))
+    if a.get("q") and not res.get("proveedores"):   # mal escrito: lo que más se parece
+        try:
+            import buscador
+            res["proveedores"] = [dict({k: (p.get(k) or "") for k in rdb.CAMPOS_PROV}, repuestos=0, parecido=True)
+                                  for p, s in buscador.buscar_proveedores(a.get("q"), 12)]
+            res["coincidencias"] = len(res["proveedores"])
+        except Exception as e:
+            print(f"[repuestos] buscador proveedores: {e}")
+    return jsonify(res)
 
 
 @bp_repuestos.route("/api/repuestos/proveedores/resumen", methods=["GET"])

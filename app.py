@@ -219,6 +219,8 @@ app.register_blueprint(bp_ot_horas)
 from compras_motivo import bp_compras_motivo, init_compras_motivo
 from cajas import bp_cajas, init_cajas
 from compras_repuestos import bp_compras_rep, init_compras_repuestos
+from buscador import init_buscador
+init_buscador()
 init_compras_repuestos()
 app.register_blueprint(bp_compras_rep)
 init_cajas()

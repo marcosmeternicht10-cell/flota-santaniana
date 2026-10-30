@@ -139,11 +139,20 @@ def buscar_para_ot(q, limite=25):
     """Lo del depósito para elegir desde la OT: primero lo que tiene stock."""
     reps = rdb.obtener_repuestos(buscar=q or None)
     reps.sort(key=lambda r: (float(r.get("stock_actual") or 0) <= 0, r.get("descripcion") or ""))
+    if q and len(reps) < 5:   # mal escrito o abreviado: lo que más se parece
+        try:
+            import buscador
+            ya = {r["id"] for r in reps}
+            for r, s, m in buscador.buscar_repuestos(q, limite):
+                if r["id"] not in ya:
+                    reps.append(dict(rdb._enriquecer(r), parecido=True))
+        except Exception:
+            pass
     out = []
     for r in reps[:limite]:
         out.append({k: r.get(k) for k in ("id", "codigo", "descripcion", "marca", "aplicacion", "categoria", "unidad",
                                           "stock_actual", "costo_unitario", "contenido", "contenido_unidad", "envase", "contenido_total",
-                                          "ubicacion", "estado_stock")})
+                                          "ubicacion", "estado_stock", "parecido")})
     return out
 
 
