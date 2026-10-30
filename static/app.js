@@ -2518,22 +2518,32 @@ function trInicioVacio() {
   if (!trPuede()) return `<div class="tr-vacio-solo"><i class="ti ti-calendar-off"></i>Todavía no se armó el tráfico de este día.</div>`;
   const opciones = [];
   const sem = trInt() && tr.d.dia_semana_pasada && tr.d.dia_semana_pasada !== ant ? tr.d.dia_semana_pasada : null;
+  const prog = trInt() && tr.d.programa_dia;
+  if (prog) {
+    opciones.push(`
+      <button class="tr-op principal" onclick="trArmarPrograma()">
+        <i class="ti ti-calendar-cog"></i>
+        <b>Armar con la programación semanal</b>
+        <span>Las ${prog} salidas y regresos de los ${trEsc(trDiaPlural(tr.d.esperado?.dia || "días"))}. Los regresos con la unidad que les toca y las salidas de Asunción con la primera que llegó.</span>
+        <em>Recomendado</em>
+      </button>`);
+  }
   if (sem) {
     opciones.push(`
-      <button class="tr-op principal" onclick="trCopiar('${sem}', false, true)">
+      <button class="tr-op ${prog ? "" : "principal"}" onclick="trCopiar('${sem}', false, true)">
         <i class="ti ti-calendar-repeat"></i>
         <b>Armar desde el ${trLargo(sem)}</b>
         <span>El mismo día de la semana pasada: trae las salidas que lleva este día. En cada regreso pone el coche que está en Buenos Aires.</span>
-        <em>Recomendado</em>
+        ${prog ? "" : "<em>Recomendado</em>"}
       </button>`);
   }
   if (ant) {
     opciones.push(`
-      <button class="tr-op ${sem ? "" : "principal"}" onclick="trCopiar('${ant}', false, true)">
+      <button class="tr-op ${sem || prog ? "" : "principal"}" onclick="trCopiar('${ant}', false, true)">
         <i class="ti ti-wand"></i>
         <b>Armar desde el ${trLargo(ant)}</b>
         <span>Copia los horarios y en cada regreso pone el coche que quedó allá, con su tripulación. Las idas quedan para completar.</span>
-        ${sem ? "" : "<em>Recomendado</em>"}
+        ${sem || prog ? "" : "<em>Recomendado</em>"}
       </button>
       <button class="tr-op" onclick="trCopiar('${ant}', true, false)">
         <i class="ti ti-copy"></i>
@@ -2573,7 +2583,7 @@ function trInicioVacio() {
     <div class="tr-vacio">
       <div class="tr-vacio-cab">
         <h2>¿Cómo armamos el ${trInt() ? "internacional del " : ""}${trLargo(tr.fecha)}?</h2>
-        <p>${sem ? "Cada día de la semana lleva sus salidas: lo más rápido es partir del mismo día de la semana pasada." : ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+        <p>${prog ? "Cada día de la semana lleva sus salidas: la programación semanal ya sabe cuáles son y qué unidad hace cada una." : sem ? "Cada día de la semana lleva sus salidas: lo más rápido es partir del mismo día de la semana pasada." : ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
         ${trEsperadoTxt()}
       </div>
       <div class="tr-ops">${opciones.join("")}</div>
@@ -2713,7 +2723,7 @@ function trIrAProblema(tipo) {
 
 // Cuántas salidas del interior sin coche tienen un coche esperando allá
 function trVaciasInterior() {
-  return tr.d.completables || 0;
+  return (tr.d.completables || 0) + (tr.d.completables_idas || 0);
 }
 
 function trDonde() {
@@ -2727,7 +2737,7 @@ function trDonde() {
       </div>
       ${trPuede() ? `<button class="tr-completar" onclick="trCompletar()" ${vacias ? "" : "disabled"}
           title="Pone en cada salida del interior sin coche el que está en ese lugar, con su tripulación">
-          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} ${trInt() ? `regreso${vacias === 1 ? "" : "s"} con el coche que está en Buenos Aires` : `salida${vacias === 1 ? "" : "s"} con el coche que está allá`}` : "Nada para completar con lo que está allá"}
+          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} ${trInt() ? (tr.d.completables_idas ? `salida${vacias === 1 ? "" : "s"}: regresos por rotación e idas por orden de llegada` : `regreso${vacias === 1 ? "" : "s"} con el coche que está en Buenos Aires`) : `salida${vacias === 1 ? "" : "s"} con el coche que está allá`}` : "Nada para completar con lo que está allá"}
         </button>` : ""}
     </div>`;
   if (!grupos.length) {
@@ -2736,7 +2746,9 @@ function trDonde() {
   const chip = (c, lugar) => {
     const usado = (c.hoy || []).filter(Boolean);
     const llego = c.desde_fecha === trSumar(tr.fecha, -1) ? "ayer" : `el ${c.desde_fecha.slice(8, 10)}/${c.desde_fecha.slice(5, 7)}`;
-    const titulo = `Llegó ${llego} (salió ${c.desde_hora} ${c.destino})${c.trip1 ? ` · ${c.trip1}${c.trip2 ? " y " + c.trip2 : ""}` : ""}${usado.length ? ` · hoy sale ${usado.join(", ")}` : ""}`;
+    const enAsu = trInt() && c.llegada && !/^(RETIRO|LINIERS|LA PLATA|LA NORIA|SAN JUSTO|BUENOS AIRES)/.test(lugar)
+      ? ` · ${lugar === "VILLARRICA" ? "en Villarrica" : "a Asunción"} ~${c.llegada.slice(8, 10)}/${c.llegada.slice(5, 7)} ${c.llegada.slice(11, 16)}` : "";
+    const titulo = `Llegó ${llego} (salió ${c.desde_hora} ${c.destino})${enAsu}${c.clase ? ` · ${c.clase === "LEITO" ? "leito" : "coche cama"}` : ""}${c.trip1 ? ` · ${c.trip1}${c.trip2 ? " y " + c.trip2 : ""}` : ""}${usado.length ? ` · hoy sale ${usado.join(", ")}` : ""}`;
     return `<button class="tr-cc ${usado.length ? "usado" : ""} ${tr.asignar === c.coche ? "sel" : ""}" data-coche="${trEsc(c.coche)}" data-lugar="${trEsc(lugar)}"
               ${trPuede() ? `draggable="true" onclick="trTomarCoche('${trEsc(c.coche)}', '${trEsc(lugar)}')"` : ""} title="${trEsc(titulo)}">
               <b>${trEsc(c.coche)}</b>${usado.length ? `<small>${usado[0]}</small>` : ""}</button>`;
@@ -2761,7 +2773,9 @@ async function _trCompletar() {
   const antes = trCochesPorFila();
   trAplicar(r, { repintar: true });
   if (r.completadas) {
-    toast(`${r.completadas} salida${r.completadas === 1 ? "" : "s"} completada${r.completadas === 1 ? "" : "s"} con el coche que está allá`, "success");
+    toast(r.completadas_idas
+      ? `${r.completadas_regresos || 0} regreso${r.completadas_regresos === 1 ? "" : "s"} por rotación y ${r.completadas_idas} salida${r.completadas_idas === 1 ? "" : "s"} por orden de llegada`
+      : `${r.completadas} salida${r.completadas === 1 ? "" : "s"} completada${r.completadas === 1 ? "" : "s"} con el coche que está allá`, "success");
     trVoltearLlenas(antes);
   } else toast("No hay coches en esos lugares para completar", "");
 }
@@ -3179,6 +3193,8 @@ function trPintarSug() {
   if (s.sel >= s.items.length) s.sel = s.items.length - 1;
   const etiqueta = c => c.rotacion ? `<em class="rot"><i class="ti ti-repeat"></i> ${trEsc(c.rotacion)}</em>`
     : c.reservado ? `<em class="tarde">En ${trEsc(c.lugar)} · por rotación ${trEsc(c.reservado)}</em>`
+    : c.viajando ? `<em class="tarde">Todavía viene de Buenos Aires · llega el ${c.viajando.slice(8, 10)}/${c.viajando.slice(5, 7)} ~${c.viajando.slice(11, 16)}</em>`
+    : c.turno ? `<em class="alla"><i class="ti ti-list-numbers"></i> ${c.turno}.º en llegar a ${trEsc(c.lugar === "ASU" ? "Asunción" : c.lugar)}${c.clase ? ` · ${c.clase === "LEITO" ? "leito" : "coche cama"}` : ""}</em>`
     : c.rango === 0 ? `<em class="alla">Está en ${trEsc(c.lugar)}</em>`
     : c.rango === 1 ? `<em class="cerca">En ${trEsc(c.lugar)}, mismo corredor</em>`
     : `<em class="tarde">En ${trEsc(c.lugar)} · sale más tarde (${trEsc((c.ya_hoy || []).join(", "))})</em>`;
@@ -3470,11 +3486,211 @@ function trMas(btn) {
     ...(sem ? [{ icono: "calendar-repeat", html: `<b>Rearmar desde el ${trCorto(sem)}</b><span>El mismo día de la semana pasada: trae las salidas de este día</span>`, fn: () => trCopiar(sem, false, true) }] : []),
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
+    ...(trInt() ? [{ icono: "calendar-cog", html: "<b>Programación semanal</b><span>Qué sale cada día, con qué regreso vuelve y el orden de llegada</span>", fn: () => trPrograma() },
+                   ...(tr.d.programa_dia ? [{ icono: "calendar-cog", html: "<b>Rearmar con la programación</b><span>Las salidas de este día de la semana, con las unidades que tocan</span>", fn: trArmarPrograma }] : [])] : []),
     { icono: "repeat", html: "<b>Rotaciones de los coches</b><span>Con qué regreso vuelve el coche de cada ida</span>", fn: trRotaciones },
     ...(trInt() ? [{ icono: "calendar-week", html: "<b>Salidas por día</b><span>Cuántas salidas y regresos lleva cada día de la semana</span>", fn: trPatron },
                    { icono: "steering-wheel", html: "<b>Viajes de los choferes</b><span>Cuántos lleva cada uno en el mes (tope: 8)</span>", fn: () => trViajesMes() }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
   ]);
+}
+
+// ─── Programación semanal del internacional ───
+function trArmarPrograma() { return trUnaVez("copiar", () => _trArmarPrograma(), "Ya se está armando el día"); }
+async function _trArmarPrograma() {
+  if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)} por la programación. ¿Seguimos?`)) return;
+  const listo = trEspera("Armando el día con la programación…");
+  let r;
+  try { r = await trPedir(`/api/trafico/dia/${tr.fecha}/programa?${trT()}`, "POST", { completar: true }); }
+  finally { listo(); }
+  if (!r.ok) { toast(r.msg || "No se pudo armar", "error"); return; }
+  tr.d = r;
+  trPintar(true);
+  trRefrescarDias();
+  const n = (r.completadas_regresos || 0) + (r.completadas_idas || 0);
+  toast(n ? `Listo: ${r.completadas_regresos || 0} regresos por rotación y ${r.completadas_idas || 0} salidas por orden de llegada` : "Salidas armadas. Faltan los coches: no hay unidades cargadas de los días anteriores.", "success");
+  trVoltearLlenas();
+}
+
+const tp = { filas: [], dia: 0, d: null };
+const TP_DIAS = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+const TP_CORTOS = ["", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const tpHm = h => { const m = String(h || "").match(/^(\d{1,2})[:.]?(\d{2})$/); return m ? m[1].padStart(2, "0") + ":" + m[2] : String(h || ""); };
+const tpOrden = (a, b) => (a.lado === b.lado ? 0 : a.lado === "ida" ? -1 : 1) || tpHm(a.hora).localeCompare(tpHm(b.hora)) || (a._k - b._k);
+
+async function trPrograma(dia) {
+  const d = await api("/api/trafico/programa");
+  if (!d || !d.ok) { toast((d && d.msg) || "No se pudo traer la programación", "error"); return; }
+  tp.d = d;
+  tp.filas = d.filas.map((f, k) => ({ ...f, _k: k }));
+  tp.dia = dia || 0;
+  document.querySelector(".modal-overlay .tr-prog-m")?.closest(".modal-overlay").remove();
+  const o = rvModal({
+    titulo: "Programación semanal · internacional", icono: "calendar-cog", ancho: 1180, clase: "tr-prog-m",
+    sub: "Qué sale cada día, con qué regreso vuelve cada unidad y en qué orden llegan a Asunción. Con esto se arma el día, se completan los coches y se generan las rotaciones.",
+    cuerpo: `<div id="tp-rev"></div>
+      <div class="tp-tabs" role="tablist">${TP_DIAS.map((n, i) => `<button type="button" role="tab" data-d="${i}">${i ? `<span class="tp-l">${n}</span><span class="tp-c">${TP_CORTOS[i]}</span>` : `<i class="ti ti-layout-columns"></i> Semana`}</button>`).join("")}</div>
+      <div id="tp-cuerpo"></div>`,
+    pie: `<label class="tp-viaje"><i class="ti ti-bus"></i> Buenos Aires → Asunción <input type="number" min="1" max="48" id="tp-viaje" value="${d.viaje_horas}" ${d.puede_editar ? "" : "disabled"}> horas</label>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">${d.puede_editar ? "Cancelar" : "Cerrar"}</button>
+      ${d.puede_editar ? `<button class="btn btn-primary" id="tp-ok"><i class="ti ti-check"></i> Guardar</button>` : ""}`,
+  });
+  o.querySelectorAll(".tp-tabs button").forEach(b => b.onclick = () => { tp.dia = +b.dataset.d; tpPintar(); });
+  const ok = o.querySelector("#tp-ok");
+  if (ok) ok.onclick = () => tpGuardar(ok);
+  tpPintar();
+}
+function tpRevision(rv) {
+  if (!rv) return "";
+  const s = rv.salen || {}, e = rv.entran || {};
+  const malos = (rv.avisos || []).filter(a => a.nivel === "error"), otros = (rv.avisos || []).filter(a => a.nivel !== "error");
+  return `<div class="tp-rev ${rv.cierra ? "ok" : "mal"}">
+      <i class="ti ti-${rv.cierra ? "circle-check" : "alert-triangle"}"></i>
+      <div><b>${rv.cierra ? "La semana cierra" : "La semana no cierra"}</b>
+        <span>Asunción: salen ${s.ASU || 0} unidades y llegan ${e.ASU || 0} · Villarrica: salen ${s.VILLARRICA || 0} y quedan de reserva ${e.VILLARRICA || 0}</span>
+        ${malos.length || otros.length ? `<ul>${[...malos, ...otros].map(a => `<li class="${a.nivel}">${trEsc(a.txt)}</li>`).join("")}</ul>` : ""}</div>
+    </div>`;
+}
+function tpTramo(f) {
+  const t = String(f.destino || "").split(/\s*\/\s*|\s+-\s+/);
+  return t.length > 1 ? `${trEsc(t[0])} <i class="ti ti-arrow-right"></i> ${trEsc(t.slice(1).join(" / "))}` : trEsc(f.destino || "");
+}
+function tpQuienVuelve(f) {
+  return tp.filas.filter(x => x.lado === "ida" && !x.sigue && +x.vuelve_dia === +f.dia && tpHm(x.vuelve_hora) === tpHm(f.hora));
+}
+function tpPintar() {
+  const o = document.querySelector(".tr-prog-m");
+  if (!o) return;
+  o.querySelector("#tp-rev").innerHTML = tpRevision(tp.d.revision);
+  o.querySelectorAll(".tp-tabs button").forEach(b => b.classList.toggle("on", +b.dataset.d === tp.dia));
+  const cuerpo = o.querySelector("#tp-cuerpo");
+  cuerpo.innerHTML = tp.dia ? tpDia(tp.dia) : tpSemana();
+  if (tp.dia) tpEnganchar(cuerpo);
+}
+function tpClase(c) {
+  return c ? `<span class="tp-clase ${c === "LEITO" ? "leito" : ""}">${c === "LEITO" ? "Leito" : "Coche cama"}</span>` : "";
+}
+function tpSemana() {
+  const llegTxt = { reserva_vca: ["building-warehouse", "Queda de reserva en Villarrica"], despues_1800: ["truck", "Vuelve en lastre desde Villarrica · llega después del de 18:00"], con_1700: ["clock", "Llega junto con el de 17:00"] };
+  const col = dia => {
+    const fs = tp.filas.filter(f => +f.dia === dia).sort(tpOrden);
+    const idas = fs.filter(f => f.lado === "ida"), regs = fs.filter(f => f.lado === "regreso");
+    const ida = f => `<div class="tp-it ida">
+        <b>${tpHm(f.hora)}</b><span class="tp-tr">${tpTramo(f)}${tpClase(f.clase)}</span>
+        ${f.sigue ? `<em class="sigue"><i class="ti ti-link"></i> misma unidad sigue a las ${tpHm(f.sigue)}</em>`
+          : f.vuelve_dia ? `<em><i class="ti ti-arrow-back-up"></i> vuelve ${TP_CORTOS[f.vuelve_dia].toLowerCase()} ${tpHm(f.vuelve_hora)}</em>` : `<em class="mal">sin regreso</em>`}
+        ${f.nota ? `<small>${trEsc(f.nota)}</small>` : ""}</div>`;
+    const reg = f => {
+      const q = tpQuienVuelve(f), l = llegTxt[f.llegada];
+      return `<div class="tp-it reg">
+        <b>${tpHm(f.hora)}</b><span class="tp-tr">${tpTramo(f)}${tpClase(f.clase)}</span>
+        ${q.length ? `<em><i class="ti ti-bus"></i> unidad del ${q.map(x => `${TP_CORTOS[x.dia].toLowerCase()} ${tpHm(x.hora)}`).join(" y ")}</em>` : `<em class="mal">ninguna ida vuelve acá</em>`}
+        ${l ? `<em class="lleg"><i class="ti ti-${l[0]}"></i> ${l[1]}</em>` : ""}
+        ${f.nota ? `<small>${trEsc(f.nota)}</small>` : ""}</div>`;
+    };
+    return `<div class="tp-col">
+        <button type="button" class="tp-col-cab" onclick="tp.dia=${dia};tpPintar()">${TP_DIAS[dia]}</button>
+        <div class="tp-sub">Salen de acá</div>${idas.map(ida).join("") || `<p class="tp-nada">—</p>`}
+        <div class="tp-sub reg">Vuelven de allá</div>${regs.map(reg).join("") || `<p class="tp-nada">—</p>`}
+      </div>`;
+  };
+  return `<div class="tp-reglas">
+      <span><i class="ti ti-list-numbers"></i> Las de Asunción salen por orden de llegada</span>
+      <span>17:00 y La Plata 13:35 (leito) → 18:00 → La Noria 14:20 (en lastre)</span>
+      <span>La Plata 13:30 queda de reserva en Villarrica</span>
+    </div>
+    <div class="tp-semana">${[1, 2, 3, 4, 5, 6, 7].map(col).join("")}</div>`;
+}
+function tpDia(dia) {
+  const ed = tp.d.puede_editar ? "" : "disabled";
+  const fs = tp.filas.filter(f => +f.dia === dia).sort(tpOrden);
+  const regsDe = dd => [...new Set(tp.filas.filter(x => x.lado === "regreso" && +x.dia === +dd).map(x => tpHm(x.hora)))].sort();
+  const optsClase = c => [["", "Común"], ["CAMA", "Coche cama"], ["LEITO", "Leito"]].map(([v, t]) => `<option value="${v}" ${v === (c || "") ? "selected" : ""}>${t}</option>`).join("");
+  const fila = f => {
+    const k = f._k;
+    const base = `<input class="tp-h" data-k="${k}" data-c="hora" value="${trEsc(tpHm(f.hora))}" placeholder="09:00" maxlength="5" ${ed} aria-label="Hora">
+      <input class="tp-d" data-k="${k}" data-c="destino" value="${trEsc(f.destino || "")}" placeholder="${f.lado === "ida" ? "ASUNCION / RETIRO" : "RETIRO / ASUNCION"}" maxlength="80" ${ed} aria-label="Tramo">
+      <select data-k="${k}" data-c="clase" ${ed} aria-label="Clase">${optsClase(f.clase)}</select>`;
+    let despues;
+    if (f.lado === "ida") {
+      const otras = fs.filter(x => x.lado === "ida" && x._k !== k).map(x => tpHm(x.hora));
+      const modo = f.sigue ? "sigue" : "vuelve";
+      const vd = +f.vuelve_dia || 0, hs = vd ? regsDe(vd) : [];
+      const vh = tpHm(f.vuelve_hora);
+      despues = `<select data-k="${k}" data-c="_modo" ${ed} aria-label="Qué hace después">
+          <option value="vuelve" ${modo === "vuelve" ? "selected" : ""}>Vuelve el</option>
+          <option value="sigue" ${modo === "sigue" ? "selected" : ""}>Sigue (misma unidad) a las</option></select>
+        ${modo === "sigue"
+          ? `<select data-k="${k}" data-c="sigue" ${ed}><option value="">elegí…</option>${otras.map(h => `<option ${h === tpHm(f.sigue) ? "selected" : ""}>${h}</option>`).join("")}</select>`
+          : `<select data-k="${k}" data-c="vuelve_dia" ${ed}><option value="">día…</option>${[1, 2, 3, 4, 5, 6, 7].map(i => `<option value="${i}" ${i === vd ? "selected" : ""}>${TP_DIAS[i]}</option>`).join("")}</select>
+             <select data-k="${k}" data-c="vuelve_hora" ${ed} ${vd ? "" : "disabled"}><option value="">regreso…</option>${hs.map(h => `<option ${h === vh ? "selected" : ""}>${h}</option>`).join("")}${vh && !hs.includes(vh) ? `<option selected>${vh} (no hay)</option>` : ""}</select>`}`;
+    } else {
+      const q = tpQuienVuelve(f);
+      despues = `<select data-k="${k}" data-c="llegada" ${ed} aria-label="Cómo llega a Asunción">${Object.entries(tp.d.llegadas).map(([v, t]) => `<option value="${v}" ${v === (f.llegada || "") ? "selected" : ""}>${trEsc(t)}</option>`).join("")}</select>
+        <span class="tp-quien ${q.length ? "" : "mal"}">${q.length ? `Unidad del ${q.map(x => `${TP_CORTOS[x.dia].toLowerCase()} ${tpHm(x.hora)}`).join(" y ")}` : "Ninguna ida vuelve acá"}</span>`;
+    }
+    return `<div class="tp-fila ${f.lado}">
+        <div class="tp-fila-a">${base}</div>
+        <div class="tp-fila-b">${despues}</div>
+        <input class="tp-n" data-k="${k}" data-c="nota" value="${trEsc(f.nota || "")}" placeholder="Nota (opcional)" maxlength="160" ${ed}>
+        ${ed ? "" : `<span></span>`}${tp.d.puede_editar ? `<button type="button" class="tp-x" data-x="${k}" title="Quitar"><i class="ti ti-trash"></i></button>` : ""}
+      </div>`;
+  };
+  const idas = fs.filter(f => f.lado === "ida"), regs = fs.filter(f => f.lado === "regreso");
+  return `<div class="tp-dia">
+      <section><h3><i class="ti ti-arrow-up-right"></i> Salen de acá los ${trEsc(trDiaPlural(TP_DIAS[dia].toLowerCase()))}</h3>
+        ${idas.map(fila).join("") || `<p class="tp-nada">Ninguna salida.</p>`}
+        ${tp.d.puede_editar ? `<button type="button" class="tp-mas" data-mas="ida"><i class="ti ti-plus"></i> Agregar salida</button>` : ""}</section>
+      <section><h3><i class="ti ti-arrow-down-left"></i> Vuelven de allá los ${trEsc(trDiaPlural(TP_DIAS[dia].toLowerCase()))}</h3>
+        ${regs.map(fila).join("") || `<p class="tp-nada">Ningún regreso.</p>`}
+        ${tp.d.puede_editar ? `<button type="button" class="tp-mas" data-mas="regreso"><i class="ti ti-plus"></i> Agregar regreso</button>` : ""}</section>
+    </div>`;
+}
+function tpEnganchar(cuerpo) {
+  const f = k => tp.filas.find(x => x._k === +k);
+  cuerpo.querySelectorAll("[data-c]").forEach(el => {
+    const ev = el.tagName === "SELECT" ? "change" : "input";
+    el.addEventListener(ev, () => {
+      const x = f(el.dataset.k), c = el.dataset.c;
+      if (!x) return;
+      if (c === "_modo") {
+        if (el.value === "sigue") { x.sigue = x.sigue || ""; x.vuelve_dia = null; x.vuelve_hora = ""; x._sigue = true; }
+        else { x.sigue = ""; x._sigue = false; }
+        if (el.value === "sigue" && !x.sigue) x.sigue = " ";
+        tpPintar(); return;
+      }
+      if (c === "destino") x.destino = el.value.toUpperCase();
+      else if (c === "vuelve_dia") { x.vuelve_dia = +el.value || null; x.vuelve_hora = ""; tpPintar(); return; }
+      else if (c === "vuelve_hora") x.vuelve_hora = el.value.replace(/ \(no hay\)$/, "");
+      else x[c] = el.value;
+    });
+  });
+  cuerpo.querySelectorAll(".tp-h").forEach(el => el.addEventListener("blur", () => { const x = f(el.dataset.k); if (x) { x.hora = tpHm(el.value.trim()); } }));
+  cuerpo.querySelectorAll("[data-x]").forEach(b => b.onclick = () => {
+    tp.filas = tp.filas.filter(x => x._k !== +b.dataset.x);
+    tpPintar();
+  });
+  cuerpo.querySelectorAll("[data-mas]").forEach(b => b.onclick = () => {
+    const k = Math.max(0, ...tp.filas.map(x => x._k)) + 1;
+    tp.filas.push({ _k: k, dia: tp.dia, lado: b.dataset.mas, hora: "", destino: "", clase: "", sigue: "", vuelve_dia: null, vuelve_hora: "", llegada: "", nota: "" });
+    tpPintar();
+    document.querySelector(`.tr-prog-m .tp-h[data-k="${k}"]`)?.focus();
+  });
+}
+async function tpGuardar(btn) {
+  const filas = tp.filas.map(x => ({ ...x, sigue: String(x.sigue || "").trim(), hora: tpHm(x.hora) }));
+  const sinHora = filas.find(x => !x.hora || !String(x.destino || "").trim());
+  if (sinHora) { tp.dia = +sinHora.dia; tpPintar(); toast(`Al ${TP_DIAS[sinHora.dia].toLowerCase()} le falta ${sinHora.hora ? "el tramo" : "la hora"} de una ${sinHora.lado === "ida" ? "salida" : "vuelta"}`, "error"); return; }
+  btn.disabled = true;
+  const r = await api("/api/trafico/programa", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filas, viaje_horas: document.getElementById("tp-viaje")?.value }) }).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  tp.d = r;
+  tp.filas = r.filas.map((f, k) => ({ ...f, _k: k }));
+  tpPintar();
+  toast(`Programación guardada · ${r.rotaciones} rotaciones y las salidas por día actualizadas${r.revision.cierra ? "" : " (ojo: la semana no cierra)"}`, r.revision.cierra ? "success" : "");
+  if (tr.fecha) trCargar(tr.fecha);
 }
 
 // ─── Tope de viajes de los choferes de internacional: 8 por mes (ida y vuelta = 1) ───

@@ -8239,3 +8239,68 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .pre-acc { align-items: center; }
 .pre-acc .pre-inv { flex: 1 1 240px; max-width: 420px; }
 .pre-acc .pre-inv input { padding: 5px 0; font-size: 12.5px; }
+
+/* ── Tráfico internacional: programación semanal ── */
+.tr-prog-m .rv-modal-cuerpo { display: flex; flex-direction: column; gap: 12px; }
+.tp-rev { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; border: 1px solid; font-size: 13px; }
+.tp-rev.ok { background: var(--success-bg); border-color: var(--success-bd); color: var(--success); }
+.tp-rev.mal { background: var(--warning-bg); border-color: var(--warning-bd); color: var(--warning); }
+.tp-rev > .ti { font-size: 20px; margin-top: 1px; }
+.tp-rev div { display: flex; flex-direction: column; gap: 2px; }
+.tp-rev span { color: var(--text); }
+.tp-rev ul { margin: 4px 0 0; padding-left: 18px; color: var(--text); }
+.tp-rev li.error { color: var(--danger); font-weight: 600; }
+.tp-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-width: none; }
+.tp-tabs button { border: 0; background: none; padding: 8px 12px; font: 600 13px "Inter", sans-serif; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; }
+.tp-tabs button.on { color: var(--brand-blue); border-bottom-color: var(--brand-blue); }
+.tp-tabs .tp-c { display: none; }
+.tp-reglas { display: flex; flex-wrap: wrap; gap: 6px; }
+.tp-reglas span { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--info-bg); color: var(--info); display: inline-flex; gap: 5px; align-items: center; }
+.tp-semana { display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.tp-col { display: flex; flex-direction: column; gap: 5px; background: var(--surface-2, #F4F3EF); border-radius: 10px; padding: 8px; min-width: 150px; }
+.tp-col-cab { border: 0; background: var(--azul-oscuro, #1D344E); color: #fff; font: 700 13px "Inter", sans-serif; letter-spacing: .04em; text-transform: uppercase; border-radius: 7px; padding: 6px; cursor: pointer; }
+.tp-col-cab:hover { filter: brightness(1.15); }
+.tp-sub { font: 700 10.5px "Inter", sans-serif; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+.tp-it { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--brand-blue); border-radius: 7px; padding: 6px 7px; display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.tp-it.reg { border-left-color: #5BA4D9; }
+.tp-it > b { font: 700 14px "Inter", sans-serif; color: var(--text); font-variant-numeric: tabular-nums; }
+.tp-tr { color: var(--text); line-height: 1.3; }
+.tp-tr .ti { font-size: 11px; color: var(--muted); }
+.tp-it em { font-style: normal; color: var(--brand-blue); font-weight: 600; display: flex; gap: 3px; align-items: center; }
+.tp-it em.sigue { color: var(--success); }
+.tp-it em.lleg { color: var(--warning); font-weight: 500; }
+.tp-it em.mal { color: var(--danger); }
+.tp-it small { color: var(--muted); font-size: 10.5px; line-height: 1.3; }
+.tp-clase { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; background: #E8F2FB; color: #1E5A96; font: 700 9.5px "Inter", sans-serif; letter-spacing: .04em; text-transform: uppercase; vertical-align: 1px; }
+.tp-clase.leito { background: #1D344E; color: #fff; }
+.tp-nada { margin: 0; color: var(--lighter, #aaa); font-size: 12px; }
+.tp-dia { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.tp-dia section { display: flex; flex-direction: column; gap: 8px; }
+.tp-dia h3 { margin: 0; font: 700 13px "Inter", sans-serif; color: var(--azul-oscuro, #1D344E); display: flex; gap: 6px; align-items: center; }
+.tp-fila { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.tp-fila.ida { border-left: 3px solid var(--brand-blue); }
+.tp-fila.regreso { border-left: 3px solid #5BA4D9; }
+.tp-fila-a, .tp-fila-b { grid-column: 1 / -1; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.tp-fila input, .tp-fila select { padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--surface); font: 400 13px "Inter", sans-serif; color: var(--text); min-width: 0; }
+.tp-fila input:focus, .tp-fila select:focus { outline: 2px solid var(--brand-blue); outline-offset: -1px; }
+.tp-h { width: 66px; font-variant-numeric: tabular-nums; font-weight: 700 !important; }
+.tp-d { flex: 1 1 180px; text-transform: uppercase; }
+.tp-n { grid-column: 1; font-size: 12px !important; }
+.tp-x { grid-column: 2; border: 0; background: none; color: var(--muted); cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.tp-x:hover { color: var(--danger); background: var(--danger-bg, #fdecec); }
+.tp-quien { font-size: 12px; color: var(--brand-blue); font-weight: 600; }
+.tp-quien.mal { color: var(--danger); }
+.tp-mas { align-self: flex-start; border: 1px dashed var(--border-strong); background: none; border-radius: 8px; padding: 6px 12px; font: 600 12.5px "Inter", sans-serif; color: var(--brand-blue); cursor: pointer; display: inline-flex; gap: 5px; align-items: center; }
+.tp-mas:hover { border-color: var(--brand-blue); background: var(--info-bg); }
+.tp-viaje { margin-right: auto; display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.tp-viaje input { width: 54px; padding: 5px 6px; border: 1px solid var(--border-strong); border-radius: 7px; font: 600 13px "Inter", sans-serif; text-align: center; }
+@media (max-width: 860px) {
+  .tp-dia { grid-template-columns: 1fr; }
+  .tp-tabs .tp-l { display: none; }
+  .tp-tabs .tp-c { display: inline; }
+}
+@media (max-width: 560px) {
+  .tp-viaje { width: 100%; margin: 0 0 6px; }
+}
+.tr-prog-m .rv-modal-cuerpo > * { flex-shrink: 0; }
+.tr-prog-m .rv-modal-pie { flex-wrap: wrap; }
