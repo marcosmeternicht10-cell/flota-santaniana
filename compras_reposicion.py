@@ -118,43 +118,84 @@ def _pedido_abierto(conn):
     return out
 
 
-def sugerido():
-    """Lo que está en el mínimo o sin stock, con cuánto pedir y a quién."""
+def _proveedores_de(conn, ids):
+    """{repuesto_id: [proveedores con precio]} de una sola vez (no uno por uno:
+    con el inventario entero serían cientos de consultas)."""
+    out = {}
+    if not ids:
+        return out
+    filas = []
+    for k in range(0, len(ids), 500):
+        parte = ids[k:k + 500]
+        filas += [dict(r) for r in conn.execute(
+            f"SELECT repuesto_id, clave, proveedor, precio FROM repuestos_por_proveedor WHERE repuesto_id IN ({','.join('?' * len(parte))})",
+            parte).fetchall()]
+    claves = sorted({f["clave"] for f in filas})
+    nombres = {}
+    for k in range(0, len(claves), 500):
+        parte = claves[k:k + 500]
+        try:
+            for c in conn.execute(f"SELECT clave, nombre, fantasia FROM repuestos_proveedores WHERE clave IN ({','.join('?' * len(parte))})",
+                                  parte).fetchall():
+                nombres[c["clave"]] = c
+        except Exception:
+            _rollback(conn)
+    for f in filas:
+        c = nombres.get(f["clave"])
+        out.setdefault(f["repuesto_id"], []).append({
+            "proveedor": (c["nombre"] if c else "") or f["proveedor"], "fantasia": (c["fantasia"] if c else "") or "",
+            "precio": float(f["precio"] or 0), "clave": f["clave"]})
+    for lista in out.values():
+        con_precio = [p["precio"] for p in lista if p["precio"] > 0]
+        minimo = min(con_precio) if len(con_precio) > 1 else None
+        for p in lista:
+            p["mas_barato"] = minimo is not None and p["precio"] == minimo
+        lista.sort(key=lambda p: (p["precio"] <= 0, p["precio"], p["proveedor"].lower()))
+    return out
+
+
+def sugerido(sin_minimo=False, limite_sin=300):
+    """Lo que está en el mínimo o sin stock, con cuánto pedir y a quién.
+    Los que no tienen mínimo (sin stock, comprados para una OT) solo se
+    cuentan, salvo que se pidan."""
     import repuestos_db as rdb
-    import repuestos_multi as multi
-    todos = rdb.obtener_repuestos(solo_bajos=True)
     conn = get_connection()
     try:
         pedido = _pedido_abierto(conn)
+        filas = [dict(r) for r in conn.execute("""SELECT * FROM repuestos WHERE activo=1
+                    AND COALESCE(stock_actual,0) <= COALESCE(stock_minimo,0) ORDER BY categoria, descripcion""").fetchall()]
+        con = [r for r in filas if float(r.get("stock_minimo") or 0) > 0]
+        sin = [r for r in filas if float(r.get("stock_minimo") or 0) <= 0]
+        elegidos = con + (sin[:limite_sin] if sin_minimo else [])
+        provs = _proveedores_de(conn, [r["id"] for r in elegidos])
     finally:
         conn.close()
-    con_min, sin_min = [], []
-    for r in todos:
+
+    def armar(r):
+        r = rdb._enriquecer(r)
         stock = float(r.get("stock_actual") or 0)
         minimo = float(r.get("stock_minimo") or 0)
         ya = pedido.get(r["id"], 0)
-        if minimo > 0:
-            sug = max(0, math.ceil(2 * minimo - stock - ya))
-        else:
-            sug = 0 if ya else 1
-        provs = multi.lista(r["id"], r.get("proveedor") or "")
-        con_precio = [p for p in provs if p["precio"] > 0]
-        elegido = min(con_precio, key=lambda p: p["precio"]) if con_precio else (provs[0] if provs else None)
-        x = {
+        sug = max(0, math.ceil(2 * minimo - stock - ya)) if minimo > 0 else (0 if ya else 1)
+        ps = provs.get(r["id"], [])
+        kp = " ".join(str(r.get("proveedor") or "").split()).lower()
+        con_precio = [p for p in ps if p["precio"] > 0]
+        elegido = (min(con_precio, key=lambda p: p["precio"]) if con_precio
+                   else next((p for p in ps if p["clave"] == kp), ps[0] if ps else None))
+        return {
             "id": r["id"], "codigo": r.get("codigo") or "", "descripcion": r.get("descripcion") or "",
             "marca": r.get("marca") or "", "categoria": r.get("categoria") or "", "unidad": r.get("unidad") or "u",
             "stock": stock, "minimo": minimo, "en_pedido": ya, "sugerido": sug,
             "estado": r.get("estado_stock"), "ubicacion": r.get("ubicacion") or "",
             "proveedor": (elegido["proveedor"] if elegido else (r.get("proveedor") or "")),
             "precio": (elegido["precio"] if elegido and elegido["precio"] else float(r.get("costo_unitario") or 0)),
-            "proveedores": [{"proveedor": p["proveedor"], "fantasia": p.get("fantasia") or "", "precio": p["precio"],
-                             "mas_barato": p.get("mas_barato")} for p in provs],
+            "proveedores": [{k: p[k] for k in ("proveedor", "fantasia", "precio", "mas_barato")} for p in ps],
         }
-        (con_min if minimo > 0 else sin_min).append(x)
-    orden = lambda x: (x["en_pedido"] >= x["sugerido"] and x["sugerido"] == 0, x["estado"] != "sin_stock", x["categoria"], x["descripcion"])
-    con_min.sort(key=orden)
-    sin_min.sort(key=lambda x: (x["categoria"], x["descripcion"]))
-    return {"con_minimo": con_min, "sin_minimo": sin_min}
+
+    con_min = [armar(r) for r in con]
+    con_min.sort(key=lambda x: (x["sugerido"] == 0, x["estado"] != "sin_stock", x["categoria"], x["descripcion"]))
+    sin_min = [armar(r) for r in sin[:limite_sin]] if sin_minimo else []
+    return {"con_minimo": con_min, "sin_minimo": sin_min, "cant_sin_minimo": len(sin)}
 
 
 def _contacto(conn, proveedor):
@@ -346,14 +387,20 @@ def anular(pid):
 
 
 def resumen():
-    """Para el contador de la pestaña: cuántos para pedir y pedidos abiertos."""
-    try:
-        s = sugerido()
-        para = sum(1 for x in s["con_minimo"] if x["sugerido"] > 0)
-    except Exception:
-        para = 0
+    """Para el contador de la pestaña: cuántos para pedir y pedidos abiertos
+    (una cuenta rápida, sin armar la lista)."""
     conn = get_connection()
     try:
+        try:
+            pedido = _pedido_abierto(conn)
+            para = 0
+            for r in conn.execute("""SELECT id, stock_actual, stock_minimo FROM repuestos WHERE activo=1
+                                     AND COALESCE(stock_minimo,0) > 0 AND COALESCE(stock_actual,0) <= stock_minimo""").fetchall():
+                if 2 * float(r["stock_minimo"]) - float(r["stock_actual"] or 0) - pedido.get(r["id"], 0) > 0:
+                    para += 1
+        except Exception:
+            _rollback(conn)
+            para = 0
         abiertos = conn.execute("SELECT COUNT(*) AS n FROM compras_repo WHERE estado IN ('pedido','parcial')").fetchone()["n"]
     except Exception:
         _rollback(conn)
@@ -390,7 +437,7 @@ def api_listar():
 def api_sugerido():
     if not _puede():
         return _no()
-    return jsonify({"ok": True, **sugerido()})
+    return jsonify({"ok": True, **sugerido(sin_minimo=request.args.get("sin_minimo") == "1")})
 
 
 @bp_reposicion.route("/api/compras/reposicion/resumen", methods=["GET"])
