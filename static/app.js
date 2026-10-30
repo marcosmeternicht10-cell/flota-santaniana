@@ -5805,7 +5805,7 @@ const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestad
 async function renderCompras() {
   status("Compras / Depósito");
   await refrescarPermisoOTs();
-  const todas = await api("/api/compras/ots");
+  const [todas, repoRes] = await Promise.all([api("/api/compras/ots"), api("/api/compras/reposicion/resumen").catch(() => null)]);
   const enEspera = todas.filter(o => o.estado_compras === "en_espera");
   const presup = todas.filter(o => o.estado_compras === "presupuestado");
   const enCamino = todas.filter(o => o.estado_compras === "en_camino");
@@ -5838,9 +5838,12 @@ async function renderCompras() {
         <div class="metric" style="cursor:pointer;${comprasTab==='cola'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('cola')">
           <div class="metric-content"><div class="metric-label">Esperando fondos</div>
           <div class="metric-value" style="color:var(--warning)">${totalEspera}</div></div></div>
+        ${repoRes && repoRes.ok ? `<div class="metric" style="cursor:pointer;${comprasTab==='reposicion'?'border:2px solid #0F766E':''}" onclick="setComprasTab('reposicion')">
+          <div class="metric-content"><div class="metric-label">Reposición del depósito</div>
+          <div class="metric-value" style="color:#0F766E">${repoRes.para_pedir}<small class="cmp-met-sub">${repoRes.abiertos ? `${repoRes.abiertos} pedido${repoRes.abiertos === 1 ? "" : "s"} en curso` : "para pedir"}</small></div></div></div>` : ""}
       </div>
 
-      ${comprasTab === "cola" ? `
+      ${comprasTab === "reposicion" ? `<div id="repo-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>` : comprasTab === "cola" ? `
         <div class="section-title"><i class="ti ti-hourglass"></i> Cola de Tesorería — esperando fondos</div>
         <p class="hint" style="margin-bottom:14px"><i class="ti ti-info-circle"></i> Ítems presupuestados que Tesorería todavía no pudo cubrir. Cuando entren fondos, marcalos y liberalos: la orden retoma su curso.</p>
         <div id="cola-espera-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
@@ -5853,6 +5856,192 @@ async function renderCompras() {
     </div>`;
 
   if (comprasTab === "cola") renderColaEspera();
+  if (comprasTab === "reposicion") renderReposicion();
+}
+
+// ─── Reposición del depósito: lo que está bajo el mínimo se pide al proveedor ───
+const repo = { sug: null, peds: [], sinMin: false };
+async function renderReposicion() {
+  const [s, l] = await Promise.all([api("/api/compras/reposicion/sugerido").catch(() => null), api("/api/compras/reposicion").catch(() => null)]);
+  const box = document.getElementById("repo-panel");
+  if (!box) return;
+  if (!s || !s.ok || !l || !l.ok) { box.innerHTML = `<div class="empty">No se pudo traer la reposición.</div>`; return; }
+  repo.sug = s; repo.peds = l.pedidos || [];
+  const abiertos = repo.peds.filter(p => p.estado === "pedido" || p.estado === "parcial");
+  const cerrados = repo.peds.filter(p => !(p.estado === "pedido" || p.estado === "parcial"));
+  const lista = repo.sinMin ? [...s.con_minimo, ...s.sin_minimo] : s.con_minimo;
+  const fila = x => {
+    const provs = x.proveedores || [];
+    return `<tr data-rid="${x.id}" class="${x.sugerido > 0 ? "" : "cubierto"}">
+      <td><input type="checkbox" class="repo-chk" ${x.sugerido > 0 && x.proveedor ? "checked" : ""} aria-label="Pedir ${trEsc(x.descripcion)}"></td>
+      <td><b>${trEsc(x.descripcion)}</b><small>${trEsc([x.codigo, x.marca, x.ubicacion].filter(Boolean).join(" · "))}</small></td>
+      <td class="num"><span class="repo-stock ${x.estado}">${preCant(x.stock)}</span>${x.minimo ? `<small>mín. ${preCant(x.minimo)}</small>` : `<small>sin mínimo</small>`}</td>
+      <td class="num">${x.en_pedido ? `<span class="repo-ya">${preCant(x.en_pedido)} en pedido</span>` : "—"}</td>
+      <td><input class="repo-q" inputmode="decimal" value="${x.sugerido || ""}" placeholder="0" aria-label="Cantidad a pedir"></td>
+      <td>${provs.length ? `<select class="repo-prov" aria-label="Proveedor">${provs.map(p => `<option value="${trEsc(p.proveedor)}" data-precio="${p.precio}" ${p.proveedor === x.proveedor ? "selected" : ""}>${trEsc(p.fantasia || p.proveedor)}${p.precio ? ` — ${preMil(p.precio)}` : ""}${p.mas_barato ? " ★" : ""}</option>`).join("")}<option value="__otro">Otro…</option></select>
+        <input class="repo-prov-in" value="" placeholder="Proveedor" hidden oninput="preProvBuscar(this)" autocomplete="off">`
+        : `<input class="repo-prov-in" value="${trEsc(x.proveedor || "")}" placeholder="Proveedor" oninput="preProvBuscar(this)" autocomplete="off">`}</td>
+      <td><input class="repo-p" inputmode="numeric" value="${x.precio ? preMil(x.precio) : ""}" placeholder="0" aria-label="Precio unitario"></td>
+    </tr>`;
+  };
+  const ped = p => {
+    const c = p.contacto || {};
+    const pend = (p.items || []).filter(i => +i.cantidad > +i.recibido);
+    const est = { pedido: ["Pedido", ""], parcial: ["Llegó una parte", "parcial"], recibido: ["Recibido", "ok"], anulado: ["Anulado", "anulado"] }[p.estado] || [p.estado, ""];
+    const dias = Math.floor((Date.now() - new Date(String(p.creado_el).slice(0, 19))) / 864e5);
+    return `<div class="repo-ped ${est[1]}">
+      <header><div><b><i class="ti ti-truck-delivery"></i> ${trEsc(c.fantasia || p.proveedor)}</b>
+        <small>Pedido #${p.id} · ${String(p.creado_el).slice(8, 10)}/${String(p.creado_el).slice(5, 7)}${p.estado === "pedido" || p.estado === "parcial" ? ` · hace ${dias <= 0 ? "hoy" : dias === 1 ? "1 día" : dias + " días"}` : ""}${c.telefono ? ` · tel. ${trEsc(c.telefono)}` : ""}${p.factura ? ` · Fac. ${trEsc(p.factura)}` : ""}</small></div>
+        <span class="repo-est ${est[1]}">${est[0]}</span></header>
+      <table><tbody>${(p.items || []).map(i => `<tr class="${+i.recibido >= +i.cantidad ? "llego" : ""}">
+        <td class="q">${preCant(i.cantidad)}</td><td>${trEsc(i.descripcion)}<small>${trEsc(i.codigo_prov || i.codigo || "")}</small></td>
+        <td class="num">${i.precio ? preMil(i.precio) : "—"}</td>
+        <td class="num">${+i.recibido ? `<span class="repo-lleg">llegó ${preCant(i.recibido)}</span>` : ""}</td></tr>`).join("")}</tbody></table>
+      ${p.estado === "pedido" || p.estado === "parcial" ? `<footer>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="repoMandar(${p.id})"><i class="ti ti-brand-whatsapp"></i> Mandar pedido</button>
+        <button type="button" class="pv-link" onclick="repoAnular(${p.id}, '${p.estado}')">${p.estado === "parcial" ? "Cerrar (no llega más)" : "Anular"}</button>
+        <button type="button" class="btn btn-success btn-sm" onclick="repoRecibir(${p.id})"><i class="ti ti-package-import"></i> Recibir${pend.length < (p.items || []).length ? " lo que falta" : ""}</button>
+      </footer>` : ""}
+    </div>`;
+  };
+  box.innerHTML = `
+    ${abiertos.length ? `<div class="section-title"><i class="ti ti-truck-delivery"></i> Pedidos en curso (${abiertos.length})</div>
+      <div class="repo-peds">${abiertos.map(ped).join("")}</div>` : ""}
+    <div class="section-title" style="margin-top:${abiertos.length ? 22 : 0}px"><i class="ti ti-building-warehouse"></i> Para pedir · bajo el mínimo (${s.con_minimo.filter(x => x.sugerido > 0).length})</div>
+    <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> La cantidad sugerida llena hasta el doble del mínimo, descontando lo que ya está pedido. El proveedor sugerido es el más barato (★). Cambiá lo que haga falta y armá el pedido: sale uno por proveedor.</p>
+    ${lista.length ? `<div class="table-wrap"><table class="repo-tabla">
+        <thead><tr><th></th><th>Repuesto</th><th class="num">Stock</th><th class="num">Ya pedido</th><th>Pedir</th><th>Proveedor</th><th>Precio c/u</th></tr></thead>
+        <tbody>${lista.map(fila).join("")}</tbody></table></div>`
+      : `<div class="empty"><i class="ti ti-circle-check"></i>Nada bajo el mínimo. ${s.sin_minimo.length ? "" : "Para que aparezcan, cargá el stock mínimo de cada repuesto en el Inventario."}</div>`}
+    <div class="repo-pie">
+      ${s.sin_minimo.length ? `<label class="repo-sinmin"><input type="checkbox" ${repo.sinMin ? "checked" : ""} onchange="repo.sinMin=this.checked;renderReposicion()"> Mostrar también los ${s.sin_minimo.length} sin stock que no tienen mínimo</label>` : "<span></span>"}
+      <span id="repo-tot"></span>
+      <button class="btn btn-primary" id="repo-armar" onclick="repoArmar(this)"><i class="ti ti-file-plus"></i> Armar pedido</button>
+    </div>
+    ${cerrados.length ? `<details class="repo-hist"><summary>Recibidos en los últimos 30 días (${cerrados.length})</summary><div class="repo-peds">${cerrados.map(ped).join("")}</div></details>` : ""}`;
+  box.querySelectorAll(".repo-tabla tbody tr").forEach(tr => {
+    const sel = tr.querySelector(".repo-prov"), inp = tr.querySelector(".repo-prov-in"), p = tr.querySelector(".repo-p");
+    if (sel) sel.onchange = () => {
+      if (sel.value === "__otro") { inp.hidden = false; inp.focus(); }
+      else { inp.hidden = true; const pr = +sel.selectedOptions[0].dataset.precio; if (pr) p.value = preMil(pr); }
+      repoTotal();
+    };
+    p.addEventListener("blur", () => { p.value = preNum(p.value) ? preMil(preNum(p.value)) : ""; repoTotal(); });
+    tr.querySelectorAll("input").forEach(i => i.addEventListener("input", repoTotal));
+  });
+  repoTotal();
+}
+function repoFilas() {
+  return [...document.querySelectorAll(".repo-tabla tbody tr")].map(tr => {
+    const sel = tr.querySelector(".repo-prov"), inp = tr.querySelector(".repo-prov-in");
+    const prov = sel && sel.value !== "__otro" ? sel.value : (inp ? inp.value.trim() : "");
+    return { tr, on: tr.querySelector(".repo-chk").checked, repuesto_id: +tr.dataset.rid, cantidad: preCantNum(tr.querySelector(".repo-q").value),
+             proveedor: prov, precio: preNum(tr.querySelector(".repo-p").value) };
+  });
+}
+function repoTotal() {
+  const f = repoFilas().filter(x => x.on && x.cantidad > 0);
+  const provs = new Set(f.map(x => x.proveedor.toLowerCase()).filter(Boolean));
+  const tot = f.reduce((a, x) => a + x.cantidad * x.precio, 0);
+  const el = document.getElementById("repo-tot");
+  if (el) el.innerHTML = f.length ? `${f.length} repuesto${f.length === 1 ? "" : "s"} · ${provs.size} proveedor${provs.size === 1 ? "" : "es"}${tot ? ` · <b>${gs(Math.round(tot))}</b>` : ""}` : "";
+  const b = document.getElementById("repo-armar");
+  if (b) b.disabled = !f.length;
+}
+async function repoArmar(btn) {
+  const f = repoFilas().filter(x => x.on && x.cantidad > 0);
+  const sin = f.find(x => !x.proveedor);
+  if (sin) { toast("A cada repuesto ponele a quién se le pide", "error"); sin.tr.querySelector(".repo-prov-in, .repo-prov")?.focus(); return; }
+  btn.disabled = true;
+  const r = await api("/api/compras/reposicion", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: f.map(({ tr, on, ...x }) => x) }) }).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo armar", "error"); return; }
+  toast(`${r.msg}: mandalos desde «Pedidos en curso»`, "success");
+  renderCompras();
+}
+function repoMandar(pid) {
+  const p = repo.peds.find(x => x.id === pid);
+  if (!p) return;
+  const c = p.contacto || {};
+  const pend = (p.items || []).filter(i => +i.cantidad > +i.recibido);
+  const texto = `Buenas${c.contacto ? " " + c.contacto.split(" ")[0] : ""}, de La Santaniana. Para reponer el depósito necesitamos:\n` +
+    pend.map(i => `• ${preCant(+i.cantidad - +i.recibido)} × ${i.descripcion}${i.codigo_prov || i.codigo ? ` (cód. ${i.codigo_prov || i.codigo})` : ""}`).join("\n") +
+    `\nPedido #${p.id}. ¿Nos confirman precio y cuándo lo tienen? Gracias.`;
+  let tel = String(c.telefono || "").replace(/\D/g, "");
+  if (tel.startsWith("0")) tel = "595" + tel.slice(1); else if (tel && !tel.startsWith("595")) tel = "595" + tel;
+  const o = rvModal({
+    titulo: `Pedido #${p.id} · ${trEsc(c.fantasia || p.proveedor)}`, icono: "brand-whatsapp", ancho: 520,
+    sub: c.telefono ? `${trEsc(c.contacto || "")} ${trEsc(c.telefono)}` : "Este proveedor no tiene teléfono: cargalo en Proveedores, o copiá el texto.",
+    cuerpo: `<textarea class="repo-wa" rows="${Math.min(14, pend.length + 4)}">${trEsc(texto)}</textarea>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" id="repo-copiar"><i class="ti ti-copy"></i> Copiar</button>
+      ${tel.length >= 11 ? `<a class="btn btn-sm cmp-wa" id="repo-wa" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> Abrir WhatsApp</a>` : ""}</div>`,
+  });
+  const ta = o.querySelector(".repo-wa");
+  o.querySelector("#repo-copiar").onclick = () => navigator.clipboard.writeText(ta.value).then(() => toast("Pedido copiado", "success"));
+  const a = o.querySelector("#repo-wa");
+  if (a) { const upd = () => a.href = `https://wa.me/${tel}?text=${encodeURIComponent(ta.value)}`; upd(); ta.addEventListener("input", upd); }
+}
+async function repoAnular(pid, estado) {
+  if (!confirm(estado === "parcial" ? "¿Cerrar el pedido? Lo que ya llegó queda; lo que falta deja de esperarse." : "¿Anular el pedido?")) return;
+  const r = await api(`/api/compras/reposicion/${pid}/anular`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  toast(r.msg, "success");
+  renderCompras();
+}
+function repoRecibir(pid) {
+  const p = repo.peds.find(x => x.id === pid);
+  if (!p) return;
+  const c = p.contacto || {};
+  const pend = (p.items || []).filter(i => +i.cantidad > +i.recibido);
+  const o = rvModal({
+    titulo: `Recibir pedido #${p.id}`, icono: "package-import", ancho: 720, clase: "rx-m repo-rec",
+    sub: `${trEsc(c.fantasia || p.proveedor)} · poné cuánto llegó y el precio de la factura. Entra al stock a ese costo.`,
+    cuerpo: `<section class="rx-grupo">
+        <header><b><i class="ti ti-truck-delivery"></i> ${trEsc(c.fantasia || p.proveedor)}</b><span class="rx-g-tot" id="rr-tot"></span></header>
+        ${pend.map(i => `<div class="rx-fila repo-rf" data-id="${i.id}">
+          <span></span>
+          <input class="repo-rq" inputmode="decimal" value="${preCant(+i.cantidad - +i.recibido)}" aria-label="Cantidad que llegó">
+          <span class="rx-desc"><b>${trEsc(i.descripcion)}</b><small>Pedido: ${preCant(i.cantidad)}${+i.recibido ? ` · ya llegó ${preCant(i.recibido)}` : ""} · ${trEsc(i.codigo_prov || i.codigo || "")}</small></span>
+          <span class="rx-precio"><input class="repo-rp" inputmode="numeric" value="${i.precio ? preMil(i.precio) : ""}" placeholder="0"><small>c/u</small></span>
+        </div>`).join("")}
+        <div class="rx-fac">
+          <label>Factura N.º<input id="rr-fn" placeholder="001-001-0001234" maxlength="30"></label>
+          <label>Total factura<input id="rr-fm" inputmode="numeric" placeholder="0"></label>
+          <label>Pago<select id="rr-fd"><option value="0">Contado</option><option value="15">A 15 días</option><option value="30">A 30 días</option><option value="60">A 60 días</option></select></label>
+          <label class="rx-teso"><input type="checkbox" id="rr-ft" checked> Cargar en Tesorería como pago a proveedor</label>
+        </div>
+      </section>
+      <p class="hint" style="margin:0"><i class="ti ti-info-circle"></i> Si llegó menos, poné lo que vino: el resto queda pendiente en el pedido. Con 0 no se registra ese renglón.</p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-success" id="rr-ok"><i class="ti ti-check"></i> Registrar llegada</button>`,
+  });
+  const fm = o.querySelector("#rr-fm");
+  const tot = () => {
+    let t = 0;
+    o.querySelectorAll(".repo-rf").forEach(f => { t += preCantNum(f.querySelector(".repo-rq").value) * preNum(f.querySelector(".repo-rp").value); });
+    o.querySelector("#rr-tot").textContent = t ? gs(Math.round(t)) : "";
+    if (!fm.dataset.tocado) fm.value = t ? preMil(Math.round(t)) : "";
+  };
+  o.querySelectorAll(".repo-rq, .repo-rp").forEach(i => i.addEventListener("input", tot));
+  o.querySelectorAll(".repo-rp, #rr-fm").forEach(i => i.addEventListener("blur", () => { i.value = preNum(i.value) ? preMil(preNum(i.value)) : ""; }));
+  fm.addEventListener("input", () => { fm.dataset.tocado = "1"; });
+  tot();
+  o.querySelector("#rr-ok").onclick = async e => {
+    const btn = e.currentTarget;
+    const items = [...o.querySelectorAll(".repo-rf")].map(f => ({ id: +f.dataset.id, cantidad: preCantNum(f.querySelector(".repo-rq").value), precio: preNum(f.querySelector(".repo-rp").value) })).filter(x => x.cantidad > 0);
+    if (!items.length) { toast("Poné cuánto llegó", "error"); return; }
+    btn.disabled = true;
+    const r = await api(`/api/compras/reposicion/${pid}/recibir`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, factura: { numero: o.querySelector("#rr-fn").value.trim(), monto: preNum(fm.value), dias: +o.querySelector("#rr-fd").value || 0, tesoreria: o.querySelector("#rr-ft").checked } }) }).catch(() => null);
+    btn.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo registrar", "error"); return; }
+    o.remove();
+    toast(`${r.msg} · entró al stock`, "success");
+    if (r.tesoreria) setTimeout(() => toast(r.tesoreria.ok ? `Tesorería: factura cargada en Pagos y cobros${/aprobación/.test(r.tesoreria.msg || "") ? " (espera aprobación)" : ""}` : "Tesorería: " + r.tesoreria.msg, r.tesoreria.ok ? "success" : "error"), 900);
+    if (r.problemas && r.problemas.length) setTimeout(() => toast(r.problemas.join(" · "), "error"), 1600);
+    renderCompras();
+  };
 }
 
 function setComprasTab(t) { comprasTab = t; renderCompras(); }
@@ -5861,7 +6050,8 @@ function setComprasTab(t) { comprasTab = t; renderCompras(); }
 function cmpMateriales(it) {
   const mats = it.materiales || [];
   if (!mats.length) return `${it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—"}${it.proveedor_compras ? `<div class="cmp-mat" style="color:var(--muted)">Proveedor: ${trEsc(it.proveedor_compras)}</div>` : ""}`;
-  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}${m.origen === "deposito" ? ` <span class="cmp-tag dep"><i class="ti ti-building-warehouse"></i> del depósito</span>` : m.repuesto_id ? ` <span class="cmp-tag inv" title="Enganchado con el inventario"><i class="ti ti-package"></i></span>` : ""}${m.proveedor ? `<div style="color:var(--muted);font-size:11.5px;margin:2px 0 5px 30px">Proveedor: ${trEsc(m.proveedor)}</div>` : ""}${m.stock_nota ? `<div class="cmp-stock-nota ${/^No /.test(m.stock_nota) ? "mal" : ""}">${trEsc(m.stock_nota)}</div>` : ""}</div>`).join("");
+  const enCamino = it._estado === "en_camino";
+  return mats.map(m => `<div class="cmp-mat ${m.entregado_el && enCamino ? "llego" : ""}"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}${m.origen === "deposito" ? ` <span class="cmp-tag dep"><i class="ti ti-building-warehouse"></i> del depósito</span>` : m.repuesto_id ? ` <span class="cmp-tag inv" title="Enganchado con el inventario"><i class="ti ti-package"></i></span>` : m.origen === "suelto" ? ` <span class="cmp-tag" title="Compra suelta: no va al inventario">suelta</span>` : ""}${enCamino && it.estado_pago !== "espera" ? (m.entregado_el ? ` <span class="cmp-tag ok"><i class="ti ti-check"></i> entregado</span>` : ` <span class="cmp-tag falta"><i class="ti ti-clock"></i> falta</span>`) : ""}${m.precio_presup && Math.abs(m.precio_presup - m.precio_unit) > 0.5 ? ` <span class="cmp-tag ${m.precio_unit > m.precio_presup ? "sube" : "baja"}" title="Precio del presupuesto ${gs(m.precio_presup)} → factura ${gs(m.precio_unit)}">${m.precio_unit > m.precio_presup ? "▲" : "▼"} ${Math.round(Math.abs(m.precio_unit - m.precio_presup) / m.precio_presup * 100)}%</span>` : ""}${m.factura ? ` <span class="cmp-tag" title="Factura del proveedor">Fac. ${trEsc(m.factura)}</span>` : ""}${m.proveedor ? `<div style="color:var(--muted);font-size:11.5px;margin:2px 0 5px 30px">Proveedor: ${trEsc(m.proveedor)}</div>` : ""}${m.stock_nota ? `<div class="cmp-stock-nota ${/^No /.test(m.stock_nota) ? "mal" : ""}">${trEsc(m.stock_nota)}</div>` : ""}</div>`).join("");
 }
 // Los trabajos de la OT agrupados por coche (si la OT tiene varios)
 function cmpPorCoche(o, fila, columnas) {
@@ -5883,9 +6073,34 @@ function cmpTituloCoches(o) {
   return `${o.n_interno ? `Coche ${o.n_interno}` : o.patente} · ${o.patente}`;
 }
 
+// Cuántos días lleva en la etapa (y si ya es mucho)
+const CMP_LIMITE = { en_espera: [2, 5], presupuestado: [3, 7], en_camino: [4, 10] };
+function cmpAntiguedad(o) {
+  const f = { en_espera: o.fecha_envio_compras, presupuestado: o.fecha_presupuesto, en_camino: o.fecha_en_camino }[o.estado_compras];
+  if (!f) return "";
+  const d = Math.floor((Date.now() - new Date(String(f).slice(0, 19))) / 864e5);
+  if (isNaN(d) || d < 0) return "";
+  const [a, b] = CMP_LIMITE[o.estado_compras] || [99, 99];
+  const cls = d >= b ? "mal" : d >= a ? "ojo" : "";
+  const txt = { en_espera: "esperando presupuesto", presupuestado: "esperando la firma", en_camino: "en camino" }[o.estado_compras];
+  return `<span class="cmp-edad ${cls}" title="Desde el ${String(f).slice(8, 10)}/${String(f).slice(5, 7)}"><i class="ti ti-clock"></i> ${d === 0 ? "hoy" : d === 1 ? "1 día" : d + " días"} ${txt}</span>`;
+}
+function cmpLlegada(o) {
+  if (o.estado_compras !== "en_camino") return "";
+  let tot = 0, ok = 0;
+  (o.items || []).forEach(it => {
+    if (it.estado_pago === "espera") return;
+    const ms = it.materiales || [];
+    if (ms.length) ms.forEach(m => { tot++; if (m.entregado_el) ok++; });
+    else if (+it.precio_compras > 0) { tot++; if (it.entregado_el) ok++; }
+  });
+  return tot && ok ? `<span class="cmp-edad parcial"><i class="ti ti-package-import"></i> Llegó ${ok} de ${tot}</span>` : "";
+}
+
 function tarjetaCompra(o) {
   const coche = o.n_interno ? `Coche ${o.n_interno}` : o.patente;
   const totalPresup = o.items.reduce((s, i) => s + (i.precio_compras || 0), 0);
+  (o.items || []).forEach(it => { it._estado = o.estado_compras; });
   let acciones = "";
   if (o.estado_compras === "en_espera") {
     acciones = `<button class="btn btn-primary" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-cash"></i> Cargar presupuesto</button>`;
@@ -5899,7 +6114,7 @@ function tarjetaCompra(o) {
     acciones = `
       <button class="btn btn-ghost" onclick="cmpPedirProveedores(${o.id})"><i class="ti ti-truck-delivery"></i> Pedir a proveedores</button>
       <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
-      <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package"></i> Registrar entrega</button>`;
+      <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package-import"></i> Recibir y entregar</button>`;
   } else {
     acciones = `
       ${o.taller_entrega || o.recibido_por ? `<span style="font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-right:auto"><i class="ti ti-map-pin"></i> ${o.taller_entrega || "Taller propio"}${o.recibido_por ? ` · recibió <b>${o.recibido_por}</b>` : ""}</span>` : ""}
@@ -5912,6 +6127,7 @@ function tarjetaCompra(o) {
       <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
         <span><i class="ti ti-clipboard-check"></i> OT #${o.id} · ${cmpTituloCoches(o)}</span>
         <span style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:10px">
+          ${cmpLlegada(o)}${cmpAntiguedad(o)}
           ${o.pagos && o.pagos.parcial ? `<span class="badge warning"><i class="ti ti-hourglass"></i> ${o.pagos.en_espera} esperando fondos · ${gs(o.pagos.monto_espera)}</span>` : ""}
           ${o.fecha_envio_compras ? "Enviada: " + o.fecha_envio_compras.slice(0,10) : ""}
         </span>
@@ -6111,12 +6327,14 @@ async function abrirPresupuesto(otId) {
     if (!mats.length) return `<tr class="pre-trab">
         <td><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>
         <td class="center" style="color:var(--lighter)">—</td>
-        <td style="color:var(--muted);font-size:12.5px">${it.material_pedido ? trEsc(it.material_pedido) : "Sin materiales anotados: precio del trabajo"}</td>
+        <td class="pre-mat-td"><div class="pre-sinmat">${it.material_pedido ? trEsc(it.material_pedido) : "El taller no anotó repuestos. Si lleva, agregalos; si no, poné el precio del trabajo."}</div>
+          <button type="button" class="pre-agregar" onclick="preAgregarMat(${it.id})"><i class="ti ti-plus"></i> Agregar repuesto</button></td>
         <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)"></td>
         <td><input class="pre-in pre-item" data-id="${it.id}" data-q="1" inputmode="numeric" value="${precio(it.precio_compras)}" placeholder="0" oninput="preRecalcular()"></td>
         <td class="num pre-sub">—</td></tr>`;
     return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}" data-mid="${m.id}">
-        ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>` : ""}
+        ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div>
+          <button type="button" class="pre-agregar chico" onclick="preAgregarMat(${it.id})" title="Agregar otro repuesto a este trabajo"><i class="ti ti-plus"></i> Repuesto</button></td>` : ""}
         ${preCeldasMat(m)}</tr>`).join("");
   };
   const conRep = Object.values(pre.mats).filter(m => m.repuesto).length, total = Object.keys(pre.mats).length;
@@ -6219,7 +6437,8 @@ function preCeldasMat(m) {
       <input value="${qTxt}" inputmode="decimal" data-mid="${m.id}" aria-label="Cantidad" onfocus="this.select()" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}" onchange="preCantGuardar(${m.id}, this.value)">
       <button type="button" onclick="preCantPaso(${m.id}, 1)" aria-label="Uno más">+</button>
     </div>${uCant ? `<small class="pre-cant-u">${trEsc(uCant)}</small>` : ""}`}</td>
-    <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(d.descripcion || m.descripcion)}${d.stock_aplicado ? "" : `<button type="button" class="pre-editar" onclick="preEditarMat(${m.id})" title="Corregir el nombre o la cantidad"><i class="ti ti-pencil"></i> Corregir</button>`}</div>${repHtml}</td>
+    <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(d.descripcion || m.descripcion)}${d.stock_aplicado || d.entregado_el ? "" : `<button type="button" class="pre-editar" onclick="preEditarMat(${m.id})" title="Corregir el nombre o la cantidad"><i class="ti ti-pencil"></i> Corregir</button>
+        <button type="button" class="pre-editar quitar" onclick="preQuitarMat(${m.id})" title="No hace falta: sacarlo del presupuesto"><i class="ti ti-trash"></i></button>`}</div>${repHtml}</td>
     <td class="pre-prov-td">${provHtml}</td>
     <td>${dep
       ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" value="0" disabled title="Sale del depósito: no se pide plata"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
@@ -6409,6 +6628,88 @@ function preInvBuscar(inp) {
     const alto = box.offsetHeight;
     box.style.top = (rc.bottom + alto + 8 > innerHeight && rc.top > alto + 8 ? rc.top - alto - 4 : rc.bottom + 4) + "px";
   }, 220);
+}
+// Volver a abrir el presupuesto (cambió la cantidad de filas) sin perder lo escrito
+async function preReabrir() {
+  const modal = document.querySelector(".pre-modal-rep");
+  const borr = { mat: {}, item: {}, prov: {} };
+  if (modal) {
+    modal.querySelectorAll(".pre-mat:not([disabled])").forEach(i => { if (i.value.trim()) borr.mat[i.dataset.id] = i.value; });
+    modal.querySelectorAll(".pre-item").forEach(i => { if (i.value.trim()) borr.item[i.dataset.id] = i.value; });
+    modal.querySelectorAll(".pre-prov-in").forEach(i => { if (i.value.trim()) borr.prov[i.dataset.kind + ":" + i.dataset.id] = i.value; });
+  }
+  const scroll = modal ? modal.scrollTop : 0;
+  modal?.closest(".modal-overlay")?.remove();
+  await abrirPresupuesto(pre.ot.id);
+  const nuevo = document.querySelector(".pre-modal-rep");
+  if (!nuevo) return;
+  Object.entries(borr.mat).forEach(([id, v]) => { const i = nuevo.querySelector(`.pre-mat[data-id="${id}"]:not([disabled])`); if (i && !i.value.trim()) i.value = v; });
+  Object.entries(borr.item).forEach(([id, v]) => { const i = nuevo.querySelector(`.pre-item[data-id="${id}"]`); if (i && !i.value.trim()) i.value = v; });
+  Object.entries(borr.prov).forEach(([k, v]) => {
+    const [kind, id] = k.split(":");
+    const i = nuevo.querySelector(`.pre-prov-in[data-kind="${kind}"][data-id="${id}"]`);
+    if (i && !i.value.trim()) { i.value = v; i.hidden = false; const sel = i.parentElement.querySelector(".pre-prov-sel"); if (sel && ![...sel.options].some(o => o.value === v && (o.selected = true))) sel.value = "__otro"; else if (sel) i.hidden = true; }
+  });
+  nuevo.scrollTop = scroll;
+  preRecalcular();
+}
+async function preQuitarMat(mid) {
+  const d = pre.mats[mid];
+  if (!confirm(`¿Sacar «${d ? d.descripcion : "este material"}» del presupuesto? No se va a comprar ni pedir.`)) return;
+  const r = await api(`/api/compras/${pre.ot.id}/material/${mid}`, { method: "DELETE" }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo quitar", "error"); return; }
+  toast("Material quitado", "success");
+  await preReabrir();
+}
+// Agregar un repuesto a un trabajo: del inventario o escrito a mano
+function preAgregarMat(itemId) {
+  const it = (pre.ot.items || []).find(x => x.id === itemId) || {};
+  const o = rvModal({
+    titulo: "Agregar repuesto", icono: "package", ancho: 640, clase: "pre-busca pre-agr",
+    sub: `${trEsc(it.descripcion || "")}${it.coche_n ? ` · coche ${trEsc(it.coche_n)}` : ""} · buscá en el inventario; si no está, se agrega igual`,
+    cuerpo: `<div class="pre-agr-fila">
+        <label class="pre-busca-in"><i class="ti ti-search"></i><input placeholder="Ej: filtro aceite, pastilla freno, 1873016…" autocomplete="off"></label>
+        <label class="pre-agr-cant">Cant.<input value="1" inputmode="decimal" aria-label="Cantidad"></label>
+      </div>
+      <div class="pre-busca-res"></div>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`,
+  });
+  const inp = o.querySelector(".pre-busca-in input"), cant = o.querySelector(".pre-agr-cant input"), res = o.querySelector(".pre-busca-res");
+  const agregar = async (rid, desc) => {
+    const q = preCantNum(cant.value);
+    if (!q) { toast("Poné la cantidad", "error"); cant.focus(); return; }
+    const r = await api(`/api/compras/${pre.ot.id}/material_nuevo`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, repuesto_id: rid || 0, descripcion: desc || "", cantidad: q })
+    }).catch(() => null);
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+    o.remove();
+    toast(rid ? "Repuesto agregado y enganchado con el inventario" : "Repuesto agregado (sin enganchar)", "success");
+    await preReabrir();
+  };
+  let t;
+  const buscar = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { res.innerHTML = `<p class="pre-busca-vacio">Escribí al menos dos letras.</p>`; return; }
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    if (inp.value.trim() !== q) return;
+    const l = (r && r.lista) || [];
+    res.innerHTML = (r && r.quisiste ? `<div class="bz-quisiste"><i class="ti ti-wand"></i> ¿Quisiste decir <button type="button" data-q="${trEsc(r.quisiste)}">${trEsc(r.quisiste)}</button>?</div>` : "")
+      + l.map(x => `<button type="button" data-id="${x.id}">
+          <span class="pre-br-cod">${trEsc(x.codigo)}</span>
+          <span class="pre-br-desc"><b>${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
+          <span class="pre-br-stock ${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""}` : "sin stock"}<small>${x.ubicacion ? trEsc(x.ubicacion) : ""}</small></span>
+        </button>`).join("")
+      + `<div class="pre-busca-nuevo"><span>${l.length ? "¿Ninguno es?" : "No está en el inventario."}</span>
+          <button type="button" class="btn btn-ghost btn-sm" data-mano><i class="ti ti-pencil"></i> Agregar «${trEsc(q.slice(0, 40))}» igual</button></div>`;
+    res.querySelectorAll("button[data-id]").forEach(b => b.onclick = () => agregar(+b.dataset.id));
+    res.querySelector("[data-mano]").onclick = () => agregar(0, q);
+    res.querySelector(".bz-quisiste button")?.addEventListener("click", e => { inp.value = e.target.dataset.q; buscar(); inp.focus(); });
+  };
+  inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(buscar, 220); });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button[data-id]")?.click(); } });
+  setTimeout(() => inp.focus(), 60);
+  res.innerHTML = `<p class="pre-busca-vacio">Escribí qué repuesto lleva ${trEsc((it.descripcion || "este trabajo").toLowerCase())}.</p>`;
 }
 // Cantidad del material desde el presupuesto (el taller a veces no la sabe)
 const _preCantT = {};
@@ -6620,85 +6921,174 @@ function comprimirFoto(file) {
   });
 }
 
-function abrirEntrega(otId) {
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:24px">
-      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-package"></i> Registrar entrega — OT #${otId}</h2>
-      <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Indicá dónde entregás y <b>quién recibe</b> — al registrarlo, la responsabilidad del material pasa a esa persona. La foto es opcional pero recomendada.</p>
-
-      <div class="field" style="margin-bottom:12px">
-        <label>¿Dónde se entrega?</label>
-        <div style="display:flex;gap:8px">
-          <select id="ev-taller-sel" style="flex:1" onchange="document.getElementById('ev-taller-otro').style.display = this.value==='__otro__' ? '' : 'none'">
-            <option value="Taller propio">Taller propio</option>
-            <option value="__otro__">Otro taller...</option>
-          </select>
+// ─── Recepción: qué llegó, a qué precio y con qué factura ───
+// Lo que no se marca queda pendiente y la OT sigue en camino. La factura de
+// cada proveedor puede quedar como pago a proveedor en Tesorería.
+const rcp = { ot: null, mats: [], items: [], foto: null };
+async function abrirEntrega(otId) {
+  const [ots, det] = await Promise.all([api("/api/compras/ots"), api(`/api/compras/${otId}/repuestos`).catch(() => null)]);
+  const o = (ots || []).find(x => x.id === otId);
+  if (!o) { toast("No se encontró la OT", "error"); return; }
+  rcp.ot = o; rcp.foto = null;
+  const itemsPorId = Object.fromEntries((o.items || []).map(i => [i.id, i]));
+  rcp.mats = ((det && det.materiales) || []).map(m => ({ ...m, _item: itemsPorId[m.item_id] || {} }));
+  const conMat = new Set(rcp.mats.map(m => m.item_id));
+  rcp.items = (o.items || []).filter(i => !conMat.has(i.id) && (+i.precio_compras > 0 || i.material_pedido));
+  // grupos: por proveedor; lo del depósito aparte
+  const grupos = {};
+  // "Diesa" y "DIESA S.A." son el mismo proveedor
+  const clave = t => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/).filter(w => w && !["s", "a", "sa", "srl", "sae", "saeca", "eca", "ltda", "cia", "y"].includes(w)).join(" ");
+  const meter = (k, nombre, fila) => {
+    const g = grupos[k] = grupos[k] || { nombre, nombres: [], filas: [] };
+    if (nombre && !g.nombres.includes(nombre)) g.nombres.push(nombre);
+    if ((nombre || "").length > (g.nombre || "").length && !k.startsWith("__")) g.nombre = nombre;
+    g.filas.push(fila);
+  };
+  rcp.mats.forEach(m => {
+    const espera = m._item.estado_pago === "espera";
+    const hecho = !!(m.entregado_el || m.stock_aplicado);
+    const fila = { tipo: "m", id: m.id, desc: m.descripcion, q: +m.cantidad || 0, precio: +m.precio_unit || 0, presup: +m.precio_presup || +m.precio_unit || 0,
+                   coche: m._item.coche_n, trabajo: m._item.descripcion, rep: m.repuesto, espera, hecho, dep: m.origen === "deposito", suelto: m.origen === "suelto" };
+    if (m.origen === "deposito") meter("__dep", "Del depósito", fila);
+    else meter(clave(m.proveedor) || "__sin", m.proveedor || "Sin proveedor", fila);
+  });
+  rcp.items.forEach(it => {
+    const fila = { tipo: "i", id: it.id, desc: it.material_pedido || it.descripcion, q: 1, precio: +it.precio_compras || 0, presup: +it.precio_compras || 0,
+                   coche: it.coche_n, trabajo: it.descripcion, espera: it.estado_pago === "espera", hecho: !!it.entregado_el };
+    meter(clave(it.proveedor_compras) || "__sin", it.proveedor_compras || "Sin proveedor", fila);
+  });
+  rcp.grupos = Object.entries(grupos).sort((a, b) => (a[0] === "__dep") - (b[0] === "__dep") || (a[0] === "__sin") - (b[0] === "__sin") || a[1].nombre.localeCompare(b[1].nombre));
+  const pend = rcp.grupos.reduce((n, [, g]) => n + g.filas.filter(f => !f.hecho && !f.espera).length, 0);
+  const filaHtml = (k, f) => `
+      <label class="rx-fila ${f.hecho ? "hecho" : f.espera ? "espera" : ""}">
+        <input type="checkbox" class="rx-chk" data-g="${trEsc(k)}" data-t="${f.tipo}" data-id="${f.id}" ${f.hecho || f.espera ? "disabled" : "checked"}>
+        <span class="rx-q">${otMatCantTxt(f.q)}</span>
+        <span class="rx-desc"><b>${trEsc(f.desc)}</b><small>${f.coche ? `Coche ${trEsc(f.coche)} · ` : ""}${trEsc(f.trabajo || "")}${f.rep ? ` · ${trEsc(f.rep.codigo)}` : f.suelto ? " · compra suelta" : ""}</small></span>
+        ${f.hecho ? `<span class="rx-est ok"><i class="ti ti-circle-check"></i> Ya entregado</span>`
+          : f.espera ? `<span class="rx-est"><i class="ti ti-hourglass"></i> Esperando fondos</span>`
+          : f.dep ? `<span class="rx-est dep"><i class="ti ti-building-warehouse"></i> Sale del depósito</span>`
+          : `<span class="rx-precio"><input class="rx-p" data-g="${trEsc(k)}" data-t="${f.tipo}" data-id="${f.id}" data-q="${f.q}" inputmode="numeric" value="${f.precio ? preMil(f.precio) : ""}" placeholder="0" title="Precio por unidad en la factura">
+              <small>${f.tipo === "i" ? "precio del trabajo" : f.presup ? `presup. ${preMil(f.presup)} c/u` : "c/u"}</small></span>`}
+      </label>`;
+  const grupoHtml = ([k, g]) => {
+    const compra = k !== "__dep";
+    const activas = g.filas.filter(f => !f.hecho && !f.espera);
+    return `<section class="rx-grupo" data-g="${trEsc(k)}">
+        <header><b><i class="ti ti-${k === "__dep" ? "building-warehouse" : k === "__sin" ? "help-circle" : "truck-delivery"}"></i> ${trEsc(g.nombre)}</b>
+          ${activas.length ? `<span class="rx-g-tot" data-tot="${trEsc(k)}"></span>` : `<span class="rx-g-ok">listo</span>`}</header>
+        ${g.filas.map(f => filaHtml(k, f)).join("")}
+        ${compra && activas.length ? `<div class="rx-fac">
+            <label>Factura N.º<input class="rx-fn" data-g="${trEsc(k)}" placeholder="001-001-0001234" maxlength="30"></label>
+            <label>Total factura<input class="rx-fm" data-g="${trEsc(k)}" inputmode="numeric" placeholder="0"></label>
+            <label>Pago<select class="rx-fd" data-g="${trEsc(k)}">
+              <option value="0">Contado</option><option value="15">A 15 días</option><option value="30">A 30 días</option><option value="60">A 60 días</option></select></label>
+            <label class="rx-teso"><input type="checkbox" class="rx-ft" data-g="${trEsc(k)}" ${k === "__sin" ? "" : "checked"}> Cargar en Tesorería como pago a proveedor</label>
+          </div>` : ""}
+      </section>`;
+  };
+  const ov = rvModal({
+    titulo: `Recibir y entregar · OT #${o.id}`, icono: "package-import", ancho: 860, clase: "rx-m",
+    sub: `${cmpTituloCoches(o)} · Marcá lo que llegó y poné el precio de la factura. Lo que no marques queda pendiente y la OT sigue en camino.`,
+    cuerpo: `${pend ? "" : `<div class="rx-nada"><i class="ti ti-circle-check"></i> No queda nada por recibir: se marca entregada.</div>`}
+      <div class="rx-grupos">${rcp.grupos.map(grupoHtml).join("")}</div>
+      <div class="rx-quien">
+        <label>¿Dónde se entrega?<select id="ev-taller-sel" onchange="document.getElementById('ev-taller-otro').style.display = this.value==='__otro__' ? '' : 'none'">
+          <option value="Taller propio">Taller propio</option><option value="__otro__">Otro taller…</option></select>
+          <input id="ev-taller-otro" placeholder="Nombre del taller externo" list="ev-talleres-list" style="display:none"><datalist id="ev-talleres-list"></datalist></label>
+        <label>¿Quién recibe? *<input id="ev-recibe" placeholder="Nombre de quien recibe en el taller"></label>
+        <div class="rx-foto">
+          <input type="file" id="ev-camara" accept="image/*" capture="environment" hidden><input type="file" id="ev-galeria" accept="image/*" hidden>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('ev-camara').click()"><i class="ti ti-camera"></i> Foto</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('ev-galeria').click()"><i class="ti ti-photo"></i> Galería</button>
+          <span id="ev-preview"></span>
         </div>
-        <input id="ev-taller-otro" placeholder="Nombre del taller externo" list="ev-talleres-list" style="display:none;margin-top:8px">
-        <datalist id="ev-talleres-list"></datalist>
-      </div>
-
-      <div class="field" style="margin-bottom:16px">
-        <label>¿Quién recibe el material? *</label>
-        <input id="ev-recibe" placeholder="Nombre de la persona que recibe">
-      </div>
-
-      <input type="file" id="ev-camara" accept="image/*" capture="environment" style="display:none">
-      <input type="file" id="ev-galeria" accept="image/*" style="display:none">
-      <div style="display:flex;gap:10px;margin-bottom:14px">
-        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-camara').click()"><i class="ti ti-camera"></i> Sacar foto</button>
-        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-galeria').click()"><i class="ti ti-photo"></i> Elegir foto</button>
-      </div>
-      <div id="ev-preview" style="margin-bottom:16px"></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
-        <button class="btn btn-success" id="ev-confirmar" onclick="confirmarEntrega(${otId}, this)"><i class="ti ti-check"></i> Confirmar entrega</button>
-      </div>
-    </div>`;
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  document.body.appendChild(overlay);
-
-  // Cargar talleres externos ya usados para el autocompletar
+      </div>`,
+    pie: `<span class="rx-resumen" id="rx-resumen"></span>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-success" id="ev-confirmar"><i class="ti ti-check"></i> Confirmar</button>`,
+  });
   api("/api/compras/talleres").then(ts => {
     const dl = document.getElementById("ev-talleres-list");
-    if (dl && Array.isArray(ts)) dl.innerHTML = ts.map(t => `<option value="${t}">`).join("");
+    if (dl && Array.isArray(ts)) dl.innerHTML = ts.map(t => `<option value="${trEsc(t)}">`).join("");
   });
-
-  let fotoEvidencia = null;
-  async function procesarEv(file) {
-    fotoEvidencia = await comprimirFoto(file);
-    document.getElementById("ev-preview").innerHTML = `<img src="${fotoEvidencia}" style="width:140px;height:140px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">`;
-    document.getElementById("ev-confirmar").disabled = false;
-  }
-  document.getElementById("ev-camara").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
-  document.getElementById("ev-galeria").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
-  window._fotoEvidenciaGetter = () => fotoEvidencia;
+  const fotoIn = async file => {
+    rcp.foto = await comprimirFoto(file);
+    document.getElementById("ev-preview").innerHTML = `<img src="${rcp.foto}" alt="Foto de la entrega">`;
+  };
+  ov.querySelector("#ev-camara").addEventListener("change", e => { if (e.target.files[0]) fotoIn(e.target.files[0]); });
+  ov.querySelector("#ev-galeria").addEventListener("change", e => { if (e.target.files[0]) fotoIn(e.target.files[0]); });
+  ov.querySelectorAll(".rx-chk, .rx-p").forEach(el => el.addEventListener("input", rcRecalcular));
+  ov.querySelectorAll(".rx-p").forEach(el => el.addEventListener("blur", () => { el.value = preNum(el.value) ? preMil(preNum(el.value)) : ""; }));
+  ov.querySelectorAll(".rx-fm").forEach(el => {
+    el.addEventListener("input", () => { el.dataset.tocado = "1"; });
+    el.addEventListener("blur", () => { el.value = preNum(el.value) ? preMil(preNum(el.value)) : ""; });
+  });
+  ov.querySelector("#ev-confirmar").onclick = e => confirmarEntrega(otId, e.currentTarget);
+  rcRecalcular();
 }
-
-async function confirmarEntrega(otId, btn) {
-  const foto = window._fotoEvidenciaGetter ? window._fotoEvidenciaGetter() : null;
-  const recibe = (document.getElementById("ev-recibe")?.value || "").trim();
-  if (!recibe) { toast("Indicá quién recibe el material", "error"); return; }
-  const tallerSel = document.getElementById("ev-taller-sel")?.value || "Taller propio";
-  const taller = tallerSel === "__otro__"
-    ? (document.getElementById("ev-taller-otro")?.value || "").trim() || "Taller externo"
-    : tallerSel;
-  btn.disabled = true;
-  const r = await api(`/api/compras/${otId}/entregar`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ foto, taller_entrega: taller, recibido_por: recibe })
+function rcRecalcular() {
+  const ov = document.querySelector(".rx-m");
+  if (!ov) return;
+  let marcadas = 0, quedan = 0;
+  const tot = {};
+  ov.querySelectorAll(".rx-chk:not([disabled])").forEach(c => {
+    const g = c.dataset.g;
+    if (!c.checked) { quedan++; return; }
+    marcadas++;
+    const p = ov.querySelector(`.rx-p[data-t="${c.dataset.t}"][data-id="${c.dataset.id}"]`);
+    if (p) tot[g] = (tot[g] || 0) + preNum(p.value) * (parseFloat(p.dataset.q) || 1);
   });
-  if (r.ok) {
-    toast(`Entregado en ${taller} — recibió ${recibe}`, "success");
-    const st = r.stock || {};
-    if (st.problemas && st.problemas.length) setTimeout(() => toast("Inventario: " + st.problemas.join(" · "), "error"), 600);
-    else if (st.movidos) setTimeout(() => toast(`Inventario al día: ${st.movidos} repuesto${st.movidos === 1 ? "" : "s"} movido${st.movidos === 1 ? "" : "s"} (entraron y salieron para la OT)`, "success"), 600);
-    btn.closest(".modal-overlay").remove();
-    renderCompras();
-  } else { toast(r.msg || "Error", "error"); btn.disabled = false; }
+  ov.querySelectorAll("[data-tot]").forEach(el => { const v = tot[el.dataset.tot] || 0; el.textContent = v ? gs(Math.round(v)) : ""; });
+  ov.querySelectorAll(".rx-fm").forEach(el => { if (!el.dataset.tocado) el.value = tot[el.dataset.g] ? preMil(Math.round(tot[el.dataset.g])) : ""; });
+  const r = document.getElementById("rx-resumen");
+  if (r) r.innerHTML = marcadas ? `Se entregan <b>${marcadas}</b>${quedan ? ` · quedan <b>${quedan}</b> pendientes` : " · completo"}` : (quedan ? "Marcá lo que llegó" : "");
+}
+async function confirmarEntrega(otId, btn) {
+  const ov = btn.closest(".modal-overlay");
+  const recibe = (document.getElementById("ev-recibe")?.value || "").trim();
+  if (!recibe) { toast("Indicá quién recibe el material", "error"); document.getElementById("ev-recibe")?.focus(); return; }
+  const tallerSel = document.getElementById("ev-taller-sel")?.value || "Taller propio";
+  const taller = tallerSel === "__otro__" ? (document.getElementById("ev-taller-otro")?.value || "").trim() || "Taller externo" : tallerSel;
+  const materiales = [], items = [];
+  ov.querySelectorAll(".rx-chk:not([disabled])").forEach(c => {
+    if (!c.checked) return;
+    const p = ov.querySelector(`.rx-p[data-t="${c.dataset.t}"][data-id="${c.dataset.id}"]`);
+    const x = { id: +c.dataset.id, precio: p ? preNum(p.value) : null };
+    (c.dataset.t === "m" ? materiales : items).push(x);
+  });
+  const hayActivas = ov.querySelectorAll(".rx-chk:not([disabled])").length;
+  if (hayActivas && !materiales.length && !items.length) { toast("Marcá lo que llegó", "error"); return; }
+  const facturas = [];
+  (rcp.grupos || []).forEach(([k, g]) => {
+    const fn = ov.querySelector(`.rx-fn[data-g="${CSS.escape(k)}"]`);
+    if (!fn) return;
+    const algun = [...ov.querySelectorAll(`.rx-chk[data-g="${CSS.escape(k)}"]:not([disabled])`)].some(c => c.checked);
+    if (!algun) return;
+    facturas.push({ proveedor: k.startsWith("__") ? "" : g.nombre, nombres: k.startsWith("__") ? [""] : g.nombres, numero: fn.value.trim(),
+      monto: preNum(ov.querySelector(`.rx-fm[data-g="${CSS.escape(k)}"]`)?.value),
+      dias: +ov.querySelector(`.rx-fd[data-g="${CSS.escape(k)}"]`)?.value || 0,
+      tesoreria: !k.startsWith("__") && !!ov.querySelector(`.rx-ft[data-g="${CSS.escape(k)}"]`)?.checked });
+  });
+  const body = { foto: rcp.foto, taller_entrega: taller, recibido_por: recibe, facturas };
+  if (hayActivas) { body.materiales = materiales; body.items = items; }
+  btn.disabled = true;
+  const r = await api(`/api/compras/${otId}/entregar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo registrar", "error"); return; }
+  const pend = r.pendientes || {};
+  toast(pend.cantidad ? `Entregado en parte · faltan ${pend.cantidad}: la OT sigue en camino` : `Entregado en ${taller} — recibió ${recibe}`, "success");
+  const st = r.stock || {};
+  if (st.problemas && st.problemas.length) setTimeout(() => toast("Inventario: " + st.problemas.join(" · "), "error"), 700);
+  else if (st.movidos) setTimeout(() => toast(`Inventario al día: ${st.movidos} repuesto${st.movidos === 1 ? "" : "s"} movido${st.movidos === 1 ? "" : "s"}`, "success"), 700);
+  const teso = (r.tesoreria || []);
+  if (teso.length) {
+    const ok = teso.filter(t => t.ok), mal = teso.filter(t => !t.ok);
+    setTimeout(() => toast(ok.length ? `Tesorería: ${ok.length} factura${ok.length === 1 ? "" : "s"} cargada${ok.length === 1 ? "" : "s"} en Pagos y cobros${ok.some(t => /aprobación/.test(t.msg || "")) ? " (alguna espera aprobación)" : ""}` : "", "success"), 1400);
+    if (mal.length) setTimeout(() => toast("Tesorería: " + mal.map(t => t.msg).join(" · "), "error"), 2000);
+  }
+  ov.remove();
+  renderCompras();
 }
 
 async function verEvidencia(otId) {
@@ -9695,7 +10085,8 @@ async function renderRepuestos() {
           <span class="rep-dot">·</span>
           <span class="rep-alerta-link" onclick="repFiltrarBajos()">
             <i class="ti ti-alert-triangle"></i> ${resumen.cant_bajos + resumen.cant_sin_stock} para pedir
-          </span>` : ""}
+          </span>
+          ${["admin", "compras"].includes(window.USUARIO_ROL) || puedeVerSeccion("compras") ? `<button type="button" class="rep-pedir-btn" onclick="comprasTab='reposicion'; irA('compras')"><i class="ti ti-truck-delivery"></i> Armar pedido de reposición</button>` : ""}` : ""}
       </div>
 
       <!-- RESULTADOS -->
@@ -11842,7 +12233,7 @@ async function hiGuardar() {
 // lo que no, queda en una cola visible en vez de perderse.
 
 async function abrirFirma(otId) {
-  const todas = await api("/api/compras/ots");
+  const [todas, repoRes] = await Promise.all([api("/api/compras/ots"), api("/api/compras/reposicion/resumen").catch(() => null)]);
   const o = todas.find(x => x.id === otId);
   if (!o) { toast("No encontré la orden", "error"); return; }
 
