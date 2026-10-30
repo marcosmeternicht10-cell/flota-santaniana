@@ -5969,16 +5969,16 @@ function preCeldasMat(m) {
     repHtml = `<div class="pre-rep">
         ${sug.length ? `<div class="pre-sug"><span>¿Es alguno de estos?</span>${sug.slice(0, 3).map(s => `<button type="button" onclick="preVincular(${m.id}, ${s.id})" title="${trEsc(s.descripcion)}">
             ${s.motivo === "aprendido" ? `<i class="ti ti-star-filled bz-estrella" title="Ya se eligió antes para algo parecido"></i>` : ""}<b>${trEsc(s.codigo)}</b> ${trEsc(s.descripcion.slice(0, 38))}${s.descripcion.length > 38 ? "…" : ""} <em class="${+s.stock_actual > 0 ? "ok" : ""}">${+s.stock_actual > 0 ? "hay " + preCant(s.stock_actual) : "sin stock"}</em></button>`).join("")}</div>` : ""}
-        <button type="button" class="pre-link" onclick="preBuscarRep(${m.id})"><i class="ti ti-search"></i> Buscar en el inventario</button>
       </div>`;
     if (d.origen === "suelto") repHtml = `<div class="pre-rep">
         <div class="pre-suelto"><i class="ti ti-shopping-bag"></i> Compra suelta: no va al inventario
           <button type="button" onclick="preVincular(${m.id}, 0)" title="Volver a buscarlo en el inventario">Deshacer</button></div>
       </div>`;
     else repHtml = repHtml.replace(/<\/div>$/, `<div class="pre-noesta">
-          <span><i class="ti ti-help-circle"></i> ¿No está en el inventario?</span>
+          <label class="pre-inv"><i class="ti ti-search"></i><input placeholder="${sug.length ? "¿Ninguno? " : ""}Buscar en el inventario: código, nombre, marca…" autocomplete="off" data-mid="${m.id}" oninput="preInvBuscar(this)" onfocus="if(this.value.trim().length>1)preInvBuscar(this)"></label>
+          <div class="pre-noesta-bts"><span>¿No está?</span>
           <button type="button" class="pre-btn-crear" onclick="preCrearRep(${m.id})"><i class="ti ti-plus"></i> Crear repuesto nuevo</button>
-          <button type="button" onclick="preVincular(${m.id}, 0, 'suelto')" title="Se compra igual, pero no se carga en el inventario"><i class="ti ti-shopping-bag"></i> Compra suelta</button>
+          <button type="button" onclick="preVincular(${m.id}, 0, 'suelto')" title="Se compra igual, pero no se carga en el inventario"><i class="ti ti-shopping-bag"></i> Compra suelta</button></div>
         </div></div>`);
   }
   // Proveedor: los que venden ese repuesto, con su precio; o cualquiera del directorio
@@ -6100,12 +6100,12 @@ function preProvBuscar(inp) {
   }, 220);
 }
 // Buscar el repuesto en el inventario
-function preBuscarRep(mid) {
+function preBuscarRep(mid, texto) {
   const d = pre.mats[mid];
   const o = rvModal({
     titulo: "¿Qué repuesto es?", icono: "package", ancho: 640, clase: "pre-busca",
     sub: `${trEsc(d ? d.descripcion : "")} · buscá por código, descripción, marca o aplicación`,
-    cuerpo: `<label class="pre-busca-in"><i class="ti ti-search"></i><input placeholder="Ej: filtro aceite, 1873016, Mann…" value="${trEsc(d ? (d.descripcion || "").split(/\s+/).slice(0, 2).join(" ") : "")}" autocomplete="off"></label>
+    cuerpo: `<label class="pre-busca-in"><i class="ti ti-search"></i><input placeholder="Ej: filtro aceite, 1873016, Mann…" value="${trEsc(texto || (d ? (d.descripcion || "").split(/\s+/).slice(0, 2).join(" ") : ""))}" autocomplete="off"></label>
       <div class="pre-busca-res"></div>`,
     pie: `<div class="pre-pie">${d && d.repuesto ? `<button type="button" class="pv-link" style="margin-right:auto;color:var(--danger)" id="pre-desv">Desenganchar</button>` : ""}
       <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`,
@@ -6135,6 +6135,58 @@ function preBuscarRep(mid) {
   const desv = o.querySelector("#pre-desv");
   if (desv) desv.onclick = async () => { o.remove(); await preVincular(mid, 0); };
   setTimeout(() => { inp.focus(); inp.select(); buscar(); }, 60);
+}
+// Buscador del inventario en la misma fila del material (tolera errores: 'filto aseite')
+let _preInvT;
+function preInvBuscar(inp) {
+  clearTimeout(_preInvT);
+  const mid = +inp.dataset.mid;
+  let box = document.getElementById("pre-inv-ac");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "pre-inv-ac";
+    box.className = "bz-ac pre-inv-ac";
+    box.hidden = true;
+    document.body.appendChild(box);
+  }
+  if (!inp._preInv) {
+    inp._preInv = 1;
+    inp.addEventListener("blur", () => setTimeout(() => { if (box.dataset.mid == mid) box.hidden = true; }, 180));
+    inp.closest(".pre-modal")?.addEventListener("scroll", () => box.hidden = true, { passive: true });
+    inp.addEventListener("keydown", e => {
+      const bs = [...box.querySelectorAll("button")];
+      if (box.hidden || !bs.length) return;
+      let k = bs.findIndex(b => b.classList.contains("on"));
+      if (e.key === "ArrowDown") { e.preventDefault(); k = Math.min(bs.length - 1, k + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); k = Math.max(0, k - 1); }
+      else if (e.key === "Enter") { e.preventDefault(); (bs[k] || bs[0]).dispatchEvent(new Event("mousedown")); return; }
+      else if (e.key === "Escape") { box.hidden = true; return; }
+      else return;
+      bs.forEach((b, x) => b.classList.toggle("on", x === k));
+      bs[k]?.scrollIntoView({ block: "nearest" });
+    });
+  }
+  const q = inp.value.trim();
+  if (q.length < 2) { box.hidden = true; return; }
+  _preInvT = setTimeout(async () => {
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    if (inp.value.trim() !== q) return;
+    const l = ((r && r.lista) || []).slice(0, 8);
+    box.dataset.mid = mid;
+    box.innerHTML = (r && r.quisiste ? `<div class="pre-inv-quis"><i class="ti ti-wand"></i> ¿Quisiste decir <b>${trEsc(r.quisiste)}</b>?</div>` : "")
+      + (l.length ? l.map(x => `<button type="button" data-id="${x.id}" class="pre-inv-it">
+          <b><em>${trEsc(x.codigo)}</em> ${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b>
+          <span>${[x.marca, x.aplicacion].filter(Boolean).map(trEsc).join(" · ")}${x.marca || x.aplicacion ? " · " : ""}<i class="${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""} en el depósito` : "sin stock"}</i></span></button>`).join("")
+        : `<div class="pre-inv-vacio">No aparece «${trEsc(q)}» en el inventario.</div>`)
+      + `<button type="button" data-crear class="pre-inv-crear"><b><i class="ti ti-plus"></i> Crear «${trEsc(q.slice(0, 40))}» como repuesto nuevo</b></button>`;
+    box.querySelectorAll("[data-id]").forEach(b => b.onmousedown = async e => { e.preventDefault(); box.hidden = true; await preVincular(mid, +b.dataset.id); });
+    box.querySelector("[data-crear]").onmousedown = e => { e.preventDefault(); box.hidden = true; preCrearRep(mid, q); };
+    const rc = inp.getBoundingClientRect();
+    box.style.cssText = `position:fixed;left:${rc.left}px;width:${Math.max(rc.width, 340)}px;right:auto;z-index:1600;`;
+    box.hidden = false;
+    const alto = box.offsetHeight;
+    box.style.top = (rc.bottom + alto + 8 > innerHeight && rc.top > alto + 8 ? rc.top - alto - 4 : rc.bottom + 4) + "px";
+  }, 220);
 }
 // Corregir lo que escribió el taller (nombre y cantidad del material)
 function preEditarMat(mid) {
@@ -6187,6 +6239,7 @@ async function preCrearRep(mid, texto) {
     sub: "Queda cargado en Inventario Repuestos (con stock 0) y enganchado a este material. Cuando llegue, entra al stock solo.",
     cuerpo: `<div class="pre-form">
       <label class="pre-f-full">Descripción *<input name="descripcion" maxlength="200" value="${trEsc(desc1)}" placeholder="Ej: Filtro de combustible"></label>
+      <div class="pre-f-full pre-dup" hidden></div>
       <label>Código del fabricante<input name="codigo" maxlength="60" placeholder="Si no tiene, queda INT-…"></label>
       <label>Marca<input name="marca" maxlength="80" placeholder="Ej: Mann, Fleetguard"></label>
       <label>Categoría<select name="categoria">${_preCats.map(c => `<option ${c === adivina ? "selected" : ""}>${trEsc(c)}</option>`).join("")}</select></label>
@@ -6195,11 +6248,27 @@ async function preCrearRep(mid, texto) {
       <label class="pre-f-full">Proveedor<input name="proveedor" class="pre-prov-in" maxlength="160" value="${trEsc(provEscrito)}" placeholder="A quién se le compra" autocomplete="off" oninput="preProvBuscar(this)"></label>
       <label>Precio unitario (Gs.)<input name="precio" inputmode="numeric" value="${trEsc(precioEscrito || "")}" placeholder="0" onblur="this.value = preNum(this.value) ? preMil(preNum(this.value)) : ''"></label>
     </div>
-    <p class="pre-crear-nota"><i class="ti ti-info-circle"></i> Revisá que no esté con otro nombre: buscalo antes por código o marca.</p>`,
+`,
     pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
       <button type="button" class="btn btn-primary" data-ok><i class="ti ti-check"></i> Crear y enganchar</button></div>`,
   });
   const f = nm => o.querySelector(`[name=${nm}]`);
+  // antes de crear: ¿ya está con otro nombre o con ese código?
+  const dup = o.querySelector(".pre-dup");
+  let tDup;
+  const revisar = () => { clearTimeout(tDup); tDup = setTimeout(async () => {
+    const q = f("codigo").value.trim() || f("descripcion").value.trim();
+    if (q.length < 3) { dup.hidden = true; return; }
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    const l = ((r && r.lista) || []).slice(0, 3);
+    dup.hidden = !l.length;
+    dup.innerHTML = `<span><i class="ti ti-alert-circle"></i> Ojo, en el inventario ya hay algo parecido. Si es este, usalo en vez de crear otro:</span>`
+      + l.map(x => `<button type="button" data-id="${x.id}"><b>${trEsc(x.codigo)}</b> ${trEsc(x.descripcion)}${x.marca ? ` · ${trEsc(x.marca)}` : ""} <em>${+x.stock_actual > 0 ? "hay " + preCant(x.stock_actual) : "sin stock"}</em> <u>Usar este</u></button>`).join("");
+    dup.querySelectorAll("button").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
+  }, 300); };
+  f("descripcion").addEventListener("input", revisar);
+  f("codigo").addEventListener("input", revisar);
+  revisar();
   o.querySelector("[data-ok]").onclick = async e => {
     const btn = e.currentTarget;
     if (!f("descripcion").value.trim()) { toast("Escribí la descripción", "error"); f("descripcion").focus(); return; }
