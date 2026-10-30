@@ -212,6 +212,10 @@ def parecido(q, d, qk=None, dk=None):
         return 0.88 if len(q) >= 4 else 0.78
     if len(d) >= 4 and q.startswith(d):
         return 0.8
+    # abreviado y mal escrito: conbus → combustible, filtr → filtro
+    if len(q) >= 5 and len(d) > len(q) and q[:1] == d[:1]:
+        if distancia(q, d[:len(q)], 1) <= 1 or (len(dk) > len(qk) and distancia(qk, dk[:len(qk)], 1) <= 1):
+            return 0.78
     tol = _tolerancia(max(len(qk), len(dk)))
     if tol:
         castigo = 0 if qk[:1] == dk[:1] else 0.1     # casi nadie le erra a la primera letra
@@ -449,7 +453,9 @@ def buscar_repuestos(q, limite=20):
         res.append((r, round(s, 3), motivo))
     res.sort(key=lambda x: (-x[1], str(x[0].get("descripcion") or "")))
     if res:   # si hay algo muy parecido, no llenar con lo que se parece de casualidad
-        corte = res[0][1] * 0.88
+        # (lo aprendido va arriba, pero no tapa a los demás)
+        base = next((x[1] for x in res if x[2] != "aprendido"), res[0][1])
+        corte = base * 0.88
         res = [x for x in res if x[1] >= corte or x[2] == "aprendido"]
     return res[:limite]
 
