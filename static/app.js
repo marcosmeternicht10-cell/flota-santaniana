@@ -5805,7 +5805,7 @@ const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestad
 async function renderCompras() {
   status("Compras / Depósito");
   await refrescarPermisoOTs();
-  const [todas, repoRes] = await Promise.all([api("/api/compras/ots"), api("/api/compras/reposicion/resumen").catch(() => null)]);
+  const todas = await api("/api/compras/ots");
   const enEspera = todas.filter(o => o.estado_compras === "en_espera");
   const presup = todas.filter(o => o.estado_compras === "presupuestado");
   const enCamino = todas.filter(o => o.estado_compras === "en_camino");
@@ -5838,9 +5838,9 @@ async function renderCompras() {
         <div class="metric" style="cursor:pointer;${comprasTab==='cola'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('cola')">
           <div class="metric-content"><div class="metric-label">Esperando fondos</div>
           <div class="metric-value" style="color:var(--warning)">${totalEspera}</div></div></div>
-        ${repoRes && repoRes.ok ? `<div class="metric" style="cursor:pointer;${comprasTab==='reposicion'?'border:2px solid #0F766E':''}" onclick="setComprasTab('reposicion')">
+        <div class="metric" id="cmp-repo-tile" style="cursor:pointer;${comprasTab==='reposicion'?'border:2px solid #0F766E':''}" onclick="setComprasTab('reposicion')">
           <div class="metric-content"><div class="metric-label">Reposición del depósito</div>
-          <div class="metric-value" style="color:#0F766E">${repoRes.para_pedir}<small class="cmp-met-sub">${repoRes.abiertos ? `${repoRes.abiertos} pedido${repoRes.abiertos === 1 ? "" : "s"} en curso` : "para pedir"}</small></div></div></div>` : ""}
+          <div class="metric-value" style="color:#0F766E">${cmpRepoRes ? cmpRepoRes.para_pedir : "·"}<small class="cmp-met-sub">${cmpRepoRes ? (cmpRepoRes.abiertos ? `${cmpRepoRes.abiertos} pedido${cmpRepoRes.abiertos === 1 ? "" : "s"} en curso` : "para pedir") : "contando…"}</small></div></div></div>
       </div>
 
       ${comprasTab === "reposicion" ? `<div id="repo-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>` : comprasTab === "cola" ? `
@@ -5857,12 +5857,20 @@ async function renderCompras() {
 
   if (comprasTab === "cola") renderColaEspera();
   if (comprasTab === "reposicion") renderReposicion();
+  // El contador de reposición llega aparte: la página no lo espera
+  api("/api/compras/reposicion/resumen").then(r => {
+    if (!r || !r.ok) return;
+    cmpRepoRes = r;
+    const v = document.querySelector("#cmp-repo-tile .metric-value");
+    if (v) v.innerHTML = `${r.para_pedir}<small class="cmp-met-sub">${r.abiertos ? `${r.abiertos} pedido${r.abiertos === 1 ? "" : "s"} en curso` : "para pedir"}</small>`;
+  }).catch(() => {});
 }
+let cmpRepoRes = null;
 
 // ─── Reposición del depósito: lo que está bajo el mínimo se pide al proveedor ───
 const repo = { sug: null, peds: [], sinMin: false };
 async function renderReposicion() {
-  const [s, l] = await Promise.all([api("/api/compras/reposicion/sugerido").catch(() => null), api("/api/compras/reposicion").catch(() => null)]);
+  const [s, l] = await Promise.all([api(`/api/compras/reposicion/sugerido${repo.sinMin ? "?sin_minimo=1" : ""}`).catch(() => null), api("/api/compras/reposicion").catch(() => null)]);
   const box = document.getElementById("repo-panel");
   if (!box) return;
   if (!s || !s.ok || !l || !l.ok) { box.innerHTML = `<div class="empty">No se pudo traer la reposición.</div>`; return; }
@@ -5912,9 +5920,9 @@ async function renderReposicion() {
     ${lista.length ? `<div class="table-wrap"><table class="repo-tabla">
         <thead><tr><th></th><th>Repuesto</th><th class="num">Stock</th><th class="num">Ya pedido</th><th>Pedir</th><th>Proveedor</th><th>Precio c/u</th></tr></thead>
         <tbody>${lista.map(fila).join("")}</tbody></table></div>`
-      : `<div class="empty"><i class="ti ti-circle-check"></i>Nada bajo el mínimo. ${s.sin_minimo.length ? "" : "Para que aparezcan, cargá el stock mínimo de cada repuesto en el Inventario."}</div>`}
+      : `<div class="empty"><i class="ti ti-circle-check"></i>Nada bajo el mínimo. Para que aparezcan, cargá el stock mínimo de cada repuesto en el Inventario.</div>`}
     <div class="repo-pie">
-      ${s.sin_minimo.length ? `<label class="repo-sinmin"><input type="checkbox" ${repo.sinMin ? "checked" : ""} onchange="repo.sinMin=this.checked;renderReposicion()"> Mostrar también los ${s.sin_minimo.length} sin stock que no tienen mínimo</label>` : "<span></span>"}
+      ${s.cant_sin_minimo ? `<label class="repo-sinmin"><input type="checkbox" ${repo.sinMin ? "checked" : ""} onchange="repo.sinMin=this.checked;renderReposicion()"> Mostrar también los ${s.cant_sin_minimo} sin stock que no tienen mínimo${s.cant_sin_minimo > 300 ? " (los primeros 300)" : ""}</label>` : "<span></span>"}
       <span id="repo-tot"></span>
       <button class="btn btn-primary" id="repo-armar" onclick="repoArmar(this)"><i class="ti ti-file-plus"></i> Armar pedido</button>
     </div>
@@ -12233,7 +12241,7 @@ async function hiGuardar() {
 // lo que no, queda en una cola visible en vez de perderse.
 
 async function abrirFirma(otId) {
-  const [todas, repoRes] = await Promise.all([api("/api/compras/ots"), api("/api/compras/reposicion/resumen").catch(() => null)]);
+  const todas = await api("/api/compras/ots");
   const o = todas.find(x => x.id === otId);
   if (!o) { toast("No encontré la orden", "error"); return; }
 
