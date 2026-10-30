@@ -5895,7 +5895,7 @@ async function abrirPresupuesto(otId) {
         <td><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>
         <td class="center" style="color:var(--lighter)">—</td>
         <td style="color:var(--muted);font-size:12.5px">${it.material_pedido ? trEsc(it.material_pedido) : "Sin materiales anotados: precio del trabajo"}</td>
-        <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" list="pre-prov-dl" oninput="preProvBuscar(this)"></td>
+        <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)"></td>
         <td><input class="pre-in pre-item" data-id="${it.id}" data-q="1" inputmode="numeric" value="${precio(it.precio_compras)}" placeholder="0" oninput="preRecalcular()"></td>
         <td class="num pre-sub">—</td></tr>`;
     return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}" data-mid="${m.id}">
@@ -5961,7 +5961,7 @@ function preCeldasMat(m) {
     const sug = d.sugerencias || [];
     repHtml = `<div class="pre-rep">
         ${sug.length ? `<div class="pre-sug"><span>¿Es alguno de estos?</span>${sug.slice(0, 3).map(s => `<button type="button" onclick="preVincular(${m.id}, ${s.id})" title="${trEsc(s.descripcion)}">
-            <b>${trEsc(s.codigo)}</b> ${trEsc(s.descripcion.slice(0, 38))}${s.descripcion.length > 38 ? "…" : ""} <em class="${+s.stock_actual > 0 ? "ok" : ""}">${+s.stock_actual > 0 ? "hay " + preCant(s.stock_actual) : "sin stock"}</em></button>`).join("")}</div>` : ""}
+            ${s.motivo === "aprendido" ? `<i class="ti ti-star-filled bz-estrella" title="Ya se eligió antes para algo parecido"></i>` : ""}<b>${trEsc(s.codigo)}</b> ${trEsc(s.descripcion.slice(0, 38))}${s.descripcion.length > 38 ? "…" : ""} <em class="${+s.stock_actual > 0 ? "ok" : ""}">${+s.stock_actual > 0 ? "hay " + preCant(s.stock_actual) : "sin stock"}</em></button>`).join("")}</div>` : ""}
         <button type="button" class="pre-link" onclick="preBuscarRep(${m.id})"><i class="ti ti-search"></i> Buscar en el inventario</button>
       </div>`;
   }
@@ -5977,8 +5977,8 @@ function preCeldasMat(m) {
         ${provs.map(p => `<option value="${trEsc(p.proveedor)}" data-precio="${p.precio}" ${p.proveedor.toLowerCase() === actual.toLowerCase() ? "selected" : ""}>${trEsc(p.fantasia || p.proveedor)}${p.precio ? ` — ${preMil(p.precio)}` : ""}${p.mas_barato ? " ★ más barato" : ""}</option>`).join("")}
         <option value="__otro" ${actual && !enLista ? "selected" : ""}>Otro proveedor…</option>
       </select>
-      <input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Nombre del proveedor" list="pre-prov-dl" oninput="preProvBuscar(this)" ${actual && !enLista ? "" : "hidden"}>`;
-  else provHtml = `<input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Proveedor" list="pre-prov-dl" oninput="preProvBuscar(this)">`;
+      <input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Nombre del proveedor" autocomplete="off" oninput="preProvBuscar(this)" ${actual && !enLista ? "" : "hidden"}>`;
+  else provHtml = `<input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)">`;
   const costo = r ? (+r.costo_unitario || 0) / (d.en_contenido && +r.contenido ? +r.contenido : 1) : 0;
   return `<td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
     <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(m.descripcion)}</div>${repHtml}</td>
@@ -6043,17 +6043,45 @@ function preProvElegir(sel) {
   if (p && precio && !precio.disabled) { precio.value = preMil(p); preRecalcular(); }
   if (pre.mats[mid]) pre.mats[mid].proveedor = sel.value;
 }
+function preMotivo(m) {
+  return m === "aprendido" ? ` <em class="bz-tag apr"><i class="ti ti-star-filled"></i> elegido antes</em>`
+    : m === "parecido" ? ` <em class="bz-tag">parecido</em>`
+    : m === "codigo" ? ` <em class="bz-tag cod">por código</em>` : "";
+}
+// Proveedor mientras se escribe, aunque esté mal escrito ('dieza' → Diesa S.A.)
 let _preProvT;
 function preProvBuscar(inp) {
   clearTimeout(_preProvT);
+  let box = inp.parentElement.querySelector(".bz-ac");
+  if (!box) {
+    inp.parentElement.style.position = "relative";
+    box = document.createElement("div");
+    box.className = "bz-ac";
+    box.hidden = true;
+    inp.after(box);
+    inp.addEventListener("blur", () => setTimeout(() => box.hidden = true, 150));
+    inp.addEventListener("keydown", e => {
+      const bs = [...box.querySelectorAll("button")];
+      if (box.hidden || !bs.length) return;
+      let k = bs.findIndex(b => b.classList.contains("on"));
+      if (e.key === "ArrowDown") { e.preventDefault(); k = Math.min(bs.length - 1, k + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); k = Math.max(0, k - 1); }
+      else if (e.key === "Enter" && k >= 0) { e.preventDefault(); bs[k].dispatchEvent(new Event("mousedown")); return; }
+      else if (e.key === "Escape") { box.hidden = true; return; }
+      else return;
+      bs.forEach((b, x) => b.classList.toggle("on", x === k));
+    });
+  }
   const q = inp.value.trim();
-  if (q.length < 2) return;
+  if (q.length < 2) { box.hidden = true; return; }
   _preProvT = setTimeout(async () => {
-    const l = await api(`/api/repuestos/proveedores?q=${encodeURIComponent(q)}&limite=12`).catch(() => null);
-    const dl = document.getElementById("pre-prov-dl");
-    const arr = Array.isArray(l) ? l : ((l && (l.proveedores || l.lista)) || []);
-    if (dl) dl.innerHTML = arr.map(p => `<option value="${trEsc(p.nombre)}">${trEsc(p.fantasia || p.ruc || "")}</option>`).join("");
-  }, 200);
+    const r = await api(`/api/compras/proveedores_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    const l = (r && r.lista) || [];
+    if (!l.length || (l.length === 1 && l[0].nombre.toLowerCase() === q.toLowerCase())) { box.hidden = true; return; }
+    box.innerHTML = l.map(p => `<button type="button" data-n="${trEsc(p.nombre)}"><b>${trEsc(p.fantasia || p.nombre)}</b><span>${trEsc([p.fantasia && p.nombre, p.ruc && "RUC " + p.ruc, p.telefono].filter(Boolean).join(" · "))}</span></button>`).join("");
+    box.querySelectorAll("button").forEach(b => b.onmousedown = e => { e.preventDefault(); inp.value = b.dataset.n; box.hidden = true; });
+    box.hidden = false;
+  }, 220);
 }
 // Buscar el repuesto en el inventario
 function preBuscarRep(mid) {
@@ -6073,15 +6101,17 @@ function preBuscarRep(mid) {
     if (q.length < 2) { res.innerHTML = `<p class="pre-busca-vacio">Escribí al menos dos letras.</p>`; return; }
     const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
     const l = (r && r.lista) || [];
-    res.innerHTML = l.length ? l.map(x => `<button type="button" data-id="${x.id}">
+    const quis = r && r.quisiste ? `<div class="bz-quisiste"><i class="ti ti-wand"></i> ¿Quisiste decir <button type="button" data-q="${trEsc(r.quisiste)}">${trEsc(r.quisiste)}</button>? Igual te muestro lo más parecido.</div>` : "";
+    res.innerHTML = quis + (l.length ? l.map(x => `<button type="button" data-id="${x.id}">
         <span class="pre-br-cod">${trEsc(x.codigo)}</span>
-        <span class="pre-br-desc"><b>${trEsc(x.descripcion)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
+        <span class="pre-br-desc"><b>${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
         <span class="pre-br-stock ${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""}` : "sin stock"}<small>${x.ubicacion ? trEsc(x.ubicacion) : ""}</small></span>
-      </button>`).join("") : `<p class="pre-busca-vacio">No está en el inventario. Se puede comprar igual: escribí el proveedor a mano. Si se va a comprar seguido, cargalo en <b>Inventario Repuestos</b>.</p>`;
-    res.querySelectorAll("button").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
+      </button>`).join("") : "") + (l.length ? "" : `<p class="pre-busca-vacio">No está en el inventario. Se puede comprar igual: escribí el proveedor a mano. Si se va a comprar seguido, cargalo en <b>Inventario Repuestos</b>.</p>`);
+    res.querySelectorAll("button[data-id]").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
+    res.querySelector(".bz-quisiste button")?.addEventListener("click", e => { inp.value = e.target.dataset.q; buscar(); inp.focus(); });
   };
   inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(buscar, 220); });
-  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button")?.click(); } });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button[data-id]")?.click(); } });
   const desv = o.querySelector("#pre-desv");
   if (desv) desv.onclick = async () => { o.remove(); await preVincular(mid, 0); };
   setTimeout(() => { inp.focus(); inp.select(); buscar(); }, 60);
@@ -18036,7 +18066,7 @@ function otDepBuscar(q) {
     if (!otDep.lista.length) { res.innerHTML = `<div class="ot-dep-vacio">No hay nada con eso en el inventario.</div>`; return; }
     res.innerHTML = otDep.lista.map((r, i) => `
       <button class="ot-dep-op ${r.stock_actual > 0 ? "" : "sin"}" onclick="otDepElegir(${i})" ${r.stock_actual > 0 ? "" : "disabled"}>
-        <span class="ot-dep-op-n"><b>${hiEsc(r.descripcion)}</b><small>${[r.contenido ? repEnvaseTxt(r) : "", r.marca, r.codigo, r.ubicacion && "📍 " + r.ubicacion].filter(Boolean).map(hiEsc).join(" · ")}</small></span>
+        <span class="ot-dep-op-n"><b>${hiEsc(r.descripcion)}${r.parecido ? ` <em class="bz-parecido">parecido</em>` : ""}</b><small>${[r.contenido ? repEnvaseTxt(r) : "", r.marca, r.codigo, r.ubicacion && "📍 " + r.ubicacion].filter(Boolean).map(hiEsc).join(" · ")}</small></span>
         <span class="ot-dep-op-s ${r.estado_stock}">${r.stock_actual > 0 ? repStockTxt(r) : "sin stock"}</span>
       </button>`).join("");
   }, q ? 220 : 0);
