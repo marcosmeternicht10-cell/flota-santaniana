@@ -7942,7 +7942,7 @@ function otHorasPintar() {
         <label class="oh-campo"><span>Fin</span>${puede
           ? `<input type="datetime-local" value="${x.fin}" onchange="otHorasEditar(${x.id}, {fin: this.value})" aria-label="Fin">`
           : `<b>${x.fin ? otHorasFH(x.fin) : "—"}</b>`}</label>
-        <span class="oh-dur">${x.abierta ? `<em>trabajando</em>` : otHorasTxt(x.horas)}</span>
+        <span class="oh-dur" ${x.almuerzo ? `title="Se descontaron ${otHorasTxt(x.almuerzo)} de almuerzo (${(r.almuerzo || ["12:00", "14:00"]).join(" a ")})"` : ""}>${x.abierta ? `<em>trabajando</em>` : otHorasTxt(x.horas)}${!x.abierta && x.almuerzo ? `<small class="oh-alm">−${otHorasTxt(x.almuerzo)} almuerzo</small>` : ""}</span>
         ${puede ? `<button type="button" class="icon-btn oh-borrar" title="Borrar esta tanda" aria-label="Borrar esta tanda" onclick="otHorasBorrar(${x.id})"><i class="ti ti-trash"></i></button>` : "<span></span>"}
         ${x.pisa_ots.length ? `<div class="oh-pisa"><i class="ti ti-alert-triangle"></i> Se pisa con sus horas en la OT ${x.pisa_ots.map(o => "#" + o).join(", ")}</div>` : ""}
       </div>`;

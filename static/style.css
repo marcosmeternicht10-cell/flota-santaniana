@@ -8525,3 +8525,4 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
   .th-fila > .th-tec { left: 40px; }
   .th-tabla { min-width: 1240px; }
 }
+.oh-alm { display: block; font-size: 9.5px; font-weight: 500; color: var(--muted); white-space: normal; line-height: 1.15; max-width: 56px; margin-left: auto; }
