@@ -127,7 +127,34 @@ def datos_pedido(ot_id, usuario=""):
                        "marca": c.get("marca") or "", "modelo": c.get("modelo") or "",
                        "km": c.get("km") or 0, "trabajos": trabajos,
                        "subtotal": sum(t["precio"] for t in trabajos)})
+    # Cuánto va a cada proveedor ("Diesa" y "DIESA S.A." son el mismo)
+    import re as _re
+    import unicodedata as _ud
+    def _clave(t):
+        t = "".join(ch for ch in _ud.normalize("NFD", str(t or "").lower()) if _ud.category(ch) != "Mn")
+        return " ".join(w for w in _re.sub(r"[^a-z0-9 ]+", " ", t).split()
+                        if w not in ("s", "a", "sa", "srl", "sae", "saeca", "eca", "ltda", "cia", "y"))
+    provs = {}
+    def _sumar(nombre, monto, dep=False):
+        k = "__dep" if dep else (_clave(nombre) or "__sin")
+        g = provs.setdefault(k, {"proveedor": "Sale del depósito" if dep else (nombre or "Sin proveedor elegido"),
+                                 "renglones": 0, "total": 0.0, "deposito": dep, "sin": k == "__sin"})
+        if nombre and not dep and len(nombre) > len(g["proveedor"]) and k != "__sin":
+            g["proveedor"] = nombre
+        g["renglones"] += 1
+        g["total"] += monto
+    for co in salida:
+        for t in co["trabajos"]:
+            if t["materiales"]:
+                for m in t["materiales"]:
+                    dep = (m.get("origen") or "") == "deposito"
+                    _sumar((m.get("proveedor") or "").strip() or (t.get("proveedor") or "").strip(),
+                           float(m.get("subtotal") or 0), dep)
+            else:
+                _sumar((t.get("proveedor") or "").strip(), float(t["precio"] or 0))
+    por_proveedor = sorted(provs.values(), key=lambda g: (g["deposito"], g["sin"], -g["total"]))
     return {
+        "por_proveedor": [{**g, "total": round(g["total"])} for g in por_proveedor],
         "numero": cab.get("numero") or cab["id"],
         "fecha_apertura": cab.get("fecha_apertura") or "",
         "fecha_pedido": (cab.get("fecha_presupuesto") or "")[:10] or _hoy(),
@@ -271,7 +298,13 @@ def _dibujar(d, c, total_pag):
         x += aw * a
     y += 50
 
-    L.texto(M, y + 2, "PROVEEDOR INDICADO EN CADA RENGLÓN DEL DETALLE", "I6", 8.2, GRIS)
+    nombres = [g["proveedor"] for g in d.get("por_proveedor") or [] if not g["deposito"] and not g["sin"]]
+    if nombres:
+        L.texto(M, y + 2, "PROVEEDORES:", "I7", 8.2, NAVY)
+        wp = L.ancho("PROVEEDORES:", "I7", 8.2) + 6
+        L.texto(M + wp, y + 2, L.cortar(" · ".join(nombres), "I6", 8.2, aw - wp), "I6", 8.2, TINTA)
+    else:
+        L.texto(M, y + 2, "PROVEEDOR: todavía no se eligió", "I6", 8.2, GRIS)
     y += 16
 
     # El monto, grande, en números y en letras
@@ -334,7 +367,14 @@ def _dibujar(d, c, total_pag):
             elif t.get("estado_pago") == "habilitado":
                 extra.append(("HABILITADO", VERDE))
             alto_trab = 8 + len(lineas) * 10.5 + len(extra) * 9.5 + 4
-            alto_mats = len(mats) * 17
+            def _prov_de(m):
+                if m is None:
+                    return (t.get("proveedor") or "").strip()
+                if (m.get("origen") or "") == "deposito":
+                    return "Sale del depósito"
+                return (m.get("proveedor") or "").strip() or (t.get("proveedor") or "").strip()
+            altos = [27 if _prov_de(m) else 17 for m in mats]
+            alto_mats = sum(altos)
             alto_bloque = max(alto_trab, alto_mats) + (16 if len(mats) > 1 else 0)
             if y + alto_bloque > LIMITE:
                 y = hoja_nueva()
@@ -353,25 +393,24 @@ def _dibujar(d, c, total_pag):
                 yy += 9.5
             # Sus materiales, uno por renglón
             ym = y
-            for m in mats:
+            for m, h in zip(mats, altos):
+                prov = _prov_de(m)
                 if m is None:
                     tx(1, ym + 12, "—", "I5", 8.4, GRIS2)
-                    detalle_trabajo = "Precio del trabajo (sin materiales anotados)"
-                    if t.get("proveedor"):
-                        detalle_trabajo += " · Prov: " + t["proveedor"]
-                    tx(2, ym + 12, L.cortar(detalle_trabajo, "I4", 7.7, cols[2][1] - 14), "I4", 7.7, GRIS)
+                    tx(2, ym + 12, L.cortar("Precio del trabajo (sin materiales anotados)", "I4", 7.7, cols[2][1] - 14), "I4", 7.7, GRIS)
                     tx(3, ym + 12, "—", "I5", 8.4, GRIS2)
                     tx(4, ym + 12, _gs(t["precio"]) if t["precio"] else "—", "D6", 10, TINTA)
                 else:
                     tx(1, ym + 12, _cant(m.get("cantidad")), "D6", 10, TINTA)
-                    detalle_mat = m.get("descripcion") or ""
-                    if m.get("proveedor"):
-                        detalle_mat += " · Prov: " + m["proveedor"]
-                    tx(2, ym + 12, L.cortar(detalle_mat, "I5", 8.1, cols[2][1] - 14), "I5", 8.1, TINTA)
+                    tx(2, ym + 12, L.cortar(m.get("descripcion") or "", "I5", 8.1, cols[2][1] - 14), "I5", 8.1, TINTA)
                     pu = float(m.get("precio_unit") or 0)
                     tx(3, ym + 12, _miles(pu) if pu else "—", "I5", 8.4, TINTA if pu else GRIS2)
                     tx(4, ym + 12, _miles(m.get("subtotal")) if pu else "—", "D6", 10, TINTA if pu else GRIS2)
-                ym += 17
+                if prov:
+                    dep = prov == "Sale del depósito"
+                    tx(2, ym + 22.5, L.cortar(prov if dep else "Proveedor: " + prov, "I6", 7.2, cols[2][1] - 14),
+                       "I6", 7.2, VERDE if dep else AZUL)
+                ym += h
                 if m is not None and ym < y + alto_mats:
                     L.linea(xs[1] + 4, ym - 2, M + aw - 4, ym - 2, LINEA, 0.4)
             if len(mats) > 1:
@@ -391,6 +430,27 @@ def _dibujar(d, c, total_pag):
     L.texto(M + 10, y + 18, "TOTAL SOLICITADO", "I7", 8.5, NAVY)
     L.texto(M + aw - 8, y + 19.5, _gs(d["total"]), "D9", 15, NAVY, align="r")
     y += 40
+
+    # ── A quién se le paga: el total por proveedor ─────────────────────
+    grupos = [g for g in d.get("por_proveedor") or [] if g["total"] > 0 or g["deposito"]]
+    if grupos:
+        alto_res = 22 + 16 * len(grupos)
+        if y + alto_res > LIMITE:
+            y = hoja_nueva(con_tabla=False)
+        L.texto(M, y + 4, "TOTAL POR PROVEEDOR", "I7", 8, NAVY)
+        y += 12
+        wcol = aw * 0.62
+        for k, g in enumerate(grupos):
+            if k % 2 == 0:
+                L.rect(M, y, wcol, 16, fill=CEBRA)
+            col = VERDE if g["deposito"] else (GRIS if g["sin"] else TINTA)
+            L.texto(M + 8, y + 11, L.cortar(g["proveedor"], "I6", 8.4, wcol - 170), "I6", 8.4, col)
+            L.texto(M + wcol - 110, y + 11, f"{g['renglones']} renglón" + ("" if g["renglones"] == 1 else "es"), "I5", 7.6, GRIS, align="r")
+            L.texto(M + wcol - 8, y + 11.5, "no se paga" if g["deposito"] else _gs(g["total"]), "D6", 10,
+                    VERDE if g["deposito"] else NAVY, align="r")
+            y += 16
+        L.linea(M, y, M + wcol, y, LINEA, 0.6)
+        y += 14
 
     # ── Firmas y aclaración (abajo de la última hoja) ─────────────────────
     alto_firmas = 112
