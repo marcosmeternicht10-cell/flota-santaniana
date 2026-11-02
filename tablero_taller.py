@@ -210,10 +210,22 @@ def tablero(fecha=None):
         ots = {}
         if ot_ids:
             m = ",".join("?" * len(ot_ids))
-            for r in conn.execute(f"""SELECT o.id, o.estado, o.vehiculo_id, v.n_interno, v.patente, v.marca, v.modelo
+            for r in conn.execute(f"""SELECT o.id, o.estado, o.vehiculo_id, v.n_interno, v.patente, v.marca, v.modelo,
+                                             COALESCE(o.estado_compras,'') AS estado_compras
                                       FROM ordenes_trabajo o LEFT JOIN vehiculos v ON v.id = o.vehiculo_id
                                       WHERE o.id IN ({m})""", ot_ids).fetchall():
                 ots[r["id"]] = dict(r)
+        # trabajos hechos afuera (subcontratados) que todavía no volvieron
+        afuera = set()
+        item_ids = sorted({x["item_id"] for c in celdas.values() for x in c["trabajos"] if x.get("item_id")})
+        if item_ids:
+            try:
+                for r in conn.execute(f"""SELECT id FROM ot_items WHERE id IN ({','.join('?' * len(item_ids))})
+                                          AND COALESCE(hecho_afuera,0)=1 AND COALESCE(estado,'') <> 'completado'""",
+                                      item_ids).fetchall():
+                    afuera.add(r["id"])
+            except Exception:
+                _rollback(conn)
         turnos = {}
         t_ids = sorted({c["turno_id"] for c in celdas.values() if c["turno_id"] and not c["ot_id"]})
         if t_ids:
@@ -259,6 +271,16 @@ def tablero(fecha=None):
             "horas": round(sum(x["horas"] for x in lista), 2),
             "trabajando": any(x["trabajando"] for x in lista),
         }
+        # Las columnas de la derecha de la planilla
+        abiertas = [x for x in lista if x["ot_id"] and not x["ot_cerrada"] and x["estado"] not in ("terminado", "tarde")]
+        r["espera"] = {
+            "actuales": [{"ot_id": x["ot_id"], "coche": x["coche"],
+                          "trabajos": sum(1 for t in x["trabajos"] if t["estado"] != "completado")} for x in abiertas],
+            "repuestos": [{"ot_id": x["ot_id"], "coche": x["coche"], "estado": (ots.get(x["ot_id"]) or {}).get("estado_compras")}
+                          for x in abiertas if (ots.get(x["ot_id"]) or {}).get("estado_compras") in ("en_espera", "presupuestado", "en_camino")],
+            "afuera": [{"ot_id": x["ot_id"], "coche": x["coche"], "descripcion": t["descripcion"]}
+                       for x in abiertas for t in x["trabajos"] if t.get("item_id") in afuera],
+        }
         pl = r["resumen"]["planificadas"]
         r["resumen"]["cumplimiento"] = round(100 * sum(1 for x in lista if x["planificado"] and x["estado"] in ("terminado", "tarde")) / pl) if pl else None
         if lista:
@@ -282,7 +304,63 @@ def tablero(fecha=None):
                                    "libres": len(libres), "trabajos": [i["descripcion"] for i in libres[:4]]})
     return {"fecha": fecha, "hoy": hoy, "ahora": ahora, "dia_txt": f"{DIAS[d.weekday()]} {d.day} de {MESES[d.month - 1]} de {d.year}",
             "tecnicos": salida, "totales": tot, "estados": ESTADOS, "max_celdas": max([len(t["celdas"]) for t in salida] + [0]),
-            "por_planificar": por_planificar}
+            "por_planificar": por_planificar, "eje": eje_horas(salida, fecha)}
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LAS HORAS DE ARRIBA (como en la planilla: 07:30, 08:00 … 22:00)
+# ════════════════════════════════════════════════════════════════════════════
+
+EJE_DESDE, EJE_HASTA = 7 * 60 + 30, 23 * 60      # 07:30 a 23:00
+PAUSA = ("12:00", "15:00")                        # la franja marcada en la planilla
+
+
+def _hhmm(m):
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def bloques(c, fecha):
+    """En minutos del día: el plan (hora_ini–hora_fin; sin fin, una hora) y
+    los tramos reales cargados (sin fin: hasta ahora)."""
+    plan = None
+    a = _minutos(c["hora_ini"]) if c.get("hora_ini") else None
+    if a is not None:
+        b = _minutos(c["hora_fin"]) if c.get("hora_fin") else None
+        plan = (a, b if b is not None and b > a else a + 60, b is None or b <= a)
+    reales = []
+    ahora = ahora_iso()[:16]
+    for t in c.get("tandas") or []:
+        ini, fin = t["inicio"][:16], (t["fin"] or "")[:16]
+        if not fin:
+            if fecha != ahora[:10]:
+                continue
+            fin = ahora
+        if fin[:10] < fecha or ini[:10] > fecha:
+            continue
+        antes = ini[:10] < fecha             # viene de un día anterior: arranca al principio de la grilla
+        mi = EJE_DESDE if antes else _minutos(ini[11:16])
+        mf = 24 * 60 if fin[:10] > fecha else _minutos(fin[11:16])
+        if mi is not None and mf is not None and mf > mi:
+            reales.append((mi, mf, not t["fin"], antes))
+    return plan, reales
+
+
+def eje_horas(tecnicos, fecha):
+    """Desde qué hora hasta qué hora va la grilla: 07:30 a 23:00, más si hay
+    algo planificado o hecho antes o después."""
+    lo, hi = EJE_DESDE, EJE_HASTA
+    for t in tecnicos:
+        for c in t["celdas"]:
+            plan, reales = bloques(c, fecha)
+            c["b_plan"] = list(plan) if plan else None          # [ini, fin, fin_supuesto]
+            c["b_real"] = [list(x) for x in reales]             # [[ini, fin, sigue, desde_antes], …]
+            for a, b, *_ in ([plan] if plan else []) + reales:
+                lo, hi = min(lo, a), max(hi, b)
+    lo = max(0, lo // 30 * 30)
+    hi = min(24 * 60, -(-hi // 60) * 60)
+    marcas = [lo] + list(range((lo // 60 + 1) * 60, hi, 60))
+    return {"desde": lo, "hasta": hi, "marcas": [{"m": m, "txt": _hhmm(m)} for m in marcas],
+            "pausa": [_minutos(PAUSA[0]), _minutos(PAUSA[1])]}
 
 
 def _armar_celda(c, ots, turnos, fecha, hoy, ahora):
@@ -672,7 +750,37 @@ def _horas_txt(h):
     return f"{m} min" if m < 60 else f"{m // 60}h{m % 60:02d}" if m % 60 else f"{m // 60}h"
 
 
+def _col_de(marcas, m):
+    """En qué columna de hora cae un minuto del día."""
+    k = 0
+    for i, x in enumerate(marcas):
+        if x <= m:
+            k = i
+    return k
+
+
+def _txt_bloque_plan(x, a, b, sup):
+    return (f"OT {x['ot_id']}" if x["ot_id"] else "Turno") + (f" · C.{x['coche']}" if x["coche"] else "") + \
+        f" · {_hhmm(a)}-{'?' if sup else _hhmm(b)}"
+
+
+def _txt_bloque_real(x, a, b, sigue, antes):
+    return (f"OT {x['ot_id']} · " if x["ot_id"] else "") + ("antes" if antes else _hhmm(a)) + "-" + ("ahora" if sigue else _hhmm(b))
+
+
+def _lado_txt(tec):
+    e = tec.get("espera") or {}
+    act = "\n".join(f"OT {a['ot_id']}" + (f" · C.{a['coche']}" if a["coche"] else "") for a in e.get("actuales") or [])
+    rep = "\n".join(f"OT {a['ot_id']} ({ {'en_espera': 'sin presup.', 'presupuestado': 'presupuestada', 'en_camino': 'en camino'}.get(a['estado'], '') })"
+                    for a in e.get("repuestos") or [])
+    afu = "\n".join(f"OT {a['ot_id']} · {a['descripcion'][:30]}" for a in e.get("afuera") or [])
+    return act, rep, afu
+
+
 def xlsx(d):
+    """El formato de la planilla: las horas arriba (07:30, 08:00 … 22:00), en
+    cada técnico la fila PLAN en celeste y la de INICIO/FIN, la franja de
+    12 a 15 marcada, y a la derecha trabajos actuales y lo que espera."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -681,66 +789,120 @@ def xlsx(d):
     ws.title = "Tablero de control"
     fino = Side(style="thin", color="000000")
     borde = Border(left=fino, right=fino, top=fino, bottom=fino)
-    n_ot = max(12, d["max_celdas"])
-    ws["B1"] = f"Tablero de control del taller — {d['dia_txt']}"
-    ws["B1"].font = Font(bold=True, size=14)
+    eje = d["eje"]
+    marcas = [x["m"] for x in eje["marcas"]]
+    n_h = len(marcas)
+    C0 = 6                                     # primera columna de hora
+    CL = C0 + n_h                              # columnas de la derecha
+    pausa = eje.get("pausa") or [0, 0]
+    en_pausa = [pausa[0] <= m < pausa[1] for m in marcas]
+    F_PLAN = PatternFill("solid", fgColor="B4C6E7")
+    F_PAUSA = PatternFill("solid", fgColor="BF9000")
+    F_BLOQ = PatternFill("solid", fgColor="1F4E79")
+    centro = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.cell(row=1, column=C0, value="TABLERO DE CONTROL").font = Font(bold=True, size=12)
+    ws.merge_cells(start_row=1, start_column=C0, end_row=1, end_column=CL - 1)
+    ws.cell(row=1, column=C0).alignment = centro
     t = d["totales"]
-    ws["B2"] = (f"Planificadas {t['planificadas']} · terminadas {t['terminadas']} · en curso {t['en_curso']} · "
-                f"atrasadas {t['atrasadas']} · no planificadas {t['no_plan']} · {t['horas']} h trabajadas"
-                + (f" · cumplimiento {t['cumplimiento']} %" if t["cumplimiento"] is not None else ""))
-    ws["B2"].font = Font(italic=True, color="555555")
-    cab = ["Numero de tecnico", "Tecnico", "Especialidad", ""]
-    for i, v in enumerate(cab):
-        c = ws.cell(row=3, column=2 + i, value=v)
+    ws.cell(row=1, column=2, value=d["dia_txt"]).font = Font(bold=True, size=11)
+    ws.cell(row=1, column=CL, value=(f"Plan. {t['planificadas']} · term. {t['terminadas']} · en curso {t['en_curso']} · atras. {t['atrasadas']}"
+                                     + (f" · cumpl. {t['cumplimiento']} %" if t["cumplimiento"] is not None else ""))).font = Font(italic=True, size=8, color="555555")
+    for col, v in ((2, "Nº de tecnico"), (3, "Tecnico"), (4, "Especialidad"), (5, "")):
+        c = ws.cell(row=2, column=col, value=v)
         c.font = Font(bold=True)
         c.border = borde
-        c.alignment = Alignment(horizontal="center", vertical="center")
-    ws.cell(row=3, column=6, value="Ordenes de trabajo").font = Font(bold=True)
-    ws.merge_cells(start_row=3, start_column=6, end_row=3, end_column=5 + n_ot)
-    ws.cell(row=3, column=6).alignment = Alignment(horizontal="center")
-    for col in range(6, 6 + n_ot):
-        ws.cell(row=3, column=col).border = borde
-    fila = 4
+        c.alignment = Alignment(vertical="bottom", wrap_text=True)
+    for k, x in enumerate(eje["marcas"]):
+        c = ws.cell(row=2, column=C0 + k, value=x["txt"])
+        c.font = Font(bold=True)
+        c.alignment = centro
+        c.border = borde
+    for k, v in enumerate(("TRABAJOS ACTUALES", "EN ESPERA DE REPUESTOS", "EN ESPERA DE SUBCONTRATADOS")):
+        c = ws.cell(row=2, column=CL + k, value=v)
+        c.font = Font(bold=True, size=8)
+        c.alignment = centro
+        c.border = borde
+    ws.row_dimensions[2].height = 30
+
+    fila = 3
     for tec in d["tecnicos"]:
         for col, v in ((2, tec["numero"]), (3, tec["nombre"]), (4, tec["puesto"])):
             ws.cell(row=fila, column=col, value=v)
             ws.merge_cells(start_row=fila, start_column=col, end_row=fila + 1, end_column=col)
-            c = ws.cell(row=fila, column=col)
-            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws.cell(row=fila, column=col).alignment = centro
             for rr in (fila, fila + 1):
                 ws.cell(row=rr, column=col).border = borde
         ws.cell(row=fila, column=5, value="PLAN").border = borde
         ws.cell(row=fila + 1, column=5, value="INICIO/FIN").border = borde
-        for k in range(n_ot):
-            cp = ws.cell(row=fila, column=6 + k)
-            cr = ws.cell(row=fila + 1, column=6 + k)
-            cp.fill = PatternFill("solid", fgColor=CELESTE)
+        for k in range(n_h):
+            cp, cr = ws.cell(row=fila, column=C0 + k), ws.cell(row=fila + 1, column=C0 + k)
+            cp.fill = F_PAUSA if en_pausa[k] else F_PLAN
+            if en_pausa[k]:
+                cr.fill = F_PAUSA
             cp.border = cr.border = borde
-            cp.alignment = cr.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            cp.font = Font(size=9, bold=True)
-            cr.font = Font(size=9)
-            if k < len(tec["celdas"]):
-                x = tec["celdas"][k]
-                cp.value = _txt_plan(x) if x["planificado"] else f"OT {x['ot_id']} · C. {x['coche']} (no plan.)"
-                cr.value = _txt_real(x)
-                cr.fill = PatternFill("solid", fgColor=COLOR_ESTADO.get(x["estado"], "FFFFFF"))
-        ws.row_dimensions[fila].height = 30
-        ws.row_dimensions[fila + 1].height = 30
+            cp.alignment = cr.alignment = centro
+            cp.font = Font(size=8, bold=True, color="FFFFFF")
+            cr.font = Font(size=8)
+        usados = {fila: set(), fila + 1: set()}
+
+        def poner(r, a, b, txt, relleno, color="000000"):
+            k1, k2 = _col_de(marcas, a), _col_de(marcas, max(a, b - 1))
+            libres = [k for k in range(k1, k2 + 1) if k not in usados[r]]
+            if not libres:
+                c = ws.cell(row=r, column=C0 + k1)
+                c.value = ((c.value or "") + "\n" + txt).strip()
+                return
+            k1, k2 = libres[0], libres[0]
+            while k2 + 1 in libres:
+                k2 += 1
+            for k in range(k1, k2 + 1):
+                usados[r].add(k)
+                ws.cell(row=r, column=C0 + k).fill = relleno
+            c = ws.cell(row=r, column=C0 + k1, value=txt)
+            c.font = Font(size=8, bold=True, color=color)
+            if k2 > k1:
+                ws.merge_cells(start_row=r, start_column=C0 + k1, end_row=r, end_column=C0 + k2)
+        for x in tec["celdas"]:
+            if x.get("b_plan"):
+                a, b, sup = x["b_plan"]
+                poner(fila, a, b, _txt_bloque_plan(x, a, b, sup), F_BLOQ, "FFFFFF")
+            for a, b, sigue, antes in x.get("b_real") or []:
+                poner(fila + 1, a, b, _txt_bloque_real(x, a, b, sigue, antes),
+                      PatternFill("solid", fgColor=COLOR_ESTADO.get(x["estado"], "FFFFFF")))
+        for k, v in enumerate(_lado_txt(tec)):
+            ws.cell(row=fila, column=CL + k, value=v or None)
+            ws.merge_cells(start_row=fila, start_column=CL + k, end_row=fila + 1, end_column=CL + k)
+            c = ws.cell(row=fila, column=CL + k)
+            c.alignment = centro
+            c.font = Font(size=8)
+            for rr in (fila, fila + 1):
+                ws.cell(row=rr, column=CL + k).border = borde
+        ws.row_dimensions[fila].height = 22
+        ws.row_dimensions[fila + 1].height = 22
         fila += 2
     ws.column_dimensions["A"].width = 2
-    ws.column_dimensions["B"].width = 10
-    ws.column_dimensions["C"].width = 26
-    ws.column_dimensions["D"].width = 20
-    ws.column_dimensions["E"].width = 11
-    for k in range(n_ot):
-        ws.column_dimensions[get_column_letter(6 + k)].width = 17
-    ws.freeze_panes = "F4"
+    ws.column_dimensions["B"].width = 11
+    ws.column_dimensions["C"].width = 24
+    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 10
+    for k in range(n_h):
+        ws.column_dimensions[get_column_letter(C0 + k)].width = 8.5
+    for k in range(3):
+        ws.column_dimensions[get_column_letter(CL + k)].width = 16
+    ws.freeze_panes = ws.cell(row=3, column=C0)
     fila += 1
     ws.cell(row=fila, column=2, value="Colores de INICIO/FIN:").font = Font(bold=True)
     for i, (k, txt) in enumerate(ESTADOS.items()):
         c = ws.cell(row=fila + 1 + i, column=2, value=txt)
         c.fill = PatternFill("solid", fgColor=COLOR_ESTADO[k])
         c.border = borde
+    sh = [x for x in ((f"N°{t_['numero']} {t_['nombre']}: " + ", ".join(f"OT {c['ot_id']}" for c in t_["celdas"] if not c.get("b_plan")))
+                      for t_ in d["tecnicos"] if any(not c.get("b_plan") for c in t_["celdas"]))]
+    if sh:
+        ws.cell(row=fila, column=4, value="Planificadas sin hora:").font = Font(bold=True)
+        for i, v in enumerate(sh):
+            ws.cell(row=fila + 1 + i, column=4, value=v).font = Font(size=9)
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -752,6 +914,7 @@ def xlsx(d):
 
 
 def pdf(d):
+    """La misma planilla en PDF horizontal: las horas arriba, PLAN e INICIO/FIN."""
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.colors import HexColor, white
@@ -759,84 +922,109 @@ def pdf(d):
     from rend_comb_pdf import _Lienzo, _logo, _ahora_txt, NAVY, TINTA, GRIS, LINEA
     F = trafico_pdf._fuentes()
     W, H = landscape(A4)
-    M = 22
+    M = 18
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(W, H))
     c.setTitle(f"Tablero de control {d['fecha']}")
     c.setAuthor("La Santaniana")
     L = _Lienzo(c, H, F)
     aw = W - 2 * M
-    tecs = d["tecnicos"]
-    n_col = max(6, min(10, d["max_celdas"] or 6))
-    w_num, w_nom, w_esp, w_et = 30, 104, 78, 46
-    w_c = (aw - w_num - w_nom - w_esp - w_et) / n_col
-    h_f = 20
+    eje = d["eje"]
+    marcas = [x["m"] for x in eje["marcas"]]
+    n_h = len(marcas)
+    pausa = eje.get("pausa") or [0, 0]
+    w_num, w_nom, w_esp, w_et, w_lado = 22, 96, 62, 40, 66
+    w_h = (aw - w_num - w_nom - w_esp - w_et - 3 * w_lado) / max(1, n_h)
+    x_h = M + w_num + w_nom + w_esp + w_et
+    x_lado = x_h + n_h * w_h
+    h_f = 15
     colores = {k: HexColor("#" + v) for k, v in COLOR_ESTADO.items()}
-    cel = HexColor("#" + CELESTE)
+    C_PLAN, C_PAUSA, C_BLOQ = HexColor("#B4C6E7"), HexColor("#BF9000"), HexColor("#1F4E79")
     t = d["totales"]
+
+    def xm(m):
+        m = max(eje["desde"], min(eje["hasta"], m))
+        k = _col_de(marcas, m)
+        ini = marcas[k]
+        fin = marcas[k + 1] if k + 1 < n_h else eje["hasta"]
+        return x_h + (k + ((m - ini) / (fin - ini) if fin > ini else 0)) * w_h
 
     def cabecera(pag):
         logo = _logo()
         if logo:
-            c.drawImage(logo, M, H - M - 28, 38, 28, mask="auto", preserveAspectRatio=True)
-        L.texto(M + 46, M + 14, "Tablero de control del taller", "D9", 17, NAVY)
-        L.texto(M + 46, M + 27, d["dia_txt"] + (f" · hoja {pag}" if pag > 1 else ""), "I5", 8.5, GRIS)
+            c.drawImage(logo, M, H - M - 24, 32, 24, mask="auto", preserveAspectRatio=True)
+        L.texto(M + 40, M + 12, "TABLERO DE CONTROL", "D9", 15, NAVY)
+        L.texto(M + 40, M + 24, d["dia_txt"] + (f" · hoja {pag}" if pag > 1 else ""), "I5", 8, GRIS)
         res = (f"Planificadas {t['planificadas']} · terminadas {t['terminadas']} · en curso {t['en_curso']} · "
                f"atrasadas {t['atrasadas']} · no planificadas {t['no_plan']} · {t['horas']} h"
                + (f" · cumplimiento {t['cumplimiento']} %" if t["cumplimiento"] is not None else ""))
-        L.texto(W - M, M + 14, res, "I6", 8, TINTA, "r")
-        y = M + 40
-        L.rect(M, y, aw, 16, fill=NAVY)
+        L.texto(W - M, M + 12, res, "I6", 7.5, TINTA, "r")
+        y = M + 32
+        L.rect(M, y, aw, 22, fill=NAVY)
         x = M
         for txt, w in (("N°", w_num), ("TÉCNICO", w_nom), ("ESPECIALIDAD", w_esp), ("", w_et)):
-            L.texto(x + 4, y + 11, txt, "I7", 6.6, white)
+            L.texto(x + 3, y + 14, txt, "I7", 6.2, white)
             x += w
-        L.texto(x + (n_col * w_c) / 2, y + 11, "ÓRDENES DE TRABAJO", "I7", 6.6, white, "c")
-        return y + 16
+        for k, mm in enumerate(marcas):
+            if pausa[0] <= mm < pausa[1]:
+                L.rect(x_h + k * w_h, y, w_h, 22, fill=C_PAUSA)
+            L.texto(x_h + k * w_h + w_h / 2, y + 14, eje["marcas"][k]["txt"], "I7", 6.6, white, "c")
+        for k, txt in enumerate(("TRABAJOS ACTUALES", "ESPERA REPUESTOS", "ESPERA SUBCONTRAT.")):
+            L.texto(x_lado + k * w_lado + w_lado / 2, y + 14, txt, "I7", 5.2, white, "c")
+        return y + 22
 
     pag = 1
     y = cabecera(pag)
-    for tec in tecs:
-        filas_tec = max(1, -(-len(tec["celdas"]) // n_col))
-        alto = h_f * 2 * filas_tec
-        if y + alto > H - 40:
+    for tec in d["tecnicos"]:
+        alto = h_f * 2
+        if y + alto > H - 34:
+            L.texto(W - M, H - 12, f"La Santaniana · impreso {_ahora_txt()}", "I4", 6.5, GRIS, "r")
             c.showPage()
             pag += 1
             y = cabecera(pag)
         x = M
-        for v, w, f in ((str(tec["numero"]), w_num, "D8"), (tec["nombre"], w_nom, "I6"), (tec["puesto"], w_esp, "I4")):
+        for v, w, f, tam in ((str(tec["numero"]), w_num, "D8", 9.5), (tec["nombre"], w_nom, "I6", 7),
+                             (tec["puesto"], w_esp, "I4", 6.4)):
             L.rect(x, y, w, alto, stroke=LINEA)
-            L.texto(x + w / 2, y + alto / 2 + 3, L.cortar(v, f, 8 if f != "D8" else 11, w - 6), f, 8 if f != "D8" else 11, TINTA, "c")
+            L.texto(x + w / 2, y + alto / 2 + 2.5, L.cortar(v or "", f, tam, w - 5), f, tam, TINTA, "c")
             x += w
-        for k in range(filas_tec):
-            yy = y + k * h_f * 2
-            L.rect(x, yy, w_et, h_f, fill=cel, stroke=LINEA)
-            L.texto(x + 4, yy + 13, "PLAN", "I7", 7, NAVY)
-            L.rect(x, yy + h_f, w_et, h_f, stroke=LINEA)
-            L.texto(x + 4, yy + h_f + 13, "INICIO/FIN", "I6", 6.4, TINTA)
-            for j in range(n_col):
-                idx = k * n_col + j
-                cx = x + w_et + j * w_c
-                L.rect(cx, yy, w_c, h_f, fill=cel, stroke=LINEA)
-                if idx < len(tec["celdas"]):
-                    it = tec["celdas"][idx]
-                    L.rect(cx, yy + h_f, w_c, h_f, fill=colores.get(it["estado"], white), stroke=LINEA)
-                    l1 = (f"OT {it['ot_id']}" if it["ot_id"] else "Turno") + (f" · C.{it['coche']}" if it["coche"] else "")
-                    l2 = (it["hora_ini"] + (f"-{it['hora_fin']}" if it["hora_fin"] else "")) if it["hora_ini"] else ("no planificado" if not it["planificado"] else "")
-                    L.texto(cx + 3, yy + 8.5, L.cortar(l1, "I7", 6.8, w_c - 6), "I7", 6.8, NAVY)
-                    L.texto(cx + 3, yy + 16.5, L.cortar(l2, "I4", 6.3, w_c - 6), "I4", 6.3, TINTA)
-                    L.texto(cx + 3, yy + h_f + 8.5, L.cortar(_txt_real(it), "I6", 6.6, w_c - 6), "I6", 6.6, TINTA)
-                    L.texto(cx + 3, yy + h_f + 16.5, L.cortar(ESTADOS.get(it["estado"], ""), "I4", 6.1, w_c - 6), "I4", 6.1, GRIS)
-                else:
-                    L.rect(cx, yy + h_f, w_c, h_f, stroke=LINEA)
+        L.rect(x, y, w_et, h_f, fill=C_PLAN, stroke=LINEA)
+        L.texto(x + 3, y + 10.5, "PLAN", "I7", 6.4, NAVY)
+        L.rect(x, y + h_f, w_et, h_f, stroke=LINEA)
+        L.texto(x + 3, y + h_f + 10.5, "INICIO/FIN", "I6", 5.6, TINTA)
+        for k, mm in enumerate(marcas):
+            cx = x_h + k * w_h
+            p_ = pausa[0] <= mm < pausa[1]
+            L.rect(cx, y, w_h, h_f, fill=C_PAUSA if p_ else C_PLAN, stroke=LINEA)
+            L.rect(cx, y + h_f, w_h, h_f, fill=C_PAUSA if p_ else None, stroke=LINEA)
+        for it in tec["celdas"]:
+            if it.get("b_plan"):
+                a, b, sup = it["b_plan"]
+                x1, x2 = xm(a), max(xm(b), xm(a) + 6)
+                L.rect(x1 + 0.6, y + 1.5, x2 - x1 - 1.2, h_f - 3, fill=C_BLOQ, r=2)
+                L.texto(x1 + 3, y + 10, L.cortar(_txt_bloque_plan(it, a, b, sup), "I7", 6, x2 - x1 - 5), "I7", 6, white)
+            for a, b, sigue, antes in it.get("b_real") or []:
+                x1, x2 = xm(a), max(xm(b), xm(a) + 5)
+                L.rect(x1 + 0.6, y + h_f + 1.5, x2 - x1 - 1.2, h_f - 3, fill=colores.get(it["estado"], white), stroke=GRIS, r=2)
+                L.texto(x1 + 3, y + h_f + 10, L.cortar(_txt_bloque_real(it, a, b, sigue, antes), "I6", 5.8, x2 - x1 - 5), "I6", 5.8, TINTA)
+        for k, v in enumerate(_lado_txt(tec)):
+            cx = x_lado + k * w_lado
+            L.rect(cx, y, w_lado, alto, stroke=LINEA)
+            lineas = [l for l in (v or "").split("\n") if l]
+            for j, l in enumerate(lineas[:3]):
+                L.texto(cx + 3, y + 9 + j * 8.5, L.cortar(l + (" …" if j == 2 and len(lineas) > 3 else ""), "I5", 5.8, w_lado - 5), "I5", 5.8, TINTA)
         y += alto
     # referencias
-    y += 10
+    y += 8
     x = M
     for k, txt in ESTADOS.items():
         L.rect(x, y, 10, 8, fill=colores[k], stroke=LINEA)
         L.texto(x + 13, y + 7, txt, "I4", 7, TINTA)
         x += 13 + L.ancho(txt, "I4", 7) + 14
+    sin_hora = [f"N°{t_['numero']}: " + ", ".join(f"OT {c_['ot_id']}" for c_ in t_["celdas"] if not c_.get("b_plan"))
+                for t_ in d["tecnicos"] if any(not c_.get("b_plan") for c_ in t_["celdas"])]
+    if sin_hora and y + 20 < H - 20:
+        L.texto(M, y + 20, L.cortar("Planificadas sin hora — " + " · ".join(sin_hora), "I5", 7, aw), "I5", 7, GRIS)
     L.texto(W - M, H - 12, f"La Santaniana · impreso {_ahora_txt()}", "I4", 6.5, GRIS, "r")
     c.save()
     buf.seek(0)
