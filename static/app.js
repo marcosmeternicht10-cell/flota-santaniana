@@ -5802,10 +5802,40 @@ let otFiltroMotivo = ""; // "" | "*" (todas las que tienen algo atrasado) | la c
 let comprasTab = "en_espera";
 const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestadas", en_camino: "En camino", entregado: "Entregadas" };
 
-async function renderCompras() {
-  status("Compras / Depósito");
-  await refrescarPermisoOTs();
-  const todas = await api("/api/compras/ots");
+let cmpTodas = [], cmpBuscar = "", _cmpBuscarT;
+const cmpNorm = t => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+// ¿La OT tiene lo que se busca? Coche, patente, OT, trabajo, repuesto, proveedor, mecánico
+function cmpCoincide(o, q) {
+  q = cmpNorm(q).trim();
+  if (!q) return true;
+  const coches = [o.n_interno, o.patente, ...(o.coches || []).flatMap(c => [c.n_interno, c.patente])];
+  const items = o.items || [];
+  if (/^#?\d+$/.test(q)) {                      // un número: coche u OT
+    const n = q.replace("#", "");
+    return coches.some(c => String(c || "").includes(n)) || items.some(i => String(i.coche_n || "").includes(n))
+      || String(o.id) === n || String(o.numero || "") === n;
+  }
+  const texto = cmpNorm([
+    "ot " + o.id, ...coches, o.nota_compras, o.proveedor_compras, o.compras_motivo,
+    ...items.flatMap(i => [i.descripcion, i.material_pedido, i.tecnico, i.coche_n, i.coche_patente, i.proveedor_compras,
+      ...(i.materiales || []).flatMap(m => [m.descripcion, m.proveedor, m.factura])]),
+  ].filter(Boolean).join(" | "));
+  return q.split(/\s+/).every(p => texto.includes(p));
+}
+function cmpBuscarEn(v) {
+  cmpBuscar = v;
+  const x = document.querySelector(".cmp-buscar-x");
+  if (x) x.hidden = !v;
+  clearTimeout(_cmpBuscarT);
+  _cmpBuscarT = setTimeout(cmpPintarCuerpo, 120);
+}
+function cmpPintarCuerpo() {
+  const caja = document.getElementById("cmp-cuerpo");
+  if (!caja) return;
+  const q = cmpBuscar.trim();
+  const todas = (cmpTodas || []).filter(o => cmpCoincide(o, q));
+  const total = { en_espera: 0, presupuestado: 0, en_camino: 0, entregado: 0 };
+  (cmpTodas || []).forEach(o => { if (o.estado_compras in total) total[o.estado_compras]++; });
   const enEspera = todas.filter(o => o.estado_compras === "en_espera");
   const presup = todas.filter(o => o.estado_compras === "presupuestado");
   const enCamino = todas.filter(o => o.estado_compras === "en_camino");
@@ -5815,26 +5845,33 @@ async function renderCompras() {
     : comprasTab === "en_camino" ? enCamino
     : comprasTab === "entregado" ? entreg : [];
   const totalEspera = todas.reduce((s, o) => s + ((o.pagos && o.pagos.en_espera) || 0), 0);
-
-  content.innerHTML = `
-    <div class="page-header">
-      <h1><i class="ti ti-shopping-cart"></i> Compras / Depósito</h1>
-      <p>Pedidos del taller — presupuestar, autorizar y entregar</p>
-    </div>
-    <div class="section">
+  const de = (n, est) => q ? `<small class="cmp-met-sub">de ${total[est]}</small>` : "";
+  const etapas = [["en_espera", enEspera], ["presupuestado", presup], ["en_camino", enCamino], ["entregado", entreg]];
+  const enOtras = q && !lista.length && !["cola", "reposicion"].includes(comprasTab)
+    ? etapas.filter(([e, l]) => e !== comprasTab && l.length) : [];
+  // Si en esta etapa no está pero en otra sí, ir directo a esa
+  if (enOtras.length) {
+    const desde = LABEL_EST_COMPRAS[comprasTab];
+    comprasTab = enOtras[0][0];
+    cmpPintarCuerpo();
+    const t = document.querySelector("#cmp-cuerpo .section-title");
+    if (t) t.insertAdjacentHTML("afterend", `<p class="cmp-salto"><i class="ti ti-arrow-right"></i> En «${trEsc(desde)}» no estaba: se encontró en «${trEsc(LABEL_EST_COMPRAS[comprasTab])}»${enOtras.length > 1 ? ` (también hay en ${enOtras.slice(1).map(([e, l]) => `«${LABEL_EST_COMPRAS[e]}» (${l.length})`).join(", ")})` : ""}.</p>`);
+    return;
+  }
+  caja.innerHTML = `
       <div class="metrics" style="margin-bottom:18px">
-        <div class="metric" style="cursor:pointer;${comprasTab==='en_espera'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('en_espera')">
+        <div class="metric ${q && enEspera.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='en_espera'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('en_espera')">
           <div class="metric-content"><div class="metric-label">En espera</div>
-          <div class="metric-value" style="color:var(--warning)">${enEspera.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='presupuestado'?'border:2px solid var(--brand-blue)':''}" onclick="setComprasTab('presupuestado')">
+          <div class="metric-value" style="color:var(--warning)">${enEspera.length}${de(enEspera.length, "en_espera")}</div></div></div>
+        <div class="metric ${q && presup.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='presupuestado'?'border:2px solid var(--brand-blue)':''}" onclick="setComprasTab('presupuestado')">
           <div class="metric-content"><div class="metric-label">Presupuestadas</div>
-          <div class="metric-value" style="color:var(--brand-blue)">${presup.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='en_camino'?'border:2px solid #d97706':''}" onclick="setComprasTab('en_camino')">
+          <div class="metric-value" style="color:var(--brand-blue)">${presup.length}${de(presup.length, "presupuestado")}</div></div></div>
+        <div class="metric ${q && enCamino.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='en_camino'?'border:2px solid #d97706':''}" onclick="setComprasTab('en_camino')">
           <div class="metric-content"><div class="metric-label">En camino</div>
-          <div class="metric-value" style="color:#d97706">${enCamino.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='entregado'?'border:2px solid var(--success)':''}" onclick="setComprasTab('entregado')">
+          <div class="metric-value" style="color:#d97706">${enCamino.length}${de(enCamino.length, "en_camino")}</div></div></div>
+        <div class="metric ${q && entreg.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='entregado'?'border:2px solid var(--success)':''}" onclick="setComprasTab('entregado')">
           <div class="metric-content"><div class="metric-label">Entregadas</div>
-          <div class="metric-value" style="color:var(--success)">${entreg.length}</div></div></div>
+          <div class="metric-value" style="color:var(--success)">${entreg.length}${de(entreg.length, "entregado")}</div></div></div>
         <div class="metric" style="cursor:pointer;${comprasTab==='cola'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('cola')">
           <div class="metric-content"><div class="metric-label">Esperando fondos</div>
           <div class="metric-value" style="color:var(--warning)">${totalEspera}</div></div></div>
@@ -5848,15 +5885,36 @@ async function renderCompras() {
         <p class="hint" style="margin-bottom:14px"><i class="ti ti-info-circle"></i> Ítems presupuestados que Tesorería todavía no pudo cubrir. Cuando entren fondos, marcalos y liberalos: la orden retoma su curso.</p>
         <div id="cola-espera-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
       ` : `
-        <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab] || ""} (${lista.length})</div>
+        <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab] || ""} (${lista.length})${q ? ` <span class="cmp-filtro">con «${trEsc(q)}»</span>` : ""}</div>
         ${lista.length === 0
-          ? `<div class="empty"><i class="ti ti-shopping-cart-off"></i>No hay pedidos en esta etapa.</div>`
+          ? (enOtras.length
+            ? `<div class="empty cmp-otras"><i class="ti ti-search"></i>En ${trEsc((LABEL_EST_COMPRAS[comprasTab] || "esta etapa").toLowerCase())} no hay nada con «${trEsc(q)}». Está en:
+                <div>${enOtras.map(([e, l]) => `<button type="button" class="btn btn-ghost btn-sm" onclick="setComprasTab('${e}')">${LABEL_EST_COMPRAS[e]} (${l.length})</button>`).join("")}</div></div>`
+            : `<div class="empty"><i class="ti ti-${q ? "search-off" : "shopping-cart-off"}"></i>${q ? `No hay pedidos con «${trEsc(q)}» en ninguna etapa.` : "No hay pedidos en esta etapa."}</div>`)
           : `<div class="cmp-lista">${lista.map(o => tarjetaCompra(o)).join("")}</div>`}
-      `}
-    </div>`;
-
+      `}`;
   if (comprasTab === "cola") renderColaEspera();
   if (comprasTab === "reposicion") renderReposicion();
+}
+async function renderCompras() {
+  status("Compras / Depósito");
+  await refrescarPermisoOTs();
+  cmpTodas = await api("/api/compras/ots");
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-shopping-cart"></i> Compras / Depósito</h1>
+      <p>Pedidos del taller — presupuestar, autorizar y entregar</p>
+    </div>
+    <div class="section">
+      <label class="cmp-buscar">
+        <i class="ti ti-search"></i>
+        <input id="cmp-buscar-in" type="search" value="${trEsc(cmpBuscar)}" placeholder="Buscar coche (ej: 22310), patente, OT, trabajo, repuesto o proveedor" autocomplete="off"
+          oninput="cmpBuscarEn(this.value)" onkeydown="if(event.key==='Escape'){this.value='';cmpBuscarEn('')}">
+        <button type="button" class="cmp-buscar-x" onclick="const i=document.getElementById('cmp-buscar-in');i.value='';cmpBuscarEn('');i.focus()" ${cmpBuscar ? "" : "hidden"} aria-label="Borrar búsqueda"><i class="ti ti-x"></i></button>
+      </label>
+      <div id="cmp-cuerpo"></div>
+    </div>`;
+  cmpPintarCuerpo();
   // El contador de reposición llega aparte: la página no lo espera
   api("/api/compras/reposicion/resumen").then(r => {
     if (!r || !r.ok) return;
@@ -12335,6 +12393,17 @@ async function renderColaEspera() {
   const cont = document.getElementById("cola-espera-panel");
   if (!cont) return;
   const cola = await api("/api/compras/cola_espera");
+  const q = (typeof cmpBuscar === "string" ? cmpBuscar : "").trim();
+  if (q && cola.items) {   // el buscador de Compras también filtra la cola
+    cola.items = cola.items.filter(i => {
+      if (/^#?\d+$/.test(q)) { const n = q.replace("#", ""); return String(i.n_interno || "").includes(n) || String(i.numero) === n || String(i.ot_id) === n; }
+      const t = cmpNorm([i.n_interno, i.patente, i.descripcion, i.material_pedido, i.marca, i.modelo, "ot " + i.numero].join(" "));
+      return cmpNorm(q).split(/\s+/).every(p => t.includes(p));
+    });
+    cola.cantidad = cola.items.length;
+    cola.total = cola.items.reduce((a, i) => a + (+i.precio_compras || 0), 0);
+    if (!cola.cantidad) { cont.innerHTML = `<div class="cola-vacia"><i class="ti ti-search-off"></i> Nada esperando fondos con «${trEsc(q)}».</div>`; return; }
+  }
   if (!cola.cantidad) {
     cont.innerHTML = `<div class="cola-vacia"><i class="ti ti-circle-check"></i> No hay ítems esperando fondos. Todo lo presupuestado está cubierto.</div>`;
     return;
