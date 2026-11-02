@@ -375,9 +375,13 @@ def _armar_celda(c, ots, turnos, fecha, hoy, ahora):
             trabajando = fecha == hoy
         if fin:
             try:
-                ini = max(x["inicio"], fecha + "T00:00")
-                fn = min(fin, fecha + "T23:59")
-                horas += max(0.0, (datetime.fromisoformat(fn) - datetime.fromisoformat(ini)).total_seconds() / 3600)
+                ini = max(x["inicio"][:16], fecha + "T00:00")
+                fn = min(fin[:16], fecha + "T23:59")
+                try:      # sin el almuerzo, igual que en la OT
+                    from ot_horas import horas_trabajadas
+                    horas += horas_trabajadas(ini, fn) if fn > ini else 0.0
+                except ImportError:
+                    horas += max(0.0, (datetime.fromisoformat(fn) - datetime.fromisoformat(ini)).total_seconds() / 3600)
             except ValueError:
                 pass
     real_ini = tandas[0]["inicio"][11:16] if tandas and tandas[0]["inicio"][:10] == fecha else (

@@ -81,10 +81,49 @@ def _fh(v, campo):
     return t
 
 
-def _horas(inicio, fin):
+# El almuerzo no es tiempo de trabajo: si una tanda lo cruza (de 8 a 18), se
+# descuenta (quedan 8 h, no 10). Vale para todas las OT y todos los días que
+# abarque la tanda.
+ALMUERZO = ("12:00", "14:00")
+
+
+def almuerzo_en(inicio, fin):
+    """Horas de almuerzo que caen dentro de la tanda."""
     if not inicio or not fin:
         return 0.0
-    return round((datetime.fromisoformat(fin) - datetime.fromisoformat(inicio)).total_seconds() / 3600, 2)
+    try:
+        a, b = datetime.fromisoformat(str(inicio)[:16]), datetime.fromisoformat(str(fin)[:16])
+    except ValueError:
+        return 0.0
+    if b <= a:
+        return 0.0
+    from datetime import timedelta
+    h1, m1 = (int(x) for x in ALMUERZO[0].split(":"))
+    h2, m2 = (int(x) for x in ALMUERZO[1].split(":"))
+    total, dia = 0.0, a.date()
+    while dia <= b.date():
+        p1 = datetime(dia.year, dia.month, dia.day, h1, m1)
+        p2 = datetime(dia.year, dia.month, dia.day, h2, m2)
+        solapa = (min(b, p2) - max(a, p1)).total_seconds()
+        if solapa > 0:
+            total += solapa / 3600
+        dia += timedelta(days=1)
+    return round(total, 2)
+
+
+def horas_trabajadas(inicio, fin):
+    """Horas entre inicio y fin, sin el almuerzo."""
+    if not inicio or not fin:
+        return 0.0
+    try:
+        bruto = (datetime.fromisoformat(str(fin)[:16]) - datetime.fromisoformat(str(inicio)[:16])).total_seconds() / 3600
+    except ValueError:
+        return 0.0
+    return round(max(0.0, bruto - almuerzo_en(inicio, fin)), 2)
+
+
+def _horas(inicio, fin):
+    return horas_trabajadas(inicio, fin)
 
 
 def _validar(inicio, fin):
@@ -153,7 +192,8 @@ def horas_de_ot(ot_id):
     for pid, p in gente.items():
         mis = [t for t in tandas if t["personal_id"] == pid]
         lista = [{"id": t["id"], "inicio": t["inicio"], "fin": t["fin"] or "", "nota": t["nota"] or "",
-                  "horas": _horas(t["inicio"], t["fin"]), "abierta": not t["fin"],
+                  "horas": _horas(t["inicio"], t["fin"]), "almuerzo": almuerzo_en(t["inicio"], t["fin"]),
+                  "abierta": not t["fin"],
                   "pisa_ots": avisos.get(t["id"], [])} for t in mis]
         abierta = next((t for t in lista if t["abierta"]), None)
         out.append({"personal_id": pid, "numero": p["numero"], "nombre": p["nombre"], "puesto": p["puesto"] or "",
@@ -161,7 +201,7 @@ def horas_de_ot(ot_id):
                     "horas": round(sum(t["horas"] for t in lista), 2),
                     "trabajando_desde": abierta["inicio"] if abierta else ""})
     out.sort(key=lambda x: (x["trabajando_desde"] == "", x["numero"]))
-    return {"ot_id": ot["id"], "estado": ot["estado"], "tecnicos": out, "ahora": _ahora(),
+    return {"ot_id": ot["id"], "estado": ot["estado"], "tecnicos": out, "ahora": _ahora(), "almuerzo": list(ALMUERZO),
             "horas": round(sum(x["horas"] for x in out), 2),
             "trabajando": sum(1 for x in out if x["trabajando_desde"])}
 
