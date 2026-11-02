@@ -3985,26 +3985,90 @@ def generar_pdf_resumen_liquidacion(rends, desde, hasta):
         ])
     data.append(["", "TOTAL A LIQUIDAR", "", "", "", gs(total_general), ""])
 
-    t = Table(data, repeatRows=1,
-              colWidths=[9*mm, 58*mm, 13*mm, 26*mm, 24*mm, 28*mm, 24*mm])
-    t.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), AZUL),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("ALIGN", (0, 0), (0, -1), "CENTER"),
-        ("ALIGN", (2, 0), (5, -1), "RIGHT"),
-        ("FONTNAME", (5, 1), (5, -1), "Helvetica-Bold"),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, SUAVE]),
-        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAF1F8")),
-        ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
-    elems.append(t)
+    # Todo en UNA hoja: con muchos choferes la letra y el alto de cada renglón
+    # se achican para que entren la lista y el total juntos.
+    alto_util = A4[1] - 15*mm - 14*mm - 22*mm - 14*mm   # título, período y pie
+    filas = len(data)
+    por_fila = alto_util / filas
+    pad = max(0.6, min(5, (por_fila - 10) / 2))
+    letra = max(5.2, min(8.5, (por_fila - 2 * pad - 0.6) / 1.2))
+    if por_fila < 10:
+        # Muchos choferes: en dos columnas, uno al lado del otro (letra legible)
+        mitad = (len(liq) + 1) // 2
+        def bloque(desde_i, hasta_i):
+            from reportlab.pdfbase.pdfmetrics import stringWidth
+            def cortar(t, w):
+                t = str(t or "")
+                if stringWidth(t, "Helvetica", letra) <= w:
+                    return t
+                while t and stringWidth(t + "…", "Helvetica", letra) > w:
+                    t = t[:-1]
+                return t.rstrip() + "…"
+            d = [["#", "Chofer", "Serv.", "TOTAL Gs.", "Firma"]]
+            for i in range(desde_i, hasta_i):
+                l = liq[i]
+                d.append([str(i + 1), cortar(l.get("chofer_nombre", ""), 38*mm - 5), str(l.get("servicios", 0)),
+                          gs(l.get("total", 0)), ""])
+            return d
+        por_fila = (alto_util - 30) / (mitad + 1)
+        pad = max(0.4, min(4, (por_fila - 9) / 2))
+        letra = max(4.6, min(8, (por_fila - 2 * pad - 0.5) / 1.2))
+        izq, der = bloque(0, mitad), bloque(mitad, len(liq))
+        while len(der) < len(izq):
+            der.append(["", "", "", "", ""])
+        estilo2 = TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), AZUL), ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), letra),
+            ("LEADING", (0, 0), (-1, -1), letra * 1.15),
+            ("ALIGN", (0, 0), (0, -1), "CENTER"), ("ALIGN", (2, 0), (3, -1), "RIGHT"),
+            ("FONTNAME", (3, 1), (3, -1), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#DDDDDD")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, SUAVE]),
+            ("TOPPADDING", (0, 0), (-1, -1), pad), ("BOTTOMPADDING", (0, 0), (-1, -1), pad),
+        ])
+        anchos = [7*mm, 38*mm, 9*mm, 20*mm, 15*mm]
+        ti, td = Table(izq, colWidths=anchos), Table(der, colWidths=anchos)
+        ti.setStyle(estilo2)
+        td.setStyle(estilo2)
+        t = Table([[ti, td]], colWidths=[91*mm, 91*mm])
+        t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                               ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+        elems.append(t)
+        elems.append(Spacer(1, 6))
+        tot = Table([["TOTAL A LIQUIDAR", f"Gs. {gs(total_general)}"]], colWidths=[140*mm, 42*mm])
+        tot.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EAF1F8")),
+                                 ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"), ("FONTSIZE", (0, 0), (-1, -1), 10),
+                                 ("ALIGN", (1, 0), (1, 0), "RIGHT"), ("TEXTCOLOR", (0, 0), (-1, -1), AZUL)]))
+        elems.append(tot)
+    else:
+        from reportlab.pdfbase.pdfmetrics import stringWidth
+        for fila in data[1:-1]:
+            t_ = str(fila[1] or "")
+            if stringWidth(t_, "Helvetica", letra) > 58*mm - 5:
+                while t_ and stringWidth(t_ + "…", "Helvetica", letra) > 58*mm - 5:
+                    t_ = t_[:-1]
+                fila[1] = t_.rstrip() + "…"
+        t = Table(data, repeatRows=1,
+                  colWidths=[9*mm, 58*mm, 13*mm, 26*mm, 24*mm, 28*mm, 24*mm])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), AZUL),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("FONTSIZE", (0, 0), (-1, -1), letra),
+            ("LEADING", (0, 0), (-1, -1), letra * 1.15),
+            ("ALIGN", (0, 0), (0, -1), "CENTER"),
+            ("ALIGN", (2, 0), (5, -1), "RIGHT"),
+            ("FONTNAME", (5, 1), (5, -1), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#DDDDDD")),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, SUAVE]),
+            ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAF1F8")),
+            ("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
+            ("TOPPADDING", (0, 0), (-1, -1), pad),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), pad),
+        ]))
+        elems.append(t)
 
-    elems.append(Spacer(1, 10))
+    elems.append(Spacer(1, 6))
     elems.append(Paragraph(
         f"{len(liq)} chofer(es) · Total a liquidar: <b>Gs. {gs(total_general)}</b>",
         ParagraphStyle("f", parent=S["Normal"], fontSize=10, textColor=AZUL,
