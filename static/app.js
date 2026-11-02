@@ -23925,7 +23925,7 @@ function agIrA(id) {
 //  el INICIO/FIN real de cada OT. Se llena solo con lo asignado, la agenda y
 //  las horas cargadas en las OTs.
 // ════════════════════════════════════════════════════════════════════════
-const tt = { fecha: "", turno: "", esp: "", solo: false, d: null, t: null };
+const tt = { fecha: "", turno: "", esp: "", solo: false, d: null, t: null, vista: (() => { try { return localStorage.getItem("tt-vista") || "horas"; } catch (e) { return "horas"; } })() };
 const TT_EST = { terminado: "Terminado", tarde: "Terminado tarde", en_curso: "En curso", atrasado: "Atrasado", pendiente: "Sin empezar", no_plan: "No planificado" };
 const TT_IC = { terminado: "circle-check", tarde: "clock-exclamation", en_curso: "player-play", atrasado: "alert-triangle", pendiente: "clock", no_plan: "help-circle" };
 const ttEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -23983,6 +23983,7 @@ function ttPintar() {
         <div class="tt-seg">${[["", "Todos"], ["manana", "Mañana"], ["tarde", "Tarde"], ["noche", "Noche"]].map(([k, v]) => `<button class="${tt.turno === k ? "on" : ""}" onclick="tt.turno='${k}';ttPintar()">${v}</button>`).join("")}</div>
         <select class="tt-sel" onchange="tt.esp=this.value;ttPintar()" aria-label="Especialidad"><option value="">Todas las especialidades</option>${esps.map(e => `<option ${tt.esp === e ? "selected" : ""}>${ttEsc(e)}</option>`).join("")}</select>
         <label class="tt-check"><input type="checkbox" ${tt.solo ? "checked" : ""} onchange="tt.solo=this.checked;ttPintar()"> Solo los que tienen OT</label>
+        <div class="tt-seg tt-vista" role="group" aria-label="Vista">${[["horas", "clock-hour-4", "Por horas"], ["ots", "layout-columns", "Por OT"]].map(([k, ic, v]) => `<button class="${tt.vista === k ? "on" : ""}" onclick="ttVista('${k}')"><i class="ti ti-${ic}"></i> ${v}</button>`).join("")}</div>
       </div>
     </div>
     <div class="tt-kpis">
@@ -23996,10 +23997,103 @@ function ttPintar() {
     </div>
     <div class="tt-ley">${Object.entries(TT_EST).map(([k, v]) => `<span class="tt-ley-i e-${k}"><i class="ti ti-${TT_IC[k]}"></i> ${v}</span>`).join("")}<span class="tt-ley-i plan">PLAN</span></div>
     ${ttBandeja()}
-    <div class="tt-tabla">
+    ${tt.vista === "horas" ? ttHorasTabla(lista) : `<div class="tt-tabla">
       <div class="tt-fila tt-cab"><div class="tt-tec">Técnico</div><div class="tt-et"></div><div class="tt-ots">Órdenes de trabajo</div></div>
       ${lista.length ? lista.map(ttFila).join("") : `<div class="empty"><i class="ti ti-users"></i>No hay técnicos con ese filtro.</div>`}
+    </div>`}`;
+  if (tt.vista === "horas") ttHorasEnganchar();
+}
+function ttVista(v) {
+  tt.vista = v;
+  try { localStorage.setItem("tt-vista", v); } catch (e) { /* sin almacenamiento */ }
+  ttPintar();
+}
+
+// ─── Vista por horas: como la planilla (07:30, 08:00 … 22:00) ───────────
+// Arriba las horas; en cada técnico, la fila PLAN (celeste) con lo que tiene
+// que hacer a qué hora y la fila INICIO/FIN con lo que hizo de verdad.
+function ttHorasTabla(lista) {
+  const e = tt.d.eje || { desde: 450, hasta: 1380, marcas: [], pausa: [720, 900] };
+  // Cada columna de hora del mismo ancho, como en la planilla (la de 07:30 es media hora)
+  const ms = e.marcas.map(x => x.m), nCol = ms.length || 1;
+  const pct = m => {
+    m = Math.max(e.desde, Math.min(e.hasta, m));
+    let k = ms.length - 1;
+    while (k > 0 && ms[k] > m) k--;
+    const ini = ms[k] ?? e.desde, fin = ms[k + 1] ?? e.hasta;
+    return (k + (fin > ini ? (m - ini) / (fin - ini) : 0)) / nCol * 100;
+  };
+  const hm = m => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const esHoy = tt.d.fecha === tt.d.hoy;
+  const ahoraM = esHoy ? (+tt.d.ahora.slice(11, 13)) * 60 + (+tt.d.ahora.slice(14, 16)) : null;
+  const pausa = e.pausa && e.pausa[1] > e.pausa[0] ? `<span class="th-pausa" style="left:${pct(e.pausa[0])}%;width:${pct(e.pausa[1]) - pct(e.pausa[0])}%"></span>` : "";
+  const lineas = e.marcas.map(x => `<span class="th-linea" style="left:${pct(x.m)}%"></span>`).join("");
+  const ahora = ahoraM != null && ahoraM >= e.desde && ahoraM <= e.hasta ? `<span class="th-ahora" style="left:${pct(ahoraM)}%"></span>` : "";
+  const cab = e.marcas.map((x, k) => {
+    const sig = e.marcas[k + 1] ? e.marcas[k + 1].m : e.hasta;
+    return `<span class="th-hora ${e.pausa && x.m >= e.pausa[0] && x.m < e.pausa[1] ? "p" : ""}" style="left:${pct(x.m)}%;width:${pct(sig) - pct(x.m)}%">${x.txt}</span>`;
+  }).join("");
+  const fila = x => {
+    const r = x.resumen, esp = x.espera || { actuales: [], repuestos: [], afuera: [] };
+    const sinHora = x.celdas.map((c, i) => [c, i]).filter(([c]) => !c.b_plan);
+    const planB = x.celdas.map((c, i) => {
+      if (!c.b_plan) return "";
+      const [a, b, sup] = c.b_plan;
+      const w = pct(b) - pct(a);
+      return `<button type="button" class="th-b plan e-${c.estado} ${sup ? "sup" : ""} ${c.planificado ? "" : "np"}" style="left:${pct(a)}%;width:${Math.max(w, 1.2)}%"
+        onclick="event.stopPropagation();ttVer(${x.id}, ${i})" title="OT ${c.ot_id || ""} · coche ${ttEsc(c.coche)} · ${hm(a)}–${sup ? "?" : hm(b)} · ${TT_EST[c.estado]}">
+        <b>${c.ot_id ? "OT " + c.ot_id : "Turno"}</b>${c.coche ? `<span>${ttEsc(c.coche)}</span>` : ""}</button>`;
+    }).join("");
+    const realB = x.celdas.map((c, i) => (c.b_real || []).map(([a, b, sigue, antes]) => {
+      const w = pct(b) - pct(a);
+      return `<button type="button" class="th-b real e-${c.estado} ${sigue ? "vivo" : ""} ${antes ? "antes" : ""}" style="left:${pct(a)}%;width:${Math.max(w, 1)}%"
+        onclick="ttVer(${x.id}, ${i})" title="OT ${c.ot_id || ""} · ${antes ? "desde antes" : hm(a)} – ${sigue ? "trabajando" : hm(b)} · ${TT_EST[c.estado]}">
+        <b>${c.ot_id ? "OT " + c.ot_id : ""}</b><span>${antes ? "‹ antes" : hm(a)}–${sigue ? "ahora" : hm(b)}</span></button>`;
+    }).join("")).join("");
+    const lista_ = (l, f) => l.length ? l.map(f).join("") : `<span class="th-vacio">—</span>`;
+    return `<div class="th-fila ${r.trabajando ? "vivo" : ""}">
+      <div class="th-n"><span class="tt-num">${x.numero}</span></div>
+      <div class="th-tec"><b>${ttEsc(x.nombre)}</b>
+        <small>${r.planificadas ? `${r.terminadas}/${r.planificadas} hechas` : x.celdas.length ? "" : "Sin OT"}${r.horas ? ` · ${ttHoras(r.horas)}` : ""}${r.trabajando ? ` · <em class="vivo"><span class="tt-punto"></span>trabajando</em>` : ""}</small>
+        ${sinHora.length ? `<span class="th-sinhora">Sin hora: ${sinHora.map(([c, i]) => `<button type="button" class="e-${c.estado}" onclick="ttVer(${x.id}, ${i})">OT ${c.ot_id || "–"}</button>`).join("")}</span>` : ""}</div>
+      <div class="th-esp">${ttEsc(x.puesto || "")}</div>
+      <div class="th-et"><span class="plan">PLAN</span><span class="real">INICIO/FIN</span></div>
+      <div class="th-eje">
+        <div class="th-carril plan" data-pid="${x.id}" ${tt.d.puede ? `title="Tocá un lugar libre para planificarle una OT a esa hora"` : ""}>${pausa}${lineas}${planB}${ahora}</div>
+        <div class="th-carril real">${pausa}${lineas}${realB}${ahora}</div>
+      </div>
+      <div class="th-lado">${lista_(esp.actuales, a => `<span>OT ${a.ot_id}${a.coche ? ` · ${ttEsc(a.coche)}` : ""}${a.trabajos ? ` <small>(${a.trabajos})</small>` : ""}</span>`)}</div>
+      <div class="th-lado ${esp.repuestos.length ? "ojo" : ""}">${lista_(esp.repuestos, a => `<span>OT ${a.ot_id} <small>${{ en_espera: "sin presup.", presupuestado: "presupuestada", en_camino: "en camino" }[a.estado] || ""}</small></span>`)}</div>
+      <div class="th-lado ${esp.afuera.length ? "ojo" : ""}">${lista_(esp.afuera, a => `<span title="${ttEsc(a.descripcion)}">OT ${a.ot_id} <small>${ttEsc(a.descripcion.slice(0, 22))}</small></span>`)}</div>
     </div>`;
+  };
+  return `<div class="th-wrap"><div class="th-tabla">
+      <div class="th-fila th-cab th-cab0"><div class="th-titulo">TABLERO DE CONTROL</div></div>
+      <div class="th-fila th-cab">
+        <div class="th-n">N° de técnico</div><div class="th-tec">Técnico</div><div class="th-esp">Especialidad</div><div class="th-et"></div>
+        <div class="th-eje th-horas">${cab}${ahoraM != null && ahoraM >= e.desde && ahoraM <= e.hasta ? `<span class="th-ahora-txt" style="left:${pct(ahoraM)}%">${tt.d.ahora.slice(11, 16)}</span>` : ""}</div>
+        <div class="th-lado">Trabajos actuales</div><div class="th-lado">En espera de repuestos</div><div class="th-lado">En espera de subcontratados</div>
+      </div>
+      ${lista.length ? lista.map(fila).join("") : `<div class="empty"><i class="ti ti-users"></i>No hay técnicos con ese filtro.</div>`}
+    </div></div>`;
+}
+function ttHorasEnganchar() {
+  // La primera vez del día, mostrar la hora de ahora (en el celular no entra todo)
+  const w = document.querySelector(".th-wrap"), ah = document.querySelector(".th-ahora-txt");
+  if (w && ah && tt._scroll !== tt.d.fecha && w.scrollWidth > w.clientWidth) {
+    tt._scroll = tt.d.fecha;
+    w.scrollLeft = Math.max(0, ah.getBoundingClientRect().left - w.getBoundingClientRect().left - w.clientWidth / 2);
+  }
+  if (!tt.d.puede) return;
+  const e = tt.d.eje;
+  document.querySelectorAll(".th-carril.plan").forEach(c => c.addEventListener("click", ev => {
+    if (ev.target.closest(".th-b")) return;
+    const r = c.getBoundingClientRect();
+    let m = e.desde + (ev.clientX - r.left) / r.width * (e.hasta - e.desde);
+    m = Math.max(e.desde, Math.min(e.hasta - 30, Math.round(m / 30) * 30));
+    const hm = x => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
+    ttPlanificar(+c.dataset.pid, null, hm(m), hm(Math.min(e.hasta, m + 60)));
+  }));
 }
 function ttFila(x) {
   const r = x.resumen;
@@ -24099,11 +24193,11 @@ async function ttHora(ot_id, pid, accion, btn) {
 }
 
 // ─── Planificarle una OT a un técnico ───────────────────────────────────
-async function ttPlanificar(pid, otElegida) {
+async function ttPlanificar(pid, otElegida, horaIni, horaFin) {
   const x = tt.d.tecnicos.find(t => t.id === pid);
   const o = rvModal({
     titulo: `Planificar a N°${x.numero} ${ttEsc(x.nombre)}`, icono: "calendar-plus", ancho: 720, clase: "tt-modal tt-plan-modal",
-    sub: `${ttEsc(tt.d.dia_txt)} · elegí la OT, la hora y los trabajos que le tocan`,
+    sub: `${ttEsc(tt.d.dia_txt)}${horaIni ? ` · desde las ${horaIni}` : ""} · elegí la OT, la hora y los trabajos que le tocan`,
     cuerpo: `
       <label class="tt-busca"><i class="ti ti-search"></i><input id="tt-q" placeholder="Coche, número de OT o trabajo" autocomplete="off"></label>
       <div class="tt-ots-lista" id="tt-ots"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
@@ -24126,7 +24220,7 @@ async function ttPlanificar(pid, otElegida) {
     box.hidden = false;
     box.innerHTML = `
       <h4>OT ${sel.id} · coche ${ttEsc(sel.coche)} <small>${ttEsc(sel.vehiculo)}</small></h4>
-      <div class="tt-m-horas"><label><span>Empieza</span><input type="time" id="tt-hi"></label><label><span>Termina</span><input type="time" id="tt-hf"></label></div>
+      <div class="tt-m-horas"><label><span>Empieza</span><input type="time" id="tt-hi" value="${horaIni || ""}"></label><label><span>Termina</span><input type="time" id="tt-hf" value="${horaFin || ""}"></label></div>
       <p class="tt-sub">Trabajos que le tocan <small>(se le asignan; los que ya tienen otro técnico lo siguen teniendo)</small></p>
       <div class="tt-trab-sel">${sel.trabajos.map(i => `<label><input type="checkbox" value="${i.id}" ${otElegida && !i.tecnico ? "checked" : ""}> <span>${ttEsc(i.descripcion)}${i.tecnico ? `<small>${ttEsc(i.tecnico)}</small>` : ""}</span></label>`).join("")}</div>
       <label class="tt-m-nota"><span>Nota para el técnico</span><input id="tt-nota" maxlength="300" placeholder="Opcional"></label>`;

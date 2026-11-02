@@ -8456,3 +8456,72 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .cmp-otras div { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
 .cmp-buscar input, .cmp-buscar input:focus { border: 0 !important; box-shadow: none !important; outline: 0 !important; background: none !important; padding-left: 0 !important; }
 .cmp-salto { margin: -4px 0 12px; font-size: 12.5px; color: var(--brand-blue); display: flex; gap: 5px; align-items: center; }
+
+/* ── Tablero de control: vista por horas (como la planilla) ── */
+.tt-vista button { display: inline-flex; gap: 5px; align-items: center; }
+.th-wrap { overflow-x: auto; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); }
+.th-tabla { min-width: 1480px; }
+.th-fila { display: grid; grid-template-columns: 52px 190px 120px 76px minmax(760px, 1fr) 128px 128px 128px; border-bottom: 1px solid var(--border-strong); }
+.th-fila > div { border-right: 1px solid var(--border); min-width: 0; }
+.th-fila > div:last-child { border-right: 0; }
+.th-cab0 { grid-template-columns: 1fr; }
+.th-titulo { text-align: center; font: 800 14px "Barlow Semi Condensed", "Inter", sans-serif; letter-spacing: .08em; padding: 6px; color: var(--azul-oscuro, #1D344E); }
+.th-cab > div { font: 700 11px "Inter", sans-serif; color: var(--azul-oscuro, #1D344E); padding: 6px 8px; display: flex; align-items: flex-end; background: var(--surface-2, #F4F3EF); }
+.th-cab .th-lado { font-size: 10px; text-transform: uppercase; letter-spacing: .03em; justify-content: center; text-align: center; align-items: center; }
+.th-horas { position: relative; height: 34px; padding: 0 !important; }
+.th-hora { position: absolute; bottom: 0; top: 0; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 6px; border-left: 1px solid var(--border); font: 800 12.5px "Inter", sans-serif; color: var(--text); font-variant-numeric: tabular-nums; box-sizing: border-box; }
+.th-hora.p { background: #C9A227; color: #fff; }
+.th-ahora-txt { position: absolute; top: 2px; transform: translateX(-50%); background: var(--danger, #DC2641); color: #fff; font: 700 9.5px "Inter", sans-serif; padding: 1px 5px; border-radius: 999px; z-index: 3; }
+.th-n { display: flex; align-items: center; justify-content: center; }
+.th-tec { padding: 6px 10px; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+.th-tec b { font-size: 13px; line-height: 1.2; }
+.th-tec small { font-size: 11px; color: var(--muted); }
+.th-sinhora { display: flex; flex-wrap: wrap; gap: 3px; align-items: center; font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+.th-sinhora button { border: 1px solid #9DC3E6; background: #DDEBF7; color: #1E5A96; border-radius: 5px; padding: 0 5px; font: 700 10.5px "Inter", sans-serif; cursor: pointer; }
+.th-sinhora button.e-terminado, .th-sinhora button.e-tarde { background: #C6EFCE; border-color: #8FD19E; color: #276738; }
+.th-esp { display: flex; align-items: center; justify-content: center; text-align: center; padding: 4px 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text); }
+.th-et { display: grid; grid-template-rows: 1fr 1fr; }
+.th-et span { display: flex; align-items: center; padding: 0 6px; font: 700 10.5px "Inter", sans-serif; }
+.th-et .plan { background: #DDEBF7; color: #1E5A96; border-bottom: 1px solid var(--border); }
+.th-eje { display: grid; grid-template-rows: 1fr 1fr; padding: 0 !important; }
+.th-carril { position: relative; height: 34px; overflow: hidden; }
+.th-carril.plan { background: #DDEBF7; border-bottom: 1px solid var(--border); cursor: copy; }
+.th-carril.real { background: var(--surface); }
+.th-linea { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(29, 52, 78, .14); }
+.th-pausa { position: absolute; top: 0; bottom: 0; background: #C9A227; opacity: .55; }
+.th-ahora { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--danger, #DC2641); z-index: 2; }
+.th-b { position: absolute; top: 3px; bottom: 3px; border-radius: 6px; border: 0; padding: 0 6px; display: flex; align-items: center; gap: 5px; overflow: hidden; white-space: nowrap; font: 600 11px "Inter", sans-serif; cursor: pointer; z-index: 1; box-sizing: border-box; min-width: 8px; }
+.th-b b { font-weight: 800; }
+.th-b span { font-weight: 500; opacity: .9; }
+.th-b.plan { background: #1E5A96; color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.18); }
+.th-b.plan.sup { border-right: 3px dashed rgba(255,255,255,.75); }
+.th-b.plan.np { background: #7A8CA3; }
+.th-b.plan.e-atrasado { background: #C53030; }
+.th-b.plan.e-terminado, .th-b.plan.e-tarde { background: #2F855A; }
+.th-b.real { color: #fff; }
+.th-b.real.e-terminado { background: #2F855A; }
+.th-b.real.e-tarde { background: #B7791F; }
+.th-b.real.e-en_curso, .th-b.real.vivo { background: repeating-linear-gradient(135deg, #1E5A96 0 8px, #2B6CB0 8px 16px); }
+.th-b.real.e-pendiente, .th-b.real.e-atrasado, .th-b.real.e-no_plan { background: #718096; }
+.th-b.real.antes { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.th-b:hover { filter: brightness(1.12); z-index: 3; }
+.th-b:focus-visible { outline: 2px solid var(--brand-red, #DC2641); outline-offset: 1px; }
+.th-lado { padding: 5px 7px; display: flex; flex-direction: column; justify-content: center; gap: 2px; font-size: 11px; line-height: 1.25; }
+.th-lado span { font-weight: 600; color: var(--text); }
+.th-lado small { font-weight: 400; color: var(--muted); }
+.th-lado.ojo { background: var(--warning-bg); }
+.th-vacio { color: var(--lighter, #bbb); text-align: center; }
+.th-fila.vivo .th-tec b { color: var(--brand-blue); }
+.th-cab > div { flex-direction: row !important; justify-content: flex-start; }
+.th-cab .th-lado, .th-cab .th-esp { justify-content: center; }
+/* el número y el técnico quedan fijos al correr las horas de costado */
+.th-fila:not(.th-cab0) > .th-n, .th-fila:not(.th-cab0) > .th-tec { position: sticky; z-index: 4; background: var(--surface); }
+.th-fila > .th-n { left: 0; }
+.th-fila > .th-tec { left: 52px; box-shadow: 1px 0 0 var(--border-strong); }
+.th-cab > .th-n, .th-cab > .th-tec { background: var(--surface-2, #F4F3EF) !important; }
+@media (max-width: 760px) {
+  .th-fila { grid-template-columns: 40px 150px 0 64px minmax(760px, 1fr) 120px 120px 120px; }
+  .th-fila > .th-esp { overflow: hidden; padding: 0; border: 0; font-size: 0; }
+  .th-fila > .th-tec { left: 40px; }
+  .th-tabla { min-width: 1240px; }
+}
