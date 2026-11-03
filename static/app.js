@@ -24533,6 +24533,7 @@ async function caeCargar() {
   const r = await api("/api/choferes_app/accesos").catch(e => ({ ok: false, msg: e.message }));
   if (!r || !r.ok) { $("#cae-cuerpo").innerHTML = `<div class="empty">${trEsc((r && r.msg) || "No se pudo cargar")}</div>`; return; }
   r.corp = r.corp || [];
+  r.duplicados = r.duplicados || [];
   cae.d = r;
   const b = $("#cae-crear");
   if (b) { b.hidden = !r.faltan.length; b.innerHTML = `<i class="ti ti-user-plus"></i> Crear ${r.faltan.length} usuario${r.faltan.length === 1 ? "" : "s"}`; }
@@ -24555,6 +24556,16 @@ function caePintar() {
   const seg = (k, t, n) => `<button class="${cae.grupo === k ? "on" : ""}" onclick="cae.grupo='${k}';cae.ver='todos';caePintar()">${t} <span>${n}</span></button>`;
   $("#cae-cuerpo").innerHTML = `
     <div class="cae-seg">${seg("linea", "Línea y turismo", r.activos)}${seg("corp", "Corporativos", r.corp.length)}</div>
+    ${r.duplicados.length ? `<div class="cae-dups">
+      <div class="cae-dups-t"><i class="ti ti-users-group"></i><div><b>${r.duplicados.length} chofer${r.duplicados.length === 1 ? " tiene" : "es tienen"} dos usuarios</b>
+        <span>Es la misma persona con un usuario de corporativos y otro de línea. Al unirlos queda uno solo con todo: sus rendiciones, su asignación, tráfico, turismo y su mes.</span></div>
+        <button class="btn btn-primary btn-sm" onclick="caeUnirTodos(this)"><i class="ti ti-git-merge"></i> Unir ${r.duplicados.length === 1 ? "" : "los " + r.duplicados.length}</button></div>
+      ${r.duplicados.map(p => `<div class="cae-dup">
+        <div><b>${trEsc(p.queda.nombre)}</b> <span class="cae-rol ${p.queda.rol === "chofer_corp" ? "corp" : ""}">${p.queda.rol === "chofer_corp" ? "corporativo" : "línea"} · <code>${trEsc(p.queda.usuario)}</code></span></div>
+        <i class="ti ti-arrow-left"></i>
+        <div><b>${trEsc(p.sale.nombre)}</b> <span class="cae-rol ${p.sale.rol === "chofer_corp" ? "corp" : ""}">${p.sale.rol === "chofer_corp" ? "corporativo" : "línea"} · <code>${trEsc(p.sale.usuario)}</code></span>${p.sale.confirmado || p.sale.ultimo_acceso ? `<small>ya entró con este</small>` : ""}</div>
+        <button class="btn btn-ghost btn-sm" onclick="caeUnir(${p.queda.id}, ${p.sale.id}, this)">Unir</button></div>`).join("")}
+    </div>` : ""}
     <div class="cae-kpis">
       <div class="cae-kpi-conf"><b>${conf}<small> de ${todos.length}</small></b><span>confirmaron que tienen la app</span>
         <i class="cae-barra"><i style="width:${pct}%"></i></i></div>
@@ -24584,11 +24595,12 @@ function caeFilas(lista) {
       ${linea ? `<td style="text-align:center">${c.servicios_mes}</td>` : ""}
       <td style="font-size:12px;color:var(--muted)">${c.ultimo_acceso ? trEsc(String(c.ultimo_acceso).slice(0, 16).replace("T", " ")) : "nunca"}</td>
       <td style="white-space:nowrap;text-align:right">
-        ${linea ? `<button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
-        <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>` : ""}
+        <button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
+        <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>
+        <button class="icon-btn" title="Es la misma persona que otro usuario: unirlos" onclick="caeUnirCon(${c.id})"><i class="ti ti-git-merge"></i></button>
         <button class="icon-btn" title="¿Por qué no le aparece su servicio?" onclick="caeRevisar(${c.id})"><i class="ti ti-zoom-question"></i></button>
         <button class="icon-btn" title="Mandarle un aviso de prueba" onclick="caeProbar(${c.id}, this)"><i class="ti ti-bell"></i></button>
-        ${linea ? `<button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>` : ""}
+        <button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>
       </td></tr>`).join("")}</tbody></table></div>`;
 }
 // Para recordarles en el grupo a los que todavía no confirmaron
@@ -24610,8 +24622,9 @@ async function caeCrear(btn) {
   toast(`${r.creados.length} usuario${r.creados.length === 1 ? "" : "s"} creado${r.creados.length === 1 ? "" : "s"}`, "success");
   await caeCargar();
 }
+const caeUno = id => cae.d.choferes.find(x => x.id === id) || cae.d.corp.find(x => x.id === id);
 function caeAlias(id) {
-  const c = cae.d.choferes.find(x => x.id === id);
+  const c = caeUno(id);
   const o = rvModal({
     titulo: trEsc(c.nombre), icono: "pencil", ancho: 480,
     sub: "Si en la planilla de tráfico o de turismo este chofer figura escrito de otra forma (o con un error), anotalo acá para que le aparezcan sus servicios.",
@@ -24634,10 +24647,81 @@ async function caeProbar(id, btn) {
   toast(r && r.ok ? "Aviso de prueba enviado" : ((r && r.msg) || "No se pudo mandar"), r && r.ok ? "success" : "info");
 }
 async function caeClave(id) {
-  const c = cae.d.choferes.find(x => x.id === id);
+  const c = caeUno(id);
   if (!confirm(`¿Volver la clave de ${c.nombre} a «${c.usuario}»?`)) return;
   const r = await fetch(`/api/choferes_app/${id}/clave`, { method: "POST" }).then(x => x.json()).catch(() => null);
   toast(r && r.ok ? `La clave quedó: ${r.clave}` : "No se pudo", r && r.ok ? "success" : "error");
+}
+// La misma persona con dos usuarios: queda uno solo con todo
+async function caePostUnir(cuerpo) {
+  const r = await fetch("/api/choferes_app/unir", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cuerpo) }).then(x => x.json()).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo unir", "error"); return null; }
+  return r;
+}
+function caeUnidoTxt(u) { return `${u.queda.nombre}: queda el usuario «${u.queda.usuario}»`; }
+async function caeUnir(queda, sale, btn) {
+  const p = cae.d.duplicados.find(x => x.queda.id === queda && x.sale.id === sale);
+  if (p && !confirm(`Unir a ${p.queda.nombre}:\n\nQueda «${p.queda.usuario}» (${p.queda.rol === "chofer_corp" ? "corporativo" : "línea"}) con todo.\nSe borra «${p.sale.usuario}»: su nombre pasa a «también figura como» y sus avisos al celular se mantienen.\n\nDesde ahora entra con usuario «${p.queda.usuario}».`)) return;
+  if (btn) btn.disabled = true;
+  const r = await caePostUnir({ queda, sale });
+  if (btn) btn.disabled = false;
+  if (!r) return;
+  toast(caeUnidoTxt(r.unidos[0]), "success");
+  await caeCargar();
+  if (typeof renderUsuarios === "function" && document.getElementById("us-q")) renderUsuarios();
+}
+async function caeUnirTodos(btn) {
+  const ps = cae.d.duplicados;
+  if (!confirm(`Se van a unir ${ps.length} chofer${ps.length === 1 ? "" : "es"} con dos usuarios:\n\n` +
+    ps.map(p => `• ${p.queda.nombre}: queda «${p.queda.usuario}», se borra «${p.sale.usuario}»`).join("\n") +
+    `\n\nA cada uno le queda todo junto (corporativo, tráfico, turismo y su mes). ¿Unir?`)) return;
+  btn.disabled = true;
+  const r = await caePostUnir({ todos: true });
+  btn.disabled = false;
+  if (!r) return;
+  toast(`${r.unidos.length} unido${r.unidos.length === 1 ? "" : "s"}${r.errores.length ? ` · ${r.errores.length} con problema` : ""}`, r.errores.length ? "info" : "success");
+  if (r.errores.length) alert(r.errores.join("\n"));
+  await caeCargar();
+  if (typeof renderUsuarios === "function" && document.getElementById("us-q")) renderUsuarios();
+}
+// Unir a mano: este chofer es el mismo que otro usuario
+function caeUnirCon(id) {
+  const c = caeUno(id), esCorp = cae.d.corp.some(x => x.id === id);
+  const otros = [...cae.d.choferes.filter(x => x.activo).map(x => ({ ...x, corp: false })), ...cae.d.corp.map(x => ({ ...x, corp: true }))]
+    .filter(x => x.id !== id && !(esCorp && x.corp));
+  const o = rvModal({
+    titulo: `Unir a ${trEsc(c.nombre)}`, icono: "git-merge", ancho: 520,
+    sub: "Si es la misma persona que otro usuario, elegilo: quedan los dos en uno solo. Si uno es de corporativos, queda ese (tiene las rendiciones).",
+    cuerpo: `<div class="emp-campo"><label>Es la misma persona que</label>
+      <input id="cae-u-q" placeholder="Buscar por nombre o usuario…" autocomplete="off" style="width:100%;margin-bottom:8px">
+      <select id="cae-u-sel" size="8" style="width:100%">${otros.map(x => `<option value="${x.id}">${trEsc(x.nombre)} — ${x.corp ? "corporativo" : "línea"} · ${trEsc(x.usuario)}</option>`).join("")}</select></div>
+      <p class="hint" id="cae-u-txt" style="margin-top:8px"></p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" id="cae-u-ok" disabled><i class="ti ti-git-merge"></i> Unir</button>`,
+  });
+  const sel = o.querySelector("#cae-u-sel"), ok = o.querySelector("#cae-u-ok"), txt = o.querySelector("#cae-u-txt");
+  const elegido = () => otros.find(x => x.id === +sel.value);
+  const quedaDe = x => x.corp ? x : c;          // si uno es corporativo queda ese; si no, el que abriste
+  sel.onchange = () => {
+    const x = elegido(); ok.disabled = !x;
+    if (!x) { txt.textContent = ""; return; }
+    const q = quedaDe(x), s_ = q === c ? x : c;
+    txt.innerHTML = `Queda <b>${trEsc(q.usuario)}</b> con todo · se borra <b>${trEsc(s_.usuario)}</b> (su nombre pasa a «también figura como»).`;
+  };
+  o.querySelector("#cae-u-q").oninput = e => {
+    const f = e.target.value.trim().toLowerCase();
+    [...sel.options].forEach(op => op.hidden = !!f && !op.textContent.toLowerCase().includes(f));
+  };
+  ok.onclick = async () => {
+    const x = elegido(); if (!x) return;
+    const q = quedaDe(x), s_ = q === c ? x : c;
+    ok.disabled = true;
+    const r = await caePostUnir({ queda: q.id, sale: s_.id });
+    ok.disabled = false;
+    if (!r) return;
+    o.remove(); toast(caeUnidoTxt(r.unidos[0]), "success"); caeCargar();
+  };
 }
 // Texto para mandar por WhatsApp: cada chofer con su usuario y clave
 async function caeCopiar(btn) {
