@@ -106,6 +106,8 @@ function setCoche(v) {
 document.querySelectorAll(".nav-item").forEach(btn => {
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
+    // Los que abren otra pestaña (Tablero, Panel del gerente) no son secciones
+    if (!btn.dataset.sec) { cerrarSidebar(); return; }
     if (btn.hasAttribute("data-needs-coche") && !cocheActual) {
       elegirCocheYIr(btn.dataset.sec);
       cerrarSidebar();
@@ -211,6 +213,7 @@ function irA(sec) {
     corp_historial: renderCorpHistorial,
     corp_empresas: renderCorpEmpresas,
     corp_cargas: renderCorpCargas,
+    corp_servicios: renderCorpServicios,
     mantenimientos: renderMantenimientos,
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
@@ -218,9 +221,17 @@ function irA(sec) {
     historial_carga: renderHistorialCarga,
     trafico: renderTrafico,
     personal: renderPersonal,
+    tablero_taller: renderTableroTaller,
     corp_asignacion: renderCorpAsignacion,
     comb_rendicion: renderRendCombustible,
-    alpha: renderAlpha,
+    // Alpha vive en static/alpha.js: si ese archivo falta, que no se rompa todo el menú
+    alpha: () => typeof renderAlpha === "function" ? renderAlpha()
+      : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/alpha.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
+    // Controles vive en static/controles.js (usa los datos de Alpha)
+    cajas: () => typeof renderCajas === "function" ? renderCajas()
+      : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/cajas.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
+    controles: () => typeof renderControles === "function" ? renderControles()
+      : (content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-alert-triangle"></i>Falta subir <b>static/controles.js</b> (y templates/index.html con el enlace a ese archivo).</div></div>`),
   };
   map[sec]();
 }
@@ -2330,9 +2341,10 @@ async function renderTrafico() {
   trCerrarSug();
   const primera = !tr.fecha;
   if (primera) tr.fecha = trHoy();
-  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha)]);
+  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha), trCargarChoferes()]);
   tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
   trDatalists();
+  trMarcarTrips();
 }
 
 function trDatalists() {
@@ -2391,6 +2403,7 @@ function trVacio() {
 function trPintar(entrada = false) {
   const raiz = $("#tr-raiz");
   if (!raiz) return;
+  setTimeout(trMarcarTrips, 0);                // marca los tripulantes sin usuario
   const d = tr.d;
   raiz.classList.toggle("solo-ver", !trPuede());
   raiz.classList.toggle("int", trInt());
@@ -2507,22 +2520,32 @@ function trInicioVacio() {
   if (!trPuede()) return `<div class="tr-vacio-solo"><i class="ti ti-calendar-off"></i>Todavía no se armó el tráfico de este día.</div>`;
   const opciones = [];
   const sem = trInt() && tr.d.dia_semana_pasada && tr.d.dia_semana_pasada !== ant ? tr.d.dia_semana_pasada : null;
+  const prog = trInt() && tr.d.programa_dia;
+  if (prog) {
+    opciones.push(`
+      <button class="tr-op principal" onclick="trArmarPrograma()">
+        <i class="ti ti-calendar-cog"></i>
+        <b>Armar con la programación semanal</b>
+        <span>Las ${prog} salidas y regresos de los ${trEsc(trDiaPlural(tr.d.esperado?.dia || "días"))}. Los regresos con la unidad que les toca y las salidas de Asunción con la primera que llegó.</span>
+        <em>Recomendado</em>
+      </button>`);
+  }
   if (sem) {
     opciones.push(`
-      <button class="tr-op principal" onclick="trCopiar('${sem}', false, true)">
+      <button class="tr-op ${prog ? "" : "principal"}" onclick="trCopiar('${sem}', false, true)">
         <i class="ti ti-calendar-repeat"></i>
         <b>Armar desde el ${trLargo(sem)}</b>
         <span>El mismo día de la semana pasada: trae las salidas que lleva este día. En cada regreso pone el coche que está en Buenos Aires.</span>
-        <em>Recomendado</em>
+        ${prog ? "" : "<em>Recomendado</em>"}
       </button>`);
   }
   if (ant) {
     opciones.push(`
-      <button class="tr-op ${sem ? "" : "principal"}" onclick="trCopiar('${ant}', false, true)">
+      <button class="tr-op ${sem || prog ? "" : "principal"}" onclick="trCopiar('${ant}', false, true)">
         <i class="ti ti-wand"></i>
         <b>Armar desde el ${trLargo(ant)}</b>
         <span>Copia los horarios y en cada regreso pone el coche que quedó allá, con su tripulación. Las idas quedan para completar.</span>
-        ${sem ? "" : "<em>Recomendado</em>"}
+        ${sem || prog ? "" : "<em>Recomendado</em>"}
       </button>
       <button class="tr-op" onclick="trCopiar('${ant}', true, false)">
         <i class="ti ti-copy"></i>
@@ -2562,7 +2585,7 @@ function trInicioVacio() {
     <div class="tr-vacio">
       <div class="tr-vacio-cab">
         <h2>¿Cómo armamos el ${trInt() ? "internacional del " : ""}${trLargo(tr.fecha)}?</h2>
-        <p>${sem ? "Cada día de la semana lleva sus salidas: lo más rápido es partir del mismo día de la semana pasada." : ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
+        <p>${prog ? "Cada día de la semana lleva sus salidas: la programación semanal ya sabe cuáles son y qué unidad hace cada una." : sem ? "Cada día de la semana lleva sus salidas: lo más rápido es partir del mismo día de la semana pasada." : ant ? "Lo más rápido es partir del último día cargado." : trInt() ? "Es el primer día del internacional: importá la planilla que ya tienen armada, o empezá a mano." : "Es el primer día: importá la planilla o empezá a mano."}</p>
         ${trEsperadoTxt()}
       </div>
       <div class="tr-ops">${opciones.join("")}</div>
@@ -2702,7 +2725,7 @@ function trIrAProblema(tipo) {
 
 // Cuántas salidas del interior sin coche tienen un coche esperando allá
 function trVaciasInterior() {
-  return tr.d.completables || 0;
+  return (tr.d.completables || 0) + (tr.d.completables_idas || 0);
 }
 
 function trDonde() {
@@ -2716,7 +2739,7 @@ function trDonde() {
       </div>
       ${trPuede() ? `<button class="tr-completar" onclick="trCompletar()" ${vacias ? "" : "disabled"}
           title="Pone en cada salida del interior sin coche el que está en ese lugar, con su tripulación">
-          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} ${trInt() ? `regreso${vacias === 1 ? "" : "s"} con el coche que está en Buenos Aires` : `salida${vacias === 1 ? "" : "s"} con el coche que está allá`}` : "Nada para completar con lo que está allá"}
+          <i class="ti ti-wand"></i> ${vacias ? `Completar ${vacias} ${trInt() ? (tr.d.completables_idas ? `salida${vacias === 1 ? "" : "s"}: regresos por rotación e idas por orden de llegada` : `regreso${vacias === 1 ? "" : "s"} con el coche que está en Buenos Aires`) : `salida${vacias === 1 ? "" : "s"} con el coche que está allá`}` : "Nada para completar con lo que está allá"}
         </button>` : ""}
     </div>`;
   if (!grupos.length) {
@@ -2725,7 +2748,9 @@ function trDonde() {
   const chip = (c, lugar) => {
     const usado = (c.hoy || []).filter(Boolean);
     const llego = c.desde_fecha === trSumar(tr.fecha, -1) ? "ayer" : `el ${c.desde_fecha.slice(8, 10)}/${c.desde_fecha.slice(5, 7)}`;
-    const titulo = `Llegó ${llego} (salió ${c.desde_hora} ${c.destino})${c.trip1 ? ` · ${c.trip1}${c.trip2 ? " y " + c.trip2 : ""}` : ""}${usado.length ? ` · hoy sale ${usado.join(", ")}` : ""}`;
+    const enAsu = trInt() && c.llegada && !/^(RETIRO|LINIERS|LA PLATA|LA NORIA|SAN JUSTO|BUENOS AIRES)/.test(lugar)
+      ? ` · ${lugar === "VILLARRICA" ? "en Villarrica" : "a Asunción"} ~${c.llegada.slice(8, 10)}/${c.llegada.slice(5, 7)} ${c.llegada.slice(11, 16)}` : "";
+    const titulo = `Llegó ${llego} (salió ${c.desde_hora} ${c.destino})${enAsu}${c.clase ? ` · ${c.clase === "LEITO" ? "leito" : "coche cama"}` : ""}${c.trip1 ? ` · ${c.trip1}${c.trip2 ? " y " + c.trip2 : ""}` : ""}${usado.length ? ` · hoy sale ${usado.join(", ")}` : ""}`;
     return `<button class="tr-cc ${usado.length ? "usado" : ""} ${tr.asignar === c.coche ? "sel" : ""}" data-coche="${trEsc(c.coche)}" data-lugar="${trEsc(lugar)}"
               ${trPuede() ? `draggable="true" onclick="trTomarCoche('${trEsc(c.coche)}', '${trEsc(lugar)}')"` : ""} title="${trEsc(titulo)}">
               <b>${trEsc(c.coche)}</b>${usado.length ? `<small>${usado[0]}</small>` : ""}</button>`;
@@ -2750,7 +2775,9 @@ async function _trCompletar() {
   const antes = trCochesPorFila();
   trAplicar(r, { repintar: true });
   if (r.completadas) {
-    toast(`${r.completadas} salida${r.completadas === 1 ? "" : "s"} completada${r.completadas === 1 ? "" : "s"} con el coche que está allá`, "success");
+    toast(r.completadas_idas
+      ? `${r.completadas_regresos || 0} regreso${r.completadas_regresos === 1 ? "" : "s"} por rotación y ${r.completadas_idas} salida${r.completadas_idas === 1 ? "" : "s"} por orden de llegada`
+      : `${r.completadas} salida${r.completadas === 1 ? "" : "s"} completada${r.completadas === 1 ? "" : "s"} con el coche que está allá`, "success");
     trVoltearLlenas(antes);
   } else toast("No hay coches en esos lugares para completar", "");
 }
@@ -2875,8 +2902,8 @@ function trFila(s, lado, cambiada, k = 0) {
         <input class="tr-in tr-chapa" ${v("coche", 'placeholder="COCHE" autocomplete="off" maxlength="10" aria-label="Coche"')}>
       </span>
       <span class="tr-trips">
-        <input class="tr-in tr-trip" ${v("trip1", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Primer tripulante"')}>
-        <input class="tr-in tr-trip" ${v("trip2", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Segundo tripulante"')}>
+        <input class="tr-in tr-trip" ${v("trip1", 'placeholder="Tripulante" autocomplete="off" maxlength="60" aria-label="Primer tripulante"')}>
+        <input class="tr-in tr-trip" ${v("trip2", 'placeholder="Tripulante" autocomplete="off" maxlength="60" aria-label="Segundo tripulante"')}>
       </span>
       ${trPuede() ? `<span class="tr-acc-fila">
           <button class="tr-ref" onclick="trRefuerzo(${s.id})" title="Agregar un refuerzo: otro coche a la misma hora y el mismo tramo" tabindex="-1"><i class="ti ti-copy-plus"></i></button>
@@ -2929,6 +2956,7 @@ function trAplicar(d, { repintar = false } = {}) {
 function trRepintarColumna(b, lado) {
   const col = document.querySelector(`.tr-col[data-bid="${b.id}"][data-lado="${lado}"] .tr-filas`);
   if (!col) return;
+  setTimeout(trMarcarTrips, 0);
   const pend = new Set((tr.d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
   // FLIP: cada fila se desliza de donde estaba a donde va
   const antes = {};
@@ -2977,6 +3005,7 @@ async function trGuardarCampo(el) {
   trAprender(campo, v);
   trAplicar(r);
   trRefrescarDias();
+  trMarcarTrips();
 }
 
 // Teclado: Enter pasa a la casilla siguiente, como en la planilla
@@ -2984,6 +3013,7 @@ function trTecla(e) {
   const el = e.target;
   if (!el.classList?.contains("tr-in")) return;
   if (tr.sug && el.classList.contains("tr-chapa") && trTeclaSug(e)) return;
+  if (tr.ch && el === tr.ch.input && trTeclaCh(e)) return;
   if (e.key === "Enter") {
     e.preventDefault();
     const todos = [...document.querySelectorAll("#tr-corredores .tr-in:not([readonly])")];
@@ -3168,6 +3198,8 @@ function trPintarSug() {
   if (s.sel >= s.items.length) s.sel = s.items.length - 1;
   const etiqueta = c => c.rotacion ? `<em class="rot"><i class="ti ti-repeat"></i> ${trEsc(c.rotacion)}</em>`
     : c.reservado ? `<em class="tarde">En ${trEsc(c.lugar)} · por rotación ${trEsc(c.reservado)}</em>`
+    : c.viajando ? `<em class="tarde">Todavía viene de Buenos Aires · llega el ${c.viajando.slice(8, 10)}/${c.viajando.slice(5, 7)} ~${c.viajando.slice(11, 16)}</em>`
+    : c.turno ? `<em class="alla"><i class="ti ti-list-numbers"></i> ${c.turno}.º en llegar a ${trEsc(c.lugar === "ASU" ? "Asunción" : c.lugar)}${c.clase ? ` · ${c.clase === "LEITO" ? "leito" : "coche cama"}` : ""}</em>`
     : c.rango === 0 ? `<em class="alla">Está en ${trEsc(c.lugar)}</em>`
     : c.rango === 1 ? `<em class="cerca">En ${trEsc(c.lugar)}, mismo corredor</em>`
     : `<em class="tarde">En ${trEsc(c.lugar)} · sale más tarde (${trEsc((c.ya_hoy || []).join(", "))})</em>`;
@@ -3367,6 +3399,7 @@ async function trConfirmarPublicar(btn) {
       <svg viewBox="0 0 52 52" class="tr-listo-check"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
       <b>${r.sin_cambios ? `La versión ${v} ya estaba publicada` : `Versión ${v} publicada`}</b>
       <span>Ahora mandalo al grupo de WhatsApp de los choferes.</span>
+      ${r.avisos && (r.avisos.avisados || (r.avisos.sin_app || []).length) ? `<span style="margin-top:6px;font-size:12.5px;color:var(--muted)"><i class="ti ti-device-mobile"></i> ${avisosTxt(r.avisos)}</span>` : ""}
     </div>`;
   if (pie) pie.innerHTML = `
     <button class="btn btn-ghost" onclick="trDescargar(${v}, 'pdf', this)"><i class="ti ti-file-type-pdf"></i> PDF</button>
@@ -3459,11 +3492,211 @@ function trMas(btn) {
     ...(sem ? [{ icono: "calendar-repeat", html: `<b>Rearmar desde el ${trCorto(sem)}</b><span>El mismo día de la semana pasada: trae las salidas de este día</span>`, fn: () => trCopiar(sem, false, true) }] : []),
     ...(ant ? [{ icono: "wand", html: `<b>Rearmar desde el ${trCorto(ant)}</b><span>Horarios de ese día y regresos con el coche que está allá</span>`, fn: () => trCopiar(ant, false, true) },
                { icono: "copy", html: `<b>Copiar el ${trCorto(ant)} tal cual</b><span>Con coches y tripulantes</span>`, fn: () => trCopiar(ant, true, false) }] : []),
+    ...(trInt() ? [{ icono: "calendar-cog", html: "<b>Programación semanal</b><span>Qué sale cada día, con qué regreso vuelve y el orden de llegada</span>", fn: () => trPrograma() },
+                   ...(tr.d.programa_dia ? [{ icono: "calendar-cog", html: "<b>Rearmar con la programación</b><span>Las salidas de este día de la semana, con las unidades que tocan</span>", fn: trArmarPrograma }] : [])] : []),
     { icono: "repeat", html: "<b>Rotaciones de los coches</b><span>Con qué regreso vuelve el coche de cada ida</span>", fn: trRotaciones },
     ...(trInt() ? [{ icono: "calendar-week", html: "<b>Salidas por día</b><span>Cuántas salidas y regresos lleva cada día de la semana</span>", fn: trPatron },
                    { icono: "steering-wheel", html: "<b>Viajes de los choferes</b><span>Cuántos lleva cada uno en el mes (tope: 8)</span>", fn: () => trViajesMes() }] : []),
     { icono: "trash", html: "<b>Vaciar el día</b><span>Quita todos los corredores y salidas</span>", peligro: true, fn: trVaciar },
   ]);
+}
+
+// ─── Programación semanal del internacional ───
+function trArmarPrograma() { return trUnaVez("copiar", () => _trArmarPrograma(), "Ya se está armando el día"); }
+async function _trArmarPrograma() {
+  if (!trVacio() && !confirm(`Esto reemplaza lo que está cargado en el ${trLargo(tr.fecha)} por la programación. ¿Seguimos?`)) return;
+  const listo = trEspera("Armando el día con la programación…");
+  let r;
+  try { r = await trPedir(`/api/trafico/dia/${tr.fecha}/programa?${trT()}`, "POST", { completar: true }); }
+  finally { listo(); }
+  if (!r.ok) { toast(r.msg || "No se pudo armar", "error"); return; }
+  tr.d = r;
+  trPintar(true);
+  trRefrescarDias();
+  const n = (r.completadas_regresos || 0) + (r.completadas_idas || 0);
+  toast(n ? `Listo: ${r.completadas_regresos || 0} regresos por rotación y ${r.completadas_idas || 0} salidas por orden de llegada` : "Salidas armadas. Faltan los coches: no hay unidades cargadas de los días anteriores.", "success");
+  trVoltearLlenas();
+}
+
+const tp = { filas: [], dia: 0, d: null };
+const TP_DIAS = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"];
+const TP_CORTOS = ["", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const tpHm = h => { const m = String(h || "").match(/^(\d{1,2})[:.]?(\d{2})$/); return m ? m[1].padStart(2, "0") + ":" + m[2] : String(h || ""); };
+const tpOrden = (a, b) => (a.lado === b.lado ? 0 : a.lado === "ida" ? -1 : 1) || tpHm(a.hora).localeCompare(tpHm(b.hora)) || (a._k - b._k);
+
+async function trPrograma(dia) {
+  const d = await api("/api/trafico/programa");
+  if (!d || !d.ok) { toast((d && d.msg) || "No se pudo traer la programación", "error"); return; }
+  tp.d = d;
+  tp.filas = d.filas.map((f, k) => ({ ...f, _k: k }));
+  tp.dia = dia || 0;
+  document.querySelector(".modal-overlay .tr-prog-m")?.closest(".modal-overlay").remove();
+  const o = rvModal({
+    titulo: "Programación semanal · internacional", icono: "calendar-cog", ancho: 1180, clase: "tr-prog-m",
+    sub: "Qué sale cada día, con qué regreso vuelve cada unidad y en qué orden llegan a Asunción. Con esto se arma el día, se completan los coches y se generan las rotaciones.",
+    cuerpo: `<div id="tp-rev"></div>
+      <div class="tp-tabs" role="tablist">${TP_DIAS.map((n, i) => `<button type="button" role="tab" data-d="${i}">${i ? `<span class="tp-l">${n}</span><span class="tp-c">${TP_CORTOS[i]}</span>` : `<i class="ti ti-layout-columns"></i> Semana`}</button>`).join("")}</div>
+      <div id="tp-cuerpo"></div>`,
+    pie: `<label class="tp-viaje"><i class="ti ti-bus"></i> Buenos Aires → Asunción <input type="number" min="1" max="48" id="tp-viaje" value="${d.viaje_horas}" ${d.puede_editar ? "" : "disabled"}> horas</label>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">${d.puede_editar ? "Cancelar" : "Cerrar"}</button>
+      ${d.puede_editar ? `<button class="btn btn-primary" id="tp-ok"><i class="ti ti-check"></i> Guardar</button>` : ""}`,
+  });
+  o.querySelectorAll(".tp-tabs button").forEach(b => b.onclick = () => { tp.dia = +b.dataset.d; tpPintar(); });
+  const ok = o.querySelector("#tp-ok");
+  if (ok) ok.onclick = () => tpGuardar(ok);
+  tpPintar();
+}
+function tpRevision(rv) {
+  if (!rv) return "";
+  const s = rv.salen || {}, e = rv.entran || {};
+  const malos = (rv.avisos || []).filter(a => a.nivel === "error"), otros = (rv.avisos || []).filter(a => a.nivel !== "error");
+  return `<div class="tp-rev ${rv.cierra ? "ok" : "mal"}">
+      <i class="ti ti-${rv.cierra ? "circle-check" : "alert-triangle"}"></i>
+      <div><b>${rv.cierra ? "La semana cierra" : "La semana no cierra"}</b>
+        <span>Asunción: salen ${s.ASU || 0} unidades y llegan ${e.ASU || 0} · Villarrica: salen ${s.VILLARRICA || 0} y quedan de reserva ${e.VILLARRICA || 0}</span>
+        ${malos.length || otros.length ? `<ul>${[...malos, ...otros].map(a => `<li class="${a.nivel}">${trEsc(a.txt)}</li>`).join("")}</ul>` : ""}</div>
+    </div>`;
+}
+function tpTramo(f) {
+  const t = String(f.destino || "").split(/\s*\/\s*|\s+-\s+/);
+  return t.length > 1 ? `${trEsc(t[0])} <i class="ti ti-arrow-right"></i> ${trEsc(t.slice(1).join(" / "))}` : trEsc(f.destino || "");
+}
+function tpQuienVuelve(f) {
+  return tp.filas.filter(x => x.lado === "ida" && !x.sigue && +x.vuelve_dia === +f.dia && tpHm(x.vuelve_hora) === tpHm(f.hora));
+}
+function tpPintar() {
+  const o = document.querySelector(".tr-prog-m");
+  if (!o) return;
+  o.querySelector("#tp-rev").innerHTML = tpRevision(tp.d.revision);
+  o.querySelectorAll(".tp-tabs button").forEach(b => b.classList.toggle("on", +b.dataset.d === tp.dia));
+  const cuerpo = o.querySelector("#tp-cuerpo");
+  cuerpo.innerHTML = tp.dia ? tpDia(tp.dia) : tpSemana();
+  if (tp.dia) tpEnganchar(cuerpo);
+}
+function tpClase(c) {
+  return c ? `<span class="tp-clase ${c === "LEITO" ? "leito" : ""}">${c === "LEITO" ? "Leito" : "Coche cama"}</span>` : "";
+}
+function tpSemana() {
+  const llegTxt = { reserva_vca: ["building-warehouse", "Queda de reserva en Villarrica"], despues_1800: ["truck", "Vuelve en lastre desde Villarrica · llega después del de 18:00"], con_1700: ["clock", "Llega junto con el de 17:00"] };
+  const col = dia => {
+    const fs = tp.filas.filter(f => +f.dia === dia).sort(tpOrden);
+    const idas = fs.filter(f => f.lado === "ida"), regs = fs.filter(f => f.lado === "regreso");
+    const ida = f => `<div class="tp-it ida">
+        <b>${tpHm(f.hora)}</b><span class="tp-tr">${tpTramo(f)}${tpClase(f.clase)}</span>
+        ${f.sigue ? `<em class="sigue"><i class="ti ti-link"></i> misma unidad sigue a las ${tpHm(f.sigue)}</em>`
+          : f.vuelve_dia ? `<em><i class="ti ti-arrow-back-up"></i> vuelve ${TP_CORTOS[f.vuelve_dia].toLowerCase()} ${tpHm(f.vuelve_hora)}</em>` : `<em class="mal">sin regreso</em>`}
+        ${f.nota ? `<small>${trEsc(f.nota)}</small>` : ""}</div>`;
+    const reg = f => {
+      const q = tpQuienVuelve(f), l = llegTxt[f.llegada];
+      return `<div class="tp-it reg">
+        <b>${tpHm(f.hora)}</b><span class="tp-tr">${tpTramo(f)}${tpClase(f.clase)}</span>
+        ${q.length ? `<em><i class="ti ti-bus"></i> unidad del ${q.map(x => `${TP_CORTOS[x.dia].toLowerCase()} ${tpHm(x.hora)}`).join(" y ")}</em>` : `<em class="mal">ninguna ida vuelve acá</em>`}
+        ${l ? `<em class="lleg"><i class="ti ti-${l[0]}"></i> ${l[1]}</em>` : ""}
+        ${f.nota ? `<small>${trEsc(f.nota)}</small>` : ""}</div>`;
+    };
+    return `<div class="tp-col">
+        <button type="button" class="tp-col-cab" onclick="tp.dia=${dia};tpPintar()">${TP_DIAS[dia]}</button>
+        <div class="tp-sub">Salen de acá</div>${idas.map(ida).join("") || `<p class="tp-nada">—</p>`}
+        <div class="tp-sub reg">Vuelven de allá</div>${regs.map(reg).join("") || `<p class="tp-nada">—</p>`}
+      </div>`;
+  };
+  return `<div class="tp-reglas">
+      <span><i class="ti ti-list-numbers"></i> Las de Asunción salen por orden de llegada</span>
+      <span>17:00 y La Plata 13:35 (leito) → 18:00 → La Noria 14:20 (en lastre)</span>
+      <span>La Plata 13:30 queda de reserva en Villarrica</span>
+    </div>
+    <div class="tp-semana">${[1, 2, 3, 4, 5, 6, 7].map(col).join("")}</div>`;
+}
+function tpDia(dia) {
+  const ed = tp.d.puede_editar ? "" : "disabled";
+  const fs = tp.filas.filter(f => +f.dia === dia).sort(tpOrden);
+  const regsDe = dd => [...new Set(tp.filas.filter(x => x.lado === "regreso" && +x.dia === +dd).map(x => tpHm(x.hora)))].sort();
+  const optsClase = c => [["", "Común"], ["CAMA", "Coche cama"], ["LEITO", "Leito"]].map(([v, t]) => `<option value="${v}" ${v === (c || "") ? "selected" : ""}>${t}</option>`).join("");
+  const fila = f => {
+    const k = f._k;
+    const base = `<input class="tp-h" data-k="${k}" data-c="hora" value="${trEsc(tpHm(f.hora))}" placeholder="09:00" maxlength="5" ${ed} aria-label="Hora">
+      <input class="tp-d" data-k="${k}" data-c="destino" value="${trEsc(f.destino || "")}" placeholder="${f.lado === "ida" ? "ASUNCION / RETIRO" : "RETIRO / ASUNCION"}" maxlength="80" ${ed} aria-label="Tramo">
+      <select data-k="${k}" data-c="clase" ${ed} aria-label="Clase">${optsClase(f.clase)}</select>`;
+    let despues;
+    if (f.lado === "ida") {
+      const otras = fs.filter(x => x.lado === "ida" && x._k !== k).map(x => tpHm(x.hora));
+      const modo = f.sigue ? "sigue" : "vuelve";
+      const vd = +f.vuelve_dia || 0, hs = vd ? regsDe(vd) : [];
+      const vh = tpHm(f.vuelve_hora);
+      despues = `<select data-k="${k}" data-c="_modo" ${ed} aria-label="Qué hace después">
+          <option value="vuelve" ${modo === "vuelve" ? "selected" : ""}>Vuelve el</option>
+          <option value="sigue" ${modo === "sigue" ? "selected" : ""}>Sigue (misma unidad) a las</option></select>
+        ${modo === "sigue"
+          ? `<select data-k="${k}" data-c="sigue" ${ed}><option value="">elegí…</option>${otras.map(h => `<option ${h === tpHm(f.sigue) ? "selected" : ""}>${h}</option>`).join("")}</select>`
+          : `<select data-k="${k}" data-c="vuelve_dia" ${ed}><option value="">día…</option>${[1, 2, 3, 4, 5, 6, 7].map(i => `<option value="${i}" ${i === vd ? "selected" : ""}>${TP_DIAS[i]}</option>`).join("")}</select>
+             <select data-k="${k}" data-c="vuelve_hora" ${ed} ${vd ? "" : "disabled"}><option value="">regreso…</option>${hs.map(h => `<option ${h === vh ? "selected" : ""}>${h}</option>`).join("")}${vh && !hs.includes(vh) ? `<option selected>${vh} (no hay)</option>` : ""}</select>`}`;
+    } else {
+      const q = tpQuienVuelve(f);
+      despues = `<select data-k="${k}" data-c="llegada" ${ed} aria-label="Cómo llega a Asunción">${Object.entries(tp.d.llegadas).map(([v, t]) => `<option value="${v}" ${v === (f.llegada || "") ? "selected" : ""}>${trEsc(t)}</option>`).join("")}</select>
+        <span class="tp-quien ${q.length ? "" : "mal"}">${q.length ? `Unidad del ${q.map(x => `${TP_CORTOS[x.dia].toLowerCase()} ${tpHm(x.hora)}`).join(" y ")}` : "Ninguna ida vuelve acá"}</span>`;
+    }
+    return `<div class="tp-fila ${f.lado}">
+        <div class="tp-fila-a">${base}</div>
+        <div class="tp-fila-b">${despues}</div>
+        <input class="tp-n" data-k="${k}" data-c="nota" value="${trEsc(f.nota || "")}" placeholder="Nota (opcional)" maxlength="160" ${ed}>
+        ${ed ? "" : `<span></span>`}${tp.d.puede_editar ? `<button type="button" class="tp-x" data-x="${k}" title="Quitar"><i class="ti ti-trash"></i></button>` : ""}
+      </div>`;
+  };
+  const idas = fs.filter(f => f.lado === "ida"), regs = fs.filter(f => f.lado === "regreso");
+  return `<div class="tp-dia">
+      <section><h3><i class="ti ti-arrow-up-right"></i> Salen de acá los ${trEsc(trDiaPlural(TP_DIAS[dia].toLowerCase()))}</h3>
+        ${idas.map(fila).join("") || `<p class="tp-nada">Ninguna salida.</p>`}
+        ${tp.d.puede_editar ? `<button type="button" class="tp-mas" data-mas="ida"><i class="ti ti-plus"></i> Agregar salida</button>` : ""}</section>
+      <section><h3><i class="ti ti-arrow-down-left"></i> Vuelven de allá los ${trEsc(trDiaPlural(TP_DIAS[dia].toLowerCase()))}</h3>
+        ${regs.map(fila).join("") || `<p class="tp-nada">Ningún regreso.</p>`}
+        ${tp.d.puede_editar ? `<button type="button" class="tp-mas" data-mas="regreso"><i class="ti ti-plus"></i> Agregar regreso</button>` : ""}</section>
+    </div>`;
+}
+function tpEnganchar(cuerpo) {
+  const f = k => tp.filas.find(x => x._k === +k);
+  cuerpo.querySelectorAll("[data-c]").forEach(el => {
+    const ev = el.tagName === "SELECT" ? "change" : "input";
+    el.addEventListener(ev, () => {
+      const x = f(el.dataset.k), c = el.dataset.c;
+      if (!x) return;
+      if (c === "_modo") {
+        if (el.value === "sigue") { x.sigue = x.sigue || ""; x.vuelve_dia = null; x.vuelve_hora = ""; x._sigue = true; }
+        else { x.sigue = ""; x._sigue = false; }
+        if (el.value === "sigue" && !x.sigue) x.sigue = " ";
+        tpPintar(); return;
+      }
+      if (c === "destino") x.destino = el.value.toUpperCase();
+      else if (c === "vuelve_dia") { x.vuelve_dia = +el.value || null; x.vuelve_hora = ""; tpPintar(); return; }
+      else if (c === "vuelve_hora") x.vuelve_hora = el.value.replace(/ \(no hay\)$/, "");
+      else x[c] = el.value;
+    });
+  });
+  cuerpo.querySelectorAll(".tp-h").forEach(el => el.addEventListener("blur", () => { const x = f(el.dataset.k); if (x) { x.hora = tpHm(el.value.trim()); } }));
+  cuerpo.querySelectorAll("[data-x]").forEach(b => b.onclick = () => {
+    tp.filas = tp.filas.filter(x => x._k !== +b.dataset.x);
+    tpPintar();
+  });
+  cuerpo.querySelectorAll("[data-mas]").forEach(b => b.onclick = () => {
+    const k = Math.max(0, ...tp.filas.map(x => x._k)) + 1;
+    tp.filas.push({ _k: k, dia: tp.dia, lado: b.dataset.mas, hora: "", destino: "", clase: "", sigue: "", vuelve_dia: null, vuelve_hora: "", llegada: "", nota: "" });
+    tpPintar();
+    document.querySelector(`.tr-prog-m .tp-h[data-k="${k}"]`)?.focus();
+  });
+}
+async function tpGuardar(btn) {
+  const filas = tp.filas.map(x => ({ ...x, sigue: String(x.sigue || "").trim(), hora: tpHm(x.hora) }));
+  const sinHora = filas.find(x => !x.hora || !String(x.destino || "").trim());
+  if (sinHora) { tp.dia = +sinHora.dia; tpPintar(); toast(`Al ${TP_DIAS[sinHora.dia].toLowerCase()} le falta ${sinHora.hora ? "el tramo" : "la hora"} de una ${sinHora.lado === "ida" ? "salida" : "vuelta"}`, "error"); return; }
+  btn.disabled = true;
+  const r = await api("/api/trafico/programa", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filas, viaje_horas: document.getElementById("tp-viaje")?.value }) }).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  tp.d = r;
+  tp.filas = r.filas.map((f, k) => ({ ...f, _k: k }));
+  tpPintar();
+  toast(`Programación guardada · ${r.rotaciones} rotaciones y las salidas por día actualizadas${r.revision.cierra ? "" : " (ojo: la semana no cierra)"}`, r.revision.cierra ? "success" : "");
+  if (tr.fecha) trCargar(tr.fecha);
 }
 
 // ─── Tope de viajes de los choferes de internacional: 8 por mes (ida y vuelta = 1) ───
@@ -3769,6 +4002,7 @@ async function _trVaciar() {
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && tr.asignar) { trTomarCoche(null); return; }
     if (!dentro(e)) return;
+    if (tr.ch && e.target === tr.ch.input && e.target.classList.contains("tr-res-trip") && trTeclaCh(e)) return;
     if (e.target.matches(".tr-nota, .tr-corr-nombre, .tr-res-coche, .tr-res-trip") && e.key === "Enter") { e.preventDefault(); e.target.blur(); return; }
     trTecla(e);
   });
@@ -3776,10 +4010,13 @@ async function _trVaciar() {
     if (!dentro(e)) { if (tr.sug && !e.target.closest?.(".tr-sug")) trCerrarSug(); return; }
     if (e.target.classList.contains("tr-chapa")) trAbrirSug(e.target);
     else if (tr.sug && e.target !== tr.sug.input) trCerrarSug();
+    if (e.target.matches(".tr-trip, .tr-res-trip")) trAbrirCh(e.target);
+    else if (tr.ch && e.target !== tr.ch.input) trCerrarCh();
   });
   document.addEventListener("focusout", e => {
     if (!dentro(e)) return;
     if (tr.sug && e.target === tr.sug.input) setTimeout(() => { if (tr.sug && document.activeElement !== tr.sug.input) trCerrarSug(); }, 120);
+    if (tr.ch && e.target === tr.ch.input) setTimeout(() => { if (tr.ch && document.activeElement !== tr.ch.input) trCerrarCh(); }, 120);
     // Si la columna quedó desordenada por una hora nueva, se acomoda al salir de ella
     const col = e.target.closest(".tr-col");
     if (col && tr.reordenar.size) setTimeout(() => {
@@ -3793,6 +4030,7 @@ async function _trVaciar() {
   });
   document.addEventListener("input", e => {
     if (tr.sug && e.target === tr.sug.input) { tr.sug.sel = -1; trPintarSug(); }
+    if (tr.ch && e.target === tr.ch.input) { tr.ch.sel = 0; trPintarCh(); }
   });
   document.addEventListener("click", e => { if (dentro(e) && tr.asignar) trClickFila(e); }, true);
   // Arrastrar un coche de "dónde amanecen" a una salida
@@ -3824,8 +4062,8 @@ async function _trVaciar() {
     if (coche) trPonerCoche(f, coche, trCandDesdePanel(coche));
   });
   // La ventanita de sugerencias acompaña a la casilla si se mueve la pantalla
-  window.addEventListener("resize", () => trUbicarSug());
-  document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); }, true);
+  window.addEventListener("resize", () => { trUbicarSug(); trUbicarCh(); });
+  document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); if (tr.ch) trUbicarCh(); }, true);
 })();
 
 // ════════════════════════════════════════════════════════════════════════
@@ -4659,13 +4897,13 @@ if (["admin", "taller"].includes(window.USUARIO_ROL)) {
 }
 if (window.USUARIO_ROL === "compras") {
   // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
-  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal"];
+  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal", "cajas", "tablero_taller"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesCompras.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Compras" && t !== "Taller") s.style.display = "none";
+    if (t !== "Compras" && t !== "Taller" && t !== "Tesorería") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="compras"]')?.classList.add("active");
   renderCompras();
@@ -4673,14 +4911,14 @@ if (window.USUARIO_ROL === "compras") {
   // El auditor controla: todo lo de rendiciones corporativas más lo suyo de
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible", "corp_asignacion",
-                            "corp_resumen", "corp_historial", "corp_empresas",
-                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias"];
+                            "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios",
+                            "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias", "cajas"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(s => {
     const t = s.textContent.trim();
-    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación" && t !== "Comercial") s.style.display = "none";
+    if (t !== "Auditoría" && t !== "Corporativos" && t !== "Turismo" && t !== "Operación" && t !== "Comercial" && t !== "Tesorería") s.style.display = "none";
   });
   document.querySelector('.nav-item[data-sec="corp_resumen"]')?.classList.add("active");
   renderCorpResumen();
@@ -5575,10 +5813,40 @@ let otFiltroMotivo = ""; // "" | "*" (todas las que tienen algo atrasado) | la c
 let comprasTab = "en_espera";
 const LABEL_EST_COMPRAS = { en_espera: "En espera", presupuestado: "Presupuestadas", en_camino: "En camino", entregado: "Entregadas" };
 
-async function renderCompras() {
-  status("Compras / Depósito");
-  await refrescarPermisoOTs();
-  const todas = await api("/api/compras/ots");
+let cmpTodas = [], cmpBuscar = "", _cmpBuscarT;
+const cmpNorm = t => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+// ¿La OT tiene lo que se busca? Coche, patente, OT, trabajo, repuesto, proveedor, mecánico
+function cmpCoincide(o, q) {
+  q = cmpNorm(q).trim();
+  if (!q) return true;
+  const coches = [o.n_interno, o.patente, ...(o.coches || []).flatMap(c => [c.n_interno, c.patente])];
+  const items = o.items || [];
+  if (/^#?\d+$/.test(q)) {                      // un número: coche u OT
+    const n = q.replace("#", "");
+    return coches.some(c => String(c || "").includes(n)) || items.some(i => String(i.coche_n || "").includes(n))
+      || String(o.id) === n || String(o.numero || "") === n;
+  }
+  const texto = cmpNorm([
+    "ot " + o.id, ...coches, o.nota_compras, o.proveedor_compras, o.compras_motivo,
+    ...items.flatMap(i => [i.descripcion, i.material_pedido, i.tecnico, i.coche_n, i.coche_patente, i.proveedor_compras,
+      ...(i.materiales || []).flatMap(m => [m.descripcion, m.proveedor, m.factura])]),
+  ].filter(Boolean).join(" | "));
+  return q.split(/\s+/).every(p => texto.includes(p));
+}
+function cmpBuscarEn(v) {
+  cmpBuscar = v;
+  const x = document.querySelector(".cmp-buscar-x");
+  if (x) x.hidden = !v;
+  clearTimeout(_cmpBuscarT);
+  _cmpBuscarT = setTimeout(cmpPintarCuerpo, 120);
+}
+function cmpPintarCuerpo() {
+  const caja = document.getElementById("cmp-cuerpo");
+  if (!caja) return;
+  const q = cmpBuscar.trim();
+  const todas = (cmpTodas || []).filter(o => cmpCoincide(o, q));
+  const total = { en_espera: 0, presupuestado: 0, en_camino: 0, entregado: 0 };
+  (cmpTodas || []).forEach(o => { if (o.estado_compras in total) total[o.estado_compras]++; });
   const enEspera = todas.filter(o => o.estado_compras === "en_espera");
   const presup = todas.filter(o => o.estado_compras === "presupuestado");
   const enCamino = todas.filter(o => o.estado_compras === "en_camino");
@@ -5588,44 +5856,269 @@ async function renderCompras() {
     : comprasTab === "en_camino" ? enCamino
     : comprasTab === "entregado" ? entreg : [];
   const totalEspera = todas.reduce((s, o) => s + ((o.pagos && o.pagos.en_espera) || 0), 0);
+  const de = (n, est) => q ? `<small class="cmp-met-sub">de ${total[est]}</small>` : "";
+  const etapas = [["en_espera", enEspera], ["presupuestado", presup], ["en_camino", enCamino], ["entregado", entreg]];
+  const enOtras = q && !lista.length && !["cola", "reposicion"].includes(comprasTab)
+    ? etapas.filter(([e, l]) => e !== comprasTab && l.length) : [];
+  // Si en esta etapa no está pero en otra sí, ir directo a esa
+  if (enOtras.length) {
+    const desde = LABEL_EST_COMPRAS[comprasTab];
+    comprasTab = enOtras[0][0];
+    cmpPintarCuerpo();
+    const t = document.querySelector("#cmp-cuerpo .section-title");
+    if (t) t.insertAdjacentHTML("afterend", `<p class="cmp-salto"><i class="ti ti-arrow-right"></i> En «${trEsc(desde)}» no estaba: se encontró en «${trEsc(LABEL_EST_COMPRAS[comprasTab])}»${enOtras.length > 1 ? ` (también hay en ${enOtras.slice(1).map(([e, l]) => `«${LABEL_EST_COMPRAS[e]}» (${l.length})`).join(", ")})` : ""}.</p>`);
+    return;
+  }
+  caja.innerHTML = `
+      <div class="metrics" style="margin-bottom:18px">
+        <div class="metric ${q && enEspera.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='en_espera'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('en_espera')">
+          <div class="metric-content"><div class="metric-label">En espera</div>
+          <div class="metric-value" style="color:var(--warning)">${enEspera.length}${de(enEspera.length, "en_espera")}</div></div></div>
+        <div class="metric ${q && presup.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='presupuestado'?'border:2px solid var(--brand-blue)':''}" onclick="setComprasTab('presupuestado')">
+          <div class="metric-content"><div class="metric-label">Presupuestadas</div>
+          <div class="metric-value" style="color:var(--brand-blue)">${presup.length}${de(presup.length, "presupuestado")}</div></div></div>
+        <div class="metric ${q && enCamino.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='en_camino'?'border:2px solid #d97706':''}" onclick="setComprasTab('en_camino')">
+          <div class="metric-content"><div class="metric-label">En camino</div>
+          <div class="metric-value" style="color:#d97706">${enCamino.length}${de(enCamino.length, "en_camino")}</div></div></div>
+        <div class="metric ${q && entreg.length ? "cmp-hay" : ""}" style="cursor:pointer;${comprasTab==='entregado'?'border:2px solid var(--success)':''}" onclick="setComprasTab('entregado')">
+          <div class="metric-content"><div class="metric-label">Entregadas</div>
+          <div class="metric-value" style="color:var(--success)">${entreg.length}${de(entreg.length, "entregado")}</div></div></div>
+        <div class="metric" style="cursor:pointer;${comprasTab==='cola'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('cola')">
+          <div class="metric-content"><div class="metric-label">Esperando fondos</div>
+          <div class="metric-value" style="color:var(--warning)">${totalEspera}</div></div></div>
+        <div class="metric" id="cmp-repo-tile" style="cursor:pointer;${comprasTab==='reposicion'?'border:2px solid #0F766E':''}" onclick="setComprasTab('reposicion')">
+          <div class="metric-content"><div class="metric-label">Reposición del depósito</div>
+          <div class="metric-value" style="color:#0F766E">${cmpRepoRes ? cmpRepoRes.para_pedir : "·"}<small class="cmp-met-sub">${cmpRepoRes ? (cmpRepoRes.abiertos ? `${cmpRepoRes.abiertos} pedido${cmpRepoRes.abiertos === 1 ? "" : "s"} en curso` : "para pedir") : "contando…"}</small></div></div></div>
+      </div>
 
+      ${comprasTab === "reposicion" ? `<div id="repo-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>` : comprasTab === "cola" ? `
+        <div class="section-title"><i class="ti ti-hourglass"></i> Cola de Tesorería — esperando fondos</div>
+        <p class="hint" style="margin-bottom:14px"><i class="ti ti-info-circle"></i> Ítems presupuestados que Tesorería todavía no pudo cubrir. Cuando entren fondos, marcalos y liberalos: la orden retoma su curso.</p>
+        <div id="cola-espera-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      ` : `
+        <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab] || ""} (${lista.length})${q ? ` <span class="cmp-filtro">con «${trEsc(q)}»</span>` : ""}</div>
+        ${lista.length === 0
+          ? (enOtras.length
+            ? `<div class="empty cmp-otras"><i class="ti ti-search"></i>En ${trEsc((LABEL_EST_COMPRAS[comprasTab] || "esta etapa").toLowerCase())} no hay nada con «${trEsc(q)}». Está en:
+                <div>${enOtras.map(([e, l]) => `<button type="button" class="btn btn-ghost btn-sm" onclick="setComprasTab('${e}')">${LABEL_EST_COMPRAS[e]} (${l.length})</button>`).join("")}</div></div>`
+            : `<div class="empty"><i class="ti ti-${q ? "search-off" : "shopping-cart-off"}"></i>${q ? `No hay pedidos con «${trEsc(q)}» en ninguna etapa.` : "No hay pedidos en esta etapa."}</div>`)
+          : `<div class="cmp-lista">${lista.map(o => tarjetaCompra(o)).join("")}</div>`}
+      `}`;
+  if (comprasTab === "cola") renderColaEspera();
+  if (comprasTab === "reposicion") renderReposicion();
+}
+async function renderCompras() {
+  status("Compras / Depósito");
+  await refrescarPermisoOTs();
+  cmpTodas = await api("/api/compras/ots");
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-shopping-cart"></i> Compras / Depósito</h1>
       <p>Pedidos del taller — presupuestar, autorizar y entregar</p>
     </div>
     <div class="section">
-      <div class="metrics" style="margin-bottom:18px">
-        <div class="metric" style="cursor:pointer;${comprasTab==='en_espera'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('en_espera')">
-          <div class="metric-content"><div class="metric-label">En espera</div>
-          <div class="metric-value" style="color:var(--warning)">${enEspera.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='presupuestado'?'border:2px solid var(--brand-blue)':''}" onclick="setComprasTab('presupuestado')">
-          <div class="metric-content"><div class="metric-label">Presupuestadas</div>
-          <div class="metric-value" style="color:var(--brand-blue)">${presup.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='en_camino'?'border:2px solid #d97706':''}" onclick="setComprasTab('en_camino')">
-          <div class="metric-content"><div class="metric-label">En camino</div>
-          <div class="metric-value" style="color:#d97706">${enCamino.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='entregado'?'border:2px solid var(--success)':''}" onclick="setComprasTab('entregado')">
-          <div class="metric-content"><div class="metric-label">Entregadas</div>
-          <div class="metric-value" style="color:var(--success)">${entreg.length}</div></div></div>
-        <div class="metric" style="cursor:pointer;${comprasTab==='cola'?'border:2px solid var(--warning)':''}" onclick="setComprasTab('cola')">
-          <div class="metric-content"><div class="metric-label">Esperando fondos</div>
-          <div class="metric-value" style="color:var(--warning)">${totalEspera}</div></div></div>
-      </div>
-
-      ${comprasTab === "cola" ? `
-        <div class="section-title"><i class="ti ti-hourglass"></i> Cola de Tesorería — esperando fondos</div>
-        <p class="hint" style="margin-bottom:14px"><i class="ti ti-info-circle"></i> Ítems presupuestados que Tesorería todavía no pudo cubrir. Cuando entren fondos, marcalos y liberalos: la orden retoma su curso.</p>
-        <div id="cola-espera-panel"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
-      ` : `
-        <div class="section-title"><i class="ti ti-list"></i> ${LABEL_EST_COMPRAS[comprasTab] || ""} (${lista.length})</div>
-        ${lista.length === 0
-          ? `<div class="empty"><i class="ti ti-shopping-cart-off"></i>No hay pedidos en esta etapa.</div>`
-          : lista.map(o => tarjetaCompra(o)).join("")}
-      `}
+      <label class="cmp-buscar">
+        <i class="ti ti-search"></i>
+        <input id="cmp-buscar-in" type="search" value="${trEsc(cmpBuscar)}" placeholder="Buscar coche (ej: 22310), patente, OT, trabajo, repuesto o proveedor" autocomplete="off"
+          oninput="cmpBuscarEn(this.value)" onkeydown="if(event.key==='Escape'){this.value='';cmpBuscarEn('')}">
+        <button type="button" class="cmp-buscar-x" onclick="const i=document.getElementById('cmp-buscar-in');i.value='';cmpBuscarEn('');i.focus()" ${cmpBuscar ? "" : "hidden"} aria-label="Borrar búsqueda"><i class="ti ti-x"></i></button>
+      </label>
+      <div id="cmp-cuerpo"></div>
     </div>`;
+  cmpPintarCuerpo();
+  // El contador de reposición llega aparte: la página no lo espera
+  api("/api/compras/reposicion/resumen").then(r => {
+    if (!r || !r.ok) return;
+    cmpRepoRes = r;
+    const v = document.querySelector("#cmp-repo-tile .metric-value");
+    if (v) v.innerHTML = `${r.para_pedir}<small class="cmp-met-sub">${r.abiertos ? `${r.abiertos} pedido${r.abiertos === 1 ? "" : "s"} en curso` : "para pedir"}</small>`;
+  }).catch(() => {});
+}
+let cmpRepoRes = null;
 
-  if (comprasTab === "cola") renderColaEspera();
+// ─── Reposición del depósito: lo que está bajo el mínimo se pide al proveedor ───
+const repo = { sug: null, peds: [], sinMin: false };
+async function renderReposicion() {
+  const [s, l] = await Promise.all([api(`/api/compras/reposicion/sugerido${repo.sinMin ? "?sin_minimo=1" : ""}`).catch(() => null), api("/api/compras/reposicion").catch(() => null)]);
+  const box = document.getElementById("repo-panel");
+  if (!box) return;
+  if (!s || !s.ok || !l || !l.ok) { box.innerHTML = `<div class="empty">No se pudo traer la reposición.</div>`; return; }
+  repo.sug = s; repo.peds = l.pedidos || [];
+  const abiertos = repo.peds.filter(p => p.estado === "pedido" || p.estado === "parcial");
+  const cerrados = repo.peds.filter(p => !(p.estado === "pedido" || p.estado === "parcial"));
+  const lista = repo.sinMin ? [...s.con_minimo, ...s.sin_minimo] : s.con_minimo;
+  const fila = x => {
+    const provs = x.proveedores || [];
+    return `<tr data-rid="${x.id}" class="${x.sugerido > 0 ? "" : "cubierto"}">
+      <td><input type="checkbox" class="repo-chk" ${x.sugerido > 0 && x.proveedor ? "checked" : ""} aria-label="Pedir ${trEsc(x.descripcion)}"></td>
+      <td><b>${trEsc(x.descripcion)}</b><small>${trEsc([x.codigo, x.marca, x.ubicacion].filter(Boolean).join(" · "))}</small></td>
+      <td class="num"><span class="repo-stock ${x.estado}">${preCant(x.stock)}</span>${x.minimo ? `<small>mín. ${preCant(x.minimo)}</small>` : `<small>sin mínimo</small>`}</td>
+      <td class="num">${x.en_pedido ? `<span class="repo-ya">${preCant(x.en_pedido)} en pedido</span>` : "—"}</td>
+      <td><input class="repo-q" inputmode="decimal" value="${x.sugerido || ""}" placeholder="0" aria-label="Cantidad a pedir"></td>
+      <td>${provs.length ? `<select class="repo-prov" aria-label="Proveedor">${provs.map(p => `<option value="${trEsc(p.proveedor)}" data-precio="${p.precio}" ${p.proveedor === x.proveedor ? "selected" : ""}>${trEsc(p.fantasia || p.proveedor)}${p.precio ? ` — ${preMil(p.precio)}` : ""}${p.mas_barato ? " ★" : ""}</option>`).join("")}<option value="__otro">Otro…</option></select>
+        <input class="repo-prov-in" value="" placeholder="Proveedor" hidden oninput="preProvBuscar(this)" autocomplete="off">`
+        : `<input class="repo-prov-in" value="${trEsc(x.proveedor || "")}" placeholder="Proveedor" oninput="preProvBuscar(this)" autocomplete="off">`}</td>
+      <td><input class="repo-p" inputmode="numeric" value="${x.precio ? preMil(x.precio) : ""}" placeholder="0" aria-label="Precio unitario"></td>
+    </tr>`;
+  };
+  const ped = p => {
+    const c = p.contacto || {};
+    const pend = (p.items || []).filter(i => +i.cantidad > +i.recibido);
+    const est = { pedido: ["Pedido", ""], parcial: ["Llegó una parte", "parcial"], recibido: ["Recibido", "ok"], anulado: ["Anulado", "anulado"] }[p.estado] || [p.estado, ""];
+    const dias = Math.floor((Date.now() - new Date(String(p.creado_el).slice(0, 19))) / 864e5);
+    return `<div class="repo-ped ${est[1]}">
+      <header><div><b><i class="ti ti-truck-delivery"></i> ${trEsc(c.fantasia || p.proveedor)}</b>
+        <small>Pedido #${p.id} · ${String(p.creado_el).slice(8, 10)}/${String(p.creado_el).slice(5, 7)}${p.estado === "pedido" || p.estado === "parcial" ? ` · hace ${dias <= 0 ? "hoy" : dias === 1 ? "1 día" : dias + " días"}` : ""}${c.telefono ? ` · tel. ${trEsc(c.telefono)}` : ""}${p.factura ? ` · Fac. ${trEsc(p.factura)}` : ""}</small></div>
+        <span class="repo-est ${est[1]}">${est[0]}</span></header>
+      <table><tbody>${(p.items || []).map(i => `<tr class="${+i.recibido >= +i.cantidad ? "llego" : ""}">
+        <td class="q">${preCant(i.cantidad)}</td><td>${trEsc(i.descripcion)}<small>${trEsc(i.codigo_prov || i.codigo || "")}</small></td>
+        <td class="num">${i.precio ? preMil(i.precio) : "—"}</td>
+        <td class="num">${+i.recibido ? `<span class="repo-lleg">llegó ${preCant(i.recibido)}</span>` : ""}</td></tr>`).join("")}</tbody></table>
+      ${p.estado === "pedido" || p.estado === "parcial" ? `<footer>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="repoMandar(${p.id})"><i class="ti ti-brand-whatsapp"></i> Mandar pedido</button>
+        <button type="button" class="pv-link" onclick="repoAnular(${p.id}, '${p.estado}')">${p.estado === "parcial" ? "Cerrar (no llega más)" : "Anular"}</button>
+        <button type="button" class="btn btn-success btn-sm" onclick="repoRecibir(${p.id})"><i class="ti ti-package-import"></i> Recibir${pend.length < (p.items || []).length ? " lo que falta" : ""}</button>
+      </footer>` : ""}
+    </div>`;
+  };
+  box.innerHTML = `
+    ${abiertos.length ? `<div class="section-title"><i class="ti ti-truck-delivery"></i> Pedidos en curso (${abiertos.length})</div>
+      <div class="repo-peds">${abiertos.map(ped).join("")}</div>` : ""}
+    <div class="section-title" style="margin-top:${abiertos.length ? 22 : 0}px"><i class="ti ti-building-warehouse"></i> Para pedir · bajo el mínimo (${s.con_minimo.filter(x => x.sugerido > 0).length})</div>
+    <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> La cantidad sugerida llena hasta el doble del mínimo, descontando lo que ya está pedido. El proveedor sugerido es el más barato (★). Cambiá lo que haga falta y armá el pedido: sale uno por proveedor.</p>
+    ${lista.length ? `<div class="table-wrap"><table class="repo-tabla">
+        <thead><tr><th></th><th>Repuesto</th><th class="num">Stock</th><th class="num">Ya pedido</th><th>Pedir</th><th>Proveedor</th><th>Precio c/u</th></tr></thead>
+        <tbody>${lista.map(fila).join("")}</tbody></table></div>`
+      : `<div class="empty"><i class="ti ti-circle-check"></i>Nada bajo el mínimo. Para que aparezcan, cargá el stock mínimo de cada repuesto en el Inventario.</div>`}
+    <div class="repo-pie">
+      ${s.cant_sin_minimo ? `<label class="repo-sinmin"><input type="checkbox" ${repo.sinMin ? "checked" : ""} onchange="repo.sinMin=this.checked;renderReposicion()"> Mostrar también los ${s.cant_sin_minimo} sin stock que no tienen mínimo${s.cant_sin_minimo > 300 ? " (los primeros 300)" : ""}</label>` : "<span></span>"}
+      <span id="repo-tot"></span>
+      <button class="btn btn-primary" id="repo-armar" onclick="repoArmar(this)"><i class="ti ti-file-plus"></i> Armar pedido</button>
+    </div>
+    ${cerrados.length ? `<details class="repo-hist"><summary>Recibidos en los últimos 30 días (${cerrados.length})</summary><div class="repo-peds">${cerrados.map(ped).join("")}</div></details>` : ""}`;
+  box.querySelectorAll(".repo-tabla tbody tr").forEach(tr => {
+    const sel = tr.querySelector(".repo-prov"), inp = tr.querySelector(".repo-prov-in"), p = tr.querySelector(".repo-p");
+    if (sel) sel.onchange = () => {
+      if (sel.value === "__otro") { inp.hidden = false; inp.focus(); }
+      else { inp.hidden = true; const pr = +sel.selectedOptions[0].dataset.precio; if (pr) p.value = preMil(pr); }
+      repoTotal();
+    };
+    p.addEventListener("blur", () => { p.value = preNum(p.value) ? preMil(preNum(p.value)) : ""; repoTotal(); });
+    tr.querySelectorAll("input").forEach(i => i.addEventListener("input", repoTotal));
+  });
+  repoTotal();
+}
+function repoFilas() {
+  return [...document.querySelectorAll(".repo-tabla tbody tr")].map(tr => {
+    const sel = tr.querySelector(".repo-prov"), inp = tr.querySelector(".repo-prov-in");
+    const prov = sel && sel.value !== "__otro" ? sel.value : (inp ? inp.value.trim() : "");
+    return { tr, on: tr.querySelector(".repo-chk").checked, repuesto_id: +tr.dataset.rid, cantidad: preCantNum(tr.querySelector(".repo-q").value),
+             proveedor: prov, precio: preNum(tr.querySelector(".repo-p").value) };
+  });
+}
+function repoTotal() {
+  const f = repoFilas().filter(x => x.on && x.cantidad > 0);
+  const provs = new Set(f.map(x => x.proveedor.toLowerCase()).filter(Boolean));
+  const tot = f.reduce((a, x) => a + x.cantidad * x.precio, 0);
+  const el = document.getElementById("repo-tot");
+  if (el) el.innerHTML = f.length ? `${f.length} repuesto${f.length === 1 ? "" : "s"} · ${provs.size} proveedor${provs.size === 1 ? "" : "es"}${tot ? ` · <b>${gs(Math.round(tot))}</b>` : ""}` : "";
+  const b = document.getElementById("repo-armar");
+  if (b) b.disabled = !f.length;
+}
+async function repoArmar(btn) {
+  const f = repoFilas().filter(x => x.on && x.cantidad > 0);
+  const sin = f.find(x => !x.proveedor);
+  if (sin) { toast("A cada repuesto ponele a quién se le pide", "error"); sin.tr.querySelector(".repo-prov-in, .repo-prov")?.focus(); return; }
+  btn.disabled = true;
+  const r = await api("/api/compras/reposicion", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items: f.map(({ tr, on, ...x }) => x) }) }).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo armar", "error"); return; }
+  toast(`${r.msg}: mandalos desde «Pedidos en curso»`, "success");
+  renderCompras();
+}
+function repoMandar(pid) {
+  const p = repo.peds.find(x => x.id === pid);
+  if (!p) return;
+  const c = p.contacto || {};
+  const pend = (p.items || []).filter(i => +i.cantidad > +i.recibido);
+  const texto = `Buenas${c.contacto ? " " + c.contacto.split(" ")[0] : ""}, de La Santaniana. Para reponer el depósito necesitamos:\n` +
+    pend.map(i => `• ${preCant(+i.cantidad - +i.recibido)} × ${i.descripcion}${i.codigo_prov || i.codigo ? ` (cód. ${i.codigo_prov || i.codigo})` : ""}`).join("\n") +
+    `\nPedido #${p.id}. ¿Nos confirman precio y cuándo lo tienen? Gracias.`;
+  let tel = String(c.telefono || "").replace(/\D/g, "");
+  if (tel.startsWith("0")) tel = "595" + tel.slice(1); else if (tel && !tel.startsWith("595")) tel = "595" + tel;
+  const o = rvModal({
+    titulo: `Pedido #${p.id} · ${trEsc(c.fantasia || p.proveedor)}`, icono: "brand-whatsapp", ancho: 520,
+    sub: c.telefono ? `${trEsc(c.contacto || "")} ${trEsc(c.telefono)}` : "Este proveedor no tiene teléfono: cargalo en Proveedores, o copiá el texto.",
+    cuerpo: `<textarea class="repo-wa" rows="${Math.min(14, pend.length + 4)}">${trEsc(texto)}</textarea>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" id="repo-copiar"><i class="ti ti-copy"></i> Copiar</button>
+      ${tel.length >= 11 ? `<a class="btn btn-sm cmp-wa" id="repo-wa" target="_blank" rel="noopener"><i class="ti ti-brand-whatsapp"></i> Abrir WhatsApp</a>` : ""}</div>`,
+  });
+  const ta = o.querySelector(".repo-wa");
+  o.querySelector("#repo-copiar").onclick = () => navigator.clipboard.writeText(ta.value).then(() => toast("Pedido copiado", "success"));
+  const a = o.querySelector("#repo-wa");
+  if (a) { const upd = () => a.href = `https://wa.me/${tel}?text=${encodeURIComponent(ta.value)}`; upd(); ta.addEventListener("input", upd); }
+}
+async function repoAnular(pid, estado) {
+  if (!confirm(estado === "parcial" ? "¿Cerrar el pedido? Lo que ya llegó queda; lo que falta deja de esperarse." : "¿Anular el pedido?")) return;
+  const r = await api(`/api/compras/reposicion/${pid}/anular`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  toast(r.msg, "success");
+  renderCompras();
+}
+function repoRecibir(pid) {
+  const p = repo.peds.find(x => x.id === pid);
+  if (!p) return;
+  const c = p.contacto || {};
+  const pend = (p.items || []).filter(i => +i.cantidad > +i.recibido);
+  const o = rvModal({
+    titulo: `Recibir pedido #${p.id}`, icono: "package-import", ancho: 720, clase: "rx-m repo-rec",
+    sub: `${trEsc(c.fantasia || p.proveedor)} · poné cuánto llegó y el precio de la factura. Entra al stock a ese costo.`,
+    cuerpo: `<section class="rx-grupo">
+        <header><b><i class="ti ti-truck-delivery"></i> ${trEsc(c.fantasia || p.proveedor)}</b><span class="rx-g-tot" id="rr-tot"></span></header>
+        ${pend.map(i => `<div class="rx-fila repo-rf" data-id="${i.id}">
+          <span></span>
+          <input class="repo-rq" inputmode="decimal" value="${preCant(+i.cantidad - +i.recibido)}" aria-label="Cantidad que llegó">
+          <span class="rx-desc"><b>${trEsc(i.descripcion)}</b><small>Pedido: ${preCant(i.cantidad)}${+i.recibido ? ` · ya llegó ${preCant(i.recibido)}` : ""} · ${trEsc(i.codigo_prov || i.codigo || "")}</small></span>
+          <span class="rx-precio"><input class="repo-rp" inputmode="numeric" value="${i.precio ? preMil(i.precio) : ""}" placeholder="0"><small>c/u</small></span>
+        </div>`).join("")}
+        <div class="rx-fac">
+          <label>Factura N.º<input id="rr-fn" placeholder="001-001-0001234" maxlength="30"></label>
+          <label>Total factura<input id="rr-fm" inputmode="numeric" placeholder="0"></label>
+          <label>Pago<select id="rr-fd"><option value="0">Contado</option><option value="15">A 15 días</option><option value="30">A 30 días</option><option value="60">A 60 días</option></select></label>
+          <label class="rx-teso"><input type="checkbox" id="rr-ft" checked> Cargar en Tesorería como pago a proveedor</label>
+        </div>
+      </section>
+      <p class="hint" style="margin:0"><i class="ti ti-info-circle"></i> Si llegó menos, poné lo que vino: el resto queda pendiente en el pedido. Con 0 no se registra ese renglón.</p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-success" id="rr-ok"><i class="ti ti-check"></i> Registrar llegada</button>`,
+  });
+  const fm = o.querySelector("#rr-fm");
+  const tot = () => {
+    let t = 0;
+    o.querySelectorAll(".repo-rf").forEach(f => { t += preCantNum(f.querySelector(".repo-rq").value) * preNum(f.querySelector(".repo-rp").value); });
+    o.querySelector("#rr-tot").textContent = t ? gs(Math.round(t)) : "";
+    if (!fm.dataset.tocado) fm.value = t ? preMil(Math.round(t)) : "";
+  };
+  o.querySelectorAll(".repo-rq, .repo-rp").forEach(i => i.addEventListener("input", tot));
+  o.querySelectorAll(".repo-rp, #rr-fm").forEach(i => i.addEventListener("blur", () => { i.value = preNum(i.value) ? preMil(preNum(i.value)) : ""; }));
+  fm.addEventListener("input", () => { fm.dataset.tocado = "1"; });
+  tot();
+  o.querySelector("#rr-ok").onclick = async e => {
+    const btn = e.currentTarget;
+    const items = [...o.querySelectorAll(".repo-rf")].map(f => ({ id: +f.dataset.id, cantidad: preCantNum(f.querySelector(".repo-rq").value), precio: preNum(f.querySelector(".repo-rp").value) })).filter(x => x.cantidad > 0);
+    if (!items.length) { toast("Poné cuánto llegó", "error"); return; }
+    btn.disabled = true;
+    const r = await api(`/api/compras/reposicion/${pid}/recibir`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, factura: { numero: o.querySelector("#rr-fn").value.trim(), monto: preNum(fm.value), dias: +o.querySelector("#rr-fd").value || 0, tesoreria: o.querySelector("#rr-ft").checked } }) }).catch(() => null);
+    btn.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo registrar", "error"); return; }
+    o.remove();
+    toast(`${r.msg} · entró al stock`, "success");
+    if (r.tesoreria) setTimeout(() => toast(r.tesoreria.ok ? `Tesorería: factura cargada en Pagos y cobros${/aprobación/.test(r.tesoreria.msg || "") ? " (espera aprobación)" : ""}` : "Tesorería: " + r.tesoreria.msg, r.tesoreria.ok ? "success" : "error"), 900);
+    if (r.problemas && r.problemas.length) setTimeout(() => toast(r.problemas.join(" · "), "error"), 1600);
+    renderCompras();
+  };
 }
 
 function setComprasTab(t) { comprasTab = t; renderCompras(); }
@@ -5633,8 +6126,9 @@ function setComprasTab(t) { comprasTab = t; renderCompras(); }
 // El material de un trabajo, renglón por renglón ("2 × Filtro de aceite")
 function cmpMateriales(it) {
   const mats = it.materiales || [];
-  if (!mats.length) return it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—";
-  return mats.map(m => `<div class="cmp-mat"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}</div>`).join("");
+  if (!mats.length) return `${it.material_pedido ? `<b>${trEsc(it.material_pedido)}</b>` : "—"}${it.proveedor_compras ? `<div class="cmp-mat" style="color:var(--muted)">Proveedor: ${trEsc(it.proveedor_compras)}</div>` : ""}`;
+  const enCamino = it._estado === "en_camino";
+  return mats.map(m => `<div class="cmp-mat ${m.entregado_el && enCamino ? "llego" : ""}"><span class="cmp-mat-q">${otMatCantTxt(m.cantidad)}</span> ${trEsc(m.descripcion)}${m.origen === "deposito" ? ` <span class="cmp-tag dep"><i class="ti ti-building-warehouse"></i> del depósito</span>` : m.repuesto_id ? ` <span class="cmp-tag inv" title="Enganchado con el inventario"><i class="ti ti-package"></i></span>` : m.origen === "suelto" ? ` <span class="cmp-tag" title="Compra suelta: no va al inventario">suelta</span>` : ""}${enCamino && it.estado_pago !== "espera" ? (m.entregado_el ? ` <span class="cmp-tag ok"><i class="ti ti-check"></i> entregado</span>` : ` <span class="cmp-tag falta"><i class="ti ti-clock"></i> falta</span>`) : ""}${m.precio_presup && Math.abs(m.precio_presup - m.precio_unit) > 0.5 ? ` <span class="cmp-tag ${m.precio_unit > m.precio_presup ? "sube" : "baja"}" title="Precio del presupuesto ${gs(m.precio_presup)} → factura ${gs(m.precio_unit)}">${m.precio_unit > m.precio_presup ? "▲" : "▼"} ${Math.round(Math.abs(m.precio_unit - m.precio_presup) / m.precio_presup * 100)}%</span>` : ""}${m.factura ? ` <span class="cmp-tag" title="Factura del proveedor">Fac. ${trEsc(m.factura)}</span>` : ""}${m.proveedor ? `<div style="color:var(--muted);font-size:11.5px;margin:2px 0 5px 30px">Proveedor: ${trEsc(m.proveedor)}</div>` : ""}${m.stock_nota ? `<div class="cmp-stock-nota ${/^No /.test(m.stock_nota) ? "mal" : ""}">${trEsc(m.stock_nota)}</div>` : ""}</div>`).join("");
 }
 // Los trabajos de la OT agrupados por coche (si la OT tiene varios)
 function cmpPorCoche(o, fila, columnas) {
@@ -5656,21 +6150,48 @@ function cmpTituloCoches(o) {
   return `${o.n_interno ? `Coche ${o.n_interno}` : o.patente} · ${o.patente}`;
 }
 
+// Cuántos días lleva en la etapa (y si ya es mucho)
+const CMP_LIMITE = { en_espera: [2, 5], presupuestado: [3, 7], en_camino: [4, 10] };
+function cmpAntiguedad(o) {
+  const f = { en_espera: o.fecha_envio_compras, presupuestado: o.fecha_presupuesto, en_camino: o.fecha_en_camino }[o.estado_compras];
+  if (!f) return "";
+  const d = Math.floor((Date.now() - new Date(String(f).slice(0, 19))) / 864e5);
+  if (isNaN(d) || d < 0) return "";
+  const [a, b] = CMP_LIMITE[o.estado_compras] || [99, 99];
+  const cls = d >= b ? "mal" : d >= a ? "ojo" : "";
+  const txt = { en_espera: "esperando presupuesto", presupuestado: "esperando la firma", en_camino: "en camino" }[o.estado_compras];
+  return `<span class="cmp-edad ${cls}" title="Desde el ${String(f).slice(8, 10)}/${String(f).slice(5, 7)}"><i class="ti ti-clock"></i> ${d === 0 ? "hoy" : d === 1 ? "1 día" : d + " días"} ${txt}</span>`;
+}
+function cmpLlegada(o) {
+  if (o.estado_compras !== "en_camino") return "";
+  let tot = 0, ok = 0;
+  (o.items || []).forEach(it => {
+    if (it.estado_pago === "espera") return;
+    const ms = it.materiales || [];
+    if (ms.length) ms.forEach(m => { tot++; if (m.entregado_el) ok++; });
+    else if (+it.precio_compras > 0) { tot++; if (it.entregado_el) ok++; }
+  });
+  return tot && ok ? `<span class="cmp-edad parcial"><i class="ti ti-package-import"></i> Llegó ${ok} de ${tot}</span>` : "";
+}
+
 function tarjetaCompra(o) {
   const coche = o.n_interno ? `Coche ${o.n_interno}` : o.patente;
   const totalPresup = o.items.reduce((s, i) => s + (i.precio_compras || 0), 0);
+  (o.items || []).forEach(it => { it._estado = o.estado_compras; });
   let acciones = "";
   if (o.estado_compras === "en_espera") {
     acciones = `<button class="btn btn-primary" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-cash"></i> Cargar presupuesto</button>`;
   } else if (o.estado_compras === "presupuestado") {
     acciones = `
       <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir para Tesorería</button>
+      <button class="btn btn-ghost" onclick="cmpPedirProveedores(${o.id})"><i class="ti ti-truck-delivery"></i> Pedir a proveedores</button>
       <button class="btn btn-ghost" onclick="abrirPresupuesto(${o.id})"><i class="ti ti-edit"></i> Editar precios</button>
       <button class="btn btn-primary" onclick="abrirFirma(${o.id})"><i class="ti ti-writing-sign"></i> Firma de Tesorería</button>`;
   } else if (o.estado_compras === "en_camino") {
     acciones = `
+      <button class="btn btn-ghost" onclick="cmpPedirProveedores(${o.id})"><i class="ti ti-truck-delivery"></i> Pedir a proveedores</button>
       <button class="btn btn-ghost" onclick="window.open('/api/compras/${o.id}/presupuesto_pdf','_blank')"><i class="ti ti-printer"></i> Ver presupuesto</button>
-      <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package"></i> Registrar entrega</button>`;
+      <button class="btn btn-success" onclick="abrirEntrega(${o.id})"><i class="ti ti-package-import"></i> Recibir y entregar</button>`;
   } else {
     acciones = `
       ${o.taller_entrega || o.recibido_por ? `<span style="font-size:12.5px;color:var(--muted);display:inline-flex;align-items:center;gap:5px;margin-right:auto"><i class="ti ti-map-pin"></i> ${o.taller_entrega || "Taller propio"}${o.recibido_por ? ` · recibió <b>${o.recibido_por}</b>` : ""}</span>` : ""}
@@ -5683,19 +6204,13 @@ function tarjetaCompra(o) {
       <div class="card-head" style="display:flex;justify-content:space-between;align-items:center">
         <span><i class="ti ti-clipboard-check"></i> OT #${o.id} · ${cmpTituloCoches(o)}</span>
         <span style="font-size:12px;color:var(--muted);display:flex;align-items:center;gap:10px">
+          ${cmpLlegada(o)}${cmpAntiguedad(o)}
           ${o.pagos && o.pagos.parcial ? `<span class="badge warning"><i class="ti ti-hourglass"></i> ${o.pagos.en_espera} esperando fondos · ${gs(o.pagos.monto_espera)}</span>` : ""}
           ${o.fecha_envio_compras ? "Enviada: " + o.fecha_envio_compras.slice(0,10) : ""}
         </span>
       </div>
       <div class="card-body">
-        ${o.estado_compras === "presupuestado" ? `
-          <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:14px;padding:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px">
-            <label style="display:flex;flex:1;min-width:220px;flex-direction:column;gap:5px;font-size:12px;font-weight:700;color:var(--muted)">PROVEEDOR
-              <input class="cmp-proveedor-in" maxlength="160" value="${String(o.proveedor_compras || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}" placeholder="Nombre del proveedor" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text)">
-            </label>
-            <button class="btn btn-primary" onclick="guardarProveedorCompra(${o.id}, this)"><i class="ti ti-device-floppy"></i> Guardar proveedor</button>
-          </div>` : o.proveedor_compras ? `
-          <div style="margin-bottom:14px;font-size:13px;color:var(--muted)"><i class="ti ti-building-store"></i> <b>Proveedor:</b> ${trEsc(o.proveedor_compras)}</div>` : ""}
+
         <div class="table-wrap"><table>
           <thead><tr>
             <th>Trabajo</th><th>Material necesario</th><th>Mecánico</th>
@@ -5711,6 +6226,7 @@ function tarjetaCompra(o) {
           </tbody>
         </table></div>
         ${o.estado_compras !== "en_espera" ? `<div style="text-align:right;margin-top:8px;font-weight:700;color:var(--brand-blue)">Total: ${gs(totalPresup)}</div>` : ''}
+        ${cmpMotivoCaja(o)}
         <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap">
           ${puedeBorrarOTs() ? `<button class="btn btn-ghost ot-borrar-btn" style="margin-right:auto" onclick="borrarOT(${o.id})"><i class="ti ti-trash"></i> Eliminar OT</button>` : ""}
           ${acciones}</div>
@@ -5718,42 +6234,200 @@ function tarjetaCompra(o) {
     </div>`;
 }
 
+// ─── Por qué no se trae todavía el repuesto (Compras) ───
+// Compras lo anota en la tarjeta (En espera / Presupuestadas): un motivo corto
+// para agrupar y la explicación larga. El taller lo ve en la OT.
+const CMP_MOT_ETAPAS = ["en_espera", "presupuestado"];
+function cmpMotHace(el) {
+  if (!el) return "";
+  const d = Math.floor((Date.now() - new Date(el)) / 86400000);
+  const f = `${el.slice(8, 10)}/${el.slice(5, 7)} ${el.slice(11, 16)}`;
+  return d >= 1 ? `${f} · hace ${d} día${d === 1 ? "" : "s"}` : f;
+}
+function cmpMotivoCaja(o, puede = true) {
+  if (!CMP_MOT_ETAPAS.includes(o.estado_compras)) return "";
+  const m = (o.compras_motivo || "").trim(), det = (o.compras_motivo_detalle || "").trim();
+  if (!m) return puede
+    ? `<button type="button" class="cmp-mot-falta" onclick="cmpMotivoEditar(${o.id})"><i class="ti ti-message-question"></i> ¿Por qué no se trae todavía el repuesto? <span>Anotalo</span></button>`
+    : "";
+  return `<div class="cmp-mot">
+      <div class="cmp-mot-cab">
+        <span class="cmp-mot-t"><i class="ti ti-hand-stop"></i> No se trae todavía</span>
+        <b class="cmp-mot-m">${trEsc(m)}</b>
+        ${puede ? `<button type="button" class="btn btn-ghost btn-sm cmp-mot-ed" onclick="cmpMotivoEditar(${o.id})"><i class="ti ti-pencil"></i> Cambiar</button>` : ""}
+      </div>
+      ${det ? `<div class="cmp-mot-det">${trEsc(det)}</div>` : ""}
+      <small class="cmp-mot-meta">${o.compras_motivo_por ? `Anotó ${trEsc(o.compras_motivo_por)} · ` : ""}${cmpMotHace(o.compras_motivo_el)}</small>
+    </div>`;
+}
+async function cmpMotivoEditar(otId, alGuardar) {
+  const [act, lis] = await Promise.all([
+    api(`/api/compras/${otId}/motivo`).catch(() => null),
+    api("/api/compras/motivos").catch(() => null),
+  ]);
+  if (!act || !act.ok) { toast((act && act.msg) || "No se pudo abrir", "error"); return; }
+  const motivos = (lis && lis.motivos) || [];
+  const actual = act.motivo || "", detActual = act.detalle || "";
+  const o = rvModal({
+    titulo: "¿Por qué no se trae todavía?", icono: "message-question", ancho: 620, clase: "ot-mot-modal",
+    sub: `OT #${act.ot_id} · el taller lo ve en la OT, así sabe en qué está el repuesto`,
+    cuerpo: `
+      <div class="ot-mot-ed2">
+        <label class="ot-mot-f"><span>Motivo <small>corto, para agrupar</small></span>
+          <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="Ej: sin stock en el proveedor" aria-label="Motivo" autocomplete="off"></label>
+        <div class="ot-mot-sug"></div>
+        <label class="ot-mot-f"><span>Explicación <small>qué pasa y para cuándo se espera</small></span>
+          <textarea class="ot-mot-det-in" rows="7" maxlength="2000" placeholder="Ej: el proveedor de Asunción no tiene el kit de embrague; lo trae de Ciudad del Este el jueves. Se pidió otra cotización a Repuestos Paraguay por si acaso." aria-label="Explicación">${trEsc(detActual)}</textarea>
+          <small class="ot-mot-cuenta"></small></label>
+      </div>`,
+    pie: `<div class="ot-mot-btns">
+        ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar el motivo</button>` : ""}
+        <span class="ot-mot-ayuda">Ctrl + Enter guarda</span>
+        <button type="button" class="btn btn-ghost ot-mot-no">Cancelar</button>
+        <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
+      </div>`,
+  });
+  const inp = o.querySelector(".ot-mot-in"), sug = o.querySelector(".ot-mot-sug"), ta = o.querySelector(".ot-mot-det-in");
+  const cuenta = o.querySelector(".ot-mot-cuenta");
+  const contar = () => {
+    cuenta.textContent = ta.value.length > 1500 ? `${ta.value.length} de 2000` : "";
+    ta.style.height = "auto"; ta.style.height = Math.min(420, Math.max(150, ta.scrollHeight + 2)) + "px";
+  };
+  const pintarSug = () => {
+    const q = acNorm(inp.value);
+    const l = motivos.filter(m => acNorm(m.motivo) !== q && (!q || acNorm(m.motivo).includes(q))).slice(0, 10);
+    sug.innerHTML = l.length ? `<span class="ot-mot-sug-t">Elegí uno:</span>` + l.map(m =>
+      `<button type="button" class="ot-mot-s" data-m="${trEsc(m.motivo)}">${trEsc(m.motivo)}${m.ahora ? `<small title="OTs en Compras con este motivo">${m.ahora}</small>` : ""}</button>`).join("") : "";
+    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => { inp.value = b.dataset.m; pintarSug(); ta.focus(); });
+  };
+  const guardar = async (motivo, detalle) => {
+    motivo = String(motivo || "").replace(/\s+/g, " ").trim();
+    detalle = String(detalle || "").replace(/\r/g, "").trim();
+    if (detalle && !motivo) { toast("Poné también el motivo corto (arriba)", "error"); inp.focus(); return; }
+    if (motivo === actual && detalle === detActual) { o.remove(); return; }
+    o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = true);
+    const r = await api(`/api/compras/${otId}/motivo`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo, detalle })
+    }).catch(() => null);
+    if (!r || !r.ok) {
+      toast((r && r.msg) || "No se pudo guardar", "error");
+      o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = false);
+      return;
+    }
+    o.remove();
+    toast(r.motivo ? "Motivo guardado: el taller lo ve en la OT" : "Motivo quitado", "success");
+    if (alGuardar) alGuardar(r);
+    else if (document.querySelector(".cmp-lista")) renderCompras();
+  };
+  pintarSug(); contar();
+  inp.addEventListener("input", pintarSug);
+  ta.addEventListener("input", contar);
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ta.focus(); } });
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); guardar(inp.value, ta.value); } });
+  o.querySelector(".ot-mot-ok").onclick = () => guardar(inp.value, ta.value);
+  o.querySelector(".ot-mot-no").onclick = () => o.remove();
+  const q = o.querySelector(".ot-mot-quitar");
+  if (q) q.onclick = () => guardar("", "");
+  setTimeout(() => { if (actual) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); } else inp.focus(); }, 60);
+}
+// En la OT: lo que anotó Compras (solo mientras el repuesto no salió)
+async function otCmpMotivoCargar(ot) {
+  const box = document.getElementById("ot-cmp-mot-box");
+  if (!box || !CMP_MOT_ETAPAS.includes(ot.estado_compras)) return;
+  const r = await api(`/api/compras/${ot.id}/motivo`).catch(() => null);
+  if (!r || !r.ok || !document.body.contains(box)) return;
+  const o = { id: ot.id, estado_compras: r.estado_compras, compras_motivo: r.motivo, compras_motivo_detalle: r.detalle,
+              compras_motivo_el: r.el, compras_motivo_por: r.por };
+  if (!o.compras_motivo && !r.puede) {
+    box.innerHTML = `<div class="cmp-mot cmp-mot-nada"><i class="ti ti-shopping-cart"></i> En Compras: todavía no anotaron por qué no se trae el repuesto.</div>`;
+    return;
+  }
+  box.innerHTML = cmpMotivoCaja(o, r.puede).replace(/cmpMotivoEditar\((\d+)\)/g, "cmpMotivoEditar($1, () => otCmpMotivoCargar(window._otActual))");
+}
+
+// Lo que hay que comprar, agrupado por proveedor: con su teléfono y el texto
+// listo para mandarle por WhatsApp.
+async function cmpPedirProveedores(otId) {
+  const r = await api(`/api/compras/${otId}/por_proveedor`).catch(() => null);
+  if (!r || !r.ok) { toast("No se pudo armar el pedido", "error"); return; }
+  const texto = g => `Buenas${g.contacto ? " " + g.contacto.split(" ")[0] : ""}, de La Santaniana. Necesitamos:\n` +
+    g.renglones.map(x => `• ${preCant(x.cantidad)} × ${x.descripcion}${x.codigo_prov || x.codigo ? ` (cód. ${x.codigo_prov || x.codigo})` : ""}`).join("\n") +
+    `\nOT #${otId}. ¿Tienen y a qué precio? Gracias.`;
+  const wa = tel => { let d = String(tel || "").replace(/\D/g, ""); if (!d) return ""; if (d.startsWith("0")) d = "595" + d.slice(1); else if (!d.startsWith("595")) d = "595" + d; return d.length >= 11 ? d : ""; };
+  window._cmpPed = r.grupos.map(texto);
+  const o = rvModal({
+    titulo: `Pedir a proveedores — OT #${otId}`, icono: "truck-delivery", ancho: 760, clase: "cmp-ped",
+    sub: `Lo que se compra, separado por proveedor${r.del_deposito ? ` · ${r.del_deposito} material${r.del_deposito === 1 ? "" : "es"} sale${r.del_deposito === 1 ? "" : "n"} del depósito` : ""}`,
+    cuerpo: r.grupos.length ? r.grupos.map((g, i) => `
+      <div class="cmp-ped-g ${g.proveedor ? "" : "sin"}">
+        <div class="cmp-ped-cab">
+          <div><b>${g.proveedor ? trEsc(g.fantasia || g.proveedor) : "Sin proveedor elegido"}</b>
+            <small>${[g.fantasia && g.proveedor, g.contacto, g.telefono, g.ruc && "RUC " + g.ruc].filter(Boolean).map(trEsc).join(" · ")}</small></div>
+          <span class="cmp-ped-tot">${g.total ? gs(g.total) : ""}</span>
+        </div>
+        <table class="cmp-ped-t"><tbody>${g.renglones.map(x => `<tr>
+          <td class="q">${preCant(x.cantidad)}</td>
+          <td>${trEsc(x.descripcion)}${x.codigo_prov || x.codigo ? `<small>cód. ${trEsc(x.codigo_prov || x.codigo)}</small>` : ""}</td>
+          <td class="c">${x.coche ? "coche " + trEsc(x.coche) : ""}</td>
+          <td class="num">${x.precio ? preMil(x.precio) : "—"}</td></tr>`).join("")}</tbody></table>
+        ${g.proveedor ? `<div class="cmp-ped-acc">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(window._cmpPed[${i}]).then(()=>toast('Pedido copiado','success'))"><i class="ti ti-copy"></i> Copiar pedido</button>
+          ${wa(g.telefono) ? `<a class="btn btn-sm cmp-wa" target="_blank" rel="noopener" href="https://wa.me/${wa(g.telefono)}?text=${encodeURIComponent(texto(g))}"><i class="ti ti-brand-whatsapp"></i> Mandar por WhatsApp</a>` : `<span class="cmp-ped-sintel">Sin teléfono: cargalo en Proveedores</span>`}
+        </div>` : `<div class="cmp-ped-sintel">Elegí el proveedor en «Editar precios».</div>`}
+      </div>`).join("") : `<div class="empty"><i class="ti ti-building-warehouse"></i>No hay nada para comprar: todo sale del depósito.</div>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button></div>`,
+  });
+}
+
 // Modal para cargar/editar precios del presupuesto: el precio por unidad de
 // cada material (el subtotal y el total se ven al escribir). El trabajo que no
 // tiene materiales anotados lleva un solo precio, como antes.
+// Presupuesto conectado con el depósito y los proveedores: cada material se
+// engancha con su repuesto del inventario. Si hay stock, puede salir del
+// depósito (no se le pide plata a Tesorería); si se compra, se elige el
+// proveedor entre los que lo venden, con su último precio.
+const pre = { ot: null, mats: {} };
+const preMil = v => Math.round(+v || 0).toLocaleString("es-PY").replace(/,/g, ".");
 async function abrirPresupuesto(otId) {
-  const ots = await api("/api/compras/ots");
+  const [ots, det] = await Promise.all([api("/api/compras/ots"), api(`/api/compras/${otId}/repuestos`).catch(() => null)]);
   const o = ots.find(x => x.id === otId);
   if (!o) return;
+  pre.ot = o;
+  pre.mats = {};
+  ((det && det.materiales) || []).forEach(m => pre.mats[m.id] = m);
   const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
+  overlay.className = "modal-overlay pre-overlay";
   overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
-  const precio = v => v ? String(Math.round(v)) : "";
+  const precio = v => v ? preMil(v) : "";
   const fila = it => {
     const mats = it.materiales || [];
     if (!mats.length) return `<tr class="pre-trab">
         <td><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>
         <td class="center" style="color:var(--lighter)">—</td>
-        <td style="color:var(--muted);font-size:12.5px">${it.material_pedido ? trEsc(it.material_pedido) : "Sin materiales anotados: precio del trabajo"}</td>
+        <td class="pre-mat-td"><div class="pre-sinmat">${it.material_pedido ? trEsc(it.material_pedido) : "El taller no anotó repuestos. Si lleva, agregalos; si no, poné el precio del trabajo."}</div>
+          <button type="button" class="pre-agregar" onclick="preAgregarMat(${it.id})"><i class="ti ti-plus"></i> Agregar repuesto</button></td>
+        <td><input class="pre-prov-in" data-kind="item" data-id="${it.id}" maxlength="160" value="${trEsc(it.proveedor_compras || "")}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)"></td>
         <td><input class="pre-in pre-item" data-id="${it.id}" data-q="1" inputmode="numeric" value="${precio(it.precio_compras)}" placeholder="0" oninput="preRecalcular()"></td>
         <td class="num pre-sub">—</td></tr>`;
-    return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}">
-        ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div></td>` : ""}
-        <td class="center"><b>${otMatCantTxt(m.cantidad)}</b></td>
-        <td style="font-size:13px">${trEsc(m.descripcion)}</td>
-        <td><input class="pre-in pre-mat" data-id="${m.id}" data-q="${m.cantidad}" inputmode="numeric" value="${precio(m.precio_unit)}" placeholder="0" oninput="preRecalcular()"></td>
-        <td class="num pre-sub">—</td></tr>`).join("");
+    return mats.map((m, k) => `<tr class="${k === 0 ? "pre-trab" : "pre-mas"}" data-mid="${m.id}">
+        ${k === 0 ? `<td rowspan="${mats.length}"><div class="pre-desc">${it.descripcion}</div><div class="pre-tec">${it.tecnico || ""}</div>
+          <button type="button" class="pre-agregar chico" onclick="preAgregarMat(${it.id})" title="Agregar otro repuesto a este trabajo"><i class="ti ti-plus"></i> Repuesto</button></td>` : ""}
+        ${preCeldasMat(m)}</tr>`).join("");
   };
+  const conRep = Object.values(pre.mats).filter(m => m.repuesto).length, total = Object.keys(pre.mats).length;
   overlay.innerHTML = `
-    <div class="pre-modal">
+    <div class="pre-modal pre-modal-rep">
       <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-cash"></i> Presupuesto — OT #${o.id}</h2>
-      <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Poné el precio <b>por unidad</b> de cada material: el subtotal sale solo con la cantidad. ${cmpTituloCoches(o)}</p>
+      <p style="font-size:13px;color:var(--muted);margin:0 0 12px">${cmpTituloCoches(o)} · Enganchá cada material con su repuesto del inventario: si hay en el depósito sale de ahí, y si se compra elegís el proveedor con su último precio.</p>
+      ${total ? `<div class="pre-resumen" id="pre-resumen">${preResumen()}</div>` : ""}
       <div class="table-wrap"><table class="pre-tabla">
-        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material</th><th class="num">Precio unitario (Gs.)</th><th class="num">Subtotal</th></tr></thead>
-        <tbody>${cmpPorCoche(o, fila, 5)}</tbody>
+        <thead><tr><th>Trabajo</th><th class="center">Cant.</th><th>Material y repuesto</th><th>Proveedor</th><th class="num">Precio unitario (Gs.)</th><th class="num">Subtotal</th></tr></thead>
+        <tbody>${cmpPorCoche(o, fila, 6)}</tbody>
       </table></div>
+      <datalist id="pre-prov-dl"></datalist>
       <div class="pre-total"><span>Total a pedir a Tesorería</span><b id="pre-total">Gs. 0</b></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+      <div class="pre-pie">
+        <span class="pre-pie-n">${total ? `${conRep} de ${total} materiales enganchados con el inventario` : ""}</span>
         <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
         <button class="btn btn-primary" onclick="guardarPresupuesto(${o.id}, this)"><i class="ti ti-check"></i> Guardar presupuesto</button>
       </div>
@@ -5761,7 +6435,487 @@ async function abrirPresupuesto(otId) {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   document.body.appendChild(overlay);
   preRecalcular();
-  overlay.querySelector(".pre-in")?.focus();
+  overlay.querySelector(".pre-in:not([disabled])")?.focus();
+}
+
+function preResumen() {
+  const ms = Object.values(pre.mats);
+  const dep = ms.filter(m => m.origen === "deposito").length;
+  const sin = ms.filter(m => !m.repuesto && m.origen !== "suelto").length;
+  const suel = ms.filter(m => m.origen === "suelto").length;
+  const hay = ms.filter(m => m.repuesto && m.origen !== "deposito" && m.disponible >= m.cantidad && m.cantidad > 0).length;
+  return `<span><i class="ti ti-building-warehouse"></i> <b>${dep}</b> del depósito</span>
+    <span><i class="ti ti-shopping-cart"></i> <b>${ms.length - dep}</b> a comprar</span>
+    ${hay ? `<span class="pre-ojo"><i class="ti ti-alert-circle"></i> <b>${hay}</b> se compra${hay === 1 ? "" : "n"} pero hay en el depósito</span>` : ""}
+    ${suel ? `<span class="pre-gris"><i class="ti ti-shopping-bag"></i> <b>${suel}</b> compra${suel === 1 ? "" : "s"} suelta${suel === 1 ? "" : "s"}</span>` : ""}
+    ${sin ? `<span class="pre-gris"><i class="ti ti-link-off"></i> <b>${sin}</b> sin enganchar al inventario</span>` : ""}`;
+}
+
+// Las celdas de un material (cantidad, material+repuesto, proveedor, precio, subtotal)
+function preCeldasMat(m) {
+  const d = pre.mats[m.id] || m;
+  const r = d.repuesto, dep = d.origen === "deposito";
+  const q = +d.cantidad || +m.cantidad || 0;
+  const unidad = d.en_contenido ? " " + (d.unidad_material || "litros") : (r && r.unidad && r.unidad !== "u" ? " " + r.unidad : "");
+  let repHtml;
+  if (r) {
+    const alcanza = d.disponible >= q;
+    repHtml = `<div class="pre-rep ${dep ? "dep" : ""}">
+        <button type="button" class="pre-rep-chip" onclick="preBuscarRep(${m.id})" title="Cambiar el repuesto">
+          <i class="ti ti-package"></i> <b>${trEsc(r.codigo)}</b> ${trEsc(r.descripcion)}${r.marca ? ` · ${trEsc(r.marca)}` : ""}</button>
+        <div class="pre-acc">
+          <label class="pre-inv"><i class="ti ti-search"></i><input placeholder="¿No es este? Buscar otro en el inventario…" autocomplete="off" data-mid="${m.id}" oninput="preInvBuscar(this)" onfocus="if(this.value.trim().length>1)preInvBuscar(this)"></label>
+          <button type="button" onclick="preVincular(${m.id}, 0)"><i class="ti ti-link-off"></i> Desenganchar</button>
+        </div>
+        <div class="pre-stock ${d.disponible > 0 ? (alcanza ? "ok" : "poco") : "no"}">
+          ${d.disponible > 0 ? `Hay ${preCant(d.disponible)}${unidad} en el depósito${r.ubicacion ? ` · ${trEsc(r.ubicacion)}` : ""}${d.apartado_otras ? ` <small>(${preCant(d.apartado_otras)} apartado para otras OTs)</small>` : ""}` : "Sin stock en el depósito"}
+        </div>
+        ${d.disponible > 0 || dep ? `<div class="pre-origen" role="group" aria-label="De dónde sale">
+          <button type="button" class="${dep ? "" : "on"}" onclick="preOrigen(${m.id}, '')"><i class="ti ti-shopping-cart"></i> Se compra</button>
+          <button type="button" class="${dep ? "on" : ""}" ${!alcanza && !dep ? `title="No alcanza para ${preCant(q)}"` : ""} onclick="preOrigen(${m.id}, 'deposito')"><i class="ti ti-building-warehouse"></i> Del depósito</button>
+        </div>` : ""}
+      </div>`;
+  } else {
+    const sug = d.sugerencias || [];
+    repHtml = `<div class="pre-rep">
+        ${sug.length ? `<div class="pre-sug"><span>¿Es alguno de estos?</span>${sug.slice(0, 3).map(s => `<button type="button" onclick="preVincular(${m.id}, ${s.id})" title="${trEsc(s.descripcion)}">
+            ${s.motivo === "aprendido" ? `<i class="ti ti-star-filled bz-estrella" title="Ya se eligió antes para algo parecido"></i>` : ""}<b>${trEsc(s.codigo)}</b> ${trEsc(s.descripcion.slice(0, 38))}${s.descripcion.length > 38 ? "…" : ""} <em class="${+s.stock_actual > 0 ? "ok" : ""}">${+s.stock_actual > 0 ? "hay " + preCant(s.stock_actual) : "sin stock"}</em></button>`).join("")}</div>` : ""}
+      </div>`;
+    if (d.origen === "suelto") repHtml = `<div class="pre-rep">
+        <div class="pre-suelto"><i class="ti ti-shopping-bag"></i> Compra suelta: no va al inventario
+          <button type="button" onclick="preVincular(${m.id}, 0)" title="Volver a buscarlo en el inventario">Deshacer</button></div>
+      </div>`;
+    else repHtml = repHtml.replace(/<\/div>$/, `<div class="pre-noesta">
+          <label class="pre-inv"><i class="ti ti-search"></i><input placeholder="${sug.length ? "¿Ninguno? " : ""}Buscar en el inventario: código, nombre, marca…" autocomplete="off" data-mid="${m.id}" oninput="preInvBuscar(this)" onfocus="if(this.value.trim().length>1)preInvBuscar(this)"></label>
+          <div class="pre-noesta-bts"><span>¿No está?</span>
+          <button type="button" class="pre-btn-crear" onclick="preCrearRep(${m.id})"><i class="ti ti-plus"></i> Crear repuesto nuevo</button>
+          <button type="button" onclick="preVincular(${m.id}, 0, 'suelto')" title="Se compra igual, pero no se carga en el inventario"><i class="ti ti-shopping-bag"></i> Compra suelta</button></div>
+        </div></div>`);
+  }
+  // Proveedor: los que venden ese repuesto, con su precio; o cualquiera del directorio
+  const provs = (r && d.proveedores) || [];
+  const actual = (d.proveedor || "").trim();
+  const enLista = provs.some(p => p.proveedor.toLowerCase() === actual.toLowerCase());
+  let provHtml;
+  if (dep) provHtml = `<span class="pre-dep-txt"><i class="ti ti-building-warehouse"></i> No se compra</span>`;
+  else if (provs.length) provHtml = `
+      <select class="pre-prov-sel" data-mid="${m.id}" onchange="preProvElegir(this)" aria-label="Proveedor">
+        <option value="">Elegí proveedor…</option>
+        ${provs.map(p => `<option value="${trEsc(p.proveedor)}" data-precio="${p.precio}" ${p.proveedor.toLowerCase() === actual.toLowerCase() ? "selected" : ""}>${trEsc(p.fantasia || p.proveedor)}${p.precio ? ` — ${preMil(p.precio)}` : ""}${p.mas_barato ? " ★ más barato" : ""}</option>`).join("")}
+        <option value="__otro" ${actual && !enLista ? "selected" : ""}>Otro proveedor…</option>
+      </select>
+      <input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Nombre del proveedor" autocomplete="off" oninput="preProvBuscar(this)" ${actual && !enLista ? "" : "hidden"}>`;
+  else provHtml = `<input class="pre-prov-in" data-kind="material" data-id="${m.id}" maxlength="160" value="${trEsc(actual)}" placeholder="Proveedor" autocomplete="off" oninput="preProvBuscar(this)">`;
+  const costo = r ? (+r.costo_unitario || 0) / (d.en_contenido && +r.contenido ? +r.contenido : 1) : 0;
+  const qTxt = otMatCantTxt(d.cantidad ?? m.cantidad);
+  const uCant = d.en_contenido ? (d.unidad_material || "litros") : (r && r.unidad && r.unidad !== "u" ? r.unidad : "");
+  return `<td class="center pre-cant-td">${d.stock_aplicado ? `<b>${qTxt}</b>` : `<div class="pre-cant" title="Cantidad: tocá − / + o escribí">
+      <button type="button" onclick="preCantPaso(${m.id}, -1)" aria-label="Uno menos">−</button>
+      <input value="${qTxt}" inputmode="decimal" data-mid="${m.id}" aria-label="Cantidad" onfocus="this.select()" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}" onchange="preCantGuardar(${m.id}, this.value)">
+      <button type="button" onclick="preCantPaso(${m.id}, 1)" aria-label="Uno más">+</button>
+    </div>${uCant ? `<small class="pre-cant-u">${trEsc(uCant)}</small>` : ""}`}</td>
+    <td class="pre-mat-td"><div class="pre-mat-desc">${trEsc(d.descripcion || m.descripcion)}${d.stock_aplicado || d.entregado_el ? "" : `<button type="button" class="pre-editar" onclick="preEditarMat(${m.id})" title="Corregir el nombre o la cantidad"><i class="ti ti-pencil"></i> Corregir</button>
+        <button type="button" class="pre-editar quitar" onclick="preQuitarMat(${m.id})" title="No hace falta: sacarlo del presupuesto"><i class="ti ti-trash"></i></button>`}</div>${repHtml}</td>
+    <td class="pre-prov-td">${provHtml}</td>
+    <td>${dep
+      ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" value="0" disabled title="Sale del depósito: no se pide plata"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
+      : `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" inputmode="numeric" value="${d.precio_unit ? preMil(d.precio_unit) : ""}" placeholder="0" oninput="preRecalcular()">${costo && r ? `<div class="pre-costo">último costo ${preMil(costo)}</div>` : ""}`}</td>
+    <td class="num pre-sub">—</td>`;
+}
+const preCant = q => { q = +q || 0; return Number.isInteger(q) ? String(q) : q.toFixed(2).replace(/0+$/, "").replace(/\.$/, "").replace(".", ","); };
+
+// Vuelve a dibujar un material sin perder lo que ya se escribió en los otros
+function preRepintar(mid) {
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  if (!tr) return;
+  const primero = tr.querySelector("td[rowspan]");
+  const cab = primero ? primero.outerHTML : "";
+  tr.innerHTML = cab + preCeldasMat({ id: mid, ...pre.mats[mid] });
+  const res = document.getElementById("pre-resumen");
+  if (res) res.innerHTML = preResumen();
+  const n = document.querySelector(".pre-pie-n"), ms = Object.values(pre.mats);
+  if (n) n.textContent = `${ms.filter(m => m.repuesto).length} de ${ms.length} materiales enganchados con el inventario`;
+  preRecalcular();
+}
+async function preRefrescar(mid) {
+  // guarda lo escrito en este material antes de pedir de nuevo
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  const precioIn = tr && tr.querySelector(".pre-mat:not([disabled])"), provIn = tr && tr.querySelector(".pre-prov-in");
+  const det = await api(`/api/compras/${pre.ot.id}/repuestos`).catch(() => null);
+  if (!det || !det.ok) return;
+  det.materiales.forEach(m => {
+    const viejo = pre.mats[m.id];
+    pre.mats[m.id] = m;
+    if (m.id === mid && viejo) {
+      if (precioIn && precioIn.value.trim()) m.precio_unit = preNum(precioIn.value);
+      if (provIn && provIn.value.trim()) m.proveedor = provIn.value.trim();
+    }
+  });
+  preRepintar(mid);
+}
+async function preVincular(mid, rid, origen = "") {
+  const r = await api(`/api/compras/${pre.ot.id}/vincular`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ material_id: mid, repuesto_id: rid, origen })
+  }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo enganchar", "error"); return; }
+  await preRefrescar(mid);
+}
+function preOrigen(mid, origen) {
+  const d = pre.mats[mid];
+  if (!d || !d.repuesto) return;
+  if (origen === "deposito" && d.disponible < d.cantidad && !confirm(`En el depósito hay ${preCant(d.disponible)} y se necesitan ${preCant(d.cantidad)}. ¿Sale igual del depósito?`)) return;
+  preVincular(mid, d.repuesto.id, origen);
+}
+function preProvElegir(sel) {
+  const mid = sel.dataset.mid, tr = sel.closest("tr");
+  const inp = tr.querySelector(".pre-prov-in"), precio = tr.querySelector(".pre-mat");
+  if (sel.value === "__otro") { inp.hidden = false; inp.value = ""; inp.focus(); return; }
+  inp.hidden = true;
+  inp.value = sel.value;
+  const p = +sel.selectedOptions[0]?.dataset.precio || 0;
+  if (p && precio && !precio.disabled) { precio.value = preMil(p); preRecalcular(); }
+  if (pre.mats[mid]) pre.mats[mid].proveedor = sel.value;
+}
+function preMotivo(m) {
+  return m === "aprendido" ? ` <em class="bz-tag apr"><i class="ti ti-star-filled"></i> elegido antes</em>`
+    : m === "parecido" ? ` <em class="bz-tag">parecido</em>`
+    : m === "codigo" ? ` <em class="bz-tag cod">por código</em>` : "";
+}
+// Proveedor mientras se escribe, aunque esté mal escrito ('dieza' → Diesa S.A.)
+let _preProvT;
+function preProvBuscar(inp) {
+  clearTimeout(_preProvT);
+  let box = inp.parentElement.querySelector(".bz-ac");
+  if (!box) {
+    inp.parentElement.style.position = "relative";
+    box = document.createElement("div");
+    box.className = "bz-ac";
+    box.hidden = true;
+    inp.after(box);
+    inp.addEventListener("blur", () => setTimeout(() => box.hidden = true, 150));
+    inp.addEventListener("keydown", e => {
+      const bs = [...box.querySelectorAll("button")];
+      if (box.hidden || !bs.length) return;
+      let k = bs.findIndex(b => b.classList.contains("on"));
+      if (e.key === "ArrowDown") { e.preventDefault(); k = Math.min(bs.length - 1, k + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); k = Math.max(0, k - 1); }
+      else if (e.key === "Enter" && k >= 0) { e.preventDefault(); bs[k].dispatchEvent(new Event("mousedown")); return; }
+      else if (e.key === "Escape") { box.hidden = true; return; }
+      else return;
+      bs.forEach((b, x) => b.classList.toggle("on", x === k));
+    });
+  }
+  const q = inp.value.trim();
+  if (q.length < 2) { box.hidden = true; return; }
+  _preProvT = setTimeout(async () => {
+    const r = await api(`/api/compras/proveedores_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    const l = (r && r.lista) || [];
+    if (!l.length || (l.length === 1 && l[0].nombre.toLowerCase() === q.toLowerCase())) { box.hidden = true; return; }
+    box.innerHTML = l.map(p => `<button type="button" data-n="${trEsc(p.nombre)}"><b>${trEsc(p.fantasia || p.nombre)}</b><span>${trEsc([p.fantasia && p.nombre, p.ruc && "RUC " + p.ruc, p.telefono].filter(Boolean).join(" · "))}</span></button>`).join("");
+    box.querySelectorAll("button").forEach(b => b.onmousedown = e => { e.preventDefault(); inp.value = b.dataset.n; box.hidden = true; });
+    box.hidden = false;
+  }, 220);
+}
+// Buscar el repuesto en el inventario
+function preBuscarRep(mid, texto) {
+  const d = pre.mats[mid];
+  const o = rvModal({
+    titulo: "¿Qué repuesto es?", icono: "package", ancho: 640, clase: "pre-busca",
+    sub: `${trEsc(d ? d.descripcion : "")} · buscá por código, descripción, marca o aplicación`,
+    cuerpo: `<label class="pre-busca-in"><i class="ti ti-search"></i><input placeholder="Ej: filtro aceite, 1873016, Mann…" value="${trEsc(texto || (d ? (d.descripcion || "").split(/\s+/).slice(0, 2).join(" ") : ""))}" autocomplete="off"></label>
+      <div class="pre-busca-res"></div>`,
+    pie: `<div class="pre-pie">${d && d.repuesto ? `<button type="button" class="pv-link" style="margin-right:auto;color:var(--danger)" id="pre-desv">Desenganchar</button>` : ""}
+      <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`,
+  });
+  const inp = o.querySelector("input"), res = o.querySelector(".pre-busca-res");
+  let t;
+  const buscar = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { res.innerHTML = `<p class="pre-busca-vacio">Escribí al menos dos letras.</p>`; return; }
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    const l = (r && r.lista) || [];
+    const quis = r && r.quisiste ? `<div class="bz-quisiste"><i class="ti ti-wand"></i> ¿Quisiste decir <button type="button" data-q="${trEsc(r.quisiste)}">${trEsc(r.quisiste)}</button>? Igual te muestro lo más parecido.</div>` : "";
+    res.innerHTML = quis + (l.length ? l.map(x => `<button type="button" data-id="${x.id}">
+        <span class="pre-br-cod">${trEsc(x.codigo)}</span>
+        <span class="pre-br-desc"><b>${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
+        <span class="pre-br-stock ${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""}` : "sin stock"}<small>${x.ubicacion ? trEsc(x.ubicacion) : ""}</small></span>
+      </button>`).join("") : "") + `<div class="pre-busca-nuevo"><span>${l.length ? "¿Ninguno es?" : "No está en el inventario."}</span>
+      <button type="button" class="btn btn-primary btn-sm" data-crear><i class="ti ti-plus"></i> Crear «${trEsc(q.slice(0, 40))}» en el inventario</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-suelto><i class="ti ti-shopping-bag"></i> Compra suelta</button></div>`;
+    res.querySelectorAll("button[data-id]").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
+    res.querySelector(".bz-quisiste button")?.addEventListener("click", e => { inp.value = e.target.dataset.q; buscar(); inp.focus(); });
+    res.querySelector("[data-crear]").onclick = () => { o.remove(); preCrearRep(mid, q); };
+    res.querySelector("[data-suelto]").onclick = async () => { o.remove(); await preVincular(mid, 0, "suelto"); };
+  };
+  inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(buscar, 220); });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button[data-id]")?.click(); } });
+  const desv = o.querySelector("#pre-desv");
+  if (desv) desv.onclick = async () => { o.remove(); await preVincular(mid, 0); };
+  setTimeout(() => { inp.focus(); inp.select(); buscar(); }, 60);
+}
+// Buscador del inventario en la misma fila del material (tolera errores: 'filto aseite')
+let _preInvT;
+function preInvBuscar(inp) {
+  clearTimeout(_preInvT);
+  const mid = +inp.dataset.mid;
+  let box = document.getElementById("pre-inv-ac");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "pre-inv-ac";
+    box.className = "bz-ac pre-inv-ac";
+    box.hidden = true;
+    document.body.appendChild(box);
+  }
+  if (!inp._preInv) {
+    inp._preInv = 1;
+    inp.addEventListener("blur", () => setTimeout(() => { if (box.dataset.mid == mid) box.hidden = true; }, 180));
+    inp.closest(".pre-modal")?.addEventListener("scroll", () => box.hidden = true, { passive: true });
+    inp.addEventListener("keydown", e => {
+      const bs = [...box.querySelectorAll("button")];
+      if (box.hidden || !bs.length) return;
+      let k = bs.findIndex(b => b.classList.contains("on"));
+      if (e.key === "ArrowDown") { e.preventDefault(); k = Math.min(bs.length - 1, k + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); k = Math.max(0, k - 1); }
+      else if (e.key === "Enter") { e.preventDefault(); (bs[k] || bs[0]).dispatchEvent(new Event("mousedown")); return; }
+      else if (e.key === "Escape") { box.hidden = true; return; }
+      else return;
+      bs.forEach((b, x) => b.classList.toggle("on", x === k));
+      bs[k]?.scrollIntoView({ block: "nearest" });
+    });
+  }
+  const q = inp.value.trim();
+  if (q.length < 2) { box.hidden = true; return; }
+  _preInvT = setTimeout(async () => {
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    if (inp.value.trim() !== q) return;
+    const l = ((r && r.lista) || []).slice(0, 8);
+    box.dataset.mid = mid;
+    box.innerHTML = (r && r.quisiste ? `<div class="pre-inv-quis"><i class="ti ti-wand"></i> ¿Quisiste decir <b>${trEsc(r.quisiste)}</b>?</div>` : "")
+      + (l.length ? l.map(x => `<button type="button" data-id="${x.id}" class="pre-inv-it">
+          <b><em>${trEsc(x.codigo)}</em> ${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b>
+          <span>${[x.marca, x.aplicacion].filter(Boolean).map(trEsc).join(" · ")}${x.marca || x.aplicacion ? " · " : ""}<i class="${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""} en el depósito` : "sin stock"}</i></span></button>`).join("")
+        : `<div class="pre-inv-vacio">No aparece «${trEsc(q)}» en el inventario.</div>`)
+      + `<button type="button" data-crear class="pre-inv-crear"><b><i class="ti ti-plus"></i> Crear «${trEsc(q.slice(0, 40))}» como repuesto nuevo</b></button>`;
+    box.querySelectorAll("[data-id]").forEach(b => b.onmousedown = async e => { e.preventDefault(); box.hidden = true; await preVincular(mid, +b.dataset.id); });
+    box.querySelector("[data-crear]").onmousedown = e => { e.preventDefault(); box.hidden = true; preCrearRep(mid, q); };
+    const rc = inp.getBoundingClientRect();
+    box.style.cssText = `position:fixed;left:${rc.left}px;width:${Math.max(rc.width, 340)}px;right:auto;z-index:1600;`;
+    box.hidden = false;
+    const alto = box.offsetHeight;
+    box.style.top = (rc.bottom + alto + 8 > innerHeight && rc.top > alto + 8 ? rc.top - alto - 4 : rc.bottom + 4) + "px";
+  }, 220);
+}
+// Volver a abrir el presupuesto (cambió la cantidad de filas) sin perder lo escrito
+async function preReabrir() {
+  const modal = document.querySelector(".pre-modal-rep");
+  const borr = { mat: {}, item: {}, prov: {} };
+  if (modal) {
+    modal.querySelectorAll(".pre-mat:not([disabled])").forEach(i => { if (i.value.trim()) borr.mat[i.dataset.id] = i.value; });
+    modal.querySelectorAll(".pre-item").forEach(i => { if (i.value.trim()) borr.item[i.dataset.id] = i.value; });
+    modal.querySelectorAll(".pre-prov-in").forEach(i => { if (i.value.trim()) borr.prov[i.dataset.kind + ":" + i.dataset.id] = i.value; });
+  }
+  const scroll = modal ? modal.scrollTop : 0;
+  modal?.closest(".modal-overlay")?.remove();
+  await abrirPresupuesto(pre.ot.id);
+  const nuevo = document.querySelector(".pre-modal-rep");
+  if (!nuevo) return;
+  Object.entries(borr.mat).forEach(([id, v]) => { const i = nuevo.querySelector(`.pre-mat[data-id="${id}"]:not([disabled])`); if (i && !i.value.trim()) i.value = v; });
+  Object.entries(borr.item).forEach(([id, v]) => { const i = nuevo.querySelector(`.pre-item[data-id="${id}"]`); if (i && !i.value.trim()) i.value = v; });
+  Object.entries(borr.prov).forEach(([k, v]) => {
+    const [kind, id] = k.split(":");
+    const i = nuevo.querySelector(`.pre-prov-in[data-kind="${kind}"][data-id="${id}"]`);
+    if (i && !i.value.trim()) { i.value = v; i.hidden = false; const sel = i.parentElement.querySelector(".pre-prov-sel"); if (sel && ![...sel.options].some(o => o.value === v && (o.selected = true))) sel.value = "__otro"; else if (sel) i.hidden = true; }
+  });
+  nuevo.scrollTop = scroll;
+  preRecalcular();
+}
+async function preQuitarMat(mid) {
+  const d = pre.mats[mid];
+  if (!confirm(`¿Sacar «${d ? d.descripcion : "este material"}» del presupuesto? No se va a comprar ni pedir.`)) return;
+  const r = await api(`/api/compras/${pre.ot.id}/material/${mid}`, { method: "DELETE" }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo quitar", "error"); return; }
+  toast("Material quitado", "success");
+  await preReabrir();
+}
+// Agregar un repuesto a un trabajo: del inventario o escrito a mano
+function preAgregarMat(itemId) {
+  const it = (pre.ot.items || []).find(x => x.id === itemId) || {};
+  const o = rvModal({
+    titulo: "Agregar repuesto", icono: "package", ancho: 640, clase: "pre-busca pre-agr",
+    sub: `${trEsc(it.descripcion || "")}${it.coche_n ? ` · coche ${trEsc(it.coche_n)}` : ""} · buscá en el inventario; si no está, se agrega igual`,
+    cuerpo: `<div class="pre-agr-fila">
+        <label class="pre-busca-in"><i class="ti ti-search"></i><input placeholder="Ej: filtro aceite, pastilla freno, 1873016…" autocomplete="off"></label>
+        <label class="pre-agr-cant">Cant.<input value="1" inputmode="decimal" aria-label="Cantidad"></label>
+      </div>
+      <div class="pre-busca-res"></div>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button></div>`,
+  });
+  const inp = o.querySelector(".pre-busca-in input"), cant = o.querySelector(".pre-agr-cant input"), res = o.querySelector(".pre-busca-res");
+  const agregar = async (rid, desc) => {
+    const q = preCantNum(cant.value);
+    if (!q) { toast("Poné la cantidad", "error"); cant.focus(); return; }
+    const r = await api(`/api/compras/${pre.ot.id}/material_nuevo`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item_id: itemId, repuesto_id: rid || 0, descripcion: desc || "", cantidad: q })
+    }).catch(() => null);
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo agregar", "error"); return; }
+    o.remove();
+    toast(rid ? "Repuesto agregado y enganchado con el inventario" : "Repuesto agregado (sin enganchar)", "success");
+    await preReabrir();
+  };
+  let t;
+  const buscar = async () => {
+    const q = inp.value.trim();
+    if (q.length < 2) { res.innerHTML = `<p class="pre-busca-vacio">Escribí al menos dos letras.</p>`; return; }
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    if (inp.value.trim() !== q) return;
+    const l = (r && r.lista) || [];
+    res.innerHTML = (r && r.quisiste ? `<div class="bz-quisiste"><i class="ti ti-wand"></i> ¿Quisiste decir <button type="button" data-q="${trEsc(r.quisiste)}">${trEsc(r.quisiste)}</button>?</div>` : "")
+      + l.map(x => `<button type="button" data-id="${x.id}">
+          <span class="pre-br-cod">${trEsc(x.codigo)}</span>
+          <span class="pre-br-desc"><b>${trEsc(x.descripcion)}${preMotivo(x.motivo)}</b><small>${[x.marca, x.aplicacion, x.proveedor].filter(Boolean).map(trEsc).join(" · ")}</small></span>
+          <span class="pre-br-stock ${+x.stock_actual > 0 ? "ok" : ""}">${+x.stock_actual > 0 ? `hay ${preCant(x.stock_actual)}${x.unidad && x.unidad !== "u" ? " " + x.unidad : ""}` : "sin stock"}<small>${x.ubicacion ? trEsc(x.ubicacion) : ""}</small></span>
+        </button>`).join("")
+      + `<div class="pre-busca-nuevo"><span>${l.length ? "¿Ninguno es?" : "No está en el inventario."}</span>
+          <button type="button" class="btn btn-ghost btn-sm" data-mano><i class="ti ti-pencil"></i> Agregar «${trEsc(q.slice(0, 40))}» igual</button></div>`;
+    res.querySelectorAll("button[data-id]").forEach(b => b.onclick = () => agregar(+b.dataset.id));
+    res.querySelector("[data-mano]").onclick = () => agregar(0, q);
+    res.querySelector(".bz-quisiste button")?.addEventListener("click", e => { inp.value = e.target.dataset.q; buscar(); inp.focus(); });
+  };
+  inp.addEventListener("input", () => { clearTimeout(t); t = setTimeout(buscar, 220); });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); res.querySelector("button[data-id]")?.click(); } });
+  setTimeout(() => inp.focus(), 60);
+  res.innerHTML = `<p class="pre-busca-vacio">Escribí qué repuesto lleva ${trEsc((it.descripcion || "este trabajo").toLowerCase())}.</p>`;
+}
+// Cantidad del material desde el presupuesto (el taller a veces no la sabe)
+const _preCantT = {};
+function preCantPaso(mid, paso) {
+  const inp = document.querySelector(`.pre-modal .pre-cant input[data-mid="${mid}"]`);
+  if (!inp) return;
+  const v = Math.max(1, Math.round((preCantNum(inp.value) || 0) + paso));
+  inp.value = otMatCantTxt(v);
+  preCantVer(mid, v);
+  clearTimeout(_preCantT[mid]);
+  _preCantT[mid] = setTimeout(() => preCantGuardar(mid, inp.value), 500);
+}
+const preCantNum = v => parseFloat(String(v || "").replace(",", ".").replace(/[^\d.]/g, "")) || 0;
+function preCantVer(mid, q) {
+  // el subtotal cambia al toque, antes de guardar
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  const p = tr && tr.querySelector(".pre-mat");
+  if (p) { p.dataset.q = q; preRecalcular(); }
+}
+async function preCantGuardar(mid, valor) {
+  clearTimeout(_preCantT[mid]);
+  const q = preCantNum(valor);
+  const d = pre.mats[mid];
+  if (!q) { toast("La cantidad tiene que ser mayor a cero", "error"); if (d) preRepintar(mid); return; }
+  if (d && +d.cantidad === q) return;
+  preCantVer(mid, q);
+  const r = await api(`/api/compras/${pre.ot.id}/material/${mid}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cantidad: q })
+  }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar la cantidad", "error"); if (d) preRepintar(mid); return; }
+  await preRefrescar(mid);
+}
+// Corregir lo que escribió el taller (nombre y cantidad del material)
+function preEditarMat(mid) {
+  const d = pre.mats[mid];
+  if (!d) return;
+  const o = rvModal({
+    titulo: "Corregir material", icono: "pencil", ancho: 460,
+    sub: "Lo que pidió el taller, bien escrito. Así después se encuentra en el inventario.",
+    cuerpo: `<div class="pre-form">
+      <label class="pre-f-full">Qué es<input name="descripcion" maxlength="200" value="${trEsc(d.descripcion || "")}"></label>
+      <label>Cantidad<input name="cantidad" inputmode="decimal" value="${preCant(d.cantidad)}"></label></div>`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" data-ok><i class="ti ti-check"></i> Guardar</button></div>`,
+  });
+  const f = n => o.querySelector(`[name=${n}]`);
+  const ok = async btn => {
+    btn.disabled = true;
+    const r = await api(`/api/compras/${pre.ot.id}/material/${mid}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ descripcion: f("descripcion").value, cantidad: f("cantidad").value })
+    }).catch(() => null);
+    btn.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+    o.remove();
+    toast("Material corregido", "success");
+    await preRefrescar(mid);
+  };
+  o.querySelector("[data-ok]").onclick = e => ok(e.currentTarget);
+  o.querySelectorAll("input").forEach(i => i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ok(o.querySelector("[data-ok]")); } }));
+  setTimeout(() => f("descripcion").select(), 60);
+}
+// Dar de alta un repuesto que no está en el inventario, desde el mismo presupuesto
+let _preCats = null;
+async function preCrearRep(mid, texto) {
+  const d = pre.mats[mid];
+  if (!d) return;
+  if (!_preCats) _preCats = await api("/api/repuestos/categorias").catch(() => null) || ["Filtros", "Varios"];
+  const desc = (texto && texto.length > (d.descripcion || "").length ? texto : d.descripcion || "").trim();
+  const desc1 = desc.charAt(0).toUpperCase() + desc.slice(1);
+  const n = sin => (sin || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const adivina = n(desc).includes("filtro") ? "Filtros" : /aceite|lubric|grasa|refriger|aditiv/.test(n(desc)) ? "Lubricantes y aditivos"
+    : /correa|manguera/.test(n(desc)) ? "Correas y mangueras" : /ruleman|rodamiento/.test(n(desc)) ? "Rulemanes / rodamientos"
+    : /freno|embrague|pastilla|cinta/.test(n(desc)) ? "Embragues / frenos" : /lampara|foco|fusible|rele|bateria|cable|electr/.test(n(desc)) ? "Eléctricos"
+    : /tornillo|tuerca|arandela|bulon|perno/.test(n(desc)) ? "Tornillería / ferretería" : "Varios";
+  const tr = document.querySelector(`.pre-modal tr[data-mid="${mid}"]`);
+  const precioEscrito = tr && tr.querySelector(".pre-mat:not([disabled])")?.value.trim();
+  const provEscrito = (tr && tr.querySelector(".pre-prov-in")?.value.trim()) || d.proveedor || "";
+  const o = rvModal({
+    titulo: "Crear repuesto nuevo", icono: "package", ancho: 560, clase: "pre-crear",
+    sub: "Queda cargado en Inventario Repuestos (con stock 0) y enganchado a este material. Cuando llegue, entra al stock solo.",
+    cuerpo: `<div class="pre-form">
+      <label class="pre-f-full">Descripción *<input name="descripcion" maxlength="200" value="${trEsc(desc1)}" placeholder="Ej: Filtro de combustible"></label>
+      <div class="pre-f-full pre-dup" hidden></div>
+      <label>Código del fabricante<input name="codigo" maxlength="60" placeholder="Si no tiene, queda INT-…"></label>
+      <label>Marca<input name="marca" maxlength="80" placeholder="Ej: Mann, Fleetguard"></label>
+      <label>Categoría<select name="categoria">${_preCats.map(c => `<option ${c === adivina ? "selected" : ""}>${trEsc(c)}</option>`).join("")}</select></label>
+      <label>Unidad<select name="unidad">${[["u", "unidad"], ["lt", "litro"], ["kg", "kilo"], ["m", "metro"], ["juego", "juego"], ["par", "par"]].map(([v, t]) => `<option value="${v}" ${v === (/litro|\(l\)|\blts?\b/.test(n(desc)) ? "lt" : "u") ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+      <label class="pre-f-full">Para qué vehículo / aplicación<input name="aplicacion" maxlength="120" placeholder="Ej: Scania K310, Mercedes O500"></label>
+      <label class="pre-f-full">Proveedor<input name="proveedor" class="pre-prov-in" maxlength="160" value="${trEsc(provEscrito)}" placeholder="A quién se le compra" autocomplete="off" oninput="preProvBuscar(this)"></label>
+      <label>Precio unitario (Gs.)<input name="precio" inputmode="numeric" value="${trEsc(precioEscrito || "")}" placeholder="0" onblur="this.value = preNum(this.value) ? preMil(preNum(this.value)) : ''"></label>
+    </div>
+`,
+    pie: `<div class="pre-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" data-ok><i class="ti ti-check"></i> Crear y enganchar</button></div>`,
+  });
+  const f = nm => o.querySelector(`[name=${nm}]`);
+  // antes de crear: ¿ya está con otro nombre o con ese código?
+  const dup = o.querySelector(".pre-dup");
+  let tDup;
+  const revisar = () => { clearTimeout(tDup); tDup = setTimeout(async () => {
+    const q = f("codigo").value.trim() || f("descripcion").value.trim();
+    if (q.length < 3) { dup.hidden = true; return; }
+    const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
+    const l = ((r && r.lista) || []).slice(0, 3);
+    dup.hidden = !l.length;
+    dup.innerHTML = `<span><i class="ti ti-alert-circle"></i> Ojo, en el inventario ya hay algo parecido. Si es este, usalo en vez de crear otro:</span>`
+      + l.map(x => `<button type="button" data-id="${x.id}"><b>${trEsc(x.codigo)}</b> ${trEsc(x.descripcion)}${x.marca ? ` · ${trEsc(x.marca)}` : ""} <em>${+x.stock_actual > 0 ? "hay " + preCant(x.stock_actual) : "sin stock"}</em> <u>Usar este</u></button>`).join("");
+    dup.querySelectorAll("button").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
+  }, 300); };
+  f("descripcion").addEventListener("input", revisar);
+  f("codigo").addEventListener("input", revisar);
+  revisar();
+  o.querySelector("[data-ok]").onclick = async e => {
+    const btn = e.currentTarget;
+    if (!f("descripcion").value.trim()) { toast("Escribí la descripción", "error"); f("descripcion").focus(); return; }
+    btn.disabled = true;
+    const body = { material_id: mid, precio: preNum(f("precio").value) };
+    ["descripcion", "codigo", "marca", "categoria", "unidad", "aplicacion", "proveedor"].forEach(k => body[k] = f(k).value);
+    const r = await api(`/api/compras/${pre.ot.id}/crear_repuesto`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).catch(() => null);
+    btn.disabled = false;
+    if (!r || !r.ok) { toast((r && r.msg) || "No se pudo crear", "error"); return; }
+    o.remove();
+    toast(r.msg, "success");
+    await preRefrescar(mid);
+  };
+  setTimeout(() => f("codigo").focus(), 60);
 }
 
 const preNum = v => parseFloat(String(v || "").replace(/\./g, "").replace(/,/g, ".").replace(/[^\d.]/g, "")) || 0;
@@ -5778,9 +6932,13 @@ function preRecalcular() {
 }
 
 async function guardarPresupuesto(otId, btn) {
-  const precios = {}, materiales = {};
+  const precios = {}, materiales = {}, proveedores_items = {}, proveedores_materiales = {};
+  document.querySelectorAll(".pre-modal .pre-prov-in").forEach(inp => {
+    (inp.dataset.kind === "material" ? proveedores_materiales : proveedores_items)[inp.dataset.id] = inp.value.trim().slice(0,160);
+  });
   let alguno = false;
   document.querySelectorAll(".pre-modal .pre-in").forEach(inp => {
+    if (inp.disabled) { materiales[inp.dataset.id] = 0; alguno = true; return; }   // sale del depósito
     if (!inp.value.trim()) return;
     (inp.classList.contains("pre-mat") ? materiales : precios)[inp.dataset.id] = preNum(inp.value);
     alguno = true;
@@ -5788,7 +6946,7 @@ async function guardarPresupuesto(otId, btn) {
   if (!alguno) { toast("Cargá al menos un precio", "error"); return; }
   const r = await api(`/api/compras/${otId}/presupuesto`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ precios, materiales })
+    body: JSON.stringify({ precios, materiales, proveedores_items, proveedores_materiales })
   });
   if (r.ok) {
     toast("Presupuesto guardado", "success");
@@ -5840,82 +6998,174 @@ function comprimirFoto(file) {
   });
 }
 
-function abrirEntrega(otId) {
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  overlay.style.cssText = "position:fixed;inset:0;background:rgba(10,15,26,0.55);z-index:1500;display:grid;place-items:center;padding:20px";
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:16px;max-width:460px;width:100%;padding:24px">
-      <h2 style="font-size:18px;color:var(--brand-blue);margin:0 0 6px;display:flex;align-items:center;gap:8px"><i class="ti ti-package"></i> Registrar entrega — OT #${otId}</h2>
-      <p style="font-size:13px;color:var(--muted);margin:0 0 16px">Indicá dónde entregás y <b>quién recibe</b> — al registrarlo, la responsabilidad del material pasa a esa persona. La foto es opcional pero recomendada.</p>
-
-      <div class="field" style="margin-bottom:12px">
-        <label>¿Dónde se entrega?</label>
-        <div style="display:flex;gap:8px">
-          <select id="ev-taller-sel" style="flex:1" onchange="document.getElementById('ev-taller-otro').style.display = this.value==='__otro__' ? '' : 'none'">
-            <option value="Taller propio">Taller propio</option>
-            <option value="__otro__">Otro taller...</option>
-          </select>
+// ─── Recepción: qué llegó, a qué precio y con qué factura ───
+// Lo que no se marca queda pendiente y la OT sigue en camino. La factura de
+// cada proveedor puede quedar como pago a proveedor en Tesorería.
+const rcp = { ot: null, mats: [], items: [], foto: null };
+async function abrirEntrega(otId) {
+  const [ots, det] = await Promise.all([api("/api/compras/ots"), api(`/api/compras/${otId}/repuestos`).catch(() => null)]);
+  const o = (ots || []).find(x => x.id === otId);
+  if (!o) { toast("No se encontró la OT", "error"); return; }
+  rcp.ot = o; rcp.foto = null;
+  const itemsPorId = Object.fromEntries((o.items || []).map(i => [i.id, i]));
+  rcp.mats = ((det && det.materiales) || []).map(m => ({ ...m, _item: itemsPorId[m.item_id] || {} }));
+  const conMat = new Set(rcp.mats.map(m => m.item_id));
+  rcp.items = (o.items || []).filter(i => !conMat.has(i.id) && (+i.precio_compras > 0 || i.material_pedido));
+  // grupos: por proveedor; lo del depósito aparte
+  const grupos = {};
+  // "Diesa" y "DIESA S.A." son el mismo proveedor
+  const clave = t => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ")
+    .split(/\s+/).filter(w => w && !["s", "a", "sa", "srl", "sae", "saeca", "eca", "ltda", "cia", "y"].includes(w)).join(" ");
+  const meter = (k, nombre, fila) => {
+    const g = grupos[k] = grupos[k] || { nombre, nombres: [], filas: [] };
+    if (nombre && !g.nombres.includes(nombre)) g.nombres.push(nombre);
+    if ((nombre || "").length > (g.nombre || "").length && !k.startsWith("__")) g.nombre = nombre;
+    g.filas.push(fila);
+  };
+  rcp.mats.forEach(m => {
+    const espera = m._item.estado_pago === "espera";
+    const hecho = !!(m.entregado_el || m.stock_aplicado);
+    const fila = { tipo: "m", id: m.id, desc: m.descripcion, q: +m.cantidad || 0, precio: +m.precio_unit || 0, presup: +m.precio_presup || +m.precio_unit || 0,
+                   coche: m._item.coche_n, trabajo: m._item.descripcion, rep: m.repuesto, espera, hecho, dep: m.origen === "deposito", suelto: m.origen === "suelto" };
+    if (m.origen === "deposito") meter("__dep", "Del depósito", fila);
+    else meter(clave(m.proveedor) || "__sin", m.proveedor || "Sin proveedor", fila);
+  });
+  rcp.items.forEach(it => {
+    const fila = { tipo: "i", id: it.id, desc: it.material_pedido || it.descripcion, q: 1, precio: +it.precio_compras || 0, presup: +it.precio_compras || 0,
+                   coche: it.coche_n, trabajo: it.descripcion, espera: it.estado_pago === "espera", hecho: !!it.entregado_el };
+    meter(clave(it.proveedor_compras) || "__sin", it.proveedor_compras || "Sin proveedor", fila);
+  });
+  rcp.grupos = Object.entries(grupos).sort((a, b) => (a[0] === "__dep") - (b[0] === "__dep") || (a[0] === "__sin") - (b[0] === "__sin") || a[1].nombre.localeCompare(b[1].nombre));
+  const pend = rcp.grupos.reduce((n, [, g]) => n + g.filas.filter(f => !f.hecho && !f.espera).length, 0);
+  const filaHtml = (k, f) => `
+      <label class="rx-fila ${f.hecho ? "hecho" : f.espera ? "espera" : ""}">
+        <input type="checkbox" class="rx-chk" data-g="${trEsc(k)}" data-t="${f.tipo}" data-id="${f.id}" ${f.hecho || f.espera ? "disabled" : "checked"}>
+        <span class="rx-q">${otMatCantTxt(f.q)}</span>
+        <span class="rx-desc"><b>${trEsc(f.desc)}</b><small>${f.coche ? `Coche ${trEsc(f.coche)} · ` : ""}${trEsc(f.trabajo || "")}${f.rep ? ` · ${trEsc(f.rep.codigo)}` : f.suelto ? " · compra suelta" : ""}</small></span>
+        ${f.hecho ? `<span class="rx-est ok"><i class="ti ti-circle-check"></i> Ya entregado</span>`
+          : f.espera ? `<span class="rx-est"><i class="ti ti-hourglass"></i> Esperando fondos</span>`
+          : f.dep ? `<span class="rx-est dep"><i class="ti ti-building-warehouse"></i> Sale del depósito</span>`
+          : `<span class="rx-precio"><input class="rx-p" data-g="${trEsc(k)}" data-t="${f.tipo}" data-id="${f.id}" data-q="${f.q}" inputmode="numeric" value="${f.precio ? preMil(f.precio) : ""}" placeholder="0" title="Precio por unidad en la factura">
+              <small>${f.tipo === "i" ? "precio del trabajo" : f.presup ? `presup. ${preMil(f.presup)} c/u` : "c/u"}</small></span>`}
+      </label>`;
+  const grupoHtml = ([k, g]) => {
+    const compra = k !== "__dep";
+    const activas = g.filas.filter(f => !f.hecho && !f.espera);
+    return `<section class="rx-grupo" data-g="${trEsc(k)}">
+        <header><b><i class="ti ti-${k === "__dep" ? "building-warehouse" : k === "__sin" ? "help-circle" : "truck-delivery"}"></i> ${trEsc(g.nombre)}</b>
+          ${activas.length ? `<span class="rx-g-tot" data-tot="${trEsc(k)}"></span>` : `<span class="rx-g-ok">listo</span>`}</header>
+        ${g.filas.map(f => filaHtml(k, f)).join("")}
+        ${compra && activas.length ? `<div class="rx-fac">
+            <label>Factura N.º<input class="rx-fn" data-g="${trEsc(k)}" placeholder="001-001-0001234" maxlength="30"></label>
+            <label>Total factura<input class="rx-fm" data-g="${trEsc(k)}" inputmode="numeric" placeholder="0"></label>
+            <label>Pago<select class="rx-fd" data-g="${trEsc(k)}">
+              <option value="0">Contado</option><option value="15">A 15 días</option><option value="30">A 30 días</option><option value="60">A 60 días</option></select></label>
+            <label class="rx-teso"><input type="checkbox" class="rx-ft" data-g="${trEsc(k)}" ${k === "__sin" ? "" : "checked"}> Cargar en Tesorería como pago a proveedor</label>
+          </div>` : ""}
+      </section>`;
+  };
+  const ov = rvModal({
+    titulo: `Recibir y entregar · OT #${o.id}`, icono: "package-import", ancho: 860, clase: "rx-m",
+    sub: `${cmpTituloCoches(o)} · Marcá lo que llegó y poné el precio de la factura. Lo que no marques queda pendiente y la OT sigue en camino.`,
+    cuerpo: `${pend ? "" : `<div class="rx-nada"><i class="ti ti-circle-check"></i> No queda nada por recibir: se marca entregada.</div>`}
+      <div class="rx-grupos">${rcp.grupos.map(grupoHtml).join("")}</div>
+      <div class="rx-quien">
+        <label>¿Dónde se entrega?<select id="ev-taller-sel" onchange="document.getElementById('ev-taller-otro').style.display = this.value==='__otro__' ? '' : 'none'">
+          <option value="Taller propio">Taller propio</option><option value="__otro__">Otro taller…</option></select>
+          <input id="ev-taller-otro" placeholder="Nombre del taller externo" list="ev-talleres-list" style="display:none"><datalist id="ev-talleres-list"></datalist></label>
+        <label>¿Quién recibe? *<input id="ev-recibe" placeholder="Nombre de quien recibe en el taller"></label>
+        <div class="rx-foto">
+          <input type="file" id="ev-camara" accept="image/*" capture="environment" hidden><input type="file" id="ev-galeria" accept="image/*" hidden>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('ev-camara').click()"><i class="ti ti-camera"></i> Foto</button>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('ev-galeria').click()"><i class="ti ti-photo"></i> Galería</button>
+          <span id="ev-preview"></span>
         </div>
-        <input id="ev-taller-otro" placeholder="Nombre del taller externo" list="ev-talleres-list" style="display:none;margin-top:8px">
-        <datalist id="ev-talleres-list"></datalist>
-      </div>
-
-      <div class="field" style="margin-bottom:16px">
-        <label>¿Quién recibe el material? *</label>
-        <input id="ev-recibe" placeholder="Nombre de la persona que recibe">
-      </div>
-
-      <input type="file" id="ev-camara" accept="image/*" capture="environment" style="display:none">
-      <input type="file" id="ev-galeria" accept="image/*" style="display:none">
-      <div style="display:flex;gap:10px;margin-bottom:14px">
-        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-camara').click()"><i class="ti ti-camera"></i> Sacar foto</button>
-        <button class="btn btn-ghost" style="flex:1" onclick="document.getElementById('ev-galeria').click()"><i class="ti ti-photo"></i> Elegir foto</button>
-      </div>
-      <div id="ev-preview" style="margin-bottom:16px"></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
-        <button class="btn btn-success" id="ev-confirmar" onclick="confirmarEntrega(${otId}, this)"><i class="ti ti-check"></i> Confirmar entrega</button>
-      </div>
-    </div>`;
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  document.body.appendChild(overlay);
-
-  // Cargar talleres externos ya usados para el autocompletar
+      </div>`,
+    pie: `<span class="rx-resumen" id="rx-resumen"></span>
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-success" id="ev-confirmar"><i class="ti ti-check"></i> Confirmar</button>`,
+  });
   api("/api/compras/talleres").then(ts => {
     const dl = document.getElementById("ev-talleres-list");
-    if (dl && Array.isArray(ts)) dl.innerHTML = ts.map(t => `<option value="${t}">`).join("");
+    if (dl && Array.isArray(ts)) dl.innerHTML = ts.map(t => `<option value="${trEsc(t)}">`).join("");
   });
-
-  let fotoEvidencia = null;
-  async function procesarEv(file) {
-    fotoEvidencia = await comprimirFoto(file);
-    document.getElementById("ev-preview").innerHTML = `<img src="${fotoEvidencia}" style="width:140px;height:140px;object-fit:cover;border-radius:10px;border:1px solid var(--border)">`;
-    document.getElementById("ev-confirmar").disabled = false;
-  }
-  document.getElementById("ev-camara").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
-  document.getElementById("ev-galeria").addEventListener("change", e => { if (e.target.files[0]) procesarEv(e.target.files[0]); });
-  window._fotoEvidenciaGetter = () => fotoEvidencia;
+  const fotoIn = async file => {
+    rcp.foto = await comprimirFoto(file);
+    document.getElementById("ev-preview").innerHTML = `<img src="${rcp.foto}" alt="Foto de la entrega">`;
+  };
+  ov.querySelector("#ev-camara").addEventListener("change", e => { if (e.target.files[0]) fotoIn(e.target.files[0]); });
+  ov.querySelector("#ev-galeria").addEventListener("change", e => { if (e.target.files[0]) fotoIn(e.target.files[0]); });
+  ov.querySelectorAll(".rx-chk, .rx-p").forEach(el => el.addEventListener("input", rcRecalcular));
+  ov.querySelectorAll(".rx-p").forEach(el => el.addEventListener("blur", () => { el.value = preNum(el.value) ? preMil(preNum(el.value)) : ""; }));
+  ov.querySelectorAll(".rx-fm").forEach(el => {
+    el.addEventListener("input", () => { el.dataset.tocado = "1"; });
+    el.addEventListener("blur", () => { el.value = preNum(el.value) ? preMil(preNum(el.value)) : ""; });
+  });
+  ov.querySelector("#ev-confirmar").onclick = e => confirmarEntrega(otId, e.currentTarget);
+  rcRecalcular();
 }
-
-async function confirmarEntrega(otId, btn) {
-  const foto = window._fotoEvidenciaGetter ? window._fotoEvidenciaGetter() : null;
-  const recibe = (document.getElementById("ev-recibe")?.value || "").trim();
-  if (!recibe) { toast("Indicá quién recibe el material", "error"); return; }
-  const tallerSel = document.getElementById("ev-taller-sel")?.value || "Taller propio";
-  const taller = tallerSel === "__otro__"
-    ? (document.getElementById("ev-taller-otro")?.value || "").trim() || "Taller externo"
-    : tallerSel;
-  btn.disabled = true;
-  const r = await api(`/api/compras/${otId}/entregar`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ foto, taller_entrega: taller, recibido_por: recibe })
+function rcRecalcular() {
+  const ov = document.querySelector(".rx-m");
+  if (!ov) return;
+  let marcadas = 0, quedan = 0;
+  const tot = {};
+  ov.querySelectorAll(".rx-chk:not([disabled])").forEach(c => {
+    const g = c.dataset.g;
+    if (!c.checked) { quedan++; return; }
+    marcadas++;
+    const p = ov.querySelector(`.rx-p[data-t="${c.dataset.t}"][data-id="${c.dataset.id}"]`);
+    if (p) tot[g] = (tot[g] || 0) + preNum(p.value) * (parseFloat(p.dataset.q) || 1);
   });
-  if (r.ok) {
-    toast(`Entregado en ${taller} — recibió ${recibe}`, "success");
-    btn.closest(".modal-overlay").remove();
-    renderCompras();
-  } else { toast(r.msg || "Error", "error"); btn.disabled = false; }
+  ov.querySelectorAll("[data-tot]").forEach(el => { const v = tot[el.dataset.tot] || 0; el.textContent = v ? gs(Math.round(v)) : ""; });
+  ov.querySelectorAll(".rx-fm").forEach(el => { if (!el.dataset.tocado) el.value = tot[el.dataset.g] ? preMil(Math.round(tot[el.dataset.g])) : ""; });
+  const r = document.getElementById("rx-resumen");
+  if (r) r.innerHTML = marcadas ? `Se entregan <b>${marcadas}</b>${quedan ? ` · quedan <b>${quedan}</b> pendientes` : " · completo"}` : (quedan ? "Marcá lo que llegó" : "");
+}
+async function confirmarEntrega(otId, btn) {
+  const ov = btn.closest(".modal-overlay");
+  const recibe = (document.getElementById("ev-recibe")?.value || "").trim();
+  if (!recibe) { toast("Indicá quién recibe el material", "error"); document.getElementById("ev-recibe")?.focus(); return; }
+  const tallerSel = document.getElementById("ev-taller-sel")?.value || "Taller propio";
+  const taller = tallerSel === "__otro__" ? (document.getElementById("ev-taller-otro")?.value || "").trim() || "Taller externo" : tallerSel;
+  const materiales = [], items = [];
+  ov.querySelectorAll(".rx-chk:not([disabled])").forEach(c => {
+    if (!c.checked) return;
+    const p = ov.querySelector(`.rx-p[data-t="${c.dataset.t}"][data-id="${c.dataset.id}"]`);
+    const x = { id: +c.dataset.id, precio: p ? preNum(p.value) : null };
+    (c.dataset.t === "m" ? materiales : items).push(x);
+  });
+  const hayActivas = ov.querySelectorAll(".rx-chk:not([disabled])").length;
+  if (hayActivas && !materiales.length && !items.length) { toast("Marcá lo que llegó", "error"); return; }
+  const facturas = [];
+  (rcp.grupos || []).forEach(([k, g]) => {
+    const fn = ov.querySelector(`.rx-fn[data-g="${CSS.escape(k)}"]`);
+    if (!fn) return;
+    const algun = [...ov.querySelectorAll(`.rx-chk[data-g="${CSS.escape(k)}"]:not([disabled])`)].some(c => c.checked);
+    if (!algun) return;
+    facturas.push({ proveedor: k.startsWith("__") ? "" : g.nombre, nombres: k.startsWith("__") ? [""] : g.nombres, numero: fn.value.trim(),
+      monto: preNum(ov.querySelector(`.rx-fm[data-g="${CSS.escape(k)}"]`)?.value),
+      dias: +ov.querySelector(`.rx-fd[data-g="${CSS.escape(k)}"]`)?.value || 0,
+      tesoreria: !k.startsWith("__") && !!ov.querySelector(`.rx-ft[data-g="${CSS.escape(k)}"]`)?.checked });
+  });
+  const body = { foto: rcp.foto, taller_entrega: taller, recibido_por: recibe, facturas };
+  if (hayActivas) { body.materiales = materiales; body.items = items; }
+  btn.disabled = true;
+  const r = await api(`/api/compras/${otId}/entregar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo registrar", "error"); return; }
+  const pend = r.pendientes || {};
+  toast(pend.cantidad ? `Entregado en parte · faltan ${pend.cantidad}: la OT sigue en camino` : `Entregado en ${taller} — recibió ${recibe}`, "success");
+  const st = r.stock || {};
+  if (st.problemas && st.problemas.length) setTimeout(() => toast("Inventario: " + st.problemas.join(" · "), "error"), 700);
+  else if (st.movidos) setTimeout(() => toast(`Inventario al día: ${st.movidos} repuesto${st.movidos === 1 ? "" : "s"} movido${st.movidos === 1 ? "" : "s"}`, "success"), 700);
+  const teso = (r.tesoreria || []);
+  if (teso.length) {
+    const ok = teso.filter(t => t.ok), mal = teso.filter(t => !t.ok);
+    setTimeout(() => toast(ok.length ? `Tesorería: ${ok.length} factura${ok.length === 1 ? "" : "s"} cargada${ok.length === 1 ? "" : "s"} en Pagos y cobros${ok.some(t => /aprobación/.test(t.msg || "")) ? " (alguna espera aprobación)" : ""}` : "", "success"), 1400);
+    if (mal.length) setTimeout(() => toast("Tesorería: " + mal.map(t => t.msg).join(" · "), "error"), 2000);
+  }
+  ov.remove();
+  renderCompras();
 }
 
 async function verEvidencia(otId) {
@@ -6013,6 +7263,7 @@ async function renderOts() {
       <div class="toolbar">
         <button class="btn btn-primary" onclick="abrirNuevaOT()"><i class="ti ti-plus"></i> Nueva OT</button>
         <button class="btn btn-ghost" onclick="abrirReporteFechas()"><i class="ti ti-file-text"></i> Reporte por fechas</button>
+        <button class="btn btn-ghost" onclick="otHojaBlanca()" title="La hoja del técnico vacía, para completar a mano"><i class="ti ti-moon"></i> Hoja turno noche</button>
         <div class="tabs">
           <button class="tab-btn ${otFiltroEstado===''?'active':''}" onclick="filtrarOTs('')"><i class="ti ti-list"></i> Todas</button>
           <button class="tab-btn ${otFiltroEstado==='abierta'?'active':''}" onclick="filtrarOTs('abierta')"><i class="ti ti-progress"></i> Abiertas</button>
@@ -6556,13 +7807,16 @@ async function abrirOT(otId) {
           <span class="badge">${compl}/${ot.items.length} completados</span>
           <span id="ot-badge-atr">${otBadgeAtrasados(ot)}</span>
           <span id="ot-badge-fac">${otBadgeFacturas(ot)}</span>
+          <span id="ot-badge-horas"></span>
           ${ot.estado_compras ? `<span class="badge ${COLOR_COMPRAS[ot.estado_compras]||''}"><i class="ti ti-shopping-cart"></i> ${LABEL_COMPRAS[ot.estado_compras]||ot.estado_compras}</span>` : ''}
           ${ot.fotos && ot.fotos.length ? `<span class="badge" style="background:#eaf2fb;color:var(--brand-blue)"><i class="ti ti-camera"></i> ${ot.fotos.length} foto${ot.fotos.length>1?'s':''}</span>` : ''}
         </div>
 
         <div id="ot-km-box">${otKmCaja(ot)}</div>
+        <div id="ot-sal-box"></div>
         <div id="pv-ot-box"></div>
         <div id="ot-dep-box" class="ot-dep"></div>
+        <div id="ot-cmp-mot-box"></div>
 
         ${ot.fotos && ot.fotos.length ? `
           <div style="margin-bottom:18px">
@@ -6594,6 +7848,7 @@ async function abrirOT(otId) {
             onkeydown="if(event.key==='Enter'){event.preventDefault();agregarItemOT(${ot.id})}"></div>
           <button class="btn btn-ghost" onclick="agregarItemOT(${ot.id})"><i class="ti ti-plus"></i> Agregar</button>
         </div>
+        <div id="ot-horas-box"></div>
         ${varios && ot.id !== numero ? `<button type="button" class="pv-link ot-coche-quitar" onclick="otCocheQuitar()"><i class="ti ti-bus-off"></i> Sacar el ${ot.n_interno ? "coche " + ot.n_interno : ot.patente} de esta OT</button>` : ""}
 
         <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
@@ -6626,6 +7881,191 @@ async function abrirOT(otId) {
   pvOtCargar(ot);
   ptCargarLista(true);   // los números del personal, para el técnico de cada ítem
   otSepBuscar(ot);
+  otSalidasCargar(ot);
+  otCmpMotivoCargar(ot);
+  window._otHorasExtra = [];
+  otHorasCargar(ot);
+}
+
+// ─── Horas del personal: inicio y fin de cada técnico en esta OT ───
+// Cada técnico puede tener varias tandas (cortó y siguió: el «intermedio» de
+// la hoja). «Empezó ahora» / «Terminó ahora» ponen la hora actual.
+function otHorasPuede() { return ["admin", "taller", "compras"].includes(window.USUARIO_ROL); }
+function otHorasTxt(h) {
+  const m = Math.round((h || 0) * 60);
+  if (m < 60) return `${m} min`;
+  return `${Math.floor(m / 60)} h${m % 60 ? " " + String(m % 60).padStart(2, "0") : ""}`;
+}
+function otHorasFH(v) { return v ? `${v.slice(8, 10)}/${v.slice(5, 7)} ${v.slice(11, 16)}` : ""; }
+function otHorasMin(a, b) { return Math.round((new Date(b) - new Date(a)) / 60000); }
+async function otHorasCargar(ot, intento = 0) {
+  const box = document.getElementById("ot-horas-box");
+  if (!box) return;
+  box.dataset.ot = ot.id;
+  // Mientras se trae, la sección ya está a la vista (nunca queda en blanco)
+  if (!box.querySelector(".oh-caja")) box.innerHTML = `<div class="oh-caja oh-cargando"><div class="oh-caja-cab"><h4><i class="ti ti-clock-hour-4"></i> Horas del personal</h4><span><i class="ti ti-loader-2 gira"></i> Trayendo las horas…</span></div></div>`;
+  let r = null;
+  try {
+    const resp = await fetch(`/api/ots/${ot.id}/horas`);
+    if (resp.status === 401) { window.location.href = "/login"; return; }
+    r = await resp.json().catch(() => null);
+  } catch (e) { r = null; }
+  const b2 = document.getElementById("ot-horas-box");
+  if (!b2 || String(b2.dataset.ot) !== String(ot.id)) return;   // ya se abrió otra OT
+  if (!r || !r.ok) {
+    // Si el servidor no respondió bien (se cortó la conexión, estaba ocupado), se reintenta solo
+    if (intento < 3 && !(r && r.msg && /permiso|no existe/i.test(r.msg))) {
+      setTimeout(() => otHorasCargar(ot, intento + 1), 900 * (intento + 1));
+      return;
+    }
+    b2.innerHTML = `<div class="oh-caja"><div class="oh-caja-cab"><h4><i class="ti ti-clock-hour-4"></i> Horas del personal</h4>
+      <span class="oh-error"><i class="ti ti-alert-triangle"></i> No se pudieron traer las horas${r && r.msg ? ": " + trEsc(r.msg) : ""}.</span>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="otHorasCargar({ id: ${ot.id} })"><i class="ti ti-refresh"></i> Reintentar</button></div></div>`;
+    return;
+  }
+  window._otHoras = r;
+  if (!pt.lista) await ptCargarLista();
+  otHorasPintar();
+}
+function otHorasPintar() {
+  const box = document.getElementById("ot-horas-box"), r = window._otHoras;
+  if (!box || !r) return;
+  const puede = otHorasPuede();
+  const extra = window._otHorasExtra || [];
+  const tecs = [...r.tecnicos];
+  extra.forEach(pid => {
+    if (tecs.some(t => t.personal_id === pid)) return;
+    const p = (pt.lista || []).find(x => x.id === pid);
+    if (p) tecs.push({ personal_id: p.id, numero: p.numero, nombre: p.nombre, puesto: p.puesto || "", trabajos: 0, tandas: [], horas: 0, trabajando_desde: "" });
+  });
+  const libres = (pt.lista || []).filter(p => p.activo && !tecs.some(t => t.personal_id === p.id));
+  const badge = document.getElementById("ot-badge-horas");
+  if (badge) badge.innerHTML = r.horas || r.trabajando ? `<span class="badge oh-badge ${r.trabajando ? "vivo" : ""}"><i class="ti ti-clock"></i> ${otHorasTxt(r.horas)}${r.trabajando ? ` · ${r.trabajando} trabajando` : ""}</span>` : "";
+  const tanda = (t, x, i) => {
+    const prev = t.tandas[i - 1];
+    const pausa = prev && prev.fin && x.inicio > prev.fin ? otHorasMin(prev.fin, x.inicio) : 0;
+    return `${pausa ? `<div class="oh-pausa"><i class="ti ti-player-pause"></i> Intermedio: paró ${otHorasTxt(pausa / 60)}</div>` : ""}
+      <div class="oh-tanda ${x.abierta ? "abierta" : ""}">
+        <span class="oh-n">${i + 1}°</span>
+        <label class="oh-campo"><span>Inicio</span>${puede
+          ? `<input type="datetime-local" value="${x.inicio}" onchange="otHorasEditar(${x.id}, {inicio: this.value})" aria-label="Inicio">`
+          : `<b>${otHorasFH(x.inicio)}</b>`}</label>
+        <label class="oh-campo"><span>Fin</span>${puede
+          ? `<input type="datetime-local" value="${x.fin}" onchange="otHorasEditar(${x.id}, {fin: this.value})" aria-label="Fin">`
+          : `<b>${x.fin ? otHorasFH(x.fin) : "—"}</b>`}</label>
+        <span class="oh-dur" ${x.almuerzo ? `title="Se descontaron ${otHorasTxt(x.almuerzo)} de almuerzo (${(r.almuerzo || ["12:00", "14:00"]).join(" a ")})"` : ""}>${x.abierta ? `<em>trabajando</em>` : otHorasTxt(x.horas)}${!x.abierta && x.almuerzo ? `<small class="oh-alm">−${otHorasTxt(x.almuerzo)} almuerzo</small>` : ""}</span>
+        ${puede ? `<button type="button" class="icon-btn oh-borrar" title="Borrar esta tanda" aria-label="Borrar esta tanda" onclick="otHorasBorrar(${x.id})"><i class="ti ti-trash"></i></button>` : "<span></span>"}
+        ${x.pisa_ots.length ? `<div class="oh-pisa"><i class="ti ti-alert-triangle"></i> Se pisa con sus horas en la OT ${x.pisa_ots.map(o => "#" + o).join(", ")}</div>` : ""}
+      </div>`;
+  };
+  const card = t => {
+    const desde = t.trabajando_desde;
+    const hace = desde ? otHorasMin(desde, r.ahora) : 0;
+    return `
+    <div class="oh-tec ${desde ? "vivo" : ""}" data-pid="${t.personal_id}">
+      <div class="oh-cab">
+        <span class="pt-num">${t.numero}</span>
+        <span class="oh-quien"><b>${trEsc(t.nombre)}</b><small>${trEsc(t.puesto)}${t.trabajos ? ` · ${t.trabajos} trabajo${t.trabajos === 1 ? "" : "s"} en esta OT` : " · sin trabajos asignados acá"}</small></span>
+        <span class="oh-total"><b>${otHorasTxt(t.horas)}</b><small>${t.tandas.length ? `${t.tandas.length} tanda${t.tandas.length === 1 ? "" : "s"}` : "sin horas"}</small></span>
+      </div>
+      ${desde ? `<div class="oh-vivo"><span class="oh-punto"></span><span>Trabajando desde las <b>${desde.slice(11, 16)}</b>${desde.slice(0, 10) !== r.ahora.slice(0, 10) ? ` del ${otHorasFH(desde).slice(0, 5)}` : ""} · hace ${otHorasTxt(hace / 60)}</span></div>` : ""}
+      ${t.tandas.length ? `<div class="oh-tandas">${t.tandas.map((x, i) => tanda(t, x, i)).join("")}</div>` : ""}
+      ${puede ? `<div class="oh-acc">
+        ${desde
+          ? `<button type="button" class="btn btn-sm oh-fin" onclick="otHorasAccion('terminar', ${t.personal_id}, this)"><i class="ti ti-player-stop"></i> Terminó ahora</button>`
+          : `<button type="button" class="btn btn-sm btn-primary" onclick="otHorasAccion('empezar', ${t.personal_id}, this)"><i class="ti ti-player-play"></i> Empezó ahora</button>`}
+        <button type="button" class="btn btn-ghost btn-sm" onclick="otHorasMano(${t.personal_id})"><i class="ti ti-pencil"></i> Cargar a mano</button>
+      </div>
+      <div class="oh-mano" id="oh-mano-${t.personal_id}" hidden>
+        <label class="oh-campo"><span>Inicio</span><input type="datetime-local" id="oh-mi-${t.personal_id}"></label>
+        <label class="oh-campo"><span>Fin</span><input type="datetime-local" id="oh-mf-${t.personal_id}"></label>
+        <button type="button" class="btn btn-primary btn-sm" onclick="otHorasGuardarMano(${t.personal_id}, this)"><i class="ti ti-check"></i> Guardar</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('oh-mano-${t.personal_id}').hidden=true">Cancelar</button>
+      </div>` : ""}
+    </div>`;
+  };
+  box.innerHTML = `
+    <div class="oh-caja">
+      <div class="oh-caja-cab">
+        <h4><i class="ti ti-clock-hour-4"></i> Horas del personal</h4>
+        <span>${r.horas ? `<b>${otHorasTxt(r.horas)}</b> en total en esta OT` : "Inicio y fin de cada técnico en esta OT"}${r.trabajando ? ` · <b class="oh-vivo-t">${r.trabajando} trabajando ahora</b>` : ""}</span>
+        ${puede && libres.length ? `<select class="oh-agregar" onchange="otHorasSumar(this)" aria-label="Agregar otro técnico">
+          <option value="">+ Agregar otro técnico</option>
+          ${libres.map(p => `<option value="${p.id}">N°${p.numero} ${trEsc(p.nombre)}</option>`).join("")}</select>` : ""}
+      </div>
+      ${tecs.length ? `<div class="oh-grid">${tecs.map(card).join("")}</div>`
+        : `<div class="oh-vacio"><i class="ti ti-user-question"></i> Todavía no hay técnicos en esta OT. Poné el número en la columna <b>Técnico</b> de cada trabajo, o agregá uno acá.</div>`}
+    </div>`;
+}
+function otHorasSumar(sel) {
+  const pid = +sel.value;
+  if (!pid) return;
+  window._otHorasExtra = [...(window._otHorasExtra || []), pid];
+  otHorasPintar();
+}
+async function otHorasMandar(url, metodo, cuerpo) {
+  const r = await api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo || {}) }).catch(() => null);
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo guardar", "error"); return false; }
+  window._otHoras = r;
+  otHorasPintar();
+  if (r.msg) toast(r.msg, "success");
+  return true;
+}
+function otHorasOt() { const b = document.getElementById("ot-horas-box"); return b ? b.dataset.ot : ""; }
+async function otHorasAccion(accion, pid, btn) {
+  if (btn) btn.disabled = true;
+  const ok = await otHorasMandar(`/api/ots/${otHorasOt()}/horas/${accion}`, "POST", { personal_id: pid });
+  if (!ok && btn) btn.disabled = false;
+}
+function otHorasMano(pid) {
+  const m = document.getElementById(`oh-mano-${pid}`);
+  if (!m) return;
+  m.hidden = !m.hidden;
+  const r = window._otHoras, hoy = (r && r.ahora || "").slice(0, 10);
+  const i = document.getElementById(`oh-mi-${pid}`), f = document.getElementById(`oh-mf-${pid}`);
+  if (!i.value) i.value = hoy + "T07:00";
+  if (!f.value && r) f.value = r.ahora;
+  if (!m.hidden) i.focus();
+}
+async function otHorasGuardarMano(pid, btn) {
+  const i = document.getElementById(`oh-mi-${pid}`).value, f = document.getElementById(`oh-mf-${pid}`).value;
+  if (!i) { toast("Poné la fecha y hora de inicio", "error"); return; }
+  btn.disabled = true;
+  const ok = await otHorasMandar(`/api/ots/${otHorasOt()}/horas/agregar`, "POST", { personal_id: pid, inicio: i, fin: f });
+  if (!ok) btn.disabled = false;
+}
+function otHorasEditar(hid, campos) { otHorasMandar(`/api/ot_horas/${hid}`, "PATCH", campos); }
+function otHorasBorrar(hid) {
+  if (!confirm("¿Borrar esta tanda de horas?")) return;
+  otHorasMandar(`/api/ot_horas/${hid}`, "DELETE");
+}
+
+// ─── Cuándo sale el coche: tráfico, corporativos y turismo ───
+// El taller ve para qué hora tiene que estar listo. Lo próximo (menos de 3 h)
+// sale en rojo.
+async function otSalidasCargar(ot) {
+  const box = document.getElementById("ot-sal-box");
+  if (!box || ot.estado === "cerrada") return;
+  const r = await api(`/api/ots/${ot.id}/salidas`).catch(() => null);
+  if (!r || !document.getElementById("ot-sal-box")) return;
+  const ss = r.salidas || [];
+  const ic = { trafico: "route", corporativos: "building-factory-2", turismo: "map-2" };
+  const falta = m => m == null ? "" : m < 60 ? `en ${m} min` : m < 24 * 60 ? `en ${Math.floor(m / 60)} h ${String(m % 60).padStart(2, "0")}` : "";
+  box.innerHTML = `<div style="margin-bottom:16px;border:1px solid ${ss.length && ss[0].faltan_min != null && ss[0].faltan_min < 180 ? "var(--danger-bd, #F3B3BC)" : "var(--border)"};border-radius:12px;padding:12px 14px;background:var(--surface2)">
+    <div style="font-size:13px;color:var(--muted);margin-bottom:8px;line-height:1.4">
+      <span style="font-weight:600;white-space:nowrap"><i class="ti ti-clock-hour-4" style="vertical-align:-2px"></i> Cuándo sale el coche ${trEsc(r.coche || "")}</span>
+      <span>· tráfico, corporativos y turismo de los próximos ${r.dias} días</span></div>
+    ${ss.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px">${ss.map((x, i) => {
+      const urge = x.faltan_min != null && x.faltan_min < 180;
+      return `<div style="display:flex;gap:10px;align-items:center;padding:8px 12px;border-radius:10px;background:var(--surface);border:1px solid ${urge ? "var(--danger, #DC2641)" : "var(--border)"};min-width:0">
+        <i class="ti ti-${ic[x.origen] || "bus"}" style="font-size:20px;color:${urge ? "var(--danger, #DC2641)" : "var(--brand-blue)"}"></i>
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:14px">${trEsc(x.dia)} ${trEsc(x.hora || "(sin hora)")}
+            ${falta(x.faltan_min) ? `<span style="font-weight:600;font-size:12px;color:${urge ? "var(--danger, #DC2641)" : "var(--muted)"}">· ${falta(x.faltan_min)}</span>` : ""}</div>
+          <div style="font-size:12.5px;color:var(--muted);line-height:1.35">${trEsc(x.titulo)}${x.detalle ? " · " + trEsc(x.detalle) : ""}</div>
+        </div></div>`; }).join("")}</div>`
+      : `<div style="font-size:13px;color:var(--muted)">No tiene salidas cargadas en el tráfico, corporativos ni turismo en los próximos ${r.dias} días.</div>`}
+  </div>`;
 }
 
 // ─── Trabajos del chofer que traen varias cosas juntas: se ofrece separarlos ───
@@ -6818,17 +8258,21 @@ function otFilaItem(ot, it, idx, modo) {
 }
 
 // ─── El motivo de lo pendiente: lo escribe el taller, se ofrecen los ya usados ───
+// Dos partes: el MOTIVO corto (agrupa en los filtros: «Falta el repuesto») y la
+// EXPLICACIÓN, en varios renglones, para contar bien lo que pasó.
 function otMotivoCaja(it, fuerte) {
-  const m = (it.motivo_pendiente || "").trim();
+  const m = (it.motivo_pendiente || "").trim(), det = (it.motivo_detalle || "").trim();
   const puede = OT_PUEDE_MOTIVO();
   let dentro;
-  if (m) dentro = `<button type="button" class="ot-mot-chip" ${puede ? `onclick="otMotivoEditar(this)" title="Cambiar el motivo"` : "disabled"}><i class="ti ti-tag"></i><span>${trEsc(m)}</span>${puede ? '<i class="ti ti-pencil ot-mot-lapiz"></i>' : ""}</button>`;
+  if (m) dentro = `<button type="button" class="ot-mot-chip" ${puede ? `onclick="otMotivoEditar(this)" title="Cambiar el motivo o la explicación"` : "disabled"}><i class="ti ti-tag"></i><span>${trEsc(m)}</span>${puede ? '<i class="ti ti-pencil ot-mot-lapiz"></i>' : ""}</button>
+      ${det ? `<div class="ot-mot-det">${trEsc(det)}</div>`
+        : puede ? `<button type="button" class="ot-mot-link" onclick="otMotivoEditar(this, true)"><i class="ti ti-align-left"></i> Explicar qué pasó</button>` : ""}`;
   else if (!puede) dentro = fuerte ? `<span class="ot-mot-chip falta"><i class="ti ti-alert-triangle"></i><span>Sin motivo</span></span>` : "";
   else if (fuerte) dentro = `<button type="button" class="ot-mot-chip falta" onclick="otMotivoEditar(this)"><i class="ti ti-alert-triangle"></i><span>¿Por qué quedó pendiente?</span></button>`;
   else dentro = `<button type="button" class="ot-mot-link" onclick="otMotivoEditar(this)"><i class="ti ti-tag"></i> Motivo, si queda pendiente</button>`;
   return `<div class="ot-mot${fuerte ? " fuerte" : ""}" data-iid="${it.id}">${dentro}</div>`;
 }
-async function otMotivoEditar(btn) {
+async function otMotivoEditar(btn, alDetalle) {
   const caja = btn.closest(".ot-mot");
   const ot = window._otActual;
   const it = ((ot && ot.items) || []).find(x => String(x.id) === caja.dataset.iid);
@@ -6837,58 +8281,86 @@ async function otMotivoEditar(btn) {
     const r = await api("/api/ot_motivos");
     window._otMotivos = (r && r.motivos) || [];
   }
-  const actual = (it.motivo_pendiente || "").trim();
-  caja.classList.add("editando");
-  caja.innerHTML = `
-    <div class="ot-mot-ed">
-      <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="¿Por qué quedó? Ej: falta el repuesto" aria-label="Motivo de pendiente" autocomplete="off">
-      <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
-      ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar</button>` : ""}
-      <button type="button" class="icon-btn ot-mot-no" title="Cancelar" aria-label="Cancelar"><i class="ti ti-x"></i></button>
-    </div>
-    <div class="ot-mot-sug"></div>`;
-  const inp = caja.querySelector(".ot-mot-in"), sug = caja.querySelector(".ot-mot-sug");
+  const actual = (it.motivo_pendiente || "").trim(), detActual = (it.motivo_detalle || "").trim();
+  // Una ventana propia: hay lugar para escribir bien lo que pasó
+  const o = rvModal({
+    titulo: "¿Por qué quedó pendiente?", icono: "message-report", ancho: 620, clase: "ot-mot-modal",
+    sub: `<b>${trEsc(it.descripcion || "")}</b>${ot && ot.n_interno ? ` · coche ${trEsc(ot.n_interno)}` : ""}`,
+    cuerpo: `
+      <div class="ot-mot-ed2">
+        <label class="ot-mot-f"><span>Motivo <small>corto, para agrupar en los filtros</small></span>
+          <input class="ot-mot-in" value="${trEsc(actual)}" maxlength="80" placeholder="Ej: falta el repuesto" aria-label="Motivo" autocomplete="off"></label>
+        <div class="ot-mot-sug"></div>
+        <label class="ot-mot-f"><span>Explicación <small>lo que pasó, con todas las palabras que hagan falta</small></span>
+          <textarea class="ot-mot-det-in" rows="7" maxlength="2000" placeholder="Ej: se pidió el repuesto a Compras el 20/10. El proveedor dice que llega el lunes; mientras tanto el coche puede salir porque no afecta la seguridad." aria-label="Explicación">${trEsc(detActual)}</textarea>
+          <small class="ot-mot-cuenta"></small></label>
+      </div>`,
+    pie: `<div class="ot-mot-btns">
+        ${actual ? `<button type="button" class="pv-link ot-mot-quitar">Quitar el motivo</button>` : ""}
+        <span class="ot-mot-ayuda">Ctrl + Enter guarda</span>
+        <button type="button" class="btn btn-ghost ot-mot-no">Cancelar</button>
+        <button type="button" class="btn btn-primary ot-mot-ok"><i class="ti ti-check"></i> Guardar</button>
+      </div>`,
+  });
+  const inp = o.querySelector(".ot-mot-in"), sug = o.querySelector(".ot-mot-sug"), ta = o.querySelector(".ot-mot-det-in");
+  const cuenta = o.querySelector(".ot-mot-cuenta");
+  const contar = () => {
+    cuenta.textContent = ta.value.length > 1500 ? `${ta.value.length} de 2000` : "";
+    ta.style.height = "auto"; ta.style.height = Math.min(420, Math.max(150, ta.scrollHeight + 2)) + "px";
+  };
   const pintarSug = () => {
     const q = acNorm(inp.value);
-    const lista = window._otMotivos.filter(m => m.motivo !== actual && (!q || acNorm(m.motivo).includes(q))).slice(0, 8);
+    const lista = window._otMotivos.filter(m => acNorm(m.motivo) !== q && (!q || acNorm(m.motivo).includes(q))).slice(0, 10);
     sug.innerHTML = lista.length
       ? `<span class="ot-mot-sug-t">Ya usados:</span>` + lista.map(m => `<button type="button" class="ot-mot-s" data-m="${trEsc(m.motivo)}">${trEsc(m.motivo)}${m.pendientes ? `<small title="Trabajos pendientes con este motivo">${m.pendientes}</small>` : ""}</button>`).join("")
       : (window._otMotivos.length ? "" : `<span class="ot-mot-sug-t">Escribilo con tus palabras: la próxima vez aparece acá para elegirlo.</span>`);
-    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => otMotivoGuardar(caja, it, b.dataset.m));
+    // Elegir uno de los ya usados lo pone y pasa a la explicación
+    sug.querySelectorAll(".ot-mot-s").forEach(b => b.onclick = () => { inp.value = b.dataset.m; pintarSug(); ta.focus(); });
   };
-  pintarSug();
+  const cerrar = () => o.remove();
+  const guardar = () => otMotivoGuardar(o, caja, it, inp.value, ta.value);
+  pintarSug(); contar();
   inp.addEventListener("input", pintarSug);
-  inp.addEventListener("keydown", e => {
-    if (e.key === "Enter") { e.preventDefault(); otMotivoGuardar(caja, it, inp.value); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); otMotivoCerrar(caja, it); }
-  });
-  caja.querySelector(".ot-mot-ok").onclick = () => otMotivoGuardar(caja, it, inp.value);
-  caja.querySelector(".ot-mot-no").onclick = () => otMotivoCerrar(caja, it);
-  const q = caja.querySelector(".ot-mot-quitar");
-  if (q) q.onclick = () => otMotivoGuardar(caja, it, "");
-  inp.focus();
-  inp.select();
+  ta.addEventListener("input", contar);
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); ta.focus(); } });
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); guardar(); } });
+  o.querySelector(".ot-mot-ok").onclick = guardar;
+  o.querySelector(".ot-mot-no").onclick = cerrar;
+  const q = o.querySelector(".ot-mot-quitar");
+  if (q) q.onclick = () => otMotivoGuardar(o, caja, it, "", "");
+  setTimeout(() => {
+    if (alDetalle || actual) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    else { inp.focus(); inp.select(); }
+  }, 60);
 }
 function otMotivoCerrar(caja, it) {
   caja.outerHTML = otMotivoCaja(it, caja.classList.contains("fuerte"));
 }
-async function otMotivoGuardar(caja, it, motivo) {
+async function otMotivoGuardar(o, caja, it, motivo, detalle) {
   motivo = String(motivo || "").replace(/\s+/g, " ").trim();
-  if (motivo === (it.motivo_pendiente || "").trim()) { otMotivoCerrar(caja, it); return; }
-  caja.querySelectorAll("button, input").forEach(x => x.disabled = true);
+  detalle = String(detalle ?? "").replace(/\r/g, "").trim();
+  if (detalle && !motivo) {
+    toast("Poné también el motivo corto (arriba), así se puede agrupar", "error");
+    o.querySelector(".ot-mot-in")?.focus();
+    return;
+  }
+  if (motivo === (it.motivo_pendiente || "").trim() && detalle === (it.motivo_detalle || "").trim()) { o.remove(); return; }
+  o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = true);
   const r = await api(`/api/ot_items/${it.id}/motivo`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo })
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ motivo, detalle })
   });
   if (!r || !r.ok) {
     toast((r && r.msg) || "No se pudo guardar el motivo", "error");
-    caja.querySelectorAll("button, input").forEach(x => x.disabled = false);
+    o.querySelectorAll("button, input, textarea").forEach(x => x.disabled = false);
     return;
   }
   it.motivo_pendiente = r.motivo || "";
+  it.motivo_detalle = r.detalle || "";
   window._otMotivos = r.motivos || window._otMotivos;
-  otMotivoCerrar(caja, it);
+  o.remove();
+  if (document.body.contains(caja)) otMotivoCerrar(caja, it);
   otRefrescarCabeceras();
-  toast(r.motivo ? "Motivo anotado" : "Motivo quitado", "success");
+  toast(r.motivo ? (r.detalle ? "Motivo y explicación guardados" : "Motivo anotado") : "Motivo quitado", "success");
 }
 // Después de cambiar un estado o un motivo: los contadores de arriba al día
 function otRefrescarCabeceras() {
@@ -6931,7 +8403,7 @@ function otItemEstadoCambio(itemId, estado) {
 // decide si pasa a la OT (y con qué prioridad), si espera o si no se hace
 // ════════════════════════════════════════════════════════════════════════════
 const PD_PRIO = { urgente: ["Urgente", "flame"], alta: ["Alta", "arrow-up"], normal: ["Normal", "minus"], baja: ["Baja", "arrow-down"] };
-const PD_TABS = [["nuevo", "Nuevos", "inbox"], ["espera", "En espera", "clock-pause"], ["aceptado", "Pasados a OT", "clipboard-check"], ["descartado", "Descartados", "circle-x"]];
+const PD_TABS = [["nuevo", "Nuevos", "inbox"], ["espera", "En espera", "clock-pause"], ["agendado", "Agendados", "calendar-check"], ["aceptado", "Pasados a OT", "clipboard-check"], ["descartado", "Descartados", "circle-x"]];
 const PD_TIPO = { correctivo: "Correctivo", preventivo: "Preventivo", neumaticos: "Neumáticos", control: "Control", otro: "Otro" };
 const pd = { estado: "nuevo", q: "", d: null, sel: new Set() };
 
@@ -6994,7 +8466,7 @@ function pdPintar() {
   const abiertos = pd.estado === "nuevo" || pd.estado === "espera";
   if (!d.coches.length) {
     $("#pd-cuerpo").innerHTML = `<div class="pd-vacio"><i class="ti ti-${pd.estado === "nuevo" ? "mood-check" : "inbox-off"}"></i>
-      <b>${pd.q ? "Nada con esa búsqueda" : pd.estado === "nuevo" ? "No hay pedidos para revisar" : pd.estado === "espera" ? "No hay nada en espera" : "Nada en los últimos 45 días"}</b>
+      <b>${pd.q ? "Nada con esa búsqueda" : pd.estado === "nuevo" ? "No hay pedidos para revisar" : pd.estado === "espera" ? "No hay nada en espera" : pd.estado === "agendado" ? "No hay pedidos agendados" : "Nada en los últimos 45 días"}</b>
       <span>${pd.estado === "nuevo" && !pd.q ? "Cuando un chofer reporte algo desde el celular, aparece acá." : ""}</span></div>`;
     pdLote();
     return;
@@ -7050,7 +8522,9 @@ function pdFila(p) {
   const fotos = (p.fotos || []).map(f => `<button type="button" class="pd-foto" onclick="verFotoGrande('/api/ot_pedidos/foto/${f}')" aria-label="Ver la foto"><img src="/api/ot_pedidos/foto/${f}" alt="" loading="lazy"></button>`).join("");
   const rep = (p.repetido || []).length ? `<div class="pd-rep"><i class="ti ti-repeat"></i><span><b>Ya ${p.repetido.length === 1 ? "hubo algo parecido" : `hubo ${p.repetido.length} cosas parecidas`}:</b> ${p.repetido.map(r =>
       `${r.fecha ? r.fecha.slice(8, 10) + "/" + r.fecha.slice(5, 7) : ""} «${trEsc(r.txt)}» ${r.fuente === "ot" ? `(OT${r.ot_id ? " #" + r.ot_id : ""}, ${r.estado === "completado" ? "hecho" : "pendiente"})` : `(pedido${r.estado === "descartado" ? ", descartado" : r.estado === "espera" ? ", en espera" : r.estado === "aceptado" ? ", pasado a OT" : ""})`}`).join(" · ")}</span></div>` : "";
-  const estadoTxt = pd.estado === "aceptado"
+  const agendadoTxt = `<div class="pd-dec espera"><i class="ti ti-calendar-check"></i> Mantenimiento agendado para <b>${p.fecha_mantenimiento ? p.fecha_mantenimiento.slice(8, 10) + "/" + p.fecha_mantenimiento.slice(5, 7) + "/" + p.fecha_mantenimiento.slice(0, 4) : "fecha pendiente"}</b>${p.turno_id ? " · Turno #" + p.turno_id : ""}</div>`;
+  const estadoTxt = pd.estado === "agendado" ? agendadoTxt
+    : pd.estado === "aceptado"
     ? `<div class="pd-dec ok"><i class="ti ti-clipboard-check"></i> En la <button class="pv-link" onclick="abrirOT(${p.ot_id})">OT #${p.ot_id}</button> con prioridad <b>${PD_PRIO[pr]?.[0] || pr}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
     : pd.estado === "descartado"
     ? `<div class="pd-dec no"><i class="ti ti-circle-x"></i> No se hace: <b>${trEsc(p.motivo)}</b> · ${trEsc((p.decidido_por || "").split(" ")[0])} el ${otFechaHora(p.decidido_el)}</div>`
@@ -7086,13 +8560,48 @@ function pdFila(p) {
         <div class="pd-prios" role="group" aria-label="Prioridad">${prios}</div>
         <div class="pd-botones">
           <button class="btn btn-primary btn-sm" onclick="pdDecidir([${p.id}], 'aceptar')"><i class="ti ti-clipboard-plus"></i> A la OT</button>
-          ${pd.estado === "nuevo" ? `<button class="btn btn-ghost btn-sm" onclick="pdEsperar([${p.id}])"><i class="ti ti-clock-pause"></i> Esperar</button>`
-                                  : `<button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> A nuevos</button>`}
+          ${pd.estado === "nuevo" ? `<button class="btn btn-ghost btn-sm" onclick="pdEsperar([${p.id}])"><i class="ti ti-clock-pause"></i> Esperar</button>` : ""}
+          <button class="btn btn-ghost btn-sm" onclick="pdAgendar(${p.id})"><i class="ti ti-calendar-plus"></i> Agendar mantenimiento</button>
+          ${pd.estado === "espera" ? `<button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> A nuevos</button>` : ""}
           <button class="btn btn-ghost btn-sm pd-no" onclick="pdDescartar([${p.id}])"><i class="ti ti-circle-x"></i> No se hace</button>
         </div>
       </div>` : pd.estado === "descartado" ? `<div class="pd-acc"><button class="btn btn-ghost btn-sm" onclick="pdDecidir([${p.id}], 'reabrir')"><i class="ti ti-arrow-back-up"></i> Volver a nuevos</button></div>` : ""}
     </article>`;
 }
+async function pdAgendar(id) {
+  const p = pdBuscar(id);
+  if (!p) return;
+  const base = (pd.d && pd.d.hoy) || new Date().toISOString().slice(0, 10);
+  const d = new Date(base + "T12:00:00");
+  d.setDate(d.getDate() + 1);
+  const manana = d.toISOString().slice(0, 10);
+  const o = rvModal({
+    titulo: "Agendar mantenimiento", icono: "calendar-plus", ancho: 480,
+    sub: "Elegí la fecha de mantenimiento para este pedido.",
+    cuerpo: `<div class="rv-campos"><label class="rv-f"><span>Fecha del mantenimiento *</span><input id="pd-ag-fecha" type="date" min="${base}" value="${manana}" required></label><label class="rv-f"><span>Hora (opcional)</span><input id="pd-ag-hora" type="time"></label></div><p class="pd-ed-ayuda">Se respetan los cupos y las reglas de la agenda del taller.</p><div id="pd-ag-error" class="pd-dec no" hidden></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button><button class="btn btn-primary" onclick="pdAgendarGuardar(this, ${id})"><i class="ti ti-calendar-check"></i> Confirmar fecha</button>`
+  });
+  setTimeout(() => o.querySelector("#pd-ag-fecha")?.focus(), 50);
+}
+
+async function pdAgendarGuardar(btn, id) {
+  const o = btn.closest(".modal-overlay");
+  const fecha = o.querySelector("#pd-ag-fecha").value;
+  const hora = o.querySelector("#pd-ag-hora").value;
+  const err = o.querySelector("#pd-ag-error");
+  if (!fecha) { err.hidden = false; err.textContent = "Elegí la fecha del mantenimiento."; return; }
+  btn.disabled = true;
+  const r = await api(`/api/ot_pedidos/${id}/agendar`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha, hora }) });
+  btn.disabled = false;
+  if (!r || !r.ok) { err.hidden = false; err.textContent = (r && r.msg) || "No se pudo agendar el mantenimiento."; return; }
+  o.remove();
+  pd.sel.delete(id);
+  toast(r.msg || "Mantenimiento agendado", "success");
+  pd.estado = "agendado";
+  pd.q = "";
+  await pdCargar();
+}
+
 // Corregir el pedido antes de decidir: el texto (varias líneas = varios
 // pedidos), el tipo, el coche si el chofer eligió mal, y una nota
 async function pdEditar(id) {
@@ -8138,17 +9647,37 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administración", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo" };
+const LABEL_ROL = { admin: "Administración", contabilidad: "Contabilidad", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", tripulante: "Chofer de línea y turismo", agencia: "Agencia", gerente: "Gerente" };
 
 // Los roles que se pueden asignar, en un solo lugar para no repetirlos
 const ROLES_DISPONIBLES = [
+  ["contabilidad", "Contabilidad y tesorería"],
   ["taller", "Taller (operación)"],
   ["admin", "Administración (todo)"],
   ["compras", "Compras / Depósito"],
   ["auditor", "Auditor (combustible e historial)"],
   ["chofer", "Chofer (solo reportar)"],
   ["chofer_corp", "Chofer corporativo (rendiciones)"],
+  ["tripulante", "Chofer de línea y turismo (su app)"],
+  ["agencia", "Agencia de pasajes (solo vende en Alpha)"],
+  ["gerente", "Gerente (solo mira su panel)"],
 ];
+// Las agencias del módulo Comercial, para atar un usuario de agencia a la suya
+let _agenciasUsuarios = null;
+async function agenciasParaUsuarios() {
+  if (!_agenciasUsuarios) {
+    const r = await api("/api/agencias").catch(() => null);
+    _agenciasUsuarios = ((r && r.agencias) || []).filter(a => a.estado !== "baja").map(a => ({ id: a.id, nombre: a.nombre, ciudad: a.ciudad || "" }));
+  }
+  return _agenciasUsuarios;
+}
+function selectAgencia(id, actual) {
+  const ags = _agenciasUsuarios || [];
+  return `<select id="${id}" style="width:100%">
+    <option value="">${ags.length ? "Elegí la agencia…" : "No hay agencias cargadas en Comercial"}</option>
+    ${ags.map(a => `<option value="${a.id}" ${a.id === actual ? "selected" : ""}>${trEsc(a.nombre)}${a.ciudad ? " · " + trEsc(a.ciudad) : ""}</option>`).join("")}
+  </select>`;
+}
 
 async function renderUsuarios() {
   status("Gestión de usuarios");
@@ -8156,6 +9685,7 @@ async function renderUsuarios() {
   try {
     usuarios = await api("/api/usuarios");
     await catalogoSecciones();
+    await agenciasParaUsuarios();
   } catch (e) {
     content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-lock"></i>Solo el administrador puede gestionar usuarios.</div></div>`;
     return;
@@ -8163,9 +9693,10 @@ async function renderUsuarios() {
   window._usuarios = usuarios;
 
   content.innerHTML = `
-    <div class="page-header">
-      <h1><i class="ti ti-users"></i> Usuarios del sistema</h1>
-      <p>Gestión de accesos — crear usuarios y asignar permisos</p>
+    <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
+      <div><h1><i class="ti ti-users"></i> Usuarios del sistema</h1>
+      <p>Gestión de accesos — crear usuarios y asignar permisos</p></div>
+      <button class="btn btn-primary" onclick="caeAbrir()"><i class="ti ti-device-mobile"></i> Choferes y la app</button>
     </div>
     <div class="section">
 
@@ -8177,11 +9708,15 @@ async function renderUsuarios() {
             <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez"></div>
             <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" style="width:140px"></div>
             <div class="field"><label>Rol</label>
-              <select id="u-rol" style="width:230px" onchange="$('#u-secc-wrap').style.display = this.value === 'taller' ? '' : 'none'">
+              <select id="u-rol" style="width:230px" onchange="$('#u-secc-wrap').style.display = this.value === 'taller' ? '' : 'none'; $('#u-ag-wrap').style.display = this.value === 'agencia' ? '' : 'none'">
                 ${ROLES_DISPONIBLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}
               </select>
             </div>
             <button class="btn btn-primary" onclick="guardarUsuario()"><i class="ti ti-plus"></i> Crear</button>
+          </div>
+          <div id="u-ag-wrap" class="field" style="margin-top:14px;max-width:420px;display:none">
+            <label>Agencia</label>${selectAgencia("u-agencia", null)}
+            <p class="hint" style="margin-top:6px"><i class="ti ti-info-circle"></i> Entra directo a la boletería: solo vende pasajes y ve su caja. No ve el resto del sistema, ni tarifas, ni choferes.</p>
           </div>
           <div id="u-secc-wrap" style="margin-top:14px">
             <div class="secc-titulo"><i class="ti ti-layout-sidebar"></i> Qué secciones ve</div>
@@ -8189,7 +9724,7 @@ async function renderUsuarios() {
           </div>
           <p class="hint" style="margin-top:14px">
             <i class="ti ti-info-circle"></i>
-            <b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios. <b>Chofer</b>: solo ve una pantalla simple para cargar sus reportes desde el celular. <b>Chofer corporativo</b>: carga sus rendiciones de servicios desde el celular.
+            <span><b>Taller</b>: gestiona órdenes de trabajo, mantenimiento, neumáticos, correctivos y todo lo operativo. <b>Administración</b>: acceso total + puede crear y administrar usuarios. <b>Chofer</b>: solo ve una pantalla simple para cargar sus reportes desde el celular. <b>Chofer corporativo</b>: carga sus rendiciones de servicios desde el celular. <b>Agencia</b>: solo la boletería de Alpha (vender, sus pasajes y su caja).</span>
           </p>
         </div>
       </div>
@@ -8208,7 +9743,7 @@ async function renderUsuarios() {
               <tr>
                 <td><b>${u.usuario}</b></td>
                 <td>${u.nombre || "—"}</td>
-                <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span></td>
+                <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span>${u.rol === "agencia" ? `<div style="font-size:11.5px;color:var(--muted);margin-top:3px">${trEsc(u.agencia || "sin agencia")}</div>` : ""}</td>
                 <td style="font-size:12px">${textoAcceso(u)}</td>
                 <td class="center">${celdaBorraOTs(u)}</td>
                 <td class="center">${celdaEditaKm(u)}</td>
@@ -8408,11 +9943,13 @@ async function guardarUsuario() {
   const rol = $("#u-rol").value;
   const secciones = rol === "taller" ? leerSecciones("u-secc") : [];
   if (secciones === null) return;    // eligió "algunas" pero no tildó ninguna
+  const agencia_id = rol === "agencia" ? $("#u-agencia").value : null;
+  if (rol === "agencia" && !agencia_id) { toast("Elegí a qué agencia pertenece", "error"); return; }
   const r = await api("/api/usuarios", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       usuario: user, password: pass,
-      nombre: $("#u-nombre").value.trim(), rol, secciones
+      nombre: $("#u-nombre").value.trim(), rol, secciones, agencia_id
     })
   });
   if (r.ok) {
@@ -8455,11 +9992,12 @@ async function cambiarRolUsuario(uid, usuario, rolActual) {
       <div class="firma-items">
         ${ROLES_DISPONIBLES.map(([v, t]) => `
           <label class="firma-item" style="margin-bottom:7px">
-            <input type="radio" name="rol-nuevo" value="${v}" ${v === rolActual ? "checked" : ""} style="width:18px;height:18px">
+            <input type="radio" name="rol-nuevo" value="${v}" ${v === rolActual ? "checked" : ""} style="width:18px;height:18px" onchange="document.getElementById('rol-ag-wrap').style.display = this.value === 'agencia' ? '' : 'none'">
             <span class="firma-item-info">
               <span class="firma-item-desc">${t}</span>
             </span>
           </label>`).join("")}
+        <div id="rol-ag-wrap" class="field" style="margin-top:8px;${rolActual === "agencia" ? "" : "display:none"}"><label>Agencia</label>${selectAgencia("rol-agencia", ((window._usuarios || []).find(x => x.id === uid) || {}).agencia_id || null)}</div>
         <p class="hint" style="margin-top:10px"><i class="ti ti-info-circle"></i> Al cambiar el rol cambia la pantalla que ve al entrar. Si pasa a chofer corporativo, entra directo a cargar rendiciones desde el celular.</p>
       </div>
       <div class="firma-acciones">
@@ -8475,10 +10013,15 @@ async function cambiarRolUsuario(uid, usuario, rolActual) {
 async function guardarRolUsuario(uid, btn) {
   const sel = document.querySelector('input[name="rol-nuevo"]:checked');
   if (!sel) { toast("Elegí un rol", "error"); return; }
+  const datos = { rol: sel.value };
+  if (sel.value === "agencia") {
+    datos.agencia_id = document.getElementById("rol-agencia")?.value || "";
+    if (!datos.agencia_id) { toast("Elegí a qué agencia pertenece", "error"); return; }
+  }
   btn.disabled = true;
   const r = await api(`/api/usuarios/${uid}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ rol: sel.value })
+    body: JSON.stringify(datos)
   });
   if (r && r.ok) {
     toast(r.msg || "Rol actualizado", "success");
@@ -8621,7 +10164,8 @@ async function renderRepuestos() {
           <span class="rep-dot">·</span>
           <span class="rep-alerta-link" onclick="repFiltrarBajos()">
             <i class="ti ti-alert-triangle"></i> ${resumen.cant_bajos + resumen.cant_sin_stock} para pedir
-          </span>` : ""}
+          </span>
+          ${["admin", "compras"].includes(window.USUARIO_ROL) || puedeVerSeccion("compras") ? `<button type="button" class="rep-pedir-btn" onclick="comprasTab='reposicion'; irA('compras')"><i class="ti ti-truck-delivery"></i> Armar pedido de reposición</button>` : ""}` : ""}
       </div>
 
       <!-- RESULTADOS -->
@@ -9947,6 +11491,7 @@ function renderDossierCompleto(d) {
       <!-- Acción de imprimir -->
       <div class="dossier-acciones">
         <button class="btn btn-ghost" onclick="window.print()"><i class="ti ti-printer"></i> Imprimir / Guardar PDF</button>
+        <button class="btn btn-primary" onclick="informeCoche(dossierVehiculoId)" title="Toda la historia del coche, no solo las fechas de arriba"><i class="ti ti-file-type-pdf"></i> Informe completo del coche</button>
       </div>
 
     </div>`;
@@ -10249,7 +11794,10 @@ function hiPintarFicha(d) {
     <div class="hi-ficha">
       <div class="hi-nav">
         <button class="hi-volver" onclick="hiVolver()"><i class="ti ti-arrow-left"></i> Toda la flota</button>
-        ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick="informeCoche(${c.id})"><i class="ti ti-file-type-pdf"></i> Informe completo</button>
+          ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
+        </span>
       </div>
       <section class="hi-hero">
         <div class="hi-hero-cartel">
@@ -10862,6 +12410,17 @@ async function renderColaEspera() {
   const cont = document.getElementById("cola-espera-panel");
   if (!cont) return;
   const cola = await api("/api/compras/cola_espera");
+  const q = (typeof cmpBuscar === "string" ? cmpBuscar : "").trim();
+  if (q && cola.items) {   // el buscador de Compras también filtra la cola
+    cola.items = cola.items.filter(i => {
+      if (/^#?\d+$/.test(q)) { const n = q.replace("#", ""); return String(i.n_interno || "").includes(n) || String(i.numero) === n || String(i.ot_id) === n; }
+      const t = cmpNorm([i.n_interno, i.patente, i.descripcion, i.material_pedido, i.marca, i.modelo, "ot " + i.numero].join(" "));
+      return cmpNorm(q).split(/\s+/).every(p => t.includes(p));
+    });
+    cola.cantidad = cola.items.length;
+    cola.total = cola.items.reduce((a, i) => a + (+i.precio_compras || 0), 0);
+    if (!cola.cantidad) { cont.innerHTML = `<div class="cola-vacia"><i class="ti ti-search-off"></i> Nada esperando fondos con «${trEsc(q)}».</div>`; return; }
+  }
   if (!cola.cantidad) {
     cont.innerHTML = `<div class="cola-vacia"><i class="ti ti-circle-check"></i> No hay ítems esperando fondos. Todo lo presupuestado está cubierto.</div>`;
     return;
@@ -13168,6 +14727,7 @@ async function renderAgendaTurismo() {
             <i class="ti ti-alert-circle"></i> Solo sin asignar
           </button>
           <button class="btn btn-ghost" onclick="descargarAgendaPDF()"><i class="ti ti-download"></i> PDF</button>
+          <button class="btn btn-ghost" onclick="agCompartirAsignacion()"><i class="ti ti-share"></i> Compartir asignación</button>
           <button class="btn btn-primary" onclick="nuevoServicioTurismo()"><i class="ti ti-plus"></i> Agendar servicio</button>
         </div>
       </div>
@@ -13780,6 +15340,189 @@ async function borrarServicioTurismo(id) {
 
 function descargarAgendaPDF() {
   window.open(`/api/turismo/agenda_pdf?${paramsAgenda().toString()}`, "_blank");
+}
+
+// ─── Compartir la asignación ─────────────────────────────────────────────
+// La hoja con la cara del tráfico (coche y tripulación de cada servicio) de
+// las fechas que se elijan, como imagen para el grupo de WhatsApp o en PDF.
+const agc = { blob: null, clave: "", timer: null, dias: [], fuera: new Set() };
+
+function agCompartirAsignacion() {
+  const hoy = trHoy();
+  const cli = $("#ag-cliente") ? $("#ag-cliente").value : "";
+  const clientes = (agDatos && agDatos.clientes) || [];
+  agc.blob = null; agc.clave = ""; agc.dias = []; agc.fuera = new Set();
+  rvModal({
+    titulo: "Compartir la asignación", icono: "share", ancho: 760,
+    sub: "Elegí las fechas: sale una imagen con el coche y la tripulación de cada servicio, lista para mandar al grupo.",
+    cuerpo: `
+      <div class="ag-chips" id="agc-chips" style="margin-bottom:12px;flex-wrap:wrap">
+        <button class="chip activo" onclick="agcRapido('hoy', this)">Hoy</button>
+        <button class="chip" onclick="agcRapido('manana', this)">Mañana</button>
+        <button class="chip" onclick="agcRapido('pasado', this)">Pasado mañana</button>
+        <button class="chip" onclick="agcRapido('semana', this)">Esta semana</button>
+        <button class="chip" onclick="agcRapido('proxima', this)">Próxima semana</button>
+        <button class="chip" onclick="agcRapido('siete', this)">Próximos 7 días</button>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+        <div class="emp-campo"><label>Desde</label><input id="agc-desde" type="date" value="${hoy}" onchange="agcCambio()"></div>
+        <div class="emp-campo"><label>Hasta</label><input id="agc-hasta" type="date" value="${hoy}" onchange="agcCambio()"></div>
+        <div class="emp-campo" style="flex:1;min-width:160px"><label>Cliente</label>
+          <select id="agc-cliente" onchange="agcCambio(true)"><option value="">Todos</option>
+            ${clientes.map(c => `<option value="${trEsc(c)}" ${c === cli ? "selected" : ""}>${trEsc(c)}</option>`).join("")}
+          </select></div>
+        <label style="display:flex;gap:6px;align-items:center;font-size:13px;padding-bottom:9px;cursor:pointer">
+          <input type="checkbox" id="agc-canc" onchange="agcCambio(true)"> Incluir cancelados</label>
+      </div>
+      <div id="agc-dias" style="margin-top:12px"></div>
+      <div id="agc-prev" style="margin-top:14px;max-height:52vh;overflow:auto;border:1px solid var(--border);border-radius:12px;background:var(--surface2);min-height:180px"></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:8px">Hasta 31 días por imagen. Lo que falta asignar sale en ámbar como «A confirmar».</div>`,
+    pie: `<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%">
+      <button class="btn btn-ghost" onclick="agcPdf()"><i class="ti ti-file-type-pdf"></i> Ver PDF</button>
+      <button class="btn btn-ghost" onclick="agcDescargar(this)"><i class="ti ti-download"></i> Descargar imagen</button>
+      <button class="btn btn-ghost" onclick="agcAvisar(this)"><i class="ti ti-bell-ringing"></i> Avisar a los choferes</button>
+      <button class="btn btn-primary" onclick="agcCompartir(this)"><i class="ti ti-brand-whatsapp"></i> Compartir imagen</button></div>`,
+  });
+  agcDias().then(agcPrevista);
+}
+
+function agcRapido(cual, btn) {
+  const hoy = new Date();
+  let d = new Date(hoy), h = new Date(hoy);
+  if (cual === "manana") { d.setDate(d.getDate() + 1); h = new Date(d); }
+  else if (cual === "pasado") { d.setDate(d.getDate() + 2); h = new Date(d); }
+  else if (cual === "proxima") { d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 7); h = new Date(d); h.setDate(h.getDate() + 6); }
+  else if (cual === "semana") { d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); h = new Date(d); h.setDate(h.getDate() + 6); }
+  else if (cual === "siete") { h.setDate(h.getDate() + 6); }
+  $("#agc-desde").value = trIso(d);
+  $("#agc-hasta").value = trIso(h);
+  agcCambio();
+  document.querySelectorAll("#agc-chips .chip").forEach(c => c.classList.toggle("activo", c === btn));
+}
+
+function agcCambio(mantenerChip) {
+  if (!mantenerChip) document.querySelectorAll("#agc-chips .chip").forEach(c => c.classList.remove("activo"));
+  agc.fuera = new Set();
+  clearTimeout(agc.timer);
+  agc.timer = setTimeout(async () => { await agcDias(); agcPrevista(); }, 350);
+}
+
+// Los días del rango que tienen servicios: se pueden sacar los que no se
+// quieren mandar (por ejemplo, avisar solo martes y jueves).
+async function agcDias() {
+  const box = $("#agc-dias");
+  if (!box) return;
+  const p = new URLSearchParams(agcQs(true));
+  const r = await api(`/api/turismo/agenda?${p.toString()}`).catch(() => null);
+  agc.dias = ((r && r.dias) || []).map(d => ({ fecha: d.fecha, n: (d.servicios || []).length, viaje: (d.en_viaje || []).length }));
+  agc.fuera = new Set([...agc.fuera].filter(f => agc.dias.some(d => d.fecha === f)));
+  agcPintarDias();
+}
+function agcPintarDias() {
+  const box = $("#agc-dias");
+  if (!box) return;
+  if (agc.dias.length < 2) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Días que van en la imagen · tocá para sacar o volver a poner</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${agc.dias.map(d => {
+      const on = !agc.fuera.has(d.fecha);
+      return `<button type="button" class="chip ${on ? "activo" : ""}" onclick="agcDia('${d.fecha}')" style="${on ? "" : "text-decoration:line-through;opacity:.6"}">
+        ${agcCorta(d.fecha)} · ${d.n ? `${d.n} serv.` : "en viaje"}</button>`; }).join("")}</div>`;
+}
+function agcCorta(f) {
+  const d = trFecha(f);
+  return `${TR_DIAS[d.getDay()].slice(0, 3)} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function agcDia(f) {
+  if (agc.fuera.has(f)) agc.fuera.delete(f);
+  else if (agc.fuera.size < agc.dias.length - 1) agc.fuera.add(f);
+  else { toast("Tiene que quedar al menos un día", "info"); return; }
+  agcPintarDias();
+  clearTimeout(agc.timer);
+  agc.timer = setTimeout(agcPrevista, 250);
+}
+
+function agcQs(sinDias) {
+  const p = new URLSearchParams();
+  let d = $("#agc-desde").value, h = $("#agc-hasta").value || d;
+  if (d && h && h < d) [d, h] = [h, d];
+  if (d) p.set("desde", d);
+  if (h) p.set("hasta", h);
+  const c = $("#agc-cliente").value;
+  if (c) p.set("cliente", c);
+  if ($("#agc-canc").checked) p.set("cancelados", "1");
+  if (!sinDias && agc.fuera.size) p.set("fechas", agc.dias.filter(x => !agc.fuera.has(x.fecha)).map(x => x.fecha).join(","));
+  return p.toString();
+}
+
+async function agcTraer() {
+  const qs = agcQs();
+  if (agc.blob && agc.clave === qs) return agc.blob;
+  const r = await fetch(`/api/turismo/asignacion/imagen?${qs}`).catch(() => null);
+  if (!r || !r.ok) return null;
+  const b = await r.blob();
+  agc.blob = b; agc.clave = qs;
+  return b;
+}
+
+async function agcPrevista() {
+  const box = $("#agc-prev");
+  if (!box) return;
+  const qs = agcQs();
+  box.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
+  const b = await agcTraer();
+  if (!$("#agc-prev") || agcQs() !== qs) return;           // cambiaron las fechas mientras tanto
+  if (!b) { box.innerHTML = `<div style="padding:40px;text-align:center;color:var(--muted)">No se pudo armar la imagen</div>`; return; }
+  const url = URL.createObjectURL(b);
+  box.innerHTML = `<img src="${url}" alt="Vista previa de la asignación de turismo" style="width:100%;display:block">`;
+}
+
+function agcTitulo() {
+  const d = $("#agc-desde").value, h = $("#agc-hasta").value || d;
+  return d === h ? `Turismo ${trLargo(d)}` : `Turismo del ${trLargo(d < h ? d : h)} al ${trLargo(d < h ? h : d)}`;
+}
+function agcNombre(ext) {
+  const p = new URLSearchParams(agcQs());
+  const d = p.get("desde"), h = p.get("hasta");
+  return `turismo-${d}${h && h !== d ? `-al-${h}` : ""}.${ext}`;
+}
+
+async function agcDescargar(btn) {
+  const blob = await trConEspera(btn, agcTraer);
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = agcNombre("png");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+// En el celular abre el menú de compartir (WhatsApp muestra la imagen en el
+// chat). En la computadora la descarga para adjuntarla.
+async function agcCompartir(btn) {
+  const blob = await trConEspera(btn, agcTraer);
+  if (!blob) { toast("No se pudo armar la imagen", "error"); return; }
+  const archivo = new File([blob], agcNombre("png"), { type: "image/png" });
+  const titulo = agcTitulo();
+  if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+    try { await navigator.share({ files: [archivo], title: titulo, text: titulo }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  agcDescargar(null);
+  toast("Se descargó la imagen: adjuntala en el grupo de WhatsApp", "success");
+}
+
+function agcPdf() { window.open(`/api/turismo/asignacion/pdf?${agcQs()}`, "_blank"); }
+
+// Les manda al celular a cada chofer su servicio de turismo (los de la app)
+async function agcAvisar(btn) {
+  const antes = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = `<i class="ti ti-loader-2 gira"></i> Avisando…`;
+  const r = await fetch(`/api/turismo/asignacion/avisar?${agcQs()}`, { method: "POST" }).then(x => x.json()).catch(() => null);
+  btn.disabled = false; btn.innerHTML = antes;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo avisar", "error"); return; }
+  const partes = [avisosTxt(r)];
+  if (r.sin_usuario && r.sin_usuario.length) partes.push(`sin usuario: ${r.sin_usuario.join(", ")}`);
+  toast(partes.filter(Boolean).join(" · ") || "No hay choferes con servicio en esas fechas", r.avisados ? "success" : "info");
 }
 
 
@@ -14566,6 +16309,247 @@ const COLOR_TALLER = "#1E5A96";
 const COLORES_EMBLEMA = ["#B97D0A", "#0F8A7E", "#6D4BB0", "#DC2641", "#2F7C46", "#5B6B7F", "#C2410C", "#0E7490"];
 const COLOR_SIN_DATO = "#C8C7C1";
 
+// ════════════════════════════════════════════════════════════════════════════
+// SERVICIOS DE CORPORATIVOS: como Servicios del tráfico, sacado de lo que
+// rinden los choferes. Lo principal es el ranking por servicio (cada tramo de
+// cada empresa): cuántas veces se hizo, pasajeros, km, plata y suspendidos.
+// ════════════════════════════════════════════════════════════════════════════
+const cs = { preset: "30", desde: "", hasta: "", cliente: "", orden: "servicios", q: "", abierto: "", d: null, seq: 0 };
+const CS_PRESETS = [["7", "Últimos 7 días"], ["30", "Últimos 30 días"], ["mes", "Este mes"], ["mes_pasado", "Mes pasado"], ["90", "3 meses"]];
+const CS_ORDENES = [
+  ["servicios", "Más hechos", r => [-r.servicios, -r.pasajeros]],
+  ["pasajeros", "Más pasajeros", r => [-r.pasajeros, -r.servicios]],
+  ["costo", "Más plata", r => [-r.costo, -r.servicios]],
+  ["costo_pasajero", "Más caros por pasajero", r => [-(r.costo_pasajero || 0), -r.servicios]],
+  ["suspendidos", "Más suspendidos", r => [-r.suspendidos, -r.servicios]],
+];
+const CS_COLORES = ["#1E5A96", "#2F7C46", "#B8740F", "#8B3FA6", "#C21F38", "#3B8EA5", "#6E6D66"];
+function csColor(cli) {
+  const l = (cs.d && cs.d.clientes_disponibles) || [];
+  const i = l.indexOf(cli);
+  return CS_COLORES[(i < 0 ? l.length : i) % CS_COLORES.length];
+}
+function csISO(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; }
+function csPeriodo(k) {
+  const hoy = new Date(trHoy() + "T12:00");
+  if (k === "mes") return [csISO(new Date(hoy.getFullYear(), hoy.getMonth(), 1)), csISO(hoy)];
+  if (k === "mes_pasado") return [csISO(new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1)), csISO(new Date(hoy.getFullYear(), hoy.getMonth(), 0))];
+  const d = new Date(hoy); d.setDate(d.getDate() - (+k - 1));
+  return [csISO(d), csISO(hoy)];
+}
+function csGs(n) { return "Gs. " + fmtNum(Math.round(n || 0)); }
+function csDec(n) { return String(n ?? 0).replace(".", ","); }
+function csFC(f) { return f ? `${f.slice(8, 10)}/${f.slice(5, 7)}` : ""; }
+function csQuery() {
+  return new URLSearchParams({ desde: cs.desde, hasta: cs.hasta, ...(cs.cliente ? { cliente: cs.cliente } : {}) }).toString();
+}
+
+async function renderCorpServicios() {
+  status("Servicios de corporativos: lo que se hizo, sacado de las rendiciones");
+  if (!cs.desde) [cs.desde, cs.hasta] = csPeriodo(cs.preset);
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-chart-histogram"></i> Servicios de corporativos</h1>
+      <p>Lo que se hizo de verdad, sacado de lo que rinden los choferes: el ranking por servicio, por empresa, día por día, choferes y coches</p>
+      <div class="page-actions"><button class="btn btn-ghost" onclick="csPdf()"><i class="ti ti-file-type-pdf"></i> PDF del ranking</button></div>
+    </div>
+    <div class="section cs-raiz">
+      <div class="cs-filtros" id="cs-filtros"></div>
+      <div id="cs-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+    </div>`;
+  csFiltros();
+  csCargar();
+}
+function csFiltros() {
+  const f = $("#cs-filtros");
+  if (!f) return;
+  const clis = (cs.d && cs.d.clientes_disponibles) || [];
+  f.innerHTML = `
+    <div class="cs-fila-f">
+      <div class="cs-chips" role="group" aria-label="Período">
+        ${CS_PRESETS.map(([k, t]) => `<button class="chip ${cs.preset === k ? "activo" : ""}" onclick="csElegirPeriodo('${k}')">${t}</button>`).join("")}
+      </div>
+      <label class="cs-fechas ${cs.preset === "custom" ? "on" : ""}"><i class="ti ti-calendar"></i>
+        <input type="date" id="cs-desde" value="${cs.desde}" max="${trHoy()}" onchange="csFechas()" aria-label="Desde">
+        <span>al</span>
+        <input type="date" id="cs-hasta" value="${cs.hasta}" max="${trHoy()}" onchange="csFechas()" aria-label="Hasta"></label>
+    </div>
+    ${clis.length ? `<div class="cs-chips" role="group" aria-label="Empresa">
+      <button class="chip ${!cs.cliente ? "activo" : ""}" onclick="csElegirCliente('')">Todas las empresas</button>
+      ${clis.map(c => `<button class="chip ${cs.cliente === c ? "activo" : ""}" onclick="csElegirCliente('${trEsc(c)}')"><i class="cs-punto" style="background:${csColor(c)}"></i>${trEsc(c)}</button>`).join("")}
+    </div>` : ""}`;
+}
+function csElegirPeriodo(k) { cs.preset = k; [cs.desde, cs.hasta] = csPeriodo(k); csFiltros(); csCargar(); }
+function csFechas() {
+  const d = $("#cs-desde").value, h = $("#cs-hasta").value;
+  if (!d || !h) return;
+  cs.preset = "custom"; cs.desde = d <= h ? d : h; cs.hasta = d <= h ? h : d;
+  csFiltros(); csCargar();
+}
+function csElegirCliente(c) { cs.cliente = c; cs.abierto = ""; csFiltros(); csCargar(); }
+function csPdf() { window.open(`/api/corp/servicios/pdf?${csQuery()}&orden=${cs.orden}`, "_blank"); }
+
+async function csCargar() {
+  const seq = ++cs.seq;
+  const box = $("#cs-cuerpo");
+  if (box && cs.d) box.classList.add("cargando");
+  const d = await api(`/api/corp/servicios/panel?${csQuery()}`).catch(() => null);
+  if (seq !== cs.seq || !$("#cs-cuerpo")) return;
+  $("#cs-cuerpo").classList.remove("cargando");
+  if (!d || d.error) { $("#cs-cuerpo").innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>No se pudieron traer los servicios</div>`; return; }
+  const antes = (cs.d && cs.d.clientes_disponibles || []).join("|");
+  cs.d = d;
+  if (antes !== d.clientes_disponibles.join("|")) csFiltros();
+  csPintar();
+}
+
+function csDelta(v, alReves) {
+  if (v == null) return "";
+  const sube = v > 0, bien = alReves ? !sube : sube;
+  return `<span class="cs-delta ${v === 0 ? "" : bien ? "bien" : "mal"}"><i class="ti ti-arrow-${sube ? "up" : v < 0 ? "down" : "right"}"></i>${csDec(Math.abs(v))} %</span>`;
+}
+function csPintar() {
+  const d = cs.d, box = $("#cs-cuerpo");
+  if (!d || !box) return;
+  const t = d.totales, dl = d.deltas;
+  if (!d.hay_datos) {
+    box.innerHTML = `<div class="empty"><i class="ti ti-clipboard-off"></i>No hay servicios rendidos ${cs.cliente ? `de ${trEsc(cs.cliente)} ` : ""}en este período.${d.primer_dia ? ` El primero que hay cargado es del ${csFC(d.primer_dia)}/${d.primer_dia.slice(0, 4)}.` : ""}</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="pv-kpis cs-kpis">
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-azul"><i class="ti ti-route"></i></span><span class="pv-kpi-et">Servicios hechos ${csDelta(dl.servicios)}</span>
+        <b>${fmtNum(t.servicios)}</b><span class="pv-kpi-sub">${t.a_medias ? `${t.a_medias} a medias (una sola mitad) · ` : ""}en ${t.dias} día${t.dias === 1 ? "" : "s"}</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-ok"><i class="ti ti-users"></i></span><span class="pv-kpi-et">Pasajeros ${csDelta(dl.pasajeros)}</span>
+        <b>${fmtNum(t.pasajeros)}</b><span class="pv-kpi-sub">${csDec(t.pasajeros_prom)} por servicio</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-sd"><i class="ti ti-road"></i></span><span class="pv-kpi-et">Km recorridos ${csDelta(dl.km)}</span>
+        <b>${fmtNum(t.km)}</b><span class="pv-kpi-sub">de los servicios con km cargado</span></div>
+      <div class="pv-kpi"><span class="pv-kpi-ic pe-pronto"><i class="ti ti-cash"></i></span><span class="pv-kpi-et">Lo que costó ${csDelta(dl.costo, true)}</span>
+        <b>${csGs(t.costo)}</b><span class="pv-kpi-sub">${t.costo_pasajero ? `${csGs(t.costo_pasajero)} por pasajero` : "lo que se le paga al chofer"}${t.suspendidos ? ` · ${t.suspendidos} suspendido${t.suspendidos === 1 ? "" : "s"}` : ""}</span></div>
+    </div>
+    <p class="cs-comp">Comparado con el período anterior del mismo largo (${csFC(d.anterior.desde)} al ${csFC(d.anterior.hasta)}: ${fmtNum(d.anterior.servicios)} servicios, ${fmtNum(d.anterior.pasajeros)} pasajeros).</p>
+    <div class="pv-card cs-rank-card" id="cs-ranking">${csRankingHTML()}</div>
+    <div class="cs-dos">
+      <div class="pv-card">${csClientesHTML()}</div>
+      <div class="pv-card">${csSerieHTML()}</div>
+    </div>
+    <div class="cs-dos">
+      <div class="pv-card">${csGenteHTML()}</div>
+      <div class="pv-card">${csCochesHTML()}</div>
+    </div>`;
+}
+
+// ─── El ranking por servicio ───
+function csRankingHTML() {
+  const d = cs.d;
+  const [, nombre, clave] = CS_ORDENES.find(o => o[0] === cs.orden) || CS_ORDENES[0];
+  const cmp = (a, b) => { const x = clave(a), y = clave(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const q = cs.q.trim().toLowerCase();
+  const todos = [...d.ranking].sort(cmp);
+  const lista = todos.filter(r => !q || `${r.corto} ${r.tramo} ${r.cliente} ${r.choferes_top.map(c => c.nombre).join(" ")}`.toLowerCase().includes(q));
+  const valor = r => cs.orden === "pasajeros" ? r.pasajeros : cs.orden === "costo" ? r.costo : cs.orden === "costo_pasajero" ? (r.costo_pasajero || 0) : cs.orden === "suspendidos" ? r.suspendidos : r.servicios;
+  const max = Math.max(1, ...todos.map(valor));
+  const fila = r => {
+    const pos = todos.indexOf(r) + 1, abierto = cs.abierto === `${r.cliente}|${r.tramo}`;
+    const v = valor(r);
+    const vTxt = cs.orden === "costo" ? csGs(v) : cs.orden === "costo_pasajero" ? (r.costo_pasajero ? csGs(v) : "—") : fmtNum(v);
+    return `
+    <div class="cs-r ${abierto ? "abierto" : ""} ${pos <= 3 ? "top" : ""}" role="row" tabindex="0" onclick="csAbrir('${trEsc(r.cliente)}|${trEsc(r.tramo).replace(/'/g, "\\'")}')" onkeydown="if(event.key==='Enter')this.click()">
+      <span class="cs-pos ${pos <= 3 ? "p" + pos : ""}">${pos}</span>
+      <span class="cs-srv"><b>${trEsc(r.corto)}${r.hora ? ` <small>${trEsc(r.hora)}</small>` : ""}</b>
+        <span class="cs-cli" style="--c:${csColor(r.cliente)}">${trEsc(r.cliente)}</span>${r.variable ? `<span class="cs-tag">variable</span>` : ""}</span>
+      <span class="cs-bar"><i style="width:${max ? Math.max(v ? 2 : 0, v / max * 100) : 0}%;background:${csColor(r.cliente)}"></i><b>${vTxt}</b></span>
+      <span class="num">${fmtNum(r.servicios)}${r.a_medias ? `<small>${r.a_medias} a medias</small>` : ""}</span>
+      <span class="num">${fmtNum(r.pasajeros)}<small>${csDec(r.pasajeros_prom)} prom.</small></span>
+      <span class="num cs-hide-m">${r.km ? fmtNum(r.km) : "—"}</span>
+      <span class="num">${fmtNum(r.costo)}<small>${r.costo_pasajero ? fmtNum(r.costo_pasajero) + "/pas." : ""}</small></span>
+      <span class="num ${r.suspendidos ? "cs-susp" : ""}">${r.suspendidos || "—"}</span>
+    </div>
+    ${abierto ? csDetalleHTML(r) : ""}`;
+  };
+  return `
+    <div class="pv-card-cab"><h3><i class="ti ti-trophy"></i> Ranking por servicio</h3><span>${d.ranking.length} servicio${d.ranking.length === 1 ? "" : "s"} distinto${d.ranking.length === 1 ? "" : "s"}${cs.cliente ? ` de ${trEsc(cs.cliente)}` : ""} · tocá uno para ver quién lo hace</span></div>
+    <div class="cs-rank-ctl">
+      <div class="cs-chips" role="group" aria-label="Ordenar por">${CS_ORDENES.map(([k, t]) => `<button class="chip ${cs.orden === k ? "activo" : ""}" onclick="cs.orden='${k}';csRepintarRanking()">${t}</button>`).join("")}</div>
+      <label class="cs-busca"><i class="ti ti-search"></i><input type="search" id="cs-q" value="${trEsc(cs.q)}" placeholder="Buscar servicio, empresa o chofer" oninput="cs.q=this.value;csRepintarRanking(true)" aria-label="Buscar servicio"></label>
+    </div>
+    <div class="cs-tabla" role="table">
+      <div class="cs-r cs-th" role="row"><span>#</span><span>Servicio</span><span>${trEsc(nombre)}</span><span class="num">Veces</span><span class="num">Pasajeros</span><span class="num cs-hide-m">Km</span><span class="num">Costo (Gs.)</span><span class="num">Susp.</span></div>
+      ${lista.map(fila).join("") || `<div class="cs-vacio"><i class="ti ti-search-off"></i> Ningún servicio con «${trEsc(cs.q)}»</div>`}
+    </div>`;
+}
+function csDetalleHTML(r) {
+  const maxC = Math.max(1, ...r.choferes_top.map(c => c.n)), maxB = Math.max(1, ...r.coches_top.map(c => c.n));
+  return `<div class="cs-det">
+    <div><h4>Quién lo hace <small>${r.choferes} chofer${r.choferes === 1 ? "" : "es"}</small></h4>
+      ${r.choferes_top.map(c => `<div class="cs-mini"><span>${trEsc(c.nombre)}</span><i><b style="width:${c.n / maxC * 100}%"></b></i><em>${c.n}</em></div>`).join("") || "<p>—</p>"}</div>
+    <div><h4>Con qué coches <small>${r.coches} coche${r.coches === 1 ? "" : "s"}</small></h4>
+      ${r.coches_top.map(c => `<div class="cs-mini"><span>${trEsc(c.coche)}</span><i><b style="width:${c.n / maxB * 100}%"></b></i><em>${c.n}</em></div>`).join("") || "<p>—</p>"}</div>
+    <div><h4>Resumen</h4>
+      <p>${r.completos} completo${r.completos === 1 ? "" : "s"}${r.a_medias ? `, ${r.a_medias} a medias (se rindió una sola mitad)` : ""}${r.suspendidos ? `, ${r.suspendidos} suspendido${r.suspendidos === 1 ? "" : "s"} (${r.pct_suspendido} %)` : ""}.</p>
+      <p>${r.km_prom ? `${fmtNum(r.km_prom)} km por servicio. ` : ""}${r.ultimo ? `Último: ${csFC(r.ultimo)}.` : ""}</p>
+      <p class="cs-det-tramo">${trEsc(r.tramo)}</p></div>
+  </div>`;
+}
+function csAbrir(k) { cs.abierto = cs.abierto === k ? "" : k; csRepintarRanking(); }
+function csRepintarRanking(foco) {
+  const box = $("#cs-ranking");
+  if (!box) return;
+  const inp = $("#cs-q"), pos = inp ? inp.selectionStart : 0;
+  box.innerHTML = csRankingHTML();
+  if (foco) { const n = $("#cs-q"); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }
+}
+
+// ─── Por empresa ───
+function csClientesHTML() {
+  const pc = cs.d.por_cliente;
+  return `<div class="pv-card-cab"><h3>Por empresa</h3><span>servicios y lo que costó</span></div>
+    ${pc.map(c => `<div class="cs-emp">
+      <div class="cs-emp-cab"><b><i class="cs-punto" style="background:${csColor(c.cliente)}"></i>${trEsc(c.cliente)}</b><span>${fmtNum(c.servicios)} servicios · ${csDec(c.pct)} %</span></div>
+      <div class="cs-emp-bar"><i style="width:${c.pct}%;background:${csColor(c.cliente)}"></i></div>
+      <div class="cs-emp-sub">${c.tramos} tramo${c.tramos === 1 ? "" : "s"} · ${fmtNum(c.pasajeros)} pasajeros (${csDec(c.pasajeros_prom)} prom.) · ${csGs(c.costo)}${c.costo_pasajero ? ` · ${csGs(c.costo_pasajero)}/pas.` : ""}${c.suspendidos ? ` · <span class="cs-susp">${c.suspendidos} susp.</span>` : ""}</div>
+    </div>`).join("")}`;
+}
+
+// ─── Día por día (por semana si el período es largo) ───
+function csSerieHTML() {
+  let s = cs.d.serie, por = "día";
+  if (s.length > 62) {
+    por = "semana";
+    const sem = [];
+    s.forEach((x, i) => {
+      if (i % 7 === 0) sem.push({ fecha: x.fecha, dia: "", total: 0, por_cliente: {} });
+      const w = sem[sem.length - 1];
+      w.total += x.total;
+      Object.entries(x.por_cliente).forEach(([c, n]) => { w.por_cliente[c] = (w.por_cliente[c] || 0) + n; });
+    });
+    s = sem;
+  }
+  const max = Math.max(1, ...s.map(x => x.total));
+  const clis = cs.d.clientes_disponibles.filter(c => !cs.cliente || c === cs.cliente);
+  const prom = s.filter(x => x.total).length ? Math.round(s.reduce((a, x) => a + x.total, 0) / s.filter(x => x.total).length) : 0;
+  return `<div class="pv-card-cab"><h3>${por === "día" ? "Día por día" : "Semana por semana"}</h3><span>${prom} servicios por ${por} en promedio</span></div>
+    <div class="cs-serie" style="--n:${s.length}">
+      ${s.map(x => `<div class="cs-col" title="${por === "día" ? `${x.dia} ${csFC(x.fecha)}` : `Semana del ${csFC(x.fecha)}`}: ${x.total} servicio${x.total === 1 ? "" : "s"}${Object.entries(x.por_cliente).map(([c, n]) => `\n${c}: ${n}`).join("")}">
+        <div class="cs-pila" style="height:${x.total / max * 100}%">${clis.map(c => x.por_cliente[c] ? `<i style="flex:${x.por_cliente[c]};background:${csColor(c)}"></i>` : "").join("")}</div>
+        ${s.length <= 31 ? `<small class="${x.dia === "sáb" || x.dia === "dom" ? "fin" : ""}">${por === "día" ? x.fecha.slice(8, 10) : csFC(x.fecha)}</small>` : ""}
+      </div>`).join("")}
+    </div>
+    ${s.length > 31 ? `<div class="cs-serie-pie"><span>${csFC(s[0].fecha)}</span><span>${csFC(s[s.length - 1].fecha)}</span></div>` : ""}`;
+}
+
+// ─── Choferes y coches ───
+function csGenteHTML() {
+  const ch = cs.d.choferes.slice(0, 12), max = Math.max(1, ...ch.map(c => c.servicios));
+  return `<div class="pv-card-cab"><h3>Choferes que más servicios hacen</h3><span>${cs.d.choferes.length} chofer${cs.d.choferes.length === 1 ? "" : "es"} · una mitad cuenta 0,5</span></div>
+    ${ch.map((c, i) => `<div class="cs-mini grande"><span><em class="cs-n">${i + 1}</em>${trEsc(c.nombre)}<small>${c.tramos} tramo${c.tramos === 1 ? "" : "s"} · ${trEsc(c.clientes.join(", "))}${c.suspendidos ? ` · ${c.suspendidos} susp.` : ""}</small></span><i><b style="width:${c.servicios / max * 100}%"></b></i><em>${csDec(c.servicios)}</em></div>`).join("")}`;
+}
+function csCochesHTML() {
+  const co = cs.d.coches.slice(0, 12), max = Math.max(1, ...co.map(c => c.servicios));
+  return `<div class="pv-card-cab"><h3>Coches más usados</h3><span>${cs.d.coches.length} coche${cs.d.coches.length === 1 ? "" : "s"} en corporativos</span></div>
+    ${co.map((c, i) => `<div class="cs-mini grande"><span><em class="cs-n">${i + 1}</em>Coche ${trEsc(c.coche)}<small>${c.km ? fmtNum(c.km) + " km · " : ""}${trEsc(c.clientes.join(", "))}</small></span><i><b style="width:${c.servicios / max * 100}%"></b></i><em>${csDec(c.servicios)}</em></div>`).join("")}`;
+}
+
 async function renderCorpCargas() {
   status("Cargas");
   const hoy = new Date();
@@ -14928,6 +16912,7 @@ async function mtCargarCoche(armar = false) {
           <h2>${v.patente || ""} <span>${[v.marca, v.modelo].filter(Boolean).join(" ")}</span></h2>
           <div class="mt-cab-chips" id="mt-resumen"></div>
         </div>
+        <button class="btn btn-primary" style="margin-left:auto;align-self:center" onclick="informeCoche(${vid})"><i class="ti ti-file-type-pdf"></i> Informe completo</button>
       </div>
 
       <div class="card mt-form">
@@ -17003,7 +18988,7 @@ function otDepBuscar(q) {
     if (!otDep.lista.length) { res.innerHTML = `<div class="ot-dep-vacio">No hay nada con eso en el inventario.</div>`; return; }
     res.innerHTML = otDep.lista.map((r, i) => `
       <button class="ot-dep-op ${r.stock_actual > 0 ? "" : "sin"}" onclick="otDepElegir(${i})" ${r.stock_actual > 0 ? "" : "disabled"}>
-        <span class="ot-dep-op-n"><b>${hiEsc(r.descripcion)}</b><small>${[r.contenido ? repEnvaseTxt(r) : "", r.marca, r.codigo, r.ubicacion && "📍 " + r.ubicacion].filter(Boolean).map(hiEsc).join(" · ")}</small></span>
+        <span class="ot-dep-op-n"><b>${hiEsc(r.descripcion)}${r.parecido ? ` <em class="bz-parecido">parecido</em>` : ""}</b><small>${[r.contenido ? repEnvaseTxt(r) : "", r.marca, r.codigo, r.ubicacion && "📍 " + r.ubicacion].filter(Boolean).map(hiEsc).join(" · ")}</small></span>
         <span class="ot-dep-op-s ${r.estado_stock}">${r.stock_actual > 0 ? repStockTxt(r) : "sin stock"}</span>
       </button>`).join("");
   }, q ? 220 : 0);
@@ -17943,7 +19928,10 @@ function pvDiaPanel(d) {
           <span>${d.cupo === 0 ? "El taller no trabaja" : `${d.ocupados} de ${d.cupo} lugares${libres > 0 ? ` · ${libres} libre${libres === 1 ? "" : "s"}` : libres === 0 ? " · lleno" : ` · ${-libres} de más`}`}${d.especial ? " · cupo especial" : ""}
             ${puede ? `<button class="pv-link" onclick="pvCupoDia('${d.fecha}', ${d.cupo})">cambiar</button>` : ""}</span>
         </div>
-        ${puede && d.fecha >= hoy ? `<button class="btn btn-primary btn-sm" onclick="pvAgendar(null, '${d.fecha}')"><i class="ti ti-plus"></i> Agendar</button>` : ""}
+        <div class="pv-dia-btns">
+          ${act.length ? `<button class="btn btn-ghost btn-sm" onclick="pvAvisoDia('${d.fecha}')" title="Mandar los turnos del día con sus técnicos por WhatsApp"><i class="ti ti-brand-whatsapp"></i> Avisar</button>` : ""}
+          ${puede && d.fecha >= hoy ? `<button class="btn btn-primary btn-sm" onclick="pvAgendar(null, '${d.fecha}')"><i class="ti ti-plus"></i> Agendar</button>` : ""}
+        </div>
       </div>
       ${d.turnos.length ? d.turnos.map(t => pvTurnoCard(t)).join("") : `<div class="pv-dia-vacio">${d.cupo ? "Sin turnos ese día" : "Sin turnos"}</div>`}
     </div>`;
@@ -17975,10 +19963,81 @@ function pvTurnoCard(t) {
       <div class="pv-tc-info">
         <div class="pv-tc-l1"><b onclick="pvAbrirCoche(${t.vehiculo_id}, true)">${pvEsc(t.patente)}</b>${t.hora ? `<span class="pv-tc-hora"><i class="ti ti-clock"></i>${t.hora}</span>` : ""}${pvTurnoChip(t, true, true)}</div>
         <small>${t.tareas_nombres.length ? pvEsc(t.tareas_nombres.length >= 3 ? `${t.tareas_nombres.length} tareas: ${t.tareas_nombres.slice(0, 3).join(", ")}…` : t.tareas_nombres.join(", ")) : "Lo que le toque"}${t.notas ? ` · ${pvEsc(t.notas)}` : ""}${t.motivo ? ` · ${pvEsc(t.motivo)}` : ""}</small>
+        ${pvTurnoTecs(t, puede)}
       </div>
       <div class="pv-tc-btns">${btns}</div>
     </div>`;
 }
+// ─── Técnicos del turno: se asignan al agendar (o después) y pasan a la OT ───
+function pvTecCorto(p) { return `N°${p.numero} ${pvEsc(String(p.nombre || "").split(" ")[0])}`; }
+function pvTurnoTecs(t, puede) {
+  const ls = t.tecnicos_lista || [];
+  const editable = puede && t.estado === "agendado";
+  if (!ls.length) return editable ? `<button type="button" class="pv-tec-add" onclick="pvTecnicosTurno(${t.id})"><i class="ti ti-user-plus"></i> Asignar técnico</button>` : "";
+  return `<div class="pv-tec-fila">${ls.map(p => `<span class="pv-tec" title="${pvEsc(p.nombre)}${p.puesto ? " · " + pvEsc(p.puesto) : ""}"><i class="ti ti-user"></i>${pvTecCorto(p)}</span>`).join("")}
+    ${editable ? `<button type="button" class="pv-tec-cambiar" onclick="pvTecnicosTurno(${t.id})" title="Cambiar los técnicos" aria-label="Cambiar los técnicos"><i class="ti ti-pencil"></i></button>` : ""}</div>`;
+}
+// En el modal de agendar: chips de los elegidos + desplegable para sumar
+function pvTecPintar(o) {
+  const box = o.querySelector("#pv-ag-tecs");
+  if (!box) return;
+  const ls = pt.lista || [], sel = o._tecs || [];
+  const elegidos = sel.map(id => ls.find(p => p.id === id)).filter(Boolean).sort((a, b) => a.numero - b.numero);
+  const libres = ls.filter(p => p.activo && !sel.includes(p.id));
+  box.innerHTML = `${elegidos.map(p => `<span class="pv-tec on">${pvTecCorto(p)}<button type="button" onclick="pvTecSacar(this, ${p.id})" aria-label="Sacar a ${pvEsc(p.nombre)}"><i class="ti ti-x"></i></button></span>`).join("")}
+    <select class="pv-tec-sel" onchange="pvTecSumar(this)" aria-label="Agregar técnico">
+      <option value="">${elegidos.length ? "+ Otro técnico" : "+ Elegir técnico"}</option>
+      ${libres.map(p => `<option value="${p.id}">N°${p.numero} ${pvEsc(p.nombre)}${p.puesto ? " · " + pvEsc(p.puesto) : ""}</option>`).join("")}
+    </select>`;
+}
+function pvTecSumar(sel) {
+  const o = sel.closest(".modal-overlay"), id = +sel.value;
+  if (!id) return;
+  o._tecs = [...(o._tecs || []), id];
+  pvTecPintar(o);
+}
+function pvTecSacar(btn, id) {
+  const o = btn.closest(".modal-overlay");
+  o._tecs = (o._tecs || []).filter(x => x !== id);
+  pvTecPintar(o);
+}
+// Cambiar los técnicos de un turno ya agendado
+async function pvTecnicosTurno(tid) {
+  await ptCargarLista();
+  const t = ((pv.agenda && pv.agenda.dias) || []).flatMap(d => d.turnos).find(x => x.id === tid);
+  if (!t) return;
+  const o = rvModal({
+    titulo: `Técnicos del turno · coche ${pvEsc(t.n_interno || t.patente)}`, icono: "users", ancho: 480,
+    sub: `${pvFL(t.fecha)}${t.hora ? " a las " + t.hora : ""}. Cuando el coche llegue, sus trabajos ya salen con estos técnicos.`,
+    cuerpo: `<div class="pv-tec-chips" id="pv-ag-tecs"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="pv-tec-ok"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+  o._tecs = (t.tecnicos_lista || []).map(p => p.id);
+  pvTecPintar(o);
+  o.querySelector("#pv-tec-ok").onclick = async ev => {
+    ev.target.disabled = true;
+    const r = await pvPost(`/api/prev/turnos/${tid}`, { tecnicos: o._tecs }, "PATCH");
+    if (!r.ok) { ev.target.disabled = false; toast(r.msg || "No se pudo guardar", "error"); return; }
+    o.remove();
+    toast(o._tecs.length ? `Turno del ${pvF(t.fecha)}: ${o._tecs.length} técnico${o._tecs.length === 1 ? "" : "s"}` : "El turno quedó sin técnico", "success");
+    pvRefrescarDespuesDeTurno();
+  };
+}
+// Avisar: el día con sus turnos y técnicos, listo para mandar por WhatsApp
+function pvAvisoDia(fecha) {
+  const d = ((pv.agenda && pv.agenda.dias) || []).find(x => x.fecha === fecha);
+  if (!d) return;
+  const ts = d.turnos.filter(t => t.estado === "agendado" || t.estado === "en_taller");
+  if (!ts.length) { toast("Ese día no tiene turnos para avisar", "error"); return; }
+  const txt = `*Taller · turnos del ${pvFL(fecha)}*\n\n` + ts.map(t =>
+    `${t.hora ? t.hora + " · " : ""}*Coche ${t.n_interno || t.patente}*` +
+    (t.tareas_nombres.length ? `\n${t.tareas_nombres.join(", ")}` : "") +
+    `\n👷 ${(t.tecnicos_lista || []).length ? t.tecnicos_lista.map(p => `N°${p.numero} ${p.nombre}`).join(", ") : "sin técnico asignado"}` +
+    (t.notas ? `\n📝 ${t.notas}` : "")).join("\n\n");
+  window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, "_blank");
+}
+
 function pvMenu(btn) {
   const m = btn.closest(".pv-menu");
   const abierto = m.classList.contains("on");
@@ -18040,11 +20099,18 @@ async function pvAgendarCoche(o, vid) {
       <label class="rv-f" style="flex:.8"><span>Hora (opcional)</span><input id="pv-ag-h" type="time"></label>
     </div>
     <div class="pv-ag-dia" id="pv-ag-dia"></div>
+    <div class="pv-ag-tec-box">
+      <div class="pv-check-tit"><span>¿Quién lo hace? <small>(opcional: así ya sabe con anticipación)</small></span></div>
+      <div class="pv-tec-chips" id="pv-ag-tecs"></div>
+    </div>
     ${f.fecha_sugerida ? `<p class="pv-nota"><i class="ti ti-sparkles"></i> ${!f.proximo ? "Sin datos para calcular cuándo le toca." : f.proximo.km_restantes < 0 ? "Está vencido: conviene que entre cuanto antes." : `Le toca ≈ ${pvFL(f.proximo.fecha_estimada)}.`} Primer día con lugar: <button class="pv-link" onclick="pvAgendarUsar('${f.fecha_sugerida}')">${pvFL(f.fecha_sugerida)}</button></p>` : ""}
     ${f.tareas.length ? `
       <div class="pv-check-tit"><span>¿Qué se le hace? <small>(lo que le toca ya viene marcado)</small></span><button class="pv-link" onclick="pvMarcarTodas(this)">marcar todas</button></div>
       <div class="pv-checks">${tareas.map(t => pvCheckTarea(t, pre.has(t.tarea_id))).join("")}</div>` : `<p class="pv-nota"><i class="ti ti-info-circle"></i> El coche no tiene plan: el turno queda sin tareas.</p>`}
     <label class="rv-f" style="margin-top:10px"><span>Notas</span><input id="pv-ag-n" placeholder="ej: viene después del servicio de la mañana"></label>`;
+  o._tecs = o._tecs || [];
+  await ptCargarLista();
+  pvTecPintar(o);
   o.querySelector("#pv-ag-ok").disabled = false;
   pvAgendarDia(o.querySelector("#pv-ag-f"));
 }
@@ -18075,7 +20141,7 @@ async function pvAgendarGuardar(btn, forzar) {
   if (!f) { toast("Elegí el coche", "error"); return; }
   const tareas = [...o.querySelectorAll(".pv-checks input:checked")].map(c => Number(c.value));
   const body = { vehiculo_id: f.vehiculo_id, fecha: o.querySelector("#pv-ag-f").value, hora: o.querySelector("#pv-ag-h").value,
-                 notas: o.querySelector("#pv-ag-n").value, tareas, forzar: !!forzar };
+                 notas: o.querySelector("#pv-ag-n").value, tareas, forzar: !!forzar, tecnicos: o._tecs || [] };
   if (!body.fecha) { toast("Elegí el día", "error"); return; }
   btn.disabled = true;
   const r = await pvPost("/api/prev/turnos", body);
@@ -18147,7 +20213,7 @@ async function pvTurnoOT(tid) {
   if (!r.ok) { toast(r.msg || "No se pudo abrir la OT", "error"); return; }
   toast(r.ya_estaba ? `La OT #${r.ot_id} ya estaba abierta`
         : r.sumada ? `Lo del turno se sumó a la OT #${r.ot_id}, que el coche ya tenía abierta`
-        : `OT #${r.ot_id} abierta con lo del turno`, "success");
+        : `OT #${r.ot_id} abierta con lo del turno${r.tecnicos ? ` y sus ${r.tecnicos === 1 ? "técnico" : r.tecnicos + " técnicos"}` : ""}`, "success");
   await pvRefrescarDespuesDeTurno();
   abrirOT(r.ot_id);
 }
@@ -18843,6 +20909,9 @@ async function ptGuardar(iid, aviso) {
   const box = document.getElementById(`pt-${iid}`);
   if (box) { box.classList.remove("ok"); void box.offsetWidth; box.classList.add("ok"); }
   if (aviso) toast(aviso, "success");
+  // Las horas del personal de la OT abierta suman o sacan a ese técnico
+  const hb = document.getElementById("ot-horas-box");
+  if (hb && hb.dataset.ot) { clearTimeout(window._otHorasT); window._otHorasT = setTimeout(() => otHorasCargar({ id: +hb.dataset.ot }), 400); }
   return true;
 }
 function ptElegir(iid, pid) {
@@ -18982,6 +21051,46 @@ async function ptTraer() {
     puestos.map(p => `<option ${p === pt.puesto ? "selected" : ""}>${ptEsc(p)}</option>`).join("");
   ptPintar();
 }
+// ─── Ahora: en qué coche está trabajando cada uno (OT abiertas, trabajos sin terminar) ───
+function ptAhoraChip(r) {
+  const a = r.ahora || [];
+  if (!a.length) return `<span class="pt-ahora-no">—</span>`;
+  const t = a.map(x => `${x.coche}: ${x.en_proceso ? x.en_proceso + " en proceso" : ""}${x.en_proceso && x.pendientes ? ", " : ""}${x.pendientes ? x.pendientes + " pendiente" + (x.pendientes === 1 ? "" : "s") : ""}`).join(" · ");
+  return `<span class="pt-ahora-chip ${a[0].en_proceso ? "proc" : ""}" title="${ptEsc(t)}"><i class="ti ti-bus"></i>${ptEsc(a[0].coche)}${a.length > 1 ? `<small>+${a.length - 1}</small>` : ""}</span>`;
+}
+function ptAhoraCard(rk) {
+  const con = rk.filter(r => (r.ahora || []).length || (r.turnos || []).length);
+  const libres = rk.filter(r => r.activo && !(r.ahora || []).length && !(r.turnos || []).length);
+  if (!con.length && !libres.length) return "";
+  const coches = new Set(con.flatMap(r => r.ahora.map(a => a.coche)));
+  const tarjeta = r => `
+    <div class="pt-ah">
+      <div class="pt-ah-cab">
+        <span class="pt-num">${r.numero}</span>
+        <span class="pt-ah-quien"><b>${ptEsc(r.nombre)}</b><small>${ptEsc(r.puesto || "")}</small></span>
+      </div>
+      ${r.ahora.map(a => `
+        <button type="button" class="pt-ah-coche ${a.en_proceso ? "proc" : ""}" onclick="event.stopPropagation();abrirOT(${a.ots[0]})" title="Abrir la OT #${a.ots.join(", #")}">
+          <span class="pt-ah-n"><i class="ti ti-bus"></i><b>${ptEsc(a.coche || "—")}</b></span>
+          <span class="pt-ah-est">${a.en_proceso ? `<em class="proc">${a.en_proceso} en proceso</em>` : ""}${a.pendientes ? `<em>${a.pendientes} pendiente${a.pendientes === 1 ? "" : "s"}</em>` : ""}<small>OT #${a.ots.join(", #")}</small></span>
+          <span class="pt-ah-tr">${a.trabajos.slice(0, 3).map(t => `<span class="${t.estado === "en_proceso" ? "proc" : ""}">${ptEsc(t.descripcion)}</span>`).join("")}${a.trabajos.length > 3 ? `<span class="mas">y ${a.en_proceso + a.pendientes - 3} más</span>` : ""}</span>
+        </button>`).join("")}
+      ${(r.turnos || []).length ? `<div class="pt-ah-turnos"><span><i class="ti ti-calendar-event"></i> Agendado</span>
+        ${r.turnos.map(t => `<div><b>${pvF(t.fecha)}${t.hora ? " " + t.hora : ""}</b> · Coche ${ptEsc(t.coche)}${t.tareas.length ? ` · <small>${ptEsc(t.tareas.slice(0, 2).join(", "))}${t.tareas.length > 2 ? "…" : ""}</small>` : ""}</div>`).join("")}</div>` : ""}
+    </div>`;
+  return `
+    <div class="pv-card pt-ahora">
+      <div class="pv-card-cab"><h3><i class="ti ti-tool"></i> Ahora: quién está en qué coche</h3>
+        <button type="button" class="btn btn-ghost btn-sm pt-ah-pdf" onclick="ptAhoraPdf()"><i class="ti ti-file-type-pdf"></i> PDF</button>
+        <span>${(() => { const n = con.filter(r => (r.ahora || []).length).length, ag = con.filter(r => (r.turnos || []).length).length;
+          return (n ? `${n} persona${n === 1 ? "" : "s"} en ${coches.size} coche${coches.size === 1 ? "" : "s"} · trabajos sin terminar de OT abiertas. Tocá un coche para abrir la OT.` : "Nadie tiene trabajos sin terminar en OT abiertas.")
+            + (ag ? ` · ${ag} con turnos agendados.` : ""); })()}</span></div>
+      ${con.length ? `<div class="pt-ah-grid">${con.sort((a, b) => a.numero - b.numero).map(tarjeta).join("")}</div>` : ""}
+      ${libres.length ? `<div class="pt-ah-libres"><span><i class="ti ti-user-pause"></i> Sin nada asignado ahora <b>${libres.length}</b></span>
+        ${libres.sort((a, b) => a.numero - b.numero).map(r => `<button type="button" class="pt-ah-libre" onclick="ptFicha(${r.id})" title="${ptEsc(r.nombre)}${r.puesto ? " · " + ptEsc(r.puesto) : ""}">N°${r.numero} ${ptEsc(r.nombre.split(" ")[0])}</button>`).join("")}</div>` : ""}
+    </div>`;
+}
+function ptAhoraPdf() { window.open(`/api/personal/ahora.pdf?${ptQuery()}${pt.puesto ? `&puesto=${encodeURIComponent(pt.puesto)}` : ""}`, "_blank"); }
 function ptBarra(v, max) { return `<span class="pt-bar"><i style="width:${max ? Math.max(v ? 3 : 0, v / max * 100) : 0}%"></i></span>`; }
 function ptPintar() {
   const d = pt.res;
@@ -19004,7 +21113,7 @@ function ptPintar() {
       <span class="pt-quien"><b>${ptEsc(r.nombre)}${r.activo ? "" : ` <em class="pt-baja-tag">de baja</em>`}</b><small>${ptEsc(r.puesto || "—")}${r.turno && !d.turno ? ` · <span class="pt-turno-tag">${PT_TURNO[r.turno] || ""}</span>` : ""}</small></span>
       <span class="pt-t">${ptBarra(r.trabajos, max)}<b>${r.trabajos}</b></span>
       <span class="pt-c num">${r.coches || "—"}</span>
-      <span class="pt-e num">${r.en_curso ? `<span class="pt-curso">${r.en_curso}</span>` : "—"}</span>
+      <span class="pt-e">${ptAhoraChip(r)}</span>
       <span class="pt-u num">${r.ultimo ? ptFC(r.ultimo) : "—"}</span>
     </div>`;
   box.innerHTML = `
@@ -19047,12 +21156,13 @@ function ptPintar() {
         <span class="pv-kpi-ic ${t.sin_numero ? "pe-pronto" : "pe-ok"}"><i class="ti ti-${t.sin_numero ? "user-question" : "checks"}"></i></span><span class="pv-kpi-et">Terminados sin nadie</span>
         <b>${t.sin_numero}</b><span class="pv-kpi-sub">${t.sin_numero ? "falta poner quién lo hizo" : "todo lo terminado tiene a alguien"}</span></div>
     </div>
+    ${ptAhoraCard(rk)}
     ${d.turno ? ptDiaPorDia(d, rk) : ""}
     <div class="pv-cu-grid pt-grid">
       <div class="pv-card">
         <div class="pv-card-cab"><h3>Quién hizo más</h3><span>${pt.puesto ? ptEsc(pt.puesto) + " · " : ""}Tocá a alguien para ver sus trabajos</span></div>
         <div class="pt-tabla" role="table">
-          <div class="pt-fila pt-th" role="row"><span>N°</span><span>Nombre</span><span>Trabajos</span><span class="num">Coches</span><span class="num">En curso</span><span class="num">Último</span></div>
+          <div class="pt-fila pt-th" role="row"><span>N°</span><span>Nombre</span><span>Trabajos</span><span class="num">Coches</span><span>Ahora en</span><span class="num">Último</span></div>
           ${con.map(fila).join("") || `<div class="pt-vacio-r"><i class="ti ti-clipboard-off"></i> Nadie tiene trabajos con número ${per}${d.coche ? " en este coche" : ""}.</div>`}
           ${sin.length ? `<div class="pt-sep" role="row"><i class="ti ti-user-off"></i> Sin trabajos registrados ${per} <span>${sin.length}</span></div>${sin.map(fila).join("")}` : ""}
         </div>
@@ -19552,7 +21662,7 @@ function caCuerpo() {
       ${falta ? `<button class="tr-num falta" onclick="caFiltrar('falta')"><b>${falta}</b><span>a completar</span></button>` : r.tramos ? `<span class="tr-num ca-ok"><i class="ti ti-circle-check"></i><span>todo asignado</span></span>` : ""}
       <span class="tr-num"><b>${r.choferes}</b><span>choferes</span></span>
       <span class="tr-num"><b>${r.coches}</b><span>coches</span></span>
-      ${r.no_corre ? `<span class="tr-num"><b>${r.no_corre}</b><span>no corre${r.no_corre === 1 ? "" : "n"}</span></span>` : ""}
+      ${r.no_corre ? `<span class="tr-num"><b>${r.no_corre}</b><span>quitado${r.no_corre === 1 ? "" : "s"}</span></span>` : ""}
     </div>
     ${!hayAlgo && caPuede() ? caVacio() : ""}
     ${ctl && hayAlgo ? caControl(ctl) : ""}
@@ -19618,6 +21728,7 @@ function caCliente(c) {
   const nc = c.tramos.filter(t => t.estado === "no_corre");
   const listos = vis.filter(t => t.estado === "listo").length;
   const puede = caPuede();
+  const sobran = vis.filter(t => !t.esperado && t.estado === "vacio");
   return `
     <section class="ca-cli" data-cli="${caEsc(c.cliente)}">
       <div class="ca-cli-cab">
@@ -19627,14 +21738,16 @@ function caCliente(c) {
           ${vis.length || c.variables.length ? `
             <button class="btn btn-ghost btn-sm" onclick="caVerPdf(caVersionArchivo(), '${caEsc(c.cliente)}')" title="La hoja de ${caEsc(c.cliente)}"><i class="ti ti-file-type-pdf"></i> PDF</button>
             <button class="btn btn-ghost btn-sm" ${caVersionPublicada() ? `onpointerenter="caTraer(caVersionArchivo(), 'imagen', '${caEsc(c.cliente)}')"` : ""} onclick="${caVersionPublicada() ? `caCompartir(caVersionArchivo(), this, '${caEsc(c.cliente)}')` : `caDescargar(caVersionArchivo(), this, '${caEsc(c.cliente)}')`}" title="${caVersionPublicada() ? "Mandar la hoja de " + caEsc(c.cliente) + " al grupo" : "Descargar la hoja de " + caEsc(c.cliente) + " como imagen"}"><i class="ti ti-${caVersionPublicada() ? "brand-whatsapp" : "photo-down"}"></i></button>` : ""}
+          ${puede && sobran.length ? `<button class="btn btn-ghost btn-sm ca-quitar-varios" onclick="caQuitarVarios('${caEsc(c.cliente)}')" title="Los que están vacíos y no suelen correr ${caEsc(caDiaSemana())}"><i class="ti ti-trash"></i> Quitar ${sobran.length}<span class="ca-largo"> que no suele${sobran.length === 1 ? "" : "n"} correr</span></button>` : ""}
           ${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNuevaVariable('${caEsc(c.cliente)}')"><i class="ti ti-plus"></i> Variable</button>` : ""}
         </span>
       </div>
       <div class="ca-filas">
         ${vis.map(t => caFila(t)).join("")}
         ${c.variables.map(s => caVariable(c, s)).join("")}
-        ${nc.map(t => caFilaNoCorre(t)).join("")}
       </div>
+      ${nc.length ? `<details class="ca-quitados"${nc.length <= 3 ? " open" : ""}><summary><i class="ti ti-chevron-right"></i> Quitados de este día <span>${nc.length}</span></summary>
+        <div class="ca-filas">${nc.map(t => caFilaNoCorre(t)).join("")}</div></details>` : ""}
       ${c.otros.length && puede ? `<button class="pv-link ca-otros-btn" onclick="caOtros('${caEsc(c.cliente)}', this)"><i class="ti ti-plus"></i> Otros tramos de ${caEsc(c.cliente)} que no suelen correr este día (${c.otros.length})</button>` : ""}
     </section>`;
 }
@@ -19685,7 +21798,8 @@ function caFila(t) {
       </div>
       <div class="ca-slots mitades">${caMitades(t).map(s => caSlot(t, s)).join("")}</div>
       <div class="ca-acc">
-        ${puede ? `<button class="icon-btn" title="No corre, igualar la salida" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
+        ${puede ? `<button class="icon-btn ca-quitar" title="Quitar de este día (no se hace)" aria-label="Quitar de este día" onclick="caQuitar(this)"><i class="ti ti-trash"></i></button>
+          <button class="icon-btn" title="Horario, igualar la salida, quitar con un motivo" aria-label="Más opciones del tramo" onclick="caMasTramo(this)"><i class="ti ti-dots-vertical"></i></button>` : ""}
       </div>
     </div>`;
 }
@@ -19719,9 +21833,9 @@ function caFilaNoCorre(t) {
     <div class="ca-fila e-no_corre ${caClaseControl(t)}" data-busca="${caEsc(caTexto(t, "no corre"))}" data-estado="no_corre" data-cli="${caEsc(t.cliente)}" data-tramo="${caEsc(t.tramo)}">
       <div class="ca-hora">${t.hora ? `<b>${t.hora}</b>` : `<b class="sin">--:--</b>`}</div>
       <div class="ca-tramo"><b title="${caEsc(t.tramo)}">${caEsc(t.corto)}</b></div>
-      <div class="ca-slots"><div class="ca-nocorre"><i class="ti ti-player-pause"></i> No corre este día${t.nota ? ` · ${caEsc(t.nota)}` : ""}
+      <div class="ca-slots"><div class="ca-nocorre"><i class="ti ti-player-pause"></i> Quitado de este día${t.nota ? ` · ${caEsc(t.nota)}` : ""}
         ${t.control ? `<span class="ca-ctl mal" title="${caEsc(t.control.txt)}"><i class="ti ti-alert-circle"></i><span>${caEsc(t.control.txt)}</span></span>` : ""}</div></div>
-      <div class="ca-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNoCorreBtn(this, false)">Vuelve a correr</button>` : ""}</div>
+      <div class="ca-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNoCorreBtn(this, false)"><i class="ti ti-arrow-back-up"></i> Volver a poner</button>` : ""}</div>
     </div>`;
 }
 
@@ -19938,7 +22052,7 @@ function caMasTramo(btn) {
   const { cliente, tramo, modo } = caFilaDe(btn);
   const items = [{ icono: "clock-edit", html: "<b>Cambiar el horario de este día</b><span>Los demás días sigue el de siempre</span>", fn: () => caHorarioDe(cliente, tramo) }];
   if (modo === "dividido") items.push({ icono: "arrows-join", html: "<b>La salida igual que la entrada</b><span>El mismo chofer y coche hacen las dos</span>", fn: () => caDividir(cliente, tramo, true) });
-  items.push({ icono: "player-pause", html: "<b>No corre este día</b><span>No cuenta como faltante</span>", fn: () => caNoCorre(cliente, tramo, true) });
+  items.push({ icono: "player-pause", html: "<b>Quitar de este día con un motivo</b><span>Ej. feriado en la planta: sale en la hoja como «no corre»</span>", fn: () => caNoCorre(cliente, tramo, true) });
   trMenu(btn, items);
 }
 // ─── Horario de un tramo, solo para este día ───
@@ -19994,7 +22108,30 @@ async function caNoCorre(cliente, tramo, marcar) {
     if (nota === null) return;
   }
   const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/no_corre`, { cliente, tramo, no_corre: marcar, nota });
-  caAplicar(r, marcar ? "Marcado: no corre" : "Vuelve a correr");
+  caAplicar(r, marcar ? "Quitado de este día" : "Volvió a la lista del día");
+}
+// Quitar un tramo que no se hace ese día (sin pedir motivo)
+async function caQuitar(btn) {
+  const { cliente, tramo } = caFilaDe(btn);
+  const c = ca.d.clientes.find(x => x.cliente === cliente), t = c && c.tramos.find(x => x.tramo === tramo);
+  if (t && t.estado !== "vacio") {
+    const quien = (t.slots || []).map(s => [s.chofer_usuario ? caNombre(s.chofer_nombre) : "", s.coche ? "coche " + s.coche : ""].filter(Boolean).join(", ")).filter(Boolean).join(" / ");
+    if (!confirm(`${t.corto} tiene asignado: ${quien}.\n\n¿Quitarlo igual de este día? Se borra lo asignado.`)) return;
+  }
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/no_corre`, { cliente, tramo, no_corre: true, nota: "" });
+  caAplicar(r, `${t ? t.corto : "Tramo"} quitado de este día`);
+}
+function caDiaSemana() {
+  const n = (ca.d && ca.d.nombre_dia || "").split(" ")[0] || "este día";
+  return n === "sábado" || n === "domingo" ? `los ${n}s` : n === "este día" ? n : `los ${n}`;
+}
+async function caQuitarVarios(cliente) {
+  const c = ca.d.clientes.find(x => x.cliente === cliente);
+  const sobran = c ? c.tramos.filter(t => t.estado !== "no_corre" && !t.esperado && t.estado === "vacio") : [];
+  if (!sobran.length) return;
+  if (!confirm(`¿Quitar de este día ${sobran.length} tramo${sobran.length === 1 ? "" : "s"} de ${cliente} que no suele${sobran.length === 1 ? "" : "n"} correr ${caDiaSemana()}?\n\n${sobran.map(t => "· " + t.corto + (t.hora ? " " + t.hora : "")).join("\n")}\n\nEstán vacíos. Si alguno se hace, después lo volvés a poner.`)) return;
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/quitar_varios`, { cliente, tramos: sobran.map(t => t.tramo) });
+  caAplicar(r, r && r.ok ? `${r.quitados} tramo${r.quitados === 1 ? "" : "s"} de ${cliente} quitado${r.quitados === 1 ? "" : "s"}` : "");
 }
 function caOtros(cliente, btn) {
   const c = ca.d.clientes.find(x => x.cliente === cliente);
@@ -20073,6 +22210,7 @@ async function caPublicar(btn) {
   if (!r || !r.ok) { toast((r && r.msg) || "No se pudo publicar", "error"); return; }
   const p = r.publicado || {};
   await caAplicar(r, p.sin_cambios ? "No había cambios para publicar" : `Versión ${p.version} publicada${p.cambios && p.cambios.length ? ` · ${p.cambios.length} cambio${p.cambios.length === 1 ? "" : "s"}` : ""}`);
+  if (p.avisos && (p.avisos.avisados || (p.avisos.sin_app || []).length)) setTimeout(() => toast(avisosTxt(p.avisos), "info"), 1800);
   caCargar(ca.fecha, true);
 }
 
@@ -20233,6 +22371,31 @@ async function otHojas(otId, btn) {
     const qs = new URLSearchParams({ cuales: d.cuales });
     if (sel.length !== d.hojas.length) qs.set("quienes", sel.join("|"));
     window.open(`/api/ots/${otId}/hojas.pdf?${qs}`, "_blank");
+    o.remove();
+  };
+}
+
+
+// ─── Hoja del técnico en blanco (turno noche: se completa a mano) ───
+function otHojaBlanca() {
+  const o = rvModal({
+    titulo: "Hoja turno noche", icono: "moon", ancho: 420,
+    sub: "La hoja del técnico vacía: sin coche, sin OT y sin técnico, para completar a mano",
+    cuerpo: `<label style="display:block;font-size:13px;font-weight:600;margin-bottom:8px">¿Cuántas hojas?</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        ${[1, 5, 10, 20].map(n => `<button type="button" class="btn btn-ghost hb-n" data-n="${n}" style="min-width:52px;height:40px">${n}</button>`).join("")}
+        <label class="rv-f" style="width:96px"><input id="hb-copias" type="number" min="1" max="30" value="5" inputmode="numeric" aria-label="Cantidad de hojas"></label>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:10px">Hasta 30 por vez. Salen todas en un solo PDF para imprimir.</div>`,
+    pie: `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;width:100%">
+      <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" id="hb-ok"><i class="ti ti-printer"></i> Imprimir</button></div>`,
+  });
+  const inp = o.querySelector("#hb-copias");
+  o.querySelectorAll(".hb-n").forEach(b => b.onclick = () => { inp.value = b.dataset.n; });
+  o.querySelector("#hb-ok").onclick = () => {
+    const n = Math.max(1, Math.min(30, parseInt(inp.value, 10) || 1));
+    window.open(`/api/ots/hoja_blanca.pdf?copias=${n}`, "_blank");
     o.remove();
   };
 }
@@ -21014,7 +23177,7 @@ function agVisibles() {
     if (["mal", "ojo", "ok"].includes(ag.filtro) && a.nivel !== ag.filtro) return false;
     if (ag.ciudad && a.ciudad !== ag.ciudad) return false;
     if (w.length) {
-      const t = caNorm([a.nombre, a.razon_social, a.ruc, a.representante, a.ciudad, a.lugar, a.direccion].join(" "));
+      const t = caNorm([a.nombre, a.codigo, a.razon_social, a.ruc, a.representante, a.ciudad, a.lugar, a.direccion].join(" "));
       if (!w.every(x => t.includes(x))) return false;
     }
     return true;
@@ -21154,7 +23317,7 @@ function agPintarFicha() {
       <div class="ag-fcab-t">
         <span class="ag-nivel n-${f.nivel}"><i class="ti ti-${nivelIc}"></i>${nivelTxt}</span>
         <h2>${agEsc(a.nombre)}</h2>
-        <p>${[a.razon_social, a.ruc ? "RUC " + a.ruc : "", a.ciudad].filter(Boolean).map(agEsc).join(" · ") || "Sin razón social ni RUC cargados"}</p>
+        <p>${[a.codigo ? "Código " + a.codigo : "", a.razon_social, a.ruc ? "RUC " + a.ruc : "", a.ciudad].filter(Boolean).map(agEsc).join(" · ") || "Sin razón social ni RUC cargados"}</p>
         ${a.estado !== "activa" ? `<p class="ag-fcab-estado"><i class="ti ti-${a.estado === "baja" ? "archive" : "player-pause"}"></i> ${a.estado === "baja" ? "Dada de baja" : "Suspendida"} el ${agFechaLarga(a.estado_el)}${a.estado_motivo ? ": " + agEsc(a.estado_motivo) : ""}</p>` : ""}
       </div>
       <div class="ag-fcab-acc">
@@ -21516,6 +23679,7 @@ function agFormAgencia(id, foco) {
     cuerpo: `
       <div class="agc-form">
         ${campo("nombre", "Nombre de la agencia *", `maxlength="120" ${foco === "ubicacion" ? "" : "autofocus"}`, "ag-f-2")}
+        ${campo("codigo", "Código en Delta", `maxlength="12" placeholder="Ej: A61"`)}
         ${campo("razon_social", "Razón social", `maxlength="160"`)}
         ${campo("ruc", "RUC", `maxlength="30" placeholder="80012345-6"`)}
         ${campo("representante", "Representante", `maxlength="120"`)}
@@ -21571,7 +23735,7 @@ function agFormAgencia(id, foco) {
   };
   o.querySelector("#agf-ok").onclick = async () => {
     const d = {};
-    ["nombre", "razon_social", "ruc", "representante", "ci_representante", "telefono", "whatsapp", "email", "ciudad", "lugar",
+    ["nombre", "codigo", "razon_social", "ruc", "representante", "ci_representante", "telefono", "whatsapp", "email", "ciudad", "lugar",
      "direccion", "ubicacion", "nota"].forEach(k => d[k] = o.querySelector("#agf-" + k).value);
     if (!d.nombre.trim()) { toast("Poné el nombre de la agencia", "error"); o.querySelector("#agf-nombre").focus(); return; }
     const b = o.querySelector("#agf-ok");
@@ -21592,7 +23756,7 @@ function agFormContrato(modo, cid) {
   const vivas = f.versiones.filter(v => !v.anulado);
   const base = cid ? f.versiones.find(v => v.id === cid) : (f.vigente || vivas[0] || null);
   const hoy = f.hoy;
-  const x = base ? { ...base } : { comision_tipo: "porcentaje", comision: "", rutas: [], deposito_frec: "", garantia_tipo: "" };
+  const x = base ? { ...base } : { comision_tipo: "porcentaje", comision: 10, rutas: [], deposito_frec: "", garantia_tipo: "" };
   let tipo = modo === "corregir" ? base.tipo : modo;
   if (modo === "renovacion") {
     const desde = base && base.hasta ? agMasDias(base.hasta, 1) : hoy;
@@ -21785,649 +23949,832 @@ function agIrA(id) {
 }
 
 
-// ════════════════════════════════════════════════════════════════════════════
-// ALPHA: maqueta de la venta de pasajes (solo admin). Los servicios salen del
-// TRÁFICO de cada día (corredores, salidas de ida y regreso, coche asignado y
-// tripulación); si ese día todavía no se armó, se toman los horarios del último
-// tráfico del mismo día de la semana y el coche queda a confirmar. Los planos
-// de los coches y los precios a Concepción son los de Delta; el resto de los
-// precios es de ejemplo. Las ventas de prueba quedan en este navegador.
-// En los viajes a Buenos Aires se piden los datos para migraciones; en los de
-// adentro del país alcanza con la cédula y el nombre.
-// ════════════════════════════════════════════════════════════════════════════
-const AL_CLASES = { CO: "Diferencial", CA: "Cama ejecutivo" };
-// Filas desde el frente: [ventanilla izq, pasillo izq, (pasillo), pasillo der, ventanilla der]
-const AL_FILAS = (desde, n, huecos = {}) => {
-  const out = []; let k = desde;
-  for (let i = 0; i < n; i++) {
-    if (huecos[i] === "izq") { out.push([k, k + 1, null, null, null]); k += 2; }
-    else { out.push([k, k + 1, null, k + 3, k + 2]); k += 4; }
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  TABLERO DE CONTROL DEL TALLER — plan contra real por técnico
+//  Como la planilla: una fila por técnico, en celeste lo PLANIFICADO y abajo
+//  el INICIO/FIN real de cada OT. Se llena solo con lo asignado, la agenda y
+//  las horas cargadas en las OTs.
+// ════════════════════════════════════════════════════════════════════════
+const tt = { fecha: "", turno: "", esp: "", solo: false, d: null, t: null, vista: (() => { try { return localStorage.getItem("tt-vista") || "horas"; } catch (e) { return "horas"; } })() };
+const TT_EST = { terminado: "Terminado", tarde: "Terminado tarde", en_curso: "En curso", atrasado: "Atrasado", pendiente: "Sin empezar", no_plan: "No planificado" };
+const TT_IC = { terminado: "circle-check", tarde: "clock-exclamation", en_curso: "player-play", atrasado: "alert-triangle", pendiente: "clock", no_plan: "help-circle" };
+const ttEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function ttHoras(h) { const m = Math.round((h || 0) * 60); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? " " + String(m % 60).padStart(2, "0") : ""}`; }
+function ttMover(dias) {
+  const d = new Date((tt.fecha || tt.d?.hoy) + "T12:00:00");
+  d.setDate(d.getDate() + dias);
+  tt.fecha = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  ttCargar();
+}
+async function renderTableroTaller() {
+  status("Tablero de control del taller — plan contra real");
+  clearInterval(tt.t);
+  content.innerHTML = `
+    <div class="page-header tt-head">
+      <div><h1><i class="ti ti-layout-grid"></i> Tablero de control</h1>
+        <p>Lo planificado (en celeste) contra lo real de cada técnico: qué OT tiene, a qué hora tenía que empezar y cuándo empezó y terminó.</p></div>
+      <div class="tt-head-acc">
+        <button class="btn btn-ghost" onclick="window.open('/api/taller/tablero.pdf?fecha='+tt.d.fecha,'_blank')"><i class="ti ti-printer"></i> PDF para el taller</button>
+        <button class="btn btn-ghost" onclick="location.href='/api/taller/tablero.xlsx?fecha='+tt.d.fecha"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+      </div>
+    </div>
+    <div class="section" id="tt-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`;
+  await ttCargar();
+  tt.t = setInterval(() => {
+    if (!document.getElementById("tt-cuerpo")) { clearInterval(tt.t); return; }
+    if (tt.d && tt.d.fecha === tt.d.hoy && !document.querySelector(".tt-modal") && !tt.arr && !document.querySelector(".tt-menu")) ttCargar(true);
+  }, 60000);
+}
+async function ttCargar(silencioso) {
+  const r = await api(`/api/taller/tablero${tt.fecha ? "?fecha=" + tt.fecha : ""}`).catch(() => null);
+  const box = document.getElementById("tt-cuerpo");
+  if (!box) return;
+  if (!r || !r.ok) { if (!silencioso) box.innerHTML = `<div class="empty"><i class="ti ti-alert-triangle"></i>No se pudo traer el tablero.</div>`; return; }
+  tt.d = r;
+  tt.fecha = r.fecha;
+  ttPintar();
+}
+function ttPintar() {
+  const d = tt.d, box = document.getElementById("tt-cuerpo");
+  if (!box) return;
+  const t = d.totales;
+  const esps = [...new Set(d.tecnicos.map(x => x.puesto).filter(Boolean))].sort();
+  const lista = d.tecnicos.filter(x => (!tt.turno || x.turno === tt.turno) && (!tt.esp || x.puesto === tt.esp) && (!tt.solo || x.celdas.length));
+  const esHoy = d.fecha === d.hoy;
+  box.innerHTML = `
+    <div class="tt-barra">
+      <div class="tt-dia">
+        <button class="icon-btn" onclick="ttMover(-1)" title="Día anterior" aria-label="Día anterior"><i class="ti ti-chevron-left"></i></button>
+        <label class="tt-fecha"><input type="date" value="${d.fecha}" onchange="tt.fecha=this.value;ttCargar()" aria-label="Fecha"><b>${ttEsc(d.dia_txt)}</b>${esHoy ? `<span class="tt-hoy">HOY · ${d.ahora.slice(11, 16)}</span>` : ""}</label>
+        <button class="icon-btn" onclick="ttMover(1)" title="Día siguiente" aria-label="Día siguiente"><i class="ti ti-chevron-right"></i></button>
+        ${esHoy ? "" : `<button class="btn btn-ghost btn-sm" onclick="tt.fecha='';ttCargar()">Hoy</button>`}
+      </div>
+      <div class="tt-filtros">
+        <div class="tt-seg">${[["", "Todos"], ["manana", "Mañana"], ["tarde", "Tarde"], ["noche", "Noche"]].map(([k, v]) => `<button class="${tt.turno === k ? "on" : ""}" onclick="tt.turno='${k}';ttPintar()">${v}</button>`).join("")}</div>
+        <select class="tt-sel" onchange="tt.esp=this.value;ttPintar()" aria-label="Especialidad"><option value="">Todas las especialidades</option>${esps.map(e => `<option ${tt.esp === e ? "selected" : ""}>${ttEsc(e)}</option>`).join("")}</select>
+        <label class="tt-check"><input type="checkbox" ${tt.solo ? "checked" : ""} onchange="tt.solo=this.checked;ttPintar()"> Solo los que tienen OT</label>
+        <div class="tt-seg tt-vista" role="group" aria-label="Vista">${[["horas", "clock-hour-4", "Por horas"], ["ots", "layout-columns", "Por OT"]].map(([k, ic, v]) => `<button class="${tt.vista === k ? "on" : ""}" onclick="ttVista('${k}')"><i class="ti ti-${ic}"></i> ${v}</button>`).join("")}</div>
+      </div>
+    </div>
+    <div class="tt-kpis">
+      <div><span>Planificadas</span><b>${t.planificadas}</b></div>
+      <div class="ok"><span>Terminadas</span><b>${t.terminadas}</b></div>
+      <div class="curso"><span>En curso</span><b>${t.en_curso}</b></div>
+      <div class="${t.atrasadas ? "mal" : ""}"><span>Atrasadas</span><b>${t.atrasadas}</b></div>
+      <div class="${t.no_plan ? "gris" : ""}"><span>No planificadas</span><b>${t.no_plan}</b></div>
+      <div><span>Horas trabajadas</span><b>${ttHoras(t.horas)}</b></div>
+      <div class="cump"><span>Cumplimiento</span><b>${t.cumplimiento == null ? "—" : t.cumplimiento + " %"}</b></div>
+    </div>
+    <div class="tt-ley">${Object.entries(TT_EST).map(([k, v]) => `<span class="tt-ley-i e-${k}"><i class="ti ti-${TT_IC[k]}"></i> ${v}</span>`).join("")}<span class="tt-ley-i plan">PLAN</span></div>
+    ${ttBandeja()}
+    ${tt.vista === "horas" ? ttHorasTabla(lista) : `<div class="tt-tabla">
+      <div class="tt-fila tt-cab"><div class="tt-tec">Técnico</div><div class="tt-et"></div><div class="tt-ots">Órdenes de trabajo</div></div>
+      ${lista.length ? lista.map(ttFila).join("") : `<div class="empty"><i class="ti ti-users"></i>No hay técnicos con ese filtro.</div>`}
+    </div>`}`;
+  if (tt.vista === "horas") ttHorasEnganchar();
+}
+function ttVista(v) {
+  tt.vista = v;
+  try { localStorage.setItem("tt-vista", v); } catch (e) { /* sin almacenamiento */ }
+  ttPintar();
+}
+
+// ─── Vista por horas: como la planilla (07:30, 08:00 … 22:00) ───────────
+// Arriba las horas; en cada técnico, la fila PLAN (celeste) con lo que tiene
+// que hacer a qué hora y la fila INICIO/FIN con lo que hizo de verdad.
+function ttHorasTabla(lista) {
+  const e = tt.d.eje || { desde: 450, hasta: 1380, marcas: [], pausa: [720, 900] };
+  // Cada columna de hora del mismo ancho, como en la planilla (la de 07:30 es media hora)
+  const ms = e.marcas.map(x => x.m), nCol = ms.length || 1;
+  const pct = m => {
+    m = Math.max(e.desde, Math.min(e.hasta, m));
+    let k = ms.length - 1;
+    while (k > 0 && ms[k] > m) k--;
+    const ini = ms[k] ?? e.desde, fin = ms[k + 1] ?? e.hasta;
+    return (k + (fin > ini ? (m - ini) / (fin - ini) : 0)) / nCol * 100;
+  };
+  const hm = m => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const esHoy = tt.d.fecha === tt.d.hoy;
+  const ahoraM = esHoy ? (+tt.d.ahora.slice(11, 13)) * 60 + (+tt.d.ahora.slice(14, 16)) : null;
+  const pausa = e.pausa && e.pausa[1] > e.pausa[0] ? `<span class="th-pausa" style="left:${pct(e.pausa[0])}%;width:${pct(e.pausa[1]) - pct(e.pausa[0])}%"></span>` : "";
+  const lineas = e.marcas.map(x => `<span class="th-linea" style="left:${pct(x.m)}%"></span>`).join("");
+  const ahora = ahoraM != null && ahoraM >= e.desde && ahoraM <= e.hasta ? `<span class="th-ahora" style="left:${pct(ahoraM)}%"></span>` : "";
+  const cab = e.marcas.map((x, k) => {
+    const sig = e.marcas[k + 1] ? e.marcas[k + 1].m : e.hasta;
+    return `<span class="th-hora ${e.pausa && x.m >= e.pausa[0] && x.m < e.pausa[1] ? "p" : ""}" style="left:${pct(x.m)}%;width:${pct(sig) - pct(x.m)}%">${x.txt}</span>`;
+  }).join("");
+  const fila = x => {
+    const r = x.resumen, esp = x.espera || { actuales: [], repuestos: [], afuera: [] };
+    const sinHora = x.celdas.map((c, i) => [c, i]).filter(([c]) => !c.b_plan);
+    const planB = x.celdas.map((c, i) => {
+      if (!c.b_plan) return "";
+      const [a, b, sup] = c.b_plan;
+      const w = pct(b) - pct(a);
+      return `<button type="button" class="th-b plan e-${c.estado} ${sup ? "sup" : ""} ${c.planificado ? "" : "np"}" style="left:${pct(a)}%;width:${Math.max(w, 1.2)}%"
+        onclick="event.stopPropagation();ttVer(${x.id}, ${i})" title="OT ${c.ot_id || ""} · coche ${ttEsc(c.coche)} · ${hm(a)}–${sup ? "?" : hm(b)} · ${TT_EST[c.estado]}">
+        <b>${c.ot_id ? "OT " + c.ot_id : "Turno"}</b>${c.coche ? `<span>${ttEsc(c.coche)}</span>` : ""}</button>`;
+    }).join("");
+    const realB = x.celdas.map((c, i) => (c.b_real || []).map(([a, b, sigue, antes]) => {
+      const w = pct(b) - pct(a);
+      return `<button type="button" class="th-b real e-${c.estado} ${sigue ? "vivo" : ""} ${antes ? "antes" : ""}" style="left:${pct(a)}%;width:${Math.max(w, 1)}%"
+        onclick="ttVer(${x.id}, ${i})" title="OT ${c.ot_id || ""} · ${antes ? "desde antes" : hm(a)} – ${sigue ? "trabajando" : hm(b)} · ${TT_EST[c.estado]}">
+        <b>${c.ot_id ? "OT " + c.ot_id : ""}</b><span>${antes ? "‹ antes" : hm(a)}–${sigue ? "ahora" : hm(b)}</span></button>`;
+    }).join("")).join("");
+    const lista_ = (l, f) => l.length ? l.map(f).join("") : `<span class="th-vacio">—</span>`;
+    return `<div class="th-fila ${r.trabajando ? "vivo" : ""}">
+      <div class="th-n"><span class="tt-num">${x.numero}</span></div>
+      <div class="th-tec"><b>${ttEsc(x.nombre)}</b>
+        <small>${r.planificadas ? `${r.terminadas}/${r.planificadas} hechas` : x.celdas.length ? "" : "Sin OT"}${r.horas ? ` · ${ttHoras(r.horas)}` : ""}${r.trabajando ? ` · <em class="vivo"><span class="tt-punto"></span>trabajando</em>` : ""}</small>
+        ${sinHora.length ? `<span class="th-sinhora">Sin hora: ${sinHora.map(([c, i]) => `<button type="button" class="e-${c.estado}" onclick="ttVer(${x.id}, ${i})">OT ${c.ot_id || "–"}</button>`).join("")}</span>` : ""}</div>
+      <div class="th-esp">${ttEsc(x.puesto || "")}</div>
+      <div class="th-et"><span class="plan">PLAN</span><span class="real">INICIO/FIN</span></div>
+      <div class="th-eje">
+        <div class="th-carril plan" data-pid="${x.id}" ${tt.d.puede ? `title="Tocá un lugar libre para planificarle una OT a esa hora"` : ""}>${pausa}${lineas}${planB}${ahora}</div>
+        <div class="th-carril real">${pausa}${lineas}${realB}${ahora}</div>
+      </div>
+      <div class="th-lado">${lista_(esp.actuales, a => `<span>OT ${a.ot_id}${a.coche ? ` · ${ttEsc(a.coche)}` : ""}${a.trabajos ? ` <small>(${a.trabajos})</small>` : ""}</span>`)}</div>
+      <div class="th-lado ${esp.repuestos.length ? "ojo" : ""}">${lista_(esp.repuestos, a => `<span>OT ${a.ot_id} <small>${{ en_espera: "sin presup.", presupuestado: "presupuestada", en_camino: "en camino" }[a.estado] || ""}</small></span>`)}</div>
+      <div class="th-lado ${esp.afuera.length ? "ojo" : ""}">${lista_(esp.afuera, a => `<span title="${ttEsc(a.descripcion)}">OT ${a.ot_id} <small>${ttEsc(a.descripcion.slice(0, 22))}</small></span>`)}</div>
+    </div>`;
+  };
+  return `<div class="th-wrap"><div class="th-tabla">
+      <div class="th-fila th-cab th-cab0"><div class="th-titulo">TABLERO DE CONTROL</div></div>
+      <div class="th-fila th-cab">
+        <div class="th-n">N° de técnico</div><div class="th-tec">Técnico</div><div class="th-esp">Especialidad</div><div class="th-et"></div>
+        <div class="th-eje th-horas">${cab}${ahoraM != null && ahoraM >= e.desde && ahoraM <= e.hasta ? `<span class="th-ahora-txt" style="left:${pct(ahoraM)}%">${tt.d.ahora.slice(11, 16)}</span>` : ""}</div>
+        <div class="th-lado">Trabajos actuales</div><div class="th-lado">En espera de repuestos</div><div class="th-lado">En espera de subcontratados</div>
+      </div>
+      ${lista.length ? lista.map(fila).join("") : `<div class="empty"><i class="ti ti-users"></i>No hay técnicos con ese filtro.</div>`}
+    </div></div>`;
+}
+function ttHorasEnganchar() {
+  // La primera vez del día, mostrar la hora de ahora (en el celular no entra todo)
+  const w = document.querySelector(".th-wrap"), ah = document.querySelector(".th-ahora-txt");
+  if (w && ah && tt._scroll !== tt.d.fecha && w.scrollWidth > w.clientWidth) {
+    tt._scroll = tt.d.fecha;
+    w.scrollLeft = Math.max(0, ah.getBoundingClientRect().left - w.getBoundingClientRect().left - w.clientWidth / 2);
   }
-  return out;
-};
-const AL_PLANOS = {
-  AO01: { tipo: "Doble piso", parados: 10, pisos: [
-    { nombre: "Piso alto", clase: "CO", filas: AL_FILAS(1, 13, { 2: "izq", 3: "izq" }) },
-    { nombre: "Piso bajo", clase: "CA", filas: [[49, 50, null, null, 51], [52, 53, null, null, 54], [55, 56, null, null, 57], [58, 59, null, null, 60]] },
-  ] },
-  AO03: { tipo: "Doble piso", parados: 10, pisos: [
-    { nombre: "Piso alto", clase: "CO", filas: AL_FILAS(1, 14, { 3: "izq", 4: "izq" }) },
-    { nombre: "Piso bajo", clase: "CO", filas: AL_FILAS(53, 4) },
-  ] },
-  ACXC: { tipo: "Un piso", parados: 0, pisos: [
-    { nombre: "Planta única", clase: "CO", filas: AL_FILAS(1, 12, { 11: "izq" }) },
-  ] },
-};
-// Precio por lugar del otro extremo (desde/hasta Asunción). Concepción es el de
-// Delta; los demás son de ejemplo hasta cargar el tarifario.
-const AL_PRECIOS = {
-  COP: { CO: 150000, CA: 180000, real: true }, LOT: { CO: 150000, CA: 180000 },
-  PJC: { CO: 170000, CA: 200000 }, "SAN PEDRO": { CO: 90000, CA: 110000 }, ATQ: { CO: 100000, CA: 120000 },
-  TACUATI: { CO: 120000, CA: 140000 }, "SAN VICENTE": { CO: 110000, CA: 130000 }, CDE: { CO: 100000, CA: 120000 },
-  VILLARRICA: { CO: 60000, CA: 75000 }, CARAPEGUA: { CO: 40000, CA: 50000 },
-};
-const AL_PRECIO_INTL = { CO: 450000, CA: 550000 };
-const AL_PRECIO_OTRO = { CO: 100000, CA: 120000 };
-// Duración de Delta para las salidas de Asunción a Concepción (las demás no se saben todavía)
-const AL_DUR = { "COP|09:00": 485, "COP|11:30": 485, "COP|17:00": 320, "COP|23:00": 321, "LOT|23:15": 355 };
-const AL_PLANO_TXT = { AO01: "Doble piso con cama abajo (AO01)", AO03: "Doble piso, todo diferencial (AO03)", ACXC: "Un piso (ACXC)" };
-const AL_TARIFAS = [["general", "General", 1], ["menor", "Menor de 12", 0.5], ["jubilado", "Jubilado", 0.75]];  // descuentos de ejemplo
-const AL_PAGOS = [["efectivo", "Efectivo"], ["tarjeta", "Tarjeta"], ["transferencia", "Transferencia"]];
-const AL_TIPODOC = [["CI", "Cédula paraguaya"], ["PAS", "Pasaporte"], ["DNI", "DNI argentino"], ["OTRO", "Otro documento"]];
-const AL_NACION = ["Paraguaya", "Argentina", "Brasileña", "Boliviana", "Uruguaya", "Otra"];
-const AL_PAISES = ["Paraguay", "Argentina", "Brasil", "Bolivia", "Uruguay", "Otro"];
-const AL_CONOCIDOS = {
-  "3456789": { apellidos: "GIMÉNEZ", nombres: "ROSA", sexo: "F", nac: "1990-03-14", nacionalidad: "Paraguaya", residencia: "Paraguay", viajes: 4 },
-  "4123987": { apellidos: "ORTIZ", nombres: "DERLIS", sexo: "M", nac: "1985-11-02", nacionalidad: "Paraguaya", residencia: "Argentina", viajes: 2 },
-};
-const AL_DIAS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
-const AL_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "setiembre", "octubre", "noviembre", "diciembre"];
-const AL_PVACIO = () => ({ tipoDoc: "CI", doc: "", nombre: "", apellidos: "", nombres: "", sexo: "", nac: "", nacionalidad: "", residencia: "" });
-const al = { cor: "", lado: "ida", dia: 0, dep: 0, sel: null, tarifa: "general", pago: "efectivo", recibe: "", aviso: "", p: AL_PVACIO(),
-             datos: {}, cargando: false, error: "" };
+  if (!tt.d.puede) return;
+  const e = tt.d.eje;
+  document.querySelectorAll(".th-carril.plan").forEach(c => c.addEventListener("click", ev => {
+    if (ev.target.closest(".th-b")) return;
+    const r = c.getBoundingClientRect();
+    let m = e.desde + (ev.clientX - r.left) / r.width * (e.hasta - e.desde);
+    m = Math.max(e.desde, Math.min(e.hasta - 30, Math.round(m / 30) * 30));
+    const hm = x => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
+    ttPlanificar(+c.dataset.pid, null, hm(m), hm(Math.min(e.hasta, m + 60)));
+  }));
+}
+function ttFila(x) {
+  const r = x.resumen;
+  return `<div class="tt-fila ${r.trabajando ? "vivo" : ""}">
+    <div class="tt-tec">
+      <span class="tt-num">${x.numero}</span>
+      <div class="tt-quien"><b>${ttEsc(x.nombre)}</b><small>${ttEsc(x.puesto)}${x.turno ? ` · ${ttEsc({ manana: "Mañana", tarde: "Tarde", noche: "Noche" }[x.turno] || x.turno)}` : ""}</small>
+        <span class="tt-res">${r.planificadas ? `<b>${r.terminadas}/${r.planificadas}</b> hechas` : x.celdas.length ? "" : "Sin OT"}${r.horas ? ` · ${ttHoras(r.horas)}` : ""}${r.atrasadas ? ` · <em class="mal">${r.atrasadas} atrasada${r.atrasadas === 1 ? "" : "s"}</em>` : ""}${r.trabajando ? ` · <em class="vivo"><span class="tt-punto"></span>trabajando</em>` : ""}</span></div>
+    </div>
+    <div class="tt-et"><span class="plan">PLAN</span><span class="real">INICIO/FIN</span></div>
+    <div class="tt-ots" data-pid="${x.id}">
+      ${x.celdas.map((c, i) => ttCelda(x, c, i)).join("")}
+      ${tt.d.puede ? `<button type="button" class="tt-mas" onclick="ttPlanificar(${x.id})" title="Planificarle una OT"><i class="ti ti-plus"></i><span>Planificar</span></button>` : ""}
+    </div>
+  </div>`;
+}
+function ttCelda(x, c, i) {
+  const plan = c.planificado
+    ? `<b>${c.ot_id ? "OT " + c.ot_id : "Turno agendado"}</b><span>${c.coche ? "Coche " + ttEsc(c.coche) : ""}</span><span class="h">${c.hora_ini ? `<i class="ti ti-clock"></i> ${c.hora_ini}${c.hora_fin ? " a " + c.hora_fin : ""}` : "sin hora"}</span>`
+    : `<b>OT ${c.ot_id}</b><span>${c.coche ? "Coche " + ttEsc(c.coche) : ""}</span><span class="h np">no planificada</span>`;
+  const real = c.trabajando
+    ? `<b>${c.real_ini}</b><span>trabajando · ${ttHoras(c.horas)}</span>`
+    : c.real_ini ? `<b>${c.real_ini} – ${c.real_fin || "?"}</b><span>${ttHoras(c.horas)}</span>`
+    : `<b>—</b><span>${c.trabajos.length ? `${c.hechos}/${c.trabajos.length} trabajos` : ""}</span>`;
+  return `<button type="button" class="tt-celda e-${c.estado}${tt.d.puede ? " movible" : ""}" data-pid="${x.id}" data-i="${i}" data-clave="${ttEsc(c.clave)}"
+    ${tt.d.puede ? `onpointerdown="ttTomar(event, this)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();ttVer(${x.id}, ${i})}"` : `onclick="ttVer(${x.id}, ${i})"`} title="${ttEsc(TT_EST[c.estado])}${tt.d.puede ? " · arrastrala para moverla" : ""}">
+    <span class="tt-plan ${c.planificado ? "" : "np"}">${plan}</span>
+    <span class="tt-real">${real}<em><i class="ti ti-${TT_IC[c.estado]}"></i> ${TT_EST[c.estado]}</em></span>
+  </button>`;
+}
 
-function alGuardado() {
-  try { const d = JSON.parse(localStorage.getItem("alpha_maqueta_v3") || "null"); if (d && Array.isArray(d.ventas)) return d; } catch (e) {}
-  return { nro: 124, ventas: [] };
-}
-function alGuardar(d) { try { localStorage.setItem("alpha_maqueta_v3", JSON.stringify(d)); } catch (e) {} }
-// El plano de cada coche: se deduce del modelo; si está mal, se corrige y queda en esta computadora
-function alPlanosCoche() { try { return JSON.parse(localStorage.getItem("alpha_planos_coche") || "{}") || {}; } catch (e) { return {}; } }
-function alPlanoDe(coche, modelo, extras) {
-  const fijo = coche && alPlanosCoche()[coche];
-  if (fijo && AL_PLANOS[fijo]) return fijo;
-  const m = String(modelo || "").toLowerCase();
-  if (/1800\s*dd|b6x2/.test(m)) return "AO01";
-  if (/8x2/.test(m)) return "AO03";
-  if (m) return "ACXC";
-  return "AO01";
-}
-function alCambiarPlano(pl) {
-  const sv = alServ(), coche = sv.coche || sv.habitual;
-  if (!coche) return;
-  const m = alPlanosCoche(); m[coche] = pl;
-  try { localStorage.setItem("alpha_planos_coche", JSON.stringify(m)); } catch (e) {}
-  al.sel = null; alPintar(false);
-}
-function alHH(m) { const x = ((m % 1440) + 1440) % 1440; return String(Math.floor(x / 60)).padStart(2, "0") + ":" + String(x % 60).padStart(2, "0"); }
-function alDur(m) { return Math.floor(m / 60) + " h" + (m % 60 ? " " + (m % 60) + " min" : ""); }
-function alFechaDe(i) { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + i); return d; }
-function alISO(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
-function alDiaTxt(d) { return AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.getDay()].slice(1) + " " + d.getDate() + " de " + AL_MESES[d.getMonth()]; }
-function alRnd(seed, n) {
-  let x = (seed ^ Math.imul(n, 0x9E3779B1)) >>> 0;
-  x = (x ^ (x >>> 16)) >>> 0; x = Math.imul(x, 0x45d9f3b) >>> 0; x = (x ^ (x >>> 16)) >>> 0;
-  return (x % 10000) / 10000;
-}
-function alSemilla(...p) { let h = 2166136261; for (const c of p.join("|")) h = Math.imul(h ^ c.charCodeAt(0), 16777619) >>> 0; return h; }
-function alHoyDatos() { return al.datos[alISO(alFechaDe(al.dia))]; }
-function alCorredores() { return (alHoyDatos() || {}).corredores || []; }
-function alRuta() {
-  const cs = alCorredores();
-  return cs.find(c => c.clave === al.cor) || cs[0] || null;
-}
-function alMin(h) { const [a, b] = String(h || "0:0").split(":").map(Number); return a * 60 + b; }
-function alServicios() {
-  const r = alRuta();
-  if (!r) return { lista: [] };
-  const intl = r.tipo === "internacional";
-  const lista = (r[al.lado] || []).map(x => {
-    const otro = x.origen === "ASU" ? x.llega : x.llega === "ASU" ? x.origen : (al.lado === "ida" ? x.llega : x.origen);
-    const precios = intl ? AL_PRECIO_INTL : (AL_PRECIOS[otro] || AL_PRECIO_OTRO);
-    const coche = x.coche || x.habitual;
-    const modelo = x.coche ? x.modelo : x.habitual_modelo;
-    const plano = alPlanoDe(coche, modelo, x.extras);
-    const dur = al.lado === "ida" && x.origen === "ASU" ? AL_DUR[`${x.llega}|${x.hora}`] : null;
-    const seed = alSemilla(x.clave);
-    return Object.assign({}, x, { h: alMin(x.hora), dur: dur || null, plano, precios,
-      cod: [x.tramo, ...x.extras].join(" "), occ: { CO: 0.05 + alRnd(seed, 1) * 0.55, CA: 0.05 + alRnd(seed, 2) * 0.6 } });
+// ─── Ver y ajustar un casillero ─────────────────────────────────────────
+function ttVer(pid, i) {
+  const x = tt.d.tecnicos.find(t => t.id === pid), c = x && x.celdas[i];
+  if (!c) return;
+  const puede = tt.d.puede, esHoy = tt.d.fecha === tt.d.hoy;
+  const o = rvModal({
+    titulo: c.ot_id ? `OT #${c.ot_id}${c.coche ? " · coche " + ttEsc(c.coche) : ""}` : `Turno agendado · coche ${ttEsc(c.coche)}`,
+    icono: "layout-grid", ancho: 640, clase: "tt-modal",
+    sub: `N°${x.numero} ${ttEsc(x.nombre)} · ${ttEsc(tt.d.dia_txt)}${c.vehiculo ? " · " + ttEsc(c.vehiculo) : ""}`,
+    cuerpo: `
+      <div class="tt-m-est e-${c.estado}"><i class="ti ti-${TT_IC[c.estado]}"></i> ${TT_EST[c.estado]}${c.planificado ? "" : " — no estaba en el plan del día"}</div>
+      <div class="tt-m-g">
+        <div class="tt-m-plan"><h4>PLAN</h4>
+          ${puede && c.ot_id ? `<div class="tt-m-horas">
+            <label><span>Empieza</span><input type="time" id="tt-hi" value="${c.hora_ini}"></label>
+            <label><span>Termina</span><input type="time" id="tt-hf" value="${c.hora_fin}"></label></div>
+            <label class="tt-m-nota"><span>Nota para el técnico</span><input id="tt-nota" value="${ttEsc(c.nota)}" maxlength="300" placeholder="Ej: primero el cambio de pastillas"></label>`
+          : `<p>${c.hora_ini ? `De ${c.hora_ini}${c.hora_fin ? " a " + c.hora_fin : ""}` : "Sin hora"}${c.nota ? `<br><small>${ttEsc(c.nota)}</small>` : ""}</p>`}
+          <small class="tt-m-fuente">${c.fuentes.map(f => ({ tablero: "planificado en el tablero", agenda: "del agendamiento", asignado: "trabajos asignados en la OT", horas: "horas cargadas" }[f] || f)).join(" · ")}</small>
+        </div>
+        <div class="tt-m-real"><h4>INICIO / FIN</h4>
+          ${c.tandas.length ? c.tandas.map(t => `<div class="tt-m-tanda"><i class="ti ti-clock-play"></i> ${t.inicio.slice(11, 16)}${t.inicio.slice(0, 10) !== tt.d.fecha ? ` <small>(${t.inicio.slice(8, 10)}/${t.inicio.slice(5, 7)})</small>` : ""} – ${t.fin ? t.fin.slice(11, 16) : "<em>trabajando</em>"}</div>`).join("") : `<p class="tt-gris">Todavía no cargó horas.</p>`}
+          ${c.horas ? `<p><b>${ttHoras(c.horas)}</b> trabajadas${c.plan_horas ? ` de ${ttHoras(c.plan_horas)} planificadas` : ""}</p>` : ""}
+          ${puede && c.ot_id && esHoy ? (c.trabajando
+            ? `<button type="button" class="btn btn-sm tt-fin" onclick="ttHora(${c.ot_id}, ${x.id}, 'terminar', this)"><i class="ti ti-player-stop"></i> Terminó ahora</button>`
+            : `<button type="button" class="btn btn-sm btn-primary" onclick="ttHora(${c.ot_id}, ${x.id}, 'empezar', this)"><i class="ti ti-player-play"></i> Empezó ahora</button>`) : ""}
+        </div>
+      </div>
+      ${c.trabajos.length ? `<h4 class="tt-m-h4">Sus trabajos en esta OT</h4><ul class="tt-m-trab">${c.trabajos.map(t => `<li class="${t.estado}"><i class="ti ti-${t.estado === "completado" ? "circle-check" : t.estado === "en_proceso" ? "player-play" : "circle"}"></i> ${ttEsc(t.descripcion)}</li>`).join("")}</ul>` : ""}
+      ${c.tareas_turno.length ? `<h4 class="tt-m-h4">Tareas del turno</h4><ul class="tt-m-trab">${c.tareas_turno.map(t => `<li><i class="ti ti-tool"></i> ${ttEsc(t)}</li>`).join("")}</ul>` : ""}`,
+    pie: `<div class="tt-pie">
+      ${puede && c.plan_id ? `<button type="button" class="pv-link" style="color:var(--danger)" onclick="ttQuitar(${c.plan_id})">Sacar del plan del día</button>` : ""}
+      ${c.ot_id ? `<button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove();abrirOT(${c.ot_id})"><i class="ti ti-clipboard-check"></i> Abrir la OT</button>` : ""}
+      ${puede && c.ot_id ? `<button type="button" class="btn btn-primary" onclick="ttGuardarPlan(${x.id}, ${c.ot_id}, this)"><i class="ti ti-check"></i> Guardar plan</button>`
+        : `<button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`}
+    </div>`,
   });
-  return { lista };
 }
-function alServ(k) { return alServicios().lista[k ?? al.dep]; }
-function alPlano(sv) { return AL_PLANOS[sv.plano]; }
-function alOrigen() { const sv = alServ(); if (sv) return sv.origen_nombre; const r = alRuta(); return r ? (al.lado === "ida" ? "Asunción" : r.titulo) : ""; }
-function alDestino() { const sv = alServ(); if (sv) return sv.llega_nombre; const r = alRuta(); return r ? (al.lado === "ida" ? r.titulo : "Asunción") : ""; }
-function alAsientos(pl) {
-  // Todos los asientos del plano con su piso, fila y lugar
-  const out = [];
-  pl.pisos.forEach((p, pi) => p.filas.forEach((f, fi) => f.forEach((n, pos) => {
-    if (n == null) return;
-    const lado = pos < 2 ? [f[0], f[1]] : [f[3], f[4]];
-    const solo = lado.filter(x => x != null).length === 1;
-    out.push({ n, piso: pi, fila: fi, pos, clase: p.clase, solo });
-  })));
-  return out;
+async function ttJson(url, metodo, cuerpo) {
+  return api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo || {}) }).catch(() => null);
 }
-function alVendidos(fecha, k) {
-  const sv = alServ(k), seed = alSemilla(fecha, sv.clave), out = new Set();
-  alAsientos(alPlano(sv)).forEach(a => { if (alRnd(seed, a.n) < (sv.occ[a.clase] || 0)) out.add(a.n); });
-  alGuardado().ventas.forEach(v => { if (v.fecha === fecha && v.servicio === sv.clave && v.asiento !== "P") out.add(v.asiento); });
-  return out;
+async function ttGuardarPlan(pid, ot_id, btn, extra) {
+  const o = btn.closest(".modal-overlay");
+  const v = s => o.querySelector(s)?.value || "";
+  btn.disabled = true;
+  const r = await ttJson("/api/taller/tablero/plan", "POST", { fecha: tt.d.fecha, personal_id: pid, ot_id, hora_ini: v("#tt-hi"), hora_fin: v("#tt-hf"), nota: v("#tt-nota"), ...(extra || {}) });
+  if (!r || !r.ok) { btn.disabled = false; toast((r && r.msg) || "No se pudo guardar", "error"); return; }
+  toast(r.msg, "success");
+  o.remove();
+  ttCargar();
 }
-function alParadosVendidos(fecha, k) {
-  const sv = alServ(k);
-  return alGuardado().ventas.filter(v => v.fecha === fecha && v.servicio === sv.clave && v.asiento === "P").length;
+async function ttQuitar(plan_id) {
+  const r = await ttJson(`/api/taller/tablero/plan/${plan_id}`, "DELETE");
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); return; }
+  toast(r.msg, "success");
+  document.querySelector(".tt-modal")?.closest(".modal-overlay")?.remove();
+  ttCargar();
 }
-function alYaSalio(dia, k) {
-  if (dia !== 0) return false;
-  const a = new Date();
-  return alServ(k).h <= a.getHours() * 60 + a.getMinutes();
+async function ttHora(ot_id, pid, accion, btn) {
+  btn.disabled = true;
+  const r = await ttJson(`/api/ots/${ot_id}/horas/${accion}`, "POST", { personal_id: pid });
+  if (!r || !r.ok) { btn.disabled = false; toast((r && r.msg) || "No se pudo", "error"); return; }
+  toast(r.msg, "success");
+  document.querySelector(".tt-modal")?.closest(".modal-overlay")?.remove();
+  ttCargar();
 }
-function alDescAsiento(n) {
-  if (n == null) return null;
-  const sv = alServ(), pl = alPlano(sv);
-  if (n === "P") return { piso: "Parado", pos: "Sin asiento asignado", tipo: AL_CLASES.CO, clase: "CO", parado: true };
-  const a = alAsientos(pl).find(x => x.n === n);
-  if (!a) return null;
-  const pos = a.solo ? "Individual" : (a.pos === 0 || a.pos === 4) ? "Ventanilla" : "Pasillo";
-  return { piso: pl.pisos.length > 1 ? pl.pisos[a.piso].nombre : "Asiento", pos: pos + ", fila " + (a.fila + 1), tipo: AL_CLASES[a.clase], clase: a.clase, a };
-}
-function alPrecio(n) {
-  const d = alDescAsiento(n);
-  if (!d) return 0;
-  const f = (AL_TARIFAS.find(t => t[0] === al.tarifa) || AL_TARIFAS[0])[2];
-  return Math.round(alServ().precios[d.clase] * f / 1000) * 1000;
-}
-function alConocido(doc) {
-  const dig = String(doc || "").replace(/\D/g, "");
-  if (!dig) return null;
-  const propias = alGuardado().ventas.filter(v => String(v.doc).replace(/\D/g, "") === dig);
-  const base = AL_CONOCIDOS[dig];
-  if (!base && !propias.length) return null;
-  const ult = propias.length ? propias[propias.length - 1] : null;
-  const datos = Object.assign({}, base || {}, ult && ult.mig ? ult.mig : {});
-  if (!datos.nombres && ult) datos.nombreCompleto = ult.nombre;
-  return { datos, viajes: (base ? base.viajes : 0) + propias.length };
-}
-function alNombreCompleto(p) { return p.nombre || [p.nombres, p.apellidos].filter(Boolean).join(" "); }
 
-async function renderAlpha() {
-  status("Alpha: maqueta de la venta de pasajes. Los servicios salen del tráfico; las ventas de prueba no van a la base");
-  if (window.USUARIO_ROL !== "admin") {
-    content.innerHTML = `<div class="page-header"><h1>Alpha</h1><p>Esta sección la ve solo administración.</p></div>`;
+// ─── Planificarle una OT a un técnico ───────────────────────────────────
+async function ttPlanificar(pid, otElegida, horaIni, horaFin) {
+  const x = tt.d.tecnicos.find(t => t.id === pid);
+  const o = rvModal({
+    titulo: `Planificar a N°${x.numero} ${ttEsc(x.nombre)}`, icono: "calendar-plus", ancho: 720, clase: "tt-modal tt-plan-modal",
+    sub: `${ttEsc(tt.d.dia_txt)}${horaIni ? ` · desde las ${horaIni}` : ""} · elegí la OT, la hora y los trabajos que le tocan`,
+    cuerpo: `
+      <label class="tt-busca"><i class="ti ti-search"></i><input id="tt-q" placeholder="Coche, número de OT o trabajo" autocomplete="off"></label>
+      <div class="tt-ots-lista" id="tt-ots"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
+      <div class="tt-elegida" id="tt-elegida" hidden></div>`,
+    pie: `<div class="tt-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button type="button" class="btn btn-primary" id="tt-ok" disabled><i class="ti ti-check"></i> Planificar</button></div>`,
+  });
+  let ots = [], sel = null, timer;
+  const pintar = () => {
+    const box = o.querySelector("#tt-ots");
+    box.innerHTML = ots.length ? ots.slice(0, 60).map(t => `<button type="button" class="${sel && sel.id === t.id ? "on" : ""}" data-id="${t.id}">
+        <b>OT ${t.id}</b><span class="c">${t.coche ? "Coche " + ttEsc(t.coche) : ttEsc(t.patente)}</span>
+        <span class="t">${t.trabajos.slice(0, 3).map(i => ttEsc(i.descripcion)).join(" · ")}${t.trabajos.length > 3 ? ` y ${t.trabajos.length - 3} más` : ""}</span></button>`).join("")
+      : `<p class="tt-gris">No hay OTs abiertas con trabajos pendientes${o.querySelector("#tt-q").value ? " con eso" : ""}.</p>`;
+    box.querySelectorAll("button").forEach(b => b.onclick = () => { sel = ots.find(t => t.id === +b.dataset.id); pintar(); elegida(); });
+  };
+  const elegida = () => {
+    const box = o.querySelector("#tt-elegida");
+    if (!sel) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `
+      <h4>OT ${sel.id} · coche ${ttEsc(sel.coche)} <small>${ttEsc(sel.vehiculo)}</small></h4>
+      <div class="tt-m-horas"><label><span>Empieza</span><input type="time" id="tt-hi" value="${horaIni || ""}"></label><label><span>Termina</span><input type="time" id="tt-hf" value="${horaFin || ""}"></label></div>
+      <p class="tt-sub">Trabajos que le tocan <small>(se le asignan; los que ya tienen otro técnico lo siguen teniendo)</small></p>
+      <div class="tt-trab-sel">${sel.trabajos.map(i => `<label><input type="checkbox" value="${i.id}" ${otElegida && !i.tecnico ? "checked" : ""}> <span>${ttEsc(i.descripcion)}${i.tecnico ? `<small>${ttEsc(i.tecnico)}</small>` : ""}</span></label>`).join("")}</div>
+      <label class="tt-m-nota"><span>Nota para el técnico</span><input id="tt-nota" maxlength="300" placeholder="Opcional"></label>`;
+    o.querySelector("#tt-ok").disabled = false;
+    o.querySelector("#tt-hi").focus();
+  };
+  const cargar = async () => {
+    const r = await api(`/api/taller/tablero/ots?q=${encodeURIComponent(o.querySelector("#tt-q").value)}`).catch(() => null);
+    ots = (r && r.ots) || [];
+    if (otElegida && !sel) { sel = ots.find(t => t.id === otElegida) || null; if (sel) elegida(); }
+    pintar();
+  };
+  o.querySelector("#tt-q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(cargar, 250); });
+  o.querySelector("#tt-ok").onclick = e => {
+    if (!sel) return;
+    const items = [...o.querySelectorAll(".tt-trab-sel input:checked")].map(i => +i.value);
+    ttGuardarPlan(pid, sel.id, e.currentTarget, { items });
+  };
+  cargar();
+  setTimeout(() => o.querySelector("#tt-q").focus(), 60);
+}
+
+// ─── Piezas móviles: arrastrar las OTs entre técnicos ───────────────────
+// Se toma una pieza (con el mouse, o manteniendo apretado en el celular) y se
+// suelta: en otro técnico (se le pasa o la comparten), en otro lugar de la
+// misma fila (el orden en que la hace), o en «Sacar del plan». Las OTs de la
+// bandeja de arriba se sueltan en un técnico para planificárselas.
+function ttBandeja() {
+  const d = tt.d;
+  if (!d.puede || d.fecha < d.hoy) return "";
+  const l = d.por_planificar || [];
+  return `<div class="tt-bandeja">
+    <div class="tt-band-cab"><b><i class="ti ti-inbox"></i> OTs sin técnico (${l.length})</b><span>Arrastralas a un técnico para planificarlas. Las piezas de abajo también se mueven: a otro técnico, a otro lugar de la fila, o al tacho para sacarlas del plan. En el celular, mantené apretado para levantarlas.</span></div>
+    <div class="tt-band-lista">${l.length ? l.map(o => `<button type="button" class="tt-pieza-libre" data-ot="${o.ot_id}" onpointerdown="ttTomar(event, this)" title="${ttEsc(o.trabajos.join(" · "))}">
+        <b>OT ${o.ot_id}</b><span>${o.coche ? "Coche " + ttEsc(o.coche) : ""}</span><small>${o.libres} trabajo${o.libres === 1 ? "" : "s"} sin técnico</small></button>`).join("")
+      : `<span class="tt-band-vacio"><i class="ti ti-circle-check"></i> Todas las OTs abiertas tienen técnico</span>`}
+      <div class="tt-tacho" data-tacho="1"><i class="ti ti-trash"></i> Soltá acá para sacar del plan</div>
+    </div>
+  </div>`;
+}
+function ttTomar(e, el) {
+  if (e.button !== undefined && e.button !== 0) return;
+  const tactil = e.pointerType === "touch";
+  const p0 = { x: e.clientX, y: e.clientY };
+  let arrancado = false, cancelado = false, larga = null;
+  const arrancar = () => {
+    if (arrancado || cancelado) return;
+    arrancado = true;
+    tt.arr = { el, libre: el.classList.contains("tt-pieza-libre"), pid: +el.dataset.pid || 0, clave: el.dataset.clave || "", ot: +el.dataset.ot || 0 };
+    const r = el.getBoundingClientRect();
+    const g = el.cloneNode(true);
+    g.removeAttribute("onpointerdown");
+    g.className = el.className + " tt-fantasma";
+    g.style.width = r.width + "px";
+    g.style.height = r.height + "px";
+    document.body.appendChild(g);
+    tt.arr.g = g;
+    tt.arr.dx = p0.x - r.left;
+    tt.arr.dy = p0.y - r.top;
+    el.classList.add("tt-levantada");
+    document.body.classList.add("tt-arrastrando");
+    if (navigator.vibrate && tactil) navigator.vibrate(15);
+    seguir(p0.x, p0.y);
+  };
+  const seguir = (x, y) => {
+    const a = tt.arr;
+    if (!a) return;
+    a.g.style.transform = `translate(${x - a.dx}px, ${y - a.dy}px) rotate(-2deg)`;
+    a.g.style.visibility = "hidden";
+    const bajo = document.elementFromPoint(x, y);
+    a.g.style.visibility = "";
+    document.querySelectorAll(".tt-ots.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".tt-hueco").forEach(h => h.remove());
+    a.dest = null;
+    const tacho = bajo && bajo.closest(".tt-tacho");
+    if (tacho && !a.libre) { tacho.classList.add("tt-sobre"); a.dest = { tacho: true }; }
+    const fila = bajo && bajo.closest(".tt-ots");
+    if (fila) {
+      fila.classList.add("tt-sobre");
+      const piezas = [...fila.querySelectorAll(".tt-celda:not(.tt-levantada)")];
+      let idx = piezas.length;
+      for (let k = 0; k < piezas.length; k++) {
+        const rr = piezas[k].getBoundingClientRect();
+        if (x < rr.left + rr.width / 2 && y < rr.bottom + 4) { idx = k; break; }
+      }
+      const hueco = document.createElement("span");
+      hueco.className = "tt-hueco";
+      const mas = fila.querySelector(".tt-mas");
+      if (piezas[idx]) piezas[idx].before(hueco); else if (mas) mas.before(hueco); else fila.appendChild(hueco);
+      a.dest = { pid: +fila.dataset.pid, idx };
+    }
+    // que la pantalla acompañe al arrastrar cerca del borde
+    const sc = document.getElementById("content") || document.scrollingElement;
+    clearInterval(tt.scrollT);
+    const borde = 70, alto = window.innerHeight;
+    if (y < borde || y > alto - borde) {
+      const v = y < borde ? -14 : 14;
+      tt.scrollT = setInterval(() => { sc.scrollTop += v; }, 16);
+    }
+  };
+  const alMover = ev => {
+    if (!arrancado) {
+      const dist = Math.hypot(ev.clientX - p0.x, ev.clientY - p0.y);
+      if (tactil) { if (dist > 10) { cancelado = true; limpiar(); } return; }   // en el celular, mover sin esperar = scrollear
+      if (dist > 6) arrancar(); else return;
+    }
+    ev.preventDefault();
+    seguir(ev.clientX, ev.clientY);
+  };
+  const tocarMover = ev => { if (arrancado) ev.preventDefault(); };
+  const soltar = ev => {
+    const a = tt.arr;
+    limpiar();
+    if (!arrancado) {
+      if (cancelado) return;
+      if (el.classList.contains("tt-pieza-libre")) toast("Arrastrala hasta un técnico para planificarla", "");
+      else ttVer(+el.dataset.pid, +el.dataset.i);
+      return;
+    }
+    ttSoltar(a, ev.clientX, ev.clientY);
+  };
+  const limpiar = () => {
+    clearTimeout(larga);
+    clearInterval(tt.scrollT);
+    document.removeEventListener("pointermove", alMover);
+    document.removeEventListener("pointerup", soltar);
+    document.removeEventListener("pointercancel", cancelar);
+    document.removeEventListener("touchmove", tocarMover);
+    if (tt.arr && tt.arr.g) tt.arr.g.remove();
+    el.classList.remove("tt-levantada");
+    document.body.classList.remove("tt-arrastrando");
+    document.querySelectorAll(".tt-ots.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".tt-hueco").forEach(h => h.remove());
+  };
+  const cancelar = () => { cancelado = true; limpiar(); tt.arr = null; };
+  document.addEventListener("pointermove", alMover, { passive: false });
+  document.addEventListener("pointerup", soltar);
+  document.addEventListener("pointercancel", cancelar);
+  document.addEventListener("touchmove", tocarMover, { passive: false });
+  if (tactil) larga = setTimeout(arrancar, 320);    // mantener apretado para levantarla
+}
+function ttSoltar(a, x, y) {
+  tt.arr = null;
+  const dest = a && a.dest;
+  if (!dest) return;
+  const nombre = pid => { const t = tt.d.tecnicos.find(z => z.id === pid); return t ? `N°${t.numero} ${t.nombre.split(" ").slice(0, 2).join(" ")}` : ""; };
+  // de la bandeja a un técnico: se planifica con la OT ya elegida
+  if (a.libre) {
+    if (dest.pid) ttPlanificar(dest.pid, a.ot);
     return;
   }
-  if (!document.getElementById("al-fuentes")) {
-    const l = document.createElement("link");
-    l.id = "al-fuentes"; l.rel = "stylesheet";
-    l.href = "https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400..800&family=Big+Shoulders:opsz,wght@10..72,600..900&display=swap";
-    document.head.appendChild(l);
+  const origen = tt.d.tecnicos.find(t => t.id === a.pid);
+  const celda = origen && origen.celdas.find(c => c.clave === a.clave);
+  if (!celda) return;
+  const que = celda.ot_id ? `OT ${celda.ot_id}` : "el turno";
+  if (dest.tacho) {
+    const pend = celda.trabajos.filter(t => t.estado !== "completado").length;
+    ttElegir(x, y, `¿Sacar ${que} a ${nombre(a.pid)}?`, [
+      { txt: "Sacar del plan del día", ic: "calendar-minus", fn: () => ttPost("sacar", { personal_id: a.pid, clave: a.clave }) },
+      ...(pend ? [{ txt: `Sacar y desasignarle ${pend} trabajo${pend === 1 ? "" : "s"}`, ic: "user-minus", peligro: true, fn: () => ttPost("sacar", { personal_id: a.pid, clave: a.clave, desasignar: true }) }] : []),
+    ]);
+    return;
   }
-  al.sel = null; al.aviso = "";
-  await alTraer();
-  alPintar(true);
-}
-// El tráfico del día elegido (se guarda por fecha mientras se está en Alpha)
-async function alTraer(forzar) {
-  const f = alISO(alFechaDe(al.dia));
-  if (al.datos[f] && !forzar) return;
-  al.cargando = true; al.error = "";
-  const d = await api(`/api/alpha/dia/${f}`);
-  al.cargando = false;
-  if (!d || !d.corredores) { al.error = (d && d.error) || "No se pudo traer el tráfico"; al.datos[f] = { corredores: [] }; return; }
-  al.datos[f] = d;
-  if (!d.corredores.some(c => c.clave === al.cor)) { al.cor = d.corredores[0]?.clave || ""; al.dep = 0; }
-}
-function alFuenteTxt(r) {
-  const f = r.fuente || {};
-  const dm = x => x ? `${AL_DIAS[new Date(x + "T12:00").getDay()]} ${x.slice(8, 10)}/${x.slice(5, 7)}` : "";
-  const qu = r.tipo === "internacional" ? "internacional" : "nacional";
-  if (f.estado === "publicado") return `Del tráfico ${qu} publicado (versión ${f.version}).`;
-  if (f.estado === "cambios") return `Del tráfico ${qu} (versión ${f.version}, con cambios sin publicar).`;
-  if (f.estado === "borrador") return `Del tráfico ${qu}, armado pero sin publicar.`;
-  return `El tráfico ${qu} de este día todavía no está armado: horarios del ${dm(f.fecha_ref)}; el coche se confirma cuando se arme.`;
-}
-
-function alVacio(animar, txt) {
-  const fechaD = alFechaDe(al.dia);
-  content.innerHTML = `<div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
-    <header class="al-cab"><div class="al-marca">${AL_LOGO}<span class="al-d al-marca-t">Alpha</span><span class="al-maqueta">Maqueta</span></div></header>
-    <div class="al-filtros">${alChipsCorredores()}<div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div></div>
-    ${alChipsLado()}
-    <div class="al-vacio"><i class="ti ti-${al.cargando ? "loader-2" : "calendar-off"}"></i><b>${txt}</b><span>${alDiaTxt(fechaD)}</span></div>
-  </div>`;
-}
-const AL_LOGO = `<svg aria-hidden="true" width="40" height="33" viewBox="0 0 120 100"><path d="M98 20C80 40 72 80 42 80C22 80 12 66 12 50C12 34 24 20 42 20C70 20 80 58 99 77" fill="none" stroke="#F3F4F6" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="98" cy="20" r="10" fill="#E83040"></circle><circle cx="106" cy="84" r="8" fill="none" stroke="#F3F4F6" stroke-width="5"></circle></svg>`;
-function alChipsCorredores() {
-  const cs = alCorredores(), r = alRuta();
-  if (!cs.length) return "";
-  return `<div class="al-dias al-corredores" role="group" aria-label="Viaje">${cs.map(c => `<button type="button" class="al-chip ${r && c.clave === r.clave ? "on" : ""}" aria-pressed="${r && c.clave === r.clave}" onclick="alCambiarRuta('${c.clave.replace(/'/g, "\\'")}')">Asunción ⇄ ${trEsc(c.titulo)}${c.tipo === "internacional" ? ' <i class="ti ti-world" aria-label="internacional"></i>' : ""}</button>`).join("")}</div>`;
-}
-function alChipsDias() {
-  return [0, 1, 2].map(i => {
-    const d = alFechaDe(i);
-    const t = i === 0 ? "Hoy" : i === 1 ? "Mañana" : AL_DIAS[d.getDay()][0].toUpperCase() + AL_DIAS[d.getDay()].slice(1) + " " + d.getDate();
-    return `<button type="button" class="al-chip ${i === al.dia ? "on" : ""}" aria-pressed="${i === al.dia}" onclick="alDia(${i})">${t}</button>`;
-  }).join("");
-}
-function alChipsLado() {
-  const r = alRuta();
-  if (!r) return "";
-  const n = l => (r[l] || []).length;
-  return `<div class="al-lados" role="group" aria-label="Sentido">
-    <button type="button" class="al-lado ${al.lado === "ida" ? "on" : ""}" aria-pressed="${al.lado === "ida"}" onclick="alLado('ida')">Ida <small>desde Asunción · ${n("ida")}</small></button>
-    <button type="button" class="al-lado ${al.lado === "regreso" ? "on" : ""}" aria-pressed="${al.lado === "regreso"}" onclick="alLado('regreso')">Regreso <small>a Asunción · ${n("regreso")}</small></button>
-  </div>`;
-}
-
-function alPintar(animar) {
-  if (al.cargando) return alVacio(animar, "Trayendo el tráfico…");
-  const r0 = alRuta();
-  if (!r0) return alVacio(animar, al.error || "No hay tráfico armado para tomar los servicios.");
-  if (!alServicios().lista.length) return alVacio(animar, `No hay salidas de ${al.lado === "ida" ? "ida" : "regreso"} en este corredor.`);
-  const fechaD = alFechaDe(al.dia), fecha = alISO(fechaD), lista = alServicios().lista;
-  // Si la salida elegida ya salió o está completa, se pasa a la próxima que sirva
-  const sirve = k => k < lista.length && !alYaSalio(al.dia, k) && (alVendidos(fecha, k).size < alAsientos(alPlano(alServ(k))).length || alParadosVendidos(fecha, k) < alPlano(alServ(k)).parados);
-  if (!sirve(al.dep)) { const k = lista.findIndex((_, i) => sirve(i)); al.dep = k >= 0 ? k : 0; }
-  const sv = alServ(), pl = alPlano(sv), vend = alVendidos(fecha, al.dep), todos = alAsientos(pl);
-  const paradosQuedan = Math.max(0, pl.parados - alParadosVendidos(fecha, al.dep));
-  if (al.sel === "P" && !paradosQuedan) al.sel = null;
-  if (al.sel != null && al.sel !== "P" && (vend.has(al.sel) || !todos.some(a => a.n === al.sel))) al.sel = null;
-  if (al.sel == null) { const libre = todos.find(a => !vend.has(a.n)); al.sel = libre ? libre.n : (paradosQuedan ? "P" : null); }
-
-  const g = alGuardado(), hoy = alISO(new Date());
-  const caja = g.ventas.filter(v => (v.vendido_en || "").slice(0, 10) === hoy).reduce((a, v) => a + v.total, 0);
-  const r = alRuta();
-  const tabs = lista.map((x, k) => {
-    const v = alVendidos(fecha, k), fue = alYaSalio(al.dia, k);
-    const asi = alAsientos(alPlano(x));
-    const porClase = ["CO", "CA"].map(c => { const tot = asi.filter(a => a.clase === c); if (!tot.length) return ""; return (tot.length - tot.filter(a => v.has(a.n)).length) + " " + c; }).filter(Boolean);
-    const lleno = v.size >= asi.length;
-    const txt = fue ? "Ya salió" : lleno ? "Completo" : porClase.join(", ") + " libres";
-    const coche = x.coche ? `Coche ${x.coche}` : x.habitual ? `A confirmar (suele ir el ${x.habitual})` : "Coche a confirmar";
-    return `<button type="button" class="al-tab ${k === al.dep ? "on" : ""}" ${fue || !sirve(k) ? "disabled" : ""} aria-pressed="${k === al.dep}" onclick="alSalida(${k})" aria-label="${alHH(x.h)}, ${trEsc(x.cod)}, ${coche}, ${txt}">
-      <span class="al-tab-in"><b class="al-d">${alHH(x.h)}</b><span class="al-tab-t"><span>${trEsc(x.cod)}${x.dur ? `, llega ${alHH(x.h + x.dur)}` : ""}</span><span class="al-tab-c ${x.coche ? "" : "conf"}">${coche}</span><span class="al-tab-l">${txt}</span></span></span></button>`;
-  }).join("");
-
-  const pisos = pl.pisos.map((p, pi) => {
-    const nf = p.filas.length, ultimo = pi === pl.pisos.length - 1, cama = p.clase === "CA";
-    const usa4 = p.filas.some(f => f[3] != null);
-    let celdas = "";
-    p.filas.forEach((f, fi) => f.forEach((n, pos) => {
-      if (n == null) return;
-      const v = vend.has(n), on = !v && n === al.sel;
-      celdas += `<button type="button" class="al-as ${cama ? "cama" : nf >= 12 ? "chico" : ""} ${v ? "vendido" : on ? "elegido" : ""}" style="grid-column:${nf - fi};grid-row:${pos + 1}"
-        ${v ? "disabled" : ""} aria-pressed="${on}" aria-label="Asiento ${n}${v ? ", vendido" : on ? ", elegido" : ", libre"}" onclick="alAsiento(${n})"><i aria-hidden="true"></i>${n}</button>`;
-    }));
-    if (ultimo) celdas += `<div class="al-cel lleno" style="grid-column:${nf + 1};grid-row:1/3"><i class="ti ti-steering-wheel"></i>Chofer</div>
-      <div class="al-cel" style="grid-column:${nf + 1};grid-row:4/6">Puerta</div>`;
-    const ancho = cama ? 64 : nf >= 12 ? 40 : 48, alto = cama ? 50 : 42;
-    const libres = p.filas.flat().filter(n => n != null && !vend.has(n)).length;
-    return `<div class="al-piso">
-      <div class="al-piso-t"><h3 class="al-d">${pl.pisos.length > 1 ? p.nombre : "Asientos"}</h3><span class="al-sub">${AL_CLASES[p.clase]}, Gs. ${fmtNum(sv.precios[p.clase])}</span><b>${libres} libres</b></div>
-      <div class="al-scroll"><div class="al-coche">
-        <div class="al-grid" style="grid-template-columns:repeat(${nf}, ${ancho}px)${ultimo ? " 58px" : ""};grid-template-rows:${alto}px ${alto}px 14px ${usa4 ? alto + "px" : "0"} ${alto}px">${celdas}</div>
-        <div class="al-parabrisas" aria-hidden="true"></div>
-      </div></div>
-    </div>`;
-  }).join("");
-  const parados = pl.parados ? `<button type="button" class="al-parado ${al.sel === "P" ? "on" : ""}" ${paradosQuedan ? "" : "disabled"} aria-pressed="${al.sel === "P"}" onclick="alAsiento('P')">
-      <i class="ti ti-man"></i><span>Pasaje parado</span><small>${paradosQuedan ? `quedan ${paradosQuedan} de ${pl.parados}` : "no quedan"}</small></button>` : "";
-
-  content.innerHTML = `
-  <div class="al ${animar ? "al-entra" : ""}" id="al-raiz">
-    <header class="al-cab">
-      <div class="al-marca">
-        ${AL_LOGO}
-        <span class="al-d al-marca-t">Alpha</span>
-        <span class="al-maqueta">Maqueta</span>
-      </div>
-      <div class="al-viaje">
-        <span class="al-d">${alOrigen()}</span>
-        <button type="button" class="al-redondo" onclick="alInvertir()" aria-label="Dar vuelta: de ${alDestino()} a ${alOrigen()}" title="Dar vuelta el viaje"><i class="ti ti-arrows-exchange"></i></button>
-        <span class="al-d">${alDestino()}</span>
-      </div>
-      <div class="al-caja">
-        <div><span>Caja de hoy (prueba)</span><b class="al-d">Gs. ${fmtNum(caja)}</b></div>
-        ${g.ventas.length ? `<button type="button" class="al-link" onclick="alBorrar()">Borrar ventas de prueba</button>` : ""}
-      </div>
-    </header>
-    <div class="al-filtros">
-      ${alChipsCorredores()}
-      <div class="al-dias" role="group" aria-label="Día del viaje">${alChipsDias()}</div>
-    </div>
-    ${alChipsLado()}
-
-    <div class="al-salidas" role="group" aria-label="Salidas del ${alDiaTxt(fechaD)}">${tabs}</div>
-    <p class="al-nota">${alDiaTxt(fechaD)}. ${alFuenteTxt(r)}${sv.precios.real ? "" : " Precios de ejemplo."}${r.tipo === "internacional" ? " Viaje internacional: se piden los datos para migraciones." : ""}</p>
-
-    <div class="al-cuerpo">
-      <section class="al-escena" aria-labelledby="al-coche-t">
-        <div class="al-cartel" aria-hidden="true">${trEsc(alDestino().toUpperCase())}</div>
-        <div class="al-contenido">
-          <div class="al-esc-cab">
-            <div><h2 id="al-coche-t" class="al-d">${sv.coche ? "Coche " + trEsc(sv.coche) : "Coche a confirmar"}</h2>
-              <span class="al-sub">${trEsc(sv.coche ? sv.modelo : sv.habitual ? `Suele ir el ${sv.habitual}${sv.habitual_modelo ? " (" + sv.habitual_modelo + ")" : ""}` : "Todavía sin coche")} · ${trEsc(sv.cod)}, sale ${alHH(sv.h)}${sv.dur ? `, ${alDur(sv.dur)} de viaje` : ""}</span>
-              ${sv.tripulacion.length ? `<span class="al-trip"><i class="ti ti-steering-wheel"></i> ${sv.tripulacion.map(trEsc).join(" y ")}</span>` : ""}
-              ${sv.coche || sv.habitual ? `<label class="al-plano-sel"><span>Plano</span><select onchange="alCambiarPlano(this.value)" aria-label="Plano de asientos de este coche">${Object.keys(AL_PLANOS).map(k => `<option value="${k}" ${k === sv.plano ? "selected" : ""}>${AL_PLANO_TXT[k] || k}</option>`).join("")}</select></label>` : ""}
-            </div>
-            <div class="al-ley">
-              <span><i class="al-ley-c"></i>Libre</span><span><i class="al-ley-c v"></i>Vendido</span><span><i class="al-ley-c e"></i>Elegido</span>
-              ${parados}
-            </div>
-          </div>
-          ${pisos}
-        </div>
-      </section>
-      <aside class="al-panel" id="al-panel" aria-label="Venta del asiento elegido">${alPanel()}</aside>
-    </div>
-  </div>`;
-}
-
-function alPanel() {
-  const sv = alServ(), d = alDescAsiento(al.sel), total = alPrecio(al.sel), intl = alRuta().tipo === "internacional", p = al.p;
-  const con = alConocido(p.doc);
-  const chips = (lista, actual, fn, nombre) => `<div class="al-chips" role="group" aria-label="${nombre}">${lista.map(t =>
-    `<button type="button" class="al-chip ${t[0] === actual ? "on" : ""}" aria-pressed="${t[0] === actual}" onclick="${fn}('${t[0]}')">${t[1]}</button>`).join("")}</div>`;
-  const campo = (id, et, val, extra = "", cls = "") => `<label class="al-campo ${cls}"><span>${et}</span>
-    <input id="al-${id}" autocomplete="off" value="${trEsc(val)}" ${extra} oninput="alCampo('${id}', this)"></label>`;
-  const opciones = (lista, val, vacio) => `<option value="">${vacio}</option>` + lista.map(o => {
-    const [v, t] = Array.isArray(o) ? o : [o, o];
-    return `<option value="${v}" ${v === val ? "selected" : ""}>${t}</option>`;
-  }).join("");
-  const hint = con ? `Ya viajó ${con.viajes} ${con.viajes === 1 ? "vez" : "veces"} con ustedes` : intl ? "Con el documento se completan los datos si ya viajó" : "Con la cédula se completa el nombre si ya viajó";
-  const datos = intl ? `
-    <div class="al-mig">
-      <div class="al-mig-t"><b>Datos para migraciones</b><span>Van a la lista de pasajeros del viaje internacional</span></div>
-      <div class="al-fila">
-        <label class="al-campo"><span>Documento</span><select id="al-tipoDoc" onchange="alCampo('tipoDoc', this)">${opciones(AL_TIPODOC, p.tipoDoc, "Elegí")}</select></label>
-        ${campo("doc", "Número", p.doc, 'inputmode="text" onblur="alDocFormato(this)"', "ci")}
-      </div>
-      <p class="al-hint" id="al-hint">${hint}</p>
-      <div class="al-fila">${campo("apellidos", "Apellidos", p.apellidos)}${campo("nombres", "Nombres", p.nombres)}</div>
-      <div class="al-fila">
-        <label class="al-campo"><span>Sexo</span><select id="al-sexo" onchange="alCampo('sexo', this)">${opciones([["F", "Femenino"], ["M", "Masculino"]], p.sexo, "Elegí")}</select></label>
-        <label class="al-campo"><span>Fecha de nacimiento</span><input id="al-nac" type="date" value="${trEsc(p.nac)}" onchange="alCampo('nac', this)"></label>
-      </div>
-      <div class="al-fila">
-        <label class="al-campo"><span>Nacionalidad</span><select id="al-nacionalidad" onchange="alCampo('nacionalidad', this)">${opciones(AL_NACION, p.nacionalidad, "Elegí")}</select></label>
-        <label class="al-campo"><span>País donde vive</span><select id="al-residencia" onchange="alCampo('residencia', this)">${opciones(AL_PAISES, p.residencia, "Elegí")}</select></label>
-      </div>
-    </div>` : `
-    <div class="al-fila">
-      ${campo("doc", "Cédula", p.doc, 'inputmode="numeric" placeholder="Número" onblur="alDocFormato(this)"', "ci")}
-      ${campo("nombre", "Nombre y apellido", p.nombre, 'placeholder="Como figura en la cédula"')}
-    </div>
-    <p class="al-hint" id="al-hint">${hint}</p>`;
-  return `
-    <div class="al-elegido">
-      <div class="al-num ${d ? "" : "vacio"} ${d && d.parado ? "parado" : ""}"><span class="al-d">${d ? (d.parado ? "P" : al.sel) : "?"}</span></div>
-      <div class="al-elegido-t">
-        <b class="al-d">${d ? d.piso : "Sin asiento"}</b>
-        <span>${d ? d.pos : "Tocá un asiento libre en el coche"}</span>
-        <small>${d ? d.tipo : ""}</small>
-      </div>
-    </div>
-    <div class="al-linea">
-      <b class="al-d">${alHH(sv.h)}</b><i aria-hidden="true"></i><b class="al-d der">${sv.dur ? alHH(sv.h + sv.dur) : "—"}</b>
-      <span>${alOrigen()}</span><span class="cen">${sv.dur ? alDur(sv.dur) : trEsc(sv.cod)}</span><span class="der">${alDestino()}</span>
-    </div>
-    ${datos}
-    ${chips(AL_TARIFAS, al.tarifa, "alTarifa", "Tarifa")}
-    ${chips(AL_PAGOS, al.pago, "alPago", "Forma de pago")}
-    ${al.pago === "efectivo" ? `
-    <div class="al-vuelto">
-      <label class="al-campo"><span>Recibe</span>
-        <input id="al-recibe" inputmode="numeric" autocomplete="off" value="${al.recibe ? fmtNum(+al.recibe) : ""}" placeholder="${fmtNum(Math.ceil((total + 1) / 50000) * 50000)}" oninput="alRecibe(this)"></label>
-      <div class="al-vuelto-t"><span>Vuelto</span><b class="al-d" id="al-vuelto">${alVueltoTxt(total)}</b></div>
-    </div>` : ""}
-    <div class="al-total"><span>Total</span><b class="al-d">Gs. ${fmtNum(total)}</b></div>
-    <button type="button" class="al-cobrar" onclick="alCobrar()" ${d ? "" : "disabled"}>
-      <span class="al-cobrar-in"><span class="al-d">Cobrar e imprimir</span><kbd>F9</kbd></span>
-    </button>
-    <p class="al-aviso" id="al-aviso" role="status">${trEsc(al.aviso)}</p>`;
-}
-function alVueltoTxt(total) {
-  const r = +al.recibe || 0;
-  if (!r) return "—";
-  return r >= total ? fmtNum(r - total) : "faltan " + fmtNum(total - r);
-}
-function alRepintarPanel() { const p = document.getElementById("al-panel"); if (p) p.innerHTML = alPanel(); }
-function alAvisoLimpio() { if (al.aviso) { al.aviso = ""; const a = document.getElementById("al-aviso"); if (a) a.textContent = ""; } }
-
-function alCambiarRuta(c) { if (c === al.cor) return; al.cor = c; al.lado = "ida"; al.dep = 0; al.sel = null; al.aviso = ""; alPintar(true); }
-function alLado(l) { if (l === al.lado) return; al.lado = l; al.dep = 0; al.sel = null; al.aviso = ""; alPintar(true); }
-function alSalida(k) { al.dep = k; al.sel = null; al.aviso = ""; alPintar(true); }
-async function alDia(i) {
-  al.dia = i; al.sel = null; al.aviso = ""; al.dep = 0;
-  if (!al.datos[alISO(alFechaDe(i))]) { al.cargando = true; alPintar(false); await alTraer(); }
-  alPintar(true);
-}
-function alInvertir() { alLado(al.lado === "ida" ? "regreso" : "ida"); }
-function alAsiento(n) { al.sel = n; al.aviso = ""; alPintar(false); }
-function alTarifa(t) { al.tarifa = t; alRepintarPanel(); }
-function alPago(p) { al.pago = p; alRepintarPanel(); }
-function alCampo(id, el) {
-  if (!el.isConnected) return;          // un campo que ya se borró de la pantalla no pisa los datos nuevos
-  let v = el.value;
-  if (["nombre", "apellidos", "nombres"].includes(id)) { v = v.toUpperCase(); el.value = v; }
-  al.p[id] = v;
-  alAvisoLimpio();
-  if (id !== "doc") return;
-  const con = alConocido(v), h = document.getElementById("al-hint");
-  if (con) {
-    const d = con.datos, p = al.p;
-    const poner = (k, val) => { if (val && !p[k]) { p[k] = val; const e = document.getElementById("al-" + k); if (e) e.value = val; } };
-    if ((alRuta()?.tipo === "internacional")) ["apellidos", "nombres", "sexo", "nac", "nacionalidad", "residencia"].forEach(k => poner(k, d[k]));
-    else poner("nombre", d.nombreCompleto || [d.nombres, d.apellidos].filter(Boolean).join(" "));
+  if (dest.pid === a.pid) {
+    // mismo técnico: cambiar el orden
+    const claves = origen.celdas.map(c => c.clave).filter(k => k !== a.clave);
+    const viejo = origen.celdas.findIndex(c => c.clave === a.clave);
+    claves.splice(Math.min(dest.idx, claves.length), 0, a.clave);
+    if (claves.indexOf(a.clave) === viejo) return;
+    ttPost("orden", { personal_id: a.pid, claves }, true);
+    return;
   }
-  if (h) h.textContent = con ? `Ya viajó ${con.viajes} ${con.viajes === 1 ? "vez" : "veces"} con ustedes` : (alRuta()?.tipo === "internacional") ? "Con el documento se completan los datos si ya viajó" : "Con la cédula se completa el nombre si ya viajó";
+  ttElegir(x, y, `${que} → ${nombre(dest.pid)}`, [
+    { txt: `Pasársela (se la saco a ${nombre(a.pid)})`, ic: "arrow-right", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "pasar" }) },
+    { txt: "Que la hagan los dos", ic: "users", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "sumar" }) },
+  ]);
 }
-function alDocFormato(inp) {
-  // La cédula paraguaya con puntos; pasaportes y otros documentos se dejan como están
-  if (!inp.isConnected || al.p.tipoDoc !== "CI") return;
-  const d = inp.value.replace(/\D/g, "");
-  al.p.doc = d ? fmtNum(+d) : "";
-  inp.value = al.p.doc;
+// Un menú chiquito donde se soltó la pieza
+function ttElegir(x, y, titulo, opciones) {
+  document.querySelector(".tt-menu")?.remove();
+  const m = document.createElement("div");
+  m.className = "tt-menu";
+  m.setAttribute("role", "menu");
+  m.innerHTML = `<b>${ttEsc(titulo)}</b>${opciones.map((o, i) => `<button type="button" role="menuitem" data-i="${i}" class="${o.peligro ? "peligro" : ""}"><i class="ti ti-${o.ic}"></i> ${ttEsc(o.txt)}</button>`).join("")}<button type="button" class="cancelar">Cancelar</button>`;
+  document.body.appendChild(m);
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(8, Math.min(x - 20, window.innerWidth - r.width - 8)) + "px";
+  m.style.top = Math.max(8, Math.min(y + 8, window.innerHeight - r.height - 8)) + "px";
+  const cerrar = () => { m.remove(); document.removeEventListener("pointerdown", afuera, true); document.removeEventListener("keydown", esc); };
+  const afuera = e => { if (!m.contains(e.target)) cerrar(); };
+  const esc = e => { if (e.key === "Escape") cerrar(); };
+  setTimeout(() => { document.addEventListener("pointerdown", afuera, true); document.addEventListener("keydown", esc); }, 0);
+  m.querySelectorAll("button[data-i]").forEach(b => b.onclick = () => { cerrar(); opciones[+b.dataset.i].fn(); });
+  m.querySelector(".cancelar").onclick = cerrar;
+  m.querySelector("button")?.focus();
 }
-function alRecibe(inp) {
-  if (!inp.isConnected) return;
-  const d = inp.value.replace(/\D/g, "");
-  al.recibe = d;
-  inp.value = d ? fmtNum(+d) : "";
-  const v = document.getElementById("al-vuelto");
-  if (v) v.textContent = alVueltoTxt(alPrecio(al.sel));
-}
-function alBorrar() {
-  if (!confirm("¿Borrar todas las ventas de prueba de Alpha guardadas en esta computadora?")) return;
-  try { localStorage.removeItem("alpha_maqueta_v2"); } catch (e) {}
-  al.sel = null; al.aviso = "";
-  alPintar(false);
-  toast("Ventas de prueba borradas", "success");
+async function ttPost(accion, cuerpo, callado) {
+  const r = await ttJson(`/api/taller/tablero/${accion}`, "POST", { fecha: tt.d.fecha, ...cuerpo });
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); ttCargar(); return; }
+  if (!callado) toast(r.msg, "success");
+  ttCargar();
 }
 
-function alCobrar() {
-  // Se suelta el campo que se estaba escribiendo antes de vaciar el formulario,
-  // así su "al salir" no vuelve a poner el dato viejo en la venta siguiente
-  if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#al-raiz")) document.activeElement.blur();
-  const d = alDescAsiento(al.sel), p = al.p, intl = alRuta().tipo === "internacional";
-  const falta = [];
-  if (!d) falta.push("el asiento");
-  if (!String(p.doc).trim()) falta.push(intl ? "el documento" : "la cédula");
-  if (intl) {
-    if (!p.tipoDoc) falta.push("el tipo de documento");
-    if (!p.apellidos.trim()) falta.push("los apellidos");
-    if (!p.nombres.trim()) falta.push("los nombres");
-    if (!p.sexo) falta.push("el sexo");
-    if (!p.nac) falta.push("la fecha de nacimiento");
-    if (!p.nacionalidad) falta.push("la nacionalidad");
-    if (!p.residencia) falta.push("el país donde vive");
-  } else if (!p.nombre.trim()) falta.push("el nombre");
-  const total = alPrecio(al.sel);
-  if (falta.length) { al.aviso = (falta.length > 1 ? "Faltan " : "Falta ") + falta.join(", ").replace(/, ([^,]*)$/, " y $1") + "."; alRepintarPanel(); return; }
-  if (al.pago === "efectivo" && al.recibe && +al.recibe < total) { al.aviso = "Lo que recibe no alcanza: faltan Gs. " + fmtNum(total - al.recibe) + "."; alRepintarPanel(); return; }
-  const g = alGuardado(), sv = alServ(), fechaD = alFechaDe(al.dia), ahora = new Date();
-  const v = {
-    nro: g.nro, fecha: alISO(fechaD), servicio: sv.clave, asiento: al.sel,
-    origen: sv.origen_nombre, destino: sv.llega_nombre, tramo: sv.cod, coche: sv.coche || "",
-    nombre: alNombreCompleto(p).trim().toUpperCase(), doc: String(p.doc).trim(),
-    tipoDoc: (AL_TIPODOC.find(t => t[0] === p.tipoDoc) || AL_TIPODOC[0])[1],
-    mig: intl ? { apellidos: p.apellidos, nombres: p.nombres, sexo: p.sexo, nac: p.nac, nacionalidad: p.nacionalidad, residencia: p.residencia } : null,
-    total, tarifa: al.tarifa, pago: al.pago, recibe: al.pago === "efectivo" ? (+al.recibe || total) : null,
-    vendido_en: alISO(ahora) + "T" + String(ahora.getHours()).padStart(2, "0") + ":" + String(ahora.getMinutes()).padStart(2, "0"),
-    vendedor: (document.getElementById("user-name")?.textContent || "").trim(),
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHOFERES DE LÍNEA Y TURISMO: sus usuarios para la app del celular
+// ═══════════════════════════════════════════════════════════════════════════
+// "Aviso enviado a 5 choferes · 3 todavía sin la app (Pérez, Gómez…)"
+function avisosTxt(a) {
+  if (!a) return "";
+  const sin = a.sin_app || [];
+  const p = [];
+  if (a.avisados) p.push(`Aviso enviado a ${a.avisados} chofer${a.avisados === 1 ? "" : "es"}`);
+  if (sin.length) p.push(`${sin.length} todavía sin la app${sin.length <= 3 ? ` (${sin.join(", ")})` : ""}`);
+  return p.join(" · ");
+}
+
+const cae = { d: null, filtro: "", ver: "todos", grupo: "linea" };
+async function caeAbrir() {
+  rvModal({
+    titulo: "Choferes y la app", icono: "device-mobile", ancho: 900, clase: "cae-modal",
+    sub: "Quién ya tiene la app en el celular (lo confirman ellos con un botón), quién recibe los avisos, y los usuarios de los choferes de línea y turismo.",
+    cuerpo: `<div id="cae-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
+    pie: `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;width:100%">
+      <button class="btn btn-ghost" onclick="window.open('/mi','_blank')"><i class="ti ti-eye"></i> Ver la app como un chofer</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="caeCopiarFaltan(this)"><i class="ti ti-message-exclamation"></i> Copiar quiénes faltan</button>
+        <button class="btn btn-ghost" onclick="caeCopiar(this)"><i class="ti ti-copy"></i> Copiar accesos</button>
+        <button class="btn btn-primary" id="cae-crear" onclick="caeCrear(this)" hidden><i class="ti ti-user-plus"></i> Crear usuarios</button>
+      </div></div>`,
+  });
+  await caeCargar();
+}
+async function caeCargar() {
+  const r = await api("/api/choferes_app/accesos").catch(e => ({ ok: false, msg: e.message }));
+  if (!r || !r.ok) { $("#cae-cuerpo").innerHTML = `<div class="empty">${trEsc((r && r.msg) || "No se pudo cargar")}</div>`; return; }
+  r.corp = r.corp || [];
+  cae.d = r;
+  const b = $("#cae-crear");
+  if (b) { b.hidden = !r.faltan.length; b.innerHTML = `<i class="ti ti-user-plus"></i> Crear ${r.faltan.length} usuario${r.faltan.length === 1 ? "" : "s"}`; }
+  caePintar();
+}
+function caeDelGrupo() {
+  const r = cae.d;
+  return cae.grupo === "corp" ? r.corp : r.choferes.filter(c => c.activo);
+}
+function caeFiltrados() {
+  const f = cae.filtro.trim().toLowerCase();
+  return caeDelGrupo().filter(c => (!f || (c.nombre + " " + c.usuario + " " + (c.alias || "")).toLowerCase().includes(f))
+    && (cae.ver === "todos" || (cae.ver === "conf" ? c.confirmado_el : cae.ver === "sin_conf" ? !c.confirmado_el : !c.avisos)));
+}
+function caePintar() {
+  const r = cae.d, todos = caeDelGrupo();
+  const conf = todos.filter(c => c.confirmado_el).length, av = todos.filter(c => c.avisos).length;
+  const pct = todos.length ? Math.round(conf / todos.length * 100) : 0;
+  const chip = (k, t) => `<button class="chip ${cae.ver === k ? "activo" : ""}" onclick="cae.ver='${k}';caePintar()">${t}</button>`;
+  const seg = (k, t, n) => `<button class="${cae.grupo === k ? "on" : ""}" onclick="cae.grupo='${k}';cae.ver='todos';caePintar()">${t} <span>${n}</span></button>`;
+  $("#cae-cuerpo").innerHTML = `
+    <div class="cae-seg">${seg("linea", "Línea y turismo", r.activos)}${seg("corp", "Corporativos", r.corp.length)}</div>
+    <div class="cae-kpis">
+      <div class="cae-kpi-conf"><b>${conf}<small> de ${todos.length}</small></b><span>confirmaron que tienen la app</span>
+        <i class="cae-barra"><i style="width:${pct}%"></i></i></div>
+      <div><b>${av}</b><span>reciben los avisos en el celular</span></div>
+      <div><b>${todos.length - conf}</b><span>todavía no confirmaron</span></div>
+    </div>
+    ${cae.grupo === "linea" && r.faltan.length ? `<div class="cae-faltan"><i class="ti ti-user-question"></i><div><b>Sin usuario todavía:</b>
+      ${r.faltan.slice(0, 12).map(x => trEsc(x.nombre)).join(" · ")}${r.faltan.length > 12 ? ` y ${r.faltan.length - 12} más` : ""}.
+      <span>Tocá «Crear usuarios»: a cada uno se le arma usuario y clave con su nombre de pila.</span></div></div>` : ""}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 10px">
+      <input class="cae-buscar" placeholder="Buscar chofer…" value="${trEsc(cae.filtro)}" oninput="cae.filtro=this.value;caePintarLista()">
+      ${chip("todos", "Todos")}${chip("sin_conf", "Sin confirmar")}${chip("conf", "Confirmaron")}${chip("sin_av", "Sin avisos")}
+    </div>
+    <div id="cae-lista">${caeFilas(caeFiltrados())}</div>`;
+}
+function caePintarLista() { $("#cae-lista").innerHTML = caeFilas(caeFiltrados()); }
+function caeFecha(f) { return f ? trEsc(String(f).slice(8, 10) + "/" + String(f).slice(5, 7) + " " + String(f).slice(11, 16)) : ""; }
+function caeFilas(lista) {
+  if (!lista.length) return `<div class="empty" style="padding:28px">Nadie con ese filtro</div>`;
+  const linea = cae.grupo === "linea";
+  return `<div class="table-wrap cae-tabla"><table><thead><tr><th>Chofer</th><th>Usuario${linea ? " y clave" : ""}</th><th>Tiene la app</th><th>Avisos</th>${linea ? `<th>Servicios de ${trEsc(cae.d.mes_txt)}</th>` : ""}<th>Último ingreso</th><th></th></tr></thead><tbody>
+    ${lista.map(c => `<tr>
+      <td><b>${trEsc(c.nombre)}</b>${c.alias ? `<div class="cae-alias" title="También figura así en las planillas">también: ${trEsc(c.alias)}</div>` : ""}</td>
+      <td><code>${trEsc(c.usuario)}</code></td>
+      <td>${c.confirmado_el ? `<span class="cae-on"><i class="ti ti-circle-check"></i> Sí · ${caeFecha(c.confirmado_el)}</span>${c.modo ? `<div class="cae-alias">${trEsc(c.modo)}</div>` : ""}` : `<span class="cae-falta">Falta</span>`}</td>
+      <td>${c.avisos ? `<span class="cae-on"><i class="ti ti-bell-ringing"></i> Activos</span>` : `<span class="cae-off">Sin activar</span>`}</td>
+      ${linea ? `<td style="text-align:center">${c.servicios_mes}</td>` : ""}
+      <td style="font-size:12px;color:var(--muted)">${c.ultimo_acceso ? trEsc(String(c.ultimo_acceso).slice(0, 16).replace("T", " ")) : "nunca"}</td>
+      <td style="white-space:nowrap;text-align:right">
+        ${linea ? `<button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
+        <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>` : ""}
+        <button class="icon-btn" title="¿Por qué no le aparece su servicio?" onclick="caeRevisar(${c.id})"><i class="ti ti-zoom-question"></i></button>
+        <button class="icon-btn" title="Mandarle un aviso de prueba" onclick="caeProbar(${c.id}, this)"><i class="ti ti-bell"></i></button>
+        ${linea ? `<button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>` : ""}
+      </td></tr>`).join("")}</tbody></table></div>`;
+}
+// Para recordarles en el grupo a los que todavía no confirmaron
+async function caeCopiarFaltan() {
+  const faltan = caeDelGrupo().filter(c => !c.confirmado_el);
+  if (!faltan.length) { toast("Ya confirmaron todos", "success"); return; }
+  const txt = `*Falta confirmar la app* 📲\nTodavía no tocaron «Sí, ya la tengo»:\n\n` + faltan.map(c => `• ${c.nombre}`).join("\n") +
+    `\n\nEntrá a la app y tocá el botón de arriba. Si no la tenés instalada, pedila en la oficina.`;
+  try { await navigator.clipboard.writeText(txt); toast(`Copiado: ${faltan.length} chofer${faltan.length === 1 ? "" : "es"} sin confirmar`, "success"); }
+  catch (e) { toast("No se pudo copiar", "error"); }
+}
+async function caeCrear(btn) {
+  const n = cae.d.faltan.length;
+  if (!confirm(`Se van a crear ${n} usuario${n === 1 ? "" : "s"} con rol «Chofer de línea y turismo».\nUsuario y clave: el nombre de pila en minúscula (si se repite, con la inicial del apellido).\n\n¿Crear?`)) return;
+  btn.disabled = true;
+  const r = await fetch("/api/choferes_app/crear", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(x => x.json()).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo crear", "error"); return; }
+  toast(`${r.creados.length} usuario${r.creados.length === 1 ? "" : "s"} creado${r.creados.length === 1 ? "" : "s"}`, "success");
+  await caeCargar();
+}
+function caeAlias(id) {
+  const c = cae.d.choferes.find(x => x.id === id);
+  const o = rvModal({
+    titulo: trEsc(c.nombre), icono: "pencil", ancho: 480,
+    sub: "Si en la planilla de tráfico o de turismo este chofer figura escrito de otra forma (o con un error), anotalo acá para que le aparezcan sus servicios.",
+    cuerpo: `<div class="emp-campo"><label>También figura como (uno por renglón)</label>
+      <textarea id="cae-alias" rows="4" style="width:100%" placeholder="Ej: FERNANDDEZ LIDER">${trEsc((c.alias || "").split(";").map(x => x.trim()).filter(Boolean).join("\n"))}</textarea></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" id="cae-alias-ok">Guardar</button>`,
+  });
+  o.querySelector("#cae-alias-ok").onclick = async () => {
+    const r = await fetch(`/api/choferes_app/${id}/alias`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alias: $("#cae-alias").value }) }).then(x => x.json()).catch(() => null);
+    if (!r || !r.ok) { toast("No se pudo guardar", "error"); return; }
+    o.remove(); toast("Guardado", "success"); caeCargar();
   };
-  g.ventas.push(v); g.nro += 1;
-  alGuardar(g);
-  alImprimir(v, sv, d, fechaD);
-  toast(`Boleto ${String(v.nro).padStart(7, "0")} vendido: ${v.asiento === "P" ? "parado" : "asiento " + v.asiento}`, "success");
-  al.p = AL_PVACIO(); al.recibe = ""; al.tarifa = "general"; al.pago = "efectivo"; al.sel = null; al.aviso = "";
-  alPintar(false);
+}
+async function caeProbar(id, btn) {
+  btn.disabled = true;
+  const r = await fetch(`/api/choferes_app/avisar_prueba/${id}`, { method: "POST" }).then(x => x.json()).catch(() => null);
+  btn.disabled = false;
+  toast(r && r.ok ? "Aviso de prueba enviado" : ((r && r.msg) || "No se pudo mandar"), r && r.ok ? "success" : "info");
+}
+async function caeClave(id) {
+  const c = cae.d.choferes.find(x => x.id === id);
+  if (!confirm(`¿Volver la clave de ${c.nombre} a «${c.usuario}»?`)) return;
+  const r = await fetch(`/api/choferes_app/${id}/clave`, { method: "POST" }).then(x => x.json()).catch(() => null);
+  toast(r && r.ok ? `La clave quedó: ${r.clave}` : "No se pudo", r && r.ok ? "success" : "error");
+}
+// Texto para mandar por WhatsApp: cada chofer con su usuario y clave
+async function caeCopiar(btn) {
+  const r = cae.d;
+  if (!r || !r.choferes.length) { toast("Todavía no hay usuarios creados", "info"); return; }
+  const txt = `*App de choferes · La Santaniana*\nEntrá desde el celular a ${location.origin} con tu usuario y clave:\n\n` +
+    r.choferes.filter(c => c.activo).map(c => `• ${c.nombre}: usuario *${c.usuario}* · clave *${c.usuario}*`).join("\n") +
+    `\n\nAdentro tocá «Activar» para que te llegue tu servicio al celular.`;
+  try { await navigator.clipboard.writeText(txt); toast("Accesos copiados: pegalos en el grupo de WhatsApp", "success"); }
+  catch (e) { toast("No se pudo copiar", "error"); }
 }
 
-// ─── El boleto: 3 copias en papel de 80 mm, una por hoja (la impresora corta entre una y otra) ───
-function alBoletoHTML(v, sv, d, fechaD) {
-  const e = trEsc;
-  const origen = v.origen || sv.origen_nombre, destino = v.destino || sv.llega_nombre;
-  const nro = "001-001-" + String(v.nro).padStart(7, "0");
-  const sale = alHH(sv.h), llega = sv.dur ? alHH(sv.h + sv.dur) : "";
-  const servicio = `Servicio ${sv.cod}${v.coche ? ", coche " + v.coche : ""}`;
-  const dLlega = new Date(fechaD); dLlega.setDate(dLlega.getDate() + Math.floor((sv.h + (sv.dur || 0)) / 1440));
-  const otroDia = sv.dur && dLlega.getDate() !== fechaD.getDate() ? AL_DIAS[dLlega.getDay()] + " " + dLlega.getDate() : "";
-  const tarifa = (AL_TARIFAS.find(t => t[0] === v.tarifa) || AL_TARIFAS[0])[1].toLowerCase();
-  const pago = (AL_PAGOS.find(p => p[0] === v.pago) || AL_PAGOS[0])[1].toLowerCase();
-  const [fy, fm, fdd] = v.vendido_en.slice(0, 10).split("-");
-  const emitido = `${fdd}/${fm}/${fy} ${v.vendido_en.slice(11, 16)}`;
-  const vendedor = v.vendedor ? `Vendió ${e(v.vendedor)}.` : "";
-  const parado = v.asiento === "P";
-  let mapa = "";
-  if (!parado) {
-    const pl = AL_PLANOS[sv.plano], piso = pl.pisos[d.a.piso], nf = piso.filas.length;
-    piso.filas.forEach((f, fi) => f.forEach((n, pos) => {
-      if (n != null) mapa += `<i style="grid-column:${nf - fi};grid-row:${pos + 1}" class="${n === v.asiento ? "si" : ""}"></i>`;
-    }));
-    mapa = `<div class="mapa"><div class="g" style="grid-template-columns:repeat(${nf},6px)">${mapa}</div><span>frente →</span></div>`;
+
+// Informe completo de un coche en PDF: todo lo que se le hizo, con sus números.
+// Sin fechas, toma toda la historia del coche.
+function informeCoche(vid, desde, hasta) {
+  if (!vid) { toast("Elegí un coche", "error"); return; }
+  const p = new URLSearchParams();
+  if (desde) p.set("desde", desde);
+  if (hasta) p.set("hasta", hasta);
+  window.open(`/api/vehiculos/${vid}/informe.pdf${p.toString() ? "?" + p : ""}`, "_blank");
+}
+
+
+// ¿Por qué no le aparece su servicio? Revisa hoy, mañana y pasado, tráfico y turismo
+const CAE_EST = {
+  ok: ["Le aparece", "#1F8A5B", "circle-check"], sin_publicar: ["Día sin publicar", "#B7791F", "clock-pause"],
+  cambio_sin_publicar: ["Se lo agregó y no se republicó", "#B7791F", "refresh-alert"],
+  hay_cambios: ["Ve lo publicado (hay cambios sin publicar)", "#1E5A96", "info-circle"],
+  escrito_distinto: ["Está escrito distinto en la planilla", "#DC2641", "user-question"],
+  no_figura: ["No figura en la planilla", "#5B6B7F", "minus"],
+};
+async function caeRevisar(id) {
+  const o = rvModal({ titulo: "¿Por qué no le aparece?", icono: "zoom-question", ancho: 640,
+    cuerpo: `<div id="caer"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+          <button class="btn btn-primary" onclick="window.open('/mi?u=${id}','_blank')"><i class="ti ti-eye"></i> Ver su app</button>` });
+  const r = await api(`/api/choferes_app/${id}/revisar?dias=3`).catch(e => ({ ok: false, msg: e.message }));
+  if (!r || !r.ok) { o.querySelector("#caer").innerHTML = `<div class="empty">${trEsc((r && r.msg) || "No se pudo revisar")}</div>`; return; }
+  const dias = r.dias.map(d => {
+    const [t, col, ic] = CAE_EST[d.estado] || CAE_EST.no_figura;
+    return `<div class="caer-dia">
+      <div class="caer-cab"><b>${trEsc(d.dia.charAt(0).toUpperCase() + d.dia.slice(1))}</b><span>${d.tipo === "internacional" ? "Internacional" : "Nacional"} · ${d.publicado ? `publicado (versión ${d.version})` : "sin publicar"}</span>
+        <em style="color:${col}"><i class="ti ti-${ic}"></i> ${t}</em></div>
+      ${d.en_planilla.length ? `<div class="caer-l"><span>En la planilla:</span> ${d.en_planilla.map(trEsc).join(" · ")}</div>` : ""}
+      ${d.en_lo_publicado.length ? `<div class="caer-l"><span>En lo publicado (lo que ve él):</span> ${d.en_lo_publicado.map(trEsc).join(" · ")}</div>` : ""}
+      ${d.parecidos.length ? `<div class="caer-l"><span>Parecidos en la planilla:</span> <b>${d.parecidos.map(trEsc).join(" · ")}</b></div>` : ""}
+      ${d.que_hacer ? `<div class="caer-q">${trEsc(d.que_hacer)}</div>` : ""}</div>`;
+  }).join("");
+  o.querySelector("#caer").innerHTML = `
+    <div class="caer-yo"><b>${trEsc(r.nombre)}</b> · usuario <code>${trEsc(r.usuario)}</code> · ${r.celulares_con_avisos ? "avisos activos" : "sin avisos en el celular"}
+      <div>Lo busca en las planillas como: ${r.como_lo_busca.map(x => `<code>${trEsc(x)}</code>`).join(" ")}${r.alias ? "" : " · sin otros nombres cargados"}</div></div>
+    ${r.avisos.map(a => `<div class="caer-q" style="margin-bottom:10px">${trEsc(a)}</div>`).join("")}
+    ${dias || `<div class="empty" style="padding:20px">No hay tráfico armado para hoy ni los próximos días.</div>`}
+    ${r.turismo.length ? `<div class="caer-dia"><div class="caer-cab"><b>Turismo</b><em style="color:#1F8A5B"><i class="ti ti-circle-check"></i> Le aparece</em></div><div class="caer-l">${r.turismo.map(trEsc).join(" · ")}</div></div>` : ""}
+    ${r.turismo_parecidos.length ? `<div class="caer-dia"><div class="caer-cab"><b>Turismo</b><em style="color:#DC2641"><i class="ti ti-user-question"></i> Escrito distinto</em></div>
+      <div class="caer-l"><span>En la agenda figura:</span> <b>${r.turismo_parecidos.map(trEsc).join(" · ")}</b></div>
+      <div class="caer-q">Si es él, agregá ese nombre en «También figura como» (lápiz en la lista).</div></div>` : ""}`;
+}
+
+
+// ─── Tripulantes: se eligen de la lista de choferes ─────────────────────
+// Al entrar en la casilla aparece un buscador con los choferes que tienen
+// usuario. Elegido de ahí, el nombre queda igual al del usuario y el viaje
+// le aparece en la app seguro. Se puede escribir otro nombre igual (por
+// ejemplo «A CONF»), pero queda marcado: a ese no le llega nada.
+async function trCargarChoferes() {
+  const r = await api("/api/trafico/choferes").catch(() => null);
+  tr.choferes = (r && r.choferes ? r.choferes : []).map(c => ({ ...c, claves: [c.n, c.nombre, ...(c.alias || [])].map(trClaveP).filter(Boolean),
+    busca: trLlano(`${c.n} ${c.nombre} ${(c.alias || []).join(" ")} ${c.usuario}`) }));
+}
+function trLlano(t) { return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase(); }
+function trClaveP(t) { return trLlano(t).replace(/[^A-Z0-9Ñ ]/g, " ").split(/\s+/).filter(Boolean).sort().join(" "); }
+// El mismo criterio que el servidor: igual, o con un segundo nombre / algo de más
+function trEsChofer(nombre, c) {
+  const k = trClaveP(nombre);
+  if (!k) return false;
+  if (c.claves.includes(k)) return true;
+  const tk = new Set(k.split(" ").filter(x => x.length > 1 && !/\d/.test(x)));
+  return c.claves.some(cl => { const tc = cl.split(" "); return tc.length >= 2 && tc.every(x => tk.has(x)) && tk.size - tc.length <= 2; });
+}
+function trChoferDe(nombre) { return (tr.choferes || []).find(c => trEsChofer(nombre, c)) || null; }
+
+function trMarcarTrips() {
+  if (!tr.choferes) return;
+  document.querySelectorAll("#tr-raiz .tr-trip, #tr-raiz .tr-res-trip").forEach(i => {
+    const v = (i.value || "").trim();
+    const ok = !v || /^A ?CONF/i.test(v) || !!trChoferDe(v);
+    i.classList.toggle("sin-usuario", !ok);
+    i.title = ok ? (v ? "Tiene usuario: le aparece en la app" : "") : "No coincide con ningún chofer con usuario: a este no le aparece el viaje en la app";
+  });
+}
+
+function trAbrirCh(input) {
+  if (!trPuede() || input.readOnly) return;
+  if (tr.ch?.input === input) return;
+  trCerrarCh();
+  const caja = document.createElement("div");
+  caja.className = "tr-sug tr-ch";
+  caja.addEventListener("mousedown", e => e.preventDefault());
+  document.body.appendChild(caja);
+  tr.ch = { input, caja, items: [], sel: 0 };
+  if (!tr.choferes) trCargarChoferes().then(() => { trPintarCh(); trMarcarTrips(); });
+  trPintarCh();
+}
+function trUbicarCh() {
+  const s = tr.ch;
+  if (!s) return;
+  const r = s.input.getBoundingClientRect();
+  const w = Math.min(340, window.innerWidth - 16);
+  s.caja.style.width = w + "px";
+  s.caja.style.left = Math.max(8, Math.min(r.left - 8, window.innerWidth - w - 8)) + "px";
+  const alto = s.caja.offsetHeight || 300, abajo = window.innerHeight - r.bottom;
+  if (abajo < alto + 16 && r.top > abajo) { s.caja.style.top = ""; s.caja.style.bottom = (window.innerHeight - r.top + 6) + "px"; }
+  else { s.caja.style.bottom = ""; s.caja.style.top = (r.bottom + 6) + "px"; }
+}
+function trPintarCh() {
+  const s = tr.ch;
+  if (!s) return;
+  const q = trLlano(s.input.value).trim();
+  const palabras = q.split(/\s+/).filter(Boolean);
+  const todos = tr.choferes || [];
+  // Los que ya van en la otra casilla de esta salida, al final
+  const lista = palabras.length
+    ? todos.filter(c => palabras.every(p => c.busca.split(/[\s,]+/).some(w => w.startsWith(p))))
+    : todos;
+  const exacto = q && lista.some(c => trEsChofer(s.input.value, c));
+  s.items = lista.slice(0, 40).map(c => ({ tipo: "ch", c }));
+  if (q && !exacto && !/^A ?CONF/.test(q)) s.items.push({ tipo: "libre", v: s.input.value.trim().toUpperCase() });
+  if (s.sel >= s.items.length) s.sel = Math.max(0, s.items.length - 1);
+  const ini = n => { const p = n.split(","); return ((p[1] || "").trim()[0] || "") + (p[0].trim()[0] || ""); };
+  s.caja.innerHTML = `
+    <div class="tr-sug-cab"><b>Elegí el chofer</b><span>${todos.length} con usuario · al elegirlo de acá le aparece el viaje en su app</span></div>
+    <div class="tr-ch-lista">${s.items.map((it, k) => it.tipo === "ch" ? `
+      <button class="tr-sug-it tr-ch-it ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-ch-av">${trEsc(ini(it.c.nombre))}</span>
+        <span class="tr-sug-txt"><span><b>${trEsc(it.c.nombre)}</b></span>
+          <small>${it.c.corp ? "Corporativo · " : ""}${it.c.app ? `<i class="ti ti-device-mobile-check"></i> tiene la app` : "todavía no confirmó la app"}${it.c.avisos ? " · avisos activos" : ""}</small></span>
+      </button>` : `
+      <button class="tr-sug-it tr-ch-libre ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-ch-av sin"><i class="ti ti-alert-triangle"></i></span>
+        <span class="tr-sug-txt"><span>Poner «${trEsc(it.v)}» igual</span><small>No tiene usuario: no le va a aparecer el viaje en la app</small></span>
+      </button>`).join("") || `<div class="tr-sug-nada">${todos.length ? "Nadie con ese nombre." : "Todavía no hay choferes con usuario."}</div>`}</div>
+    <div class="tr-sug-pie"><kbd>↑</kbd><kbd>↓</kbd> elegir · <kbd>Enter</kbd> poner · <kbd>Esc</kbd> cerrar</div>`;
+  s.caja.querySelectorAll(".tr-sug-it").forEach(b => b.onclick = () => trElegirCh(+b.dataset.k));
+  trUbicarCh();
+}
+function trTeclaCh(e) {
+  const s = tr.ch;
+  if (!s) return false;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = s.items.length;
+    if (n) { s.sel = e.key === "ArrowDown" ? (s.sel + 1) % n : (s.sel - 1 + n) % n; trPintarCh(); s.caja.querySelector(".tr-sug-it.on")?.scrollIntoView({ block: "nearest" }); }
+    return true;
   }
-  const docTxt = v.mig ? `${e(v.tipoDoc)} ${e(v.doc)}` : `CI ${e(v.doc)}`;
-  const cab = `
-    <div class="cab"><img src="${location.origin}/static/logo.png" alt=""><div><b class="n">La Santaniana</b><span>RUC [RUC], timbrado [número]<br>vence [fecha]</span></div></div>
-    <div class="doc"><b>Boleto ${nro}</b><span>${emitido}</span></div>
-    <div class="dia">${alDiaTxt(fechaD)}</div>`;
-  const ruta = (larga) => `
-    <div class="ruta">
-      <i class="p"></i><b class="c">${e(origen.toUpperCase())}</b><b class="h">${sale}</b>
-      ${larga ? `<i class="l"></i><span class="m">${e(servicio)}.${llega ? ` ${otroDia ? `Llega el ${e(otroDia)}; la hora` : "La llegada"} es aproximada.` : ""}</span>` : ""}
-      <i class="p o"></i><b class="c">${e(destino.toUpperCase())}</b><b class="h">${llega}</b>
-    </div>`;
-  const nroAs = (big) => parado
-    ? `<div class="nro ${big ? "big" : ""}"><span>Pasaje</span><b class="par">Parado</b></div>`
-    : `<div class="nro ${big ? "big" : ""}"><span>Asiento</span><b>${v.asiento}</b>${big ? `<span>${e(d.piso.toLowerCase())}</span>` : ""}</div>`;
-  const asiento = (conMapa) => `
-    <div class="as">${nroAs(false)}
-      <div class="as-t"><b>${e(d.piso)}</b><span>${e(d.pos)}</span>${conMapa ? mapa : ""}<small>${e(d.tipo)} · ${e(servicio)}</small></div>
-    </div>`;
-  const pas = `<div class="pas"><b>${e(v.nombre)}</b><span>${docTxt}</span>${v.mig ? `<span>${e(v.mig.nacionalidad)}, nac. ${e(v.mig.nac.split("-").reverse().join("/"))}</span>` : ""}</div>`;
-  const precio = (detalle) => `
-    <div class="pre">
-      <div class="r"><span>${e(d.tipo)}, tarifa ${tarifa}</span><span>${fmtNum(v.total)}</span></div>
-      <div class="t"><b>Total Gs.</b><b class="tg">${fmtNum(v.total)}</b></div>
-      <span class="p">${detalle}</span>
-    </div>`;
-  const pie = (a, b) => `<div class="pie"><b>${a}</b><span>${b}</span></div><div class="maq">Maqueta de Alpha: sin valor fiscal</div>`;
-  const efectivo = v.pago === "efectivo" && v.recibe ? ` Recibió ${fmtNum(v.recibe)}, vuelto ${fmtNum(v.recibe - v.total)}.` : "";
-  const original = `<article>${cab}${ruta(true)}${asiento(true)}${pas}${precio(`Pagó con ${pago}. ${vendedor}`)}
-    <div class="nota">Mostrá este boleto al subir. Presentate [minutos] antes de la salida. Equipaje incluido: [kg].${v.mig ? " Viajá con el mismo documento que figura acá." : ""}</div>${pie("Original", "para el pasajero")}</article>`;
-  const duplicado = `<article>${cab}${ruta(false)}${asiento(false)}${pas}${precio(`Pagó con ${pago}.${efectivo} ${vendedor}`)}${pie("Duplicado", "queda en la caja")}</article>`;
-  const triplicado = `<article class="tri">
-    <div class="doc top"><b class="n">La Santaniana</b><b>Boleto ${String(v.nro).padStart(7, "0")}</b></div>
-    <div class="tri-s">${alDiaTxt(fechaD).split(" de ")[0]}, sale ${sale}<br>${e(servicio)}</div>
-    <div class="as">${nroAs(true)}
-      <div class="as-t mid"><span>Baja en</span><b class="baja">${e(destino.toUpperCase())}</b><small>Sube en ${e(origen)}</small></div></div>
-    ${pas}${pie("Triplicado", "para el guarda")}</article>`;
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Boleto ${nro}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap">
-<style>
-@page{size:80mm auto;margin:0}
-*{box-sizing:border-box}
-html,body{margin:0;background:#fff;color:#000;font-family:Archivo,Arial,sans-serif}
-article{width:80mm;padding:5mm 4mm 3mm;break-after:page;page-break-after:always}
-article:last-child{break-after:auto;page-break-after:auto}
-.cab{display:flex;align-items:center;gap:10px}
-.cab img{width:46px;height:32px;object-fit:contain;filter:grayscale(1) contrast(1.8) brightness(.85)}
-.cab div{display:flex;flex-direction:column;gap:2px}
-.n{font-weight:800;font-size:18px;line-height:1;font-stretch:80%}
-.cab span{font-size:11px;line-height:1.3}
-.doc{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:10px;padding-top:8px;border-top:1.5px dashed #000}
-.doc b{font-size:13px}.doc span{font-size:11px}
-.doc.top{margin-top:0;padding-top:0;border:0}
-.dia{margin-top:6px;font-weight:800;font-size:18px;line-height:1.1;font-stretch:85%}
-.ruta{display:grid;grid-template-columns:12px minmax(0,1fr) auto;column-gap:9px;row-gap:6px;margin-top:8px}
-.ruta .p{width:12px;height:12px;border-radius:50%;background:#000;align-self:center}
-.ruta .p.o{background:#fff;border:3px solid #000}
-.ruta .c{font-weight:800;font-size:25px;line-height:1;font-stretch:68%}
-.ruta .h{font-weight:800;font-size:25px;line-height:1;font-stretch:85%;font-variant-numeric:tabular-nums}
-.ruta .l{width:3px;justify-self:center;align-self:stretch;background:#000}
-.ruta .m{grid-column:2/4;font-size:11px;line-height:1.35}
-.as{display:flex;align-items:stretch;gap:11px;margin-top:10px;padding-top:10px;border-top:1.5px dashed #000}
-.nro{width:76px;flex:0 0 76px;background:#000;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 0 4px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.nro span{font-size:11px;font-weight:700}
-.nro b{font-weight:900;font-size:50px;line-height:.95;font-stretch:80%;font-variant-numeric:tabular-nums}
-.nro b.par{font-size:24px;line-height:1.2;font-stretch:75%}
-.nro.big{width:92px;flex-basis:92px}.nro.big b{font-size:62px}.nro.big b.par{font-size:28px}
-.as-t{display:flex;flex-direction:column;gap:4px;min-width:0}
-.as-t.mid{justify-content:center;gap:2px}
-.as-t > b{font-weight:800;font-size:19px;line-height:1;font-stretch:80%}
-.as-t > span{font-size:12px;font-weight:600}
-.as-t small{font-size:11px}
-.as-t .baja{font-weight:900;font-size:34px;line-height:.95;font-stretch:64%}
-.mapa{display:flex;align-items:center;gap:4px}
-.mapa > span{font-size:10.5px;font-weight:600}
-.g{display:grid;grid-template-rows:6px 6px 3px 6px 6px;gap:2px;padding:3px;border:1.25px solid #000;border-radius:3px 8px 8px 3px}
-.g i{width:6px;height:6px;border:1px solid #000}
-.g i.si{background:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.pas{display:flex;flex-direction:column;gap:2px;margin-top:10px;padding-top:8px;border-top:1.5px dashed #000}
-.pas b{font-weight:800;font-size:16px}.pas span{font-size:12.5px;font-weight:600}
-.pre{display:flex;flex-direction:column;gap:4px;margin-top:10px;padding-top:8px;border-top:1.5px dashed #000}
-.pre .r{display:flex;justify-content:space-between;gap:8px;font-size:12px}
-.pre .t{display:flex;justify-content:space-between;align-items:baseline}
-.pre .t b{font-weight:800;font-size:14px}.pre .t .tg{font-weight:900;font-size:27px;line-height:1;font-stretch:85%}
-.pre .p{font-size:11px;line-height:1.4}
-.nota{margin-top:10px;padding-top:8px;border-top:1.5px dashed #000;font-size:11px;line-height:1.35}
-.tri-s{margin-top:8px;padding-top:8px;border-top:1.5px dashed #000;font-weight:800;font-size:16px;line-height:1.25;font-stretch:85%}
-.pie{display:flex;justify-content:space-between;align-items:baseline;margin:12px -4mm 0;padding:8px 4mm 9px;background:#000;color:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-.pie b{font-weight:900;font-size:18px;font-stretch:85%}.pie span{font-size:11px;font-weight:600}
-.maq{margin-top:5px;font-size:10px;text-align:center}
-</style></head><body>${original}${duplicado}${triplicado}</body></html>`;
+  if (e.key === "Enter") {
+    if (!s.input.value.trim()) { trCerrarCh(); return false; }       // vacío: sigue como siempre (borra)
+    e.preventDefault(); trElegirCh(s.sel); return true;
+  }
+  if (e.key === "Escape") { trCerrarCh(); return false; }
+  return false;
 }
-function alImprimir(v, sv, d, fechaD) {
-  const f = document.createElement("iframe");
-  f.setAttribute("aria-hidden", "true");
-  f.style.cssText = "position:fixed;left:-10000px;top:0;width:80mm;height:20px;border:0";
-  document.body.appendChild(f);
-  const doc = f.contentDocument;
-  doc.open(); doc.write(alBoletoHTML(v, sv, d, fechaD)); doc.close();
-  const listo = () => {
-    const w = f.contentWindow;
-    const fuentes = w.document.fonts ? w.document.fonts.ready : Promise.resolve();
-    Promise.race([fuentes, new Promise(r => setTimeout(r, 2500))]).then(() => {
-      w.focus(); w.print();
-      setTimeout(() => f.remove(), 60000);
-    });
-  };
-  if (doc.readyState === "complete") setTimeout(listo, 300); else f.onload = listo;
+async function trElegirCh(k) {
+  const s = tr.ch;
+  const it = s?.items[k];
+  if (!it) return;
+  const input = s.input;
+  trCerrarCh();
+  input.value = it.tipo === "ch" ? it.c.n : it.v;
+  await trGuardarCampo(input);
+  trMarcarTrips();
+  // y sigue con la casilla siguiente
+  if (input.classList.contains("tr-trip")) {
+    const todos = [...document.querySelectorAll("#tr-corredores .tr-in:not([readonly])")];
+    const sig = todos[todos.indexOf(input) + 1];
+    if (sig) sig.focus(); else input.blur();
+  } else input.blur();
 }
-// F9 cobra mientras se está en Alpha
-document.addEventListener("keydown", e => {
-  if (e.key === "F9" && document.getElementById("al-raiz")) { e.preventDefault(); alCobrar(); }
-});
+function trCerrarCh() {
+  if (tr.ch?.caja) tr.ch.caja.remove();
+  tr.ch = null;
+}
