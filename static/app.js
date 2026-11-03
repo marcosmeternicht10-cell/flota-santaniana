@@ -9686,7 +9686,7 @@ async function renderUsuarios() {
     <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
       <div><h1><i class="ti ti-users"></i> Usuarios del sistema</h1>
       <p>Gestión de accesos — crear usuarios y asignar permisos</p></div>
-      <button class="btn btn-primary" onclick="caeAbrir()"><i class="ti ti-device-mobile"></i> Choferes de línea y turismo</button>
+      <button class="btn btn-primary" onclick="caeAbrir()"><i class="ti ti-device-mobile"></i> Choferes y la app</button>
     </div>
     <div class="section">
 
@@ -24455,15 +24455,16 @@ function avisosTxt(a) {
   return p.join(" · ");
 }
 
-const cae = { d: null, filtro: "", ver: "todos" };
+const cae = { d: null, filtro: "", ver: "todos", grupo: "linea" };
 async function caeAbrir() {
   rvModal({
-    titulo: "Choferes de línea y turismo", icono: "device-mobile", ancho: 860, clase: "cae-modal",
-    sub: "Cada chofer entra al sistema desde el celular y ve el servicio que le toca y su producción del mes. Usuario y clave son su nombre de pila.",
+    titulo: "Choferes y la app", icono: "device-mobile", ancho: 900, clase: "cae-modal",
+    sub: "Quién ya tiene la app en el celular (lo confirman ellos con un botón), quién recibe los avisos, y los usuarios de los choferes de línea y turismo.",
     cuerpo: `<div id="cae-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
     pie: `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;width:100%">
       <button class="btn btn-ghost" onclick="window.open('/mi','_blank')"><i class="ti ti-eye"></i> Ver la app como un chofer</button>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="caeCopiarFaltan(this)"><i class="ti ti-message-exclamation"></i> Copiar quiénes faltan</button>
         <button class="btn btn-ghost" onclick="caeCopiar(this)"><i class="ti ti-copy"></i> Copiar accesos</button>
         <button class="btn btn-primary" id="cae-crear" onclick="caeCrear(this)" hidden><i class="ti ti-user-plus"></i> Crear usuarios</button>
       </div></div>`,
@@ -24473,53 +24474,72 @@ async function caeAbrir() {
 async function caeCargar() {
   const r = await api("/api/choferes_app/accesos").catch(e => ({ ok: false, msg: e.message }));
   if (!r || !r.ok) { $("#cae-cuerpo").innerHTML = `<div class="empty">${trEsc((r && r.msg) || "No se pudo cargar")}</div>`; return; }
+  r.corp = r.corp || [];
   cae.d = r;
   const b = $("#cae-crear");
   if (b) { b.hidden = !r.faltan.length; b.innerHTML = `<i class="ti ti-user-plus"></i> Crear ${r.faltan.length} usuario${r.faltan.length === 1 ? "" : "s"}`; }
   caePintar();
 }
+function caeDelGrupo() {
+  const r = cae.d;
+  return cae.grupo === "corp" ? r.corp : r.choferes.filter(c => c.activo);
+}
+function caeFiltrados() {
+  const f = cae.filtro.trim().toLowerCase();
+  return caeDelGrupo().filter(c => (!f || (c.nombre + " " + c.usuario + " " + (c.alias || "")).toLowerCase().includes(f))
+    && (cae.ver === "todos" || (cae.ver === "conf" ? c.confirmado_el : cae.ver === "sin_conf" ? !c.confirmado_el : !c.avisos)));
+}
 function caePintar() {
-  const r = cae.d, f = cae.filtro.trim().toLowerCase();
-  const total = r.choferes.length, conAv = r.con_avisos;
-  const lista = r.choferes.filter(c => (!f || (c.nombre + " " + c.usuario + " " + c.alias).toLowerCase().includes(f))
-    && (cae.ver === "todos" || (cae.ver === "con" ? c.avisos : !c.avisos)));
+  const r = cae.d, todos = caeDelGrupo();
+  const conf = todos.filter(c => c.confirmado_el).length, av = todos.filter(c => c.avisos).length;
+  const pct = todos.length ? Math.round(conf / todos.length * 100) : 0;
   const chip = (k, t) => `<button class="chip ${cae.ver === k ? "activo" : ""}" onclick="cae.ver='${k}';caePintar()">${t}</button>`;
+  const seg = (k, t, n) => `<button class="${cae.grupo === k ? "on" : ""}" onclick="cae.grupo='${k}';cae.ver='todos';caePintar()">${t} <span>${n}</span></button>`;
   $("#cae-cuerpo").innerHTML = `
+    <div class="cae-seg">${seg("linea", "Línea y turismo", r.activos)}${seg("corp", "Corporativos", r.corp.length)}</div>
     <div class="cae-kpis">
-      <div><b>${total}</b><span>choferes con usuario</span></div>
-      <div><b>${conAv}</b><span>con avisos en el celular</span></div>
-      <div><b>${r.faltan.length}</b><span>figuran en las planillas sin usuario</span></div>
+      <div class="cae-kpi-conf"><b>${conf}<small> de ${todos.length}</small></b><span>confirmaron que tienen la app</span>
+        <i class="cae-barra"><i style="width:${pct}%"></i></i></div>
+      <div><b>${av}</b><span>reciben los avisos en el celular</span></div>
+      <div><b>${todos.length - conf}</b><span>todavía no confirmaron</span></div>
     </div>
-    ${r.faltan.length ? `<div class="cae-faltan"><i class="ti ti-user-question"></i><div><b>Sin usuario todavía:</b>
+    ${cae.grupo === "linea" && r.faltan.length ? `<div class="cae-faltan"><i class="ti ti-user-question"></i><div><b>Sin usuario todavía:</b>
       ${r.faltan.slice(0, 12).map(x => trEsc(x.nombre)).join(" · ")}${r.faltan.length > 12 ? ` y ${r.faltan.length - 12} más` : ""}.
       <span>Tocá «Crear usuarios»: a cada uno se le arma usuario y clave con su nombre de pila.</span></div></div>` : ""}
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 10px">
       <input class="cae-buscar" placeholder="Buscar chofer…" value="${trEsc(cae.filtro)}" oninput="cae.filtro=this.value;caePintarLista()">
-      ${chip("todos", "Todos")}${chip("con", "Con avisos")}${chip("sin", "Sin avisos")}
+      ${chip("todos", "Todos")}${chip("sin_conf", "Sin confirmar")}${chip("conf", "Confirmaron")}${chip("sin_av", "Sin avisos")}
     </div>
-    <div id="cae-lista">${caeFilas(lista)}</div>`;
+    <div id="cae-lista">${caeFilas(caeFiltrados())}</div>`;
 }
-function caePintarLista() {
-  const r = cae.d, f = cae.filtro.trim().toLowerCase();
-  const lista = r.choferes.filter(c => (!f || (c.nombre + " " + c.usuario + " " + c.alias).toLowerCase().includes(f))
-    && (cae.ver === "todos" || (cae.ver === "con" ? c.avisos : !c.avisos)));
-  $("#cae-lista").innerHTML = caeFilas(lista);
-}
+function caePintarLista() { $("#cae-lista").innerHTML = caeFilas(caeFiltrados()); }
+function caeFecha(f) { return f ? trEsc(String(f).slice(8, 10) + "/" + String(f).slice(5, 7) + " " + String(f).slice(11, 16)) : ""; }
 function caeFilas(lista) {
   if (!lista.length) return `<div class="empty" style="padding:28px">Nadie con ese filtro</div>`;
-  return `<div class="table-wrap cae-tabla"><table><thead><tr><th>Chofer</th><th>Usuario y clave</th><th>Avisos</th><th>Servicios de ${trEsc(cae.d.mes_txt)}</th><th>Último ingreso</th><th></th></tr></thead><tbody>
+  const linea = cae.grupo === "linea";
+  return `<div class="table-wrap cae-tabla"><table><thead><tr><th>Chofer</th><th>Usuario${linea ? " y clave" : ""}</th><th>Tiene la app</th><th>Avisos</th>${linea ? `<th>Servicios de ${trEsc(cae.d.mes_txt)}</th>` : ""}<th>Último ingreso</th><th></th></tr></thead><tbody>
     ${lista.map(c => `<tr>
       <td><b>${trEsc(c.nombre)}</b>${c.alias ? `<div class="cae-alias" title="También figura así en las planillas">también: ${trEsc(c.alias)}</div>` : ""}</td>
       <td><code>${trEsc(c.usuario)}</code></td>
+      <td>${c.confirmado_el ? `<span class="cae-on"><i class="ti ti-circle-check"></i> Sí · ${caeFecha(c.confirmado_el)}</span>${c.modo ? `<div class="cae-alias">${trEsc(c.modo)}</div>` : ""}` : `<span class="cae-falta">Falta</span>`}</td>
       <td>${c.avisos ? `<span class="cae-on"><i class="ti ti-bell-ringing"></i> Activos</span>` : `<span class="cae-off">Sin activar</span>`}</td>
-      <td style="text-align:center">${c.servicios_mes}</td>
+      ${linea ? `<td style="text-align:center">${c.servicios_mes}</td>` : ""}
       <td style="font-size:12px;color:var(--muted)">${c.ultimo_acceso ? trEsc(String(c.ultimo_acceso).slice(0, 16).replace("T", " ")) : "nunca"}</td>
       <td style="white-space:nowrap;text-align:right">
-        <button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
-        <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>
+        ${linea ? `<button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
+        <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>` : ""}
         <button class="icon-btn" title="Mandarle un aviso de prueba" onclick="caeProbar(${c.id}, this)"><i class="ti ti-bell"></i></button>
-        <button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>
+        ${linea ? `<button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>` : ""}
       </td></tr>`).join("")}</tbody></table></div>`;
+}
+// Para recordarles en el grupo a los que todavía no confirmaron
+async function caeCopiarFaltan() {
+  const faltan = caeDelGrupo().filter(c => !c.confirmado_el);
+  if (!faltan.length) { toast("Ya confirmaron todos", "success"); return; }
+  const txt = `*Falta confirmar la app* 📲\nTodavía no tocaron «Sí, ya la tengo»:\n\n` + faltan.map(c => `• ${c.nombre}`).join("\n") +
+    `\n\nEntrá a la app y tocá el botón de arriba. Si no la tenés instalada, pedila en la oficina.`;
+  try { await navigator.clipboard.writeText(txt); toast(`Copiado: ${faltan.length} chofer${faltan.length === 1 ? "" : "es"} sin confirmar`, "success"); }
+  catch (e) { toast("No se pudo copiar", "error"); }
 }
 async function caeCrear(btn) {
   const n = cae.d.faltan.length;

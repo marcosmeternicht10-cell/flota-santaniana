@@ -8543,3 +8543,13 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .cae-on { color: #1F8A5B; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .cae-off { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 @media (max-width: 640px) { .cae-kpis { grid-template-columns: 1fr; } }
+
+.cae-seg { display: inline-flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--surface2); border: 1px solid var(--border); margin-bottom: 12px; }
+.cae-seg button { border: 0; background: none; padding: 8px 14px; border-radius: 9px; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.cae-seg button.on { background: var(--surface); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.cae-seg button span { font-weight: 500; opacity: .7; margin-left: 2px; }
+.cae-kpis b small { font-size: 16px; font-weight: 600; color: var(--muted); }
+.cae-barra { display: block; height: 6px; border-radius: 3px; background: var(--border); margin-top: 8px; overflow: hidden; }
+.cae-barra > i { display: block; height: 100%; background: #1F8A5B; border-radius: 3px; transition: width .4s; }
+.cae-falta { color: #B7791F; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.cae-on { white-space: nowrap; }
