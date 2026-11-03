@@ -459,11 +459,12 @@ def proteger_rutas():
                 return jsonify({"error": "Sin permiso"}), 403
             return redirect("/boleteria")
 
-    # El chofer de corporativos: solo su pantalla de rendiciones (celular).
+    # El chofer de corporativos: su pantalla de rendiciones y la app del chofer
+    # (sus viajes de tráfico, turismo y corporativos, y su mes).
     if session.get("rol") == "chofer_corp":
         permitido = (
-            p == "/" or p == "/corp" or
-            p.startswith("/api/corp/") or
+            p == "/" or p == "/corp" or p == "/mi" or
+            p.startswith("/api/corp/") or p.startswith("/api/mi/") or
             p.startswith("/api/push/") or     # avisos al celular
             p.startswith("/static/") or
             p == "/api/logout" or p == "/api/me" or
@@ -732,7 +733,7 @@ def api_login():
         # Sesión NO permanente: se cierra al cerrar el navegador (más seguro).
         # El chofer de línea y turismo entra desde su propio celular, en la app:
         # queda adentro (31 días) para no tener que poner la clave cada vez.
-        session.permanent = u["rol"] == "tripulante"
+        session.permanent = u["rol"] in ("tripulante", "chofer_corp")   # la app del celular queda abierta
         auditar("Inició sesión", "Acceso")
         return jsonify({"ok": True, "usuario": u})
     # Registrar intento fallido (sin sesión, lo hacemos directo)

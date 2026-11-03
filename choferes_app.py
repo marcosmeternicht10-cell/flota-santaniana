@@ -18,6 +18,12 @@ no mira el orden ni las tildes (nombres.clave_persona).
 Usuarios: los crea el admin de una vez desde Usuarios → "Choferes de línea y
 turismo". Usuario = nombre de pila; clave = la misma (fácil de recordar).
 
+Corporativos: el chofer de corporativos también tiene esta app (además de su
+pantalla de rendiciones). Ve sus servicios de tráfico y turismo y su
+asignación corporativa publicada. Si una misma persona quedó con dos usuarios
+(uno corporativo y uno de línea), desde Usuarios → "Choferes y la app" se
+unen: queda el corporativo (que tiene las rendiciones) con todo lo del otro.
+
 Avisos (push.py):
   · Tráfico: al publicar el día, a cada chofer que tiene servicio. Si se vuelve
     a publicar, solo a los que les cambió algo (o se les sacó el servicio).
@@ -45,6 +51,8 @@ from nombres import apellido_primero, clave_persona, separar_personas, _llano
 bp_choferes_app = Blueprint("choferes_app", __name__)
 
 ROL = "tripulante"
+CORP = "chofer_corp"
+ROLES_APP = (ROL, CORP)                # los que tienen la app del chofer
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 DIAS_CORTOS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
@@ -250,10 +258,67 @@ def _turismo(conn, desde, hasta):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# CORPORATIVOS (lo publicado de la asignación)
+# ════════════════════════════════════════════════════════════════════════════
+
+LADO_CORP = {"completo": "", "entrante": "entrada", "saliente": "salida", "variable": ""}
+
+
+def _corp(conn, usuario, desde, hasta):
+    """La asignación corporativa PUBLICADA de este chofer en el rango."""
+    usuario = str(usuario or "").strip().lower()
+    if not usuario:
+        return
+    try:
+        import corp_asignacion as CA
+        filas = conn.execute("""
+            SELECT d.fecha, v.datos FROM corp_asig_dias d
+            JOIN corp_asig_versiones v ON v.dia_id = d.id AND v.version = d.version
+            WHERE d.fecha >= ? AND d.fecha <= ? AND COALESCE(d.publicado_el,'') <> ''
+            ORDER BY d.fecha""", (desde, hasta)).fetchall()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return
+    for f in filas:
+        try:
+            foto = json.loads(f["datos"])
+        except Exception:
+            continue
+        horarios = foto.get("horarios") or {}
+        for k, x in enumerate(foto.get("filas") or []):
+            if (x.get("chofer_usuario") or "").strip().lower() != usuario or x.get("lado") == "no_corre":
+                continue
+            h = horarios.get(f"{x.get('cliente')}|{x.get('tramo')}")
+            hora = hora_fin = ""
+            try:
+                r = CA.rango(x, h)
+                if r:
+                    hora = CA._hhmm(r[0])
+                    dur = (r[1] - r[0]) % 24
+                    if dur >= 2:                 # "6:00/6:30" son dos horas de salida, no un horario
+                        hora_fin = CA._hhmm(r[1])
+            except Exception:
+                pass
+            tramo = CA.tramo_corto(x.get("tramo") or "")
+            cli = (x.get("cliente") or "").strip()
+            yield {
+                "origen": "corp", "id": f"c{f['fecha']}{k}", "fecha": f["fecha"], "hora": hora, "hora_fin": hora_fin,
+                "tipo": "corporativo", "cliente": cli if len(cli) <= 4 else _lindo(cli), "tramo": tramo,
+                "tramo_completo": x.get("tramo") or "",
+                "lado": LADO_CORP.get(x.get("lado"), ""), "desde": "", "hasta": tramo,
+                "coche": str(x.get("coche") or "").strip(), "nota": x.get("nota") or x.get("detalle") or "",
+                "extras": [], "refuerzo": False, "con": [],
+            }
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # LO QUE LE TOCA Y SU MES
 # ════════════════════════════════════════════════════════════════════════════
 
-def proximos(conn, claves, hoy):
+def proximos(conn, claves, hoy, usuario_corp=None):
     hasta = (date.fromisoformat(hoy) + timedelta(days=DIAS_ADELANTE)).isoformat()
     items = []
     for fecha, tipo, foto in _fotos(conn, hoy, hasta):
@@ -265,6 +330,8 @@ def proximos(conn, claves, hoy):
         it = _para(s, claves)
         if it:
             items.append(it)
+    if usuario_corp:
+        items.extend(_corp(conn, usuario_corp, hoy, hasta))
     items.sort(key=lambda x: (x["fecha"], x["hora"] or "99", x["origen"]))
     return items
 
@@ -281,7 +348,7 @@ def _mes_anterior(mes):
     return f"{a - (m == 1)}-{(m - 2) % 12 + 1:02d}"
 
 
-def produccion(conn, claves, mes, hoy, hasta_dia=None):
+def produccion(conn, claves, mes, hoy, hasta_dia=None, usuario_corp=None):
     """Lo que hizo en el mes (hasta hoy) y lo que ya tiene programado.
     hasta_dia: cortar en ese día del mes (para comparar contra el mes anterior
     a la misma altura, no contra el mes entero)."""
@@ -330,15 +397,24 @@ def produccion(conn, claves, mes, hoy, hasta_dia=None):
         while d <= b and d.isoformat() <= tope_hecho:
             por_dia[d.isoformat()] = por_dia.get(d.isoformat(), 0) + 1
             d += timedelta(days=1)
+    # Corporativos: lo asignado y publicado (hasta hoy cuenta como hecho)
+    corp_h = corp_p = 0
+    if usuario_corp:
+        for it in _corp(conn, usuario_corp, ini.isoformat(), fin.isoformat()):
+            if it["fecha"] <= tope_hecho:
+                corp_h += 1
+                por_dia[it["fecha"]] = por_dia.get(it["fecha"], 0) + 1
+            elif not hasta_dia:
+                corp_p += 1
     km_conocidos = [s["km"] for s in hechos if s["km"]]
     return {
         "mes": mes, "mes_txt": f"{MESES[ini.month - 1].capitalize()} {ini.year}",
-        "servicios": len(hechos) + sum(1 for t in tur if t["hecho"]),
-        "linea": len(hechos), "turismo": sum(1 for t in tur if t["hecho"]),
+        "servicios": len(hechos) + sum(1 for t in tur if t["hecho"]) + corp_h,
+        "linea": len(hechos), "turismo": sum(1 for t in tur if t["hecho"]), "corp": corp_h,
         "km": round(sum(km_conocidos)), "km_completo": len(km_conocidos) == len(hechos),
         "dias": len(por_dia), "refuerzos": sum(1 for s in hechos if s["refuerzo"]),
         "coches": len({s["coche"] for s in hechos if s["coche"]}),
-        "programados": len(programados) + sum(1 for t in tur if not t["hecho"]),
+        "programados": len(programados) + sum(1 for t in tur if not t["hecho"]) + corp_p,
         "internacional": {"viajes": viajes, "hechos": viajes_hechos, "tope": TOPE_VIAJES_INT} if (int_h or int_p) else None,
         "tramos": sorted(({"tramo": k, "n": n} for k, n in tramos.items()), key=lambda x: -x["n"])[:5],
         "por_dia": por_dia, "turismo_lista": [{k: t[k] for k in ("fecha", "fecha_fin", "hora", "cliente", "desde",
@@ -351,11 +427,12 @@ def _resumen_corto(p, a_la_altura=False):
     return {k: p[k] for k in ("servicios", "km", "dias", "refuerzos")} | {"mes_txt": p["mes_txt"], "a_la_altura": a_la_altura}
 
 
-def _comparar(conn, claves, mes, hoy):
+def _comparar(conn, claves, mes, hoy, usuario_corp=None):
     """El mes anterior: si el mes que se mira está en curso, hasta el mismo día
     (así no se compara una semana contra un mes entero)."""
     en_curso = mes == hoy[:7]
-    a = produccion(conn, claves, _mes_anterior(mes), hoy, hasta_dia=int(hoy[8:10]) if en_curso else None)
+    a = produccion(conn, claves, _mes_anterior(mes), hoy, hasta_dia=int(hoy[8:10]) if en_curso else None,
+                   usuario_corp=usuario_corp)
     return _resumen_corto(a, en_curso)
 
 
@@ -412,7 +489,7 @@ def avisar_trafico(fecha, tipo="nacional"):
         else:
             titulo = (f"Cambió tu servicio · {dia}" if antes else f"Tu servicio · {dia}")
             cuerpo = "\n".join(_linea_aviso(i) for i in mios[:3]) + (f"\n+{len(mios) - 3} más" if len(mios) > 3 else "")
-        avisos.append((t["id"], titulo, cuerpo, "/mi" if t["rol"] == ROL else "/corp", f"trafico-{fecha}-{tipo}"))
+        avisos.append((t["id"], titulo, cuerpo, "/mi", f"trafico-{fecha}-{tipo}"))
         if not con_cel.get(t["id"]):
             sin_app.append(t["nombre"])
     push.enviar_varios(avisos)
@@ -468,7 +545,7 @@ def avisar_corp(fecha):
                 lineas.append(f"{x.get('cliente')} · {x.get('tramo')}{lado}" +
                               (f" · Coche {x['coche']}" if x.get("coche") else ""))
             cuerpo = "\n".join(lineas)
-        avisos.append((uid, titulo, cuerpo, "/corp", f"corp-{fecha}"))
+        avisos.append((uid, titulo, cuerpo, "/mi", f"corp-{fecha}"))
         if not con_cel.get(uid):
             sin_app.append(nombres.get(u) or u)
     push.enviar_varios(avisos)
@@ -512,7 +589,7 @@ def avisar_turismo(servicios_por_fecha):
             pre = "" if len({x['fecha'] for x in its}) == 1 else f"{_dia_txt(i['fecha'], hoy).capitalize()} "
             lineas.append(f"{pre}{i['hora'] + ' ' if i['hora'] else ''}{ruta}" +
                           (f" · {i['cliente']}" if i["cliente"] else "") + (f" · Coche {i['coche']}" if i["coche"] else ""))
-        avisos.append((uid, titulo, "\n".join(lineas), "/mi" if d["t"]["rol"] == ROL else "/corp", "turismo"))
+        avisos.append((uid, titulo, "\n".join(lineas), "/mi", "turismo"))
         if not con_cel.get(uid):
             sin_app.append(d["t"]["nombre"])
     push.enviar_varios(avisos)
@@ -548,10 +625,12 @@ def candidatos(conn):
             for p in separar_personas(r[campo]):
                 nombres[p] = nombres.get(p, 0) + 1
     # Ya tienen usuario: los tripulantes y también los choferes de corporativos y de taller
-    tomadas = set()
+    tomadas, personas = set(), []
     for r in conn.execute("""SELECT nombre, COALESCE(alias_planilla,'') AS alias FROM usuarios
                              WHERE rol IN ('tripulante', 'chofer_corp', 'chofer')""").fetchall():
-        tomadas |= _claves_de(r["nombre"], r["alias"])
+        ks = _claves_de(r["nombre"], r["alias"])
+        tomadas |= ks
+        personas.append(ks)
     # Agrupar: misma clave, o casi igual (un error de tipeo)
     grupos = []
     for n, usos in sorted(nombres.items(), key=lambda x: -x[1]):
@@ -570,6 +649,8 @@ def candidatos(conn):
     for g in grupos:
         if g["claves"] & tomadas or any(_distancia(k, t, 2) <= 1 for k in g["claves"] for t in tomadas if len(k) >= 8):
             continue
+        if any(misma_persona(g["claves"], ks) for ks in personas):
+            continue                            # ya tiene usuario (con un segundo nombre de más o de menos)
         alias = sorted({v for v in g["variantes"] if clave_persona(v) != clave_persona(g["nombre"])})
         out.append({"nombre": apellido_primero(g["nombre"]).upper(), "alias": alias, "usos": g["usos"]})
     out.sort(key=lambda x: x["nombre"])
@@ -621,6 +702,111 @@ def crear_usuarios(nombres=None):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# LA MISMA PERSONA CON DOS USUARIOS (corporativo + línea)
+# ════════════════════════════════════════════════════════════════════════════
+
+def misma_persona(ka, kb):
+    """Si dos juegos de claves de nombre son de la misma persona: igual, uno
+    con un segundo nombre o apellido de más, o con un error de tipeo."""
+    if not ka or not kb:
+        return False
+    if ka & kb:
+        return True
+    if any(coincide(x, kb) for x in ka) or any(coincide(x, ka) for x in kb):
+        return True
+    return any(len(x) >= 8 and len(y) >= 8 and _distancia(x, y, 2) <= 1 for x in ka for y in kb)
+
+
+def _cual_queda(a, b):
+    """De dos usuarios de la misma persona, cuál queda: el corporativo (tiene
+    las rendiciones y la asignación); si no, el que ya entró o confirmó la app."""
+    if (a["rol"] == CORP) != (b["rol"] == CORP):
+        return (a, b) if a["rol"] == CORP else (b, a)
+    puntaje = lambda u: (bool(u.get("app_confirmado_el")), u.get("ultimo_acceso") or "", -u["id"])
+    return (a, b) if puntaje(a) >= puntaje(b) else (b, a)
+
+
+def duplicados(conn):
+    """Las personas que quedaron con dos usuarios de chofer."""
+    us = tripulantes(conn, con_corp=True)
+    pares, vistos = [], set()
+    for i, a in enumerate(us):
+        for b in us[i + 1:]:
+            if a["rol"] == CORP and b["rol"] == CORP:
+                continue                    # dos corporativos: cada uno con sus rendiciones, no se tocan
+            if a["id"] in vistos or b["id"] in vistos:
+                continue
+            if misma_persona(a["claves"], b["claves"]):
+                q, s_ = _cual_queda(a, b)
+                pares.append({"queda": _ficha(q), "sale": _ficha(s_)})
+                vistos.add(s_["id"])
+    return pares
+
+
+def _ficha(u):
+    return {"id": u["id"], "usuario": u["usuario"], "nombre": u["nombre"], "rol": u["rol"],
+            "ultimo_acceso": u.get("ultimo_acceso") or "", "confirmado": bool(u.get("app_confirmado_el"))}
+
+
+def unir(queda_id, sale_id, quien=""):
+    """Junta dos usuarios de la misma persona en uno: el que queda se lleva el
+    nombre del otro como «también figura como», sus celulares con avisos y la
+    confirmación de la app. El otro se borra."""
+    if not queda_id or not sale_id or queda_id == sale_id:
+        return None, "Elegí dos usuarios distintos"
+    conn = get_connection()
+    try:
+        filas = {r["id"]: dict(r) for r in conn.execute(
+            f"""SELECT id, usuario, nombre, rol, COALESCE(alias_planilla,'') AS alias, ultimo_acceso,
+                       COALESCE(app_confirmado_el,'') AS app_confirmado_el, COALESCE(app_modo,'') AS app_modo
+                FROM usuarios WHERE id IN (?,?)""", (queda_id, sale_id)).fetchall()}
+        q, s_ = filas.get(queda_id), filas.get(sale_id)
+        if not q or not s_:
+            return None, "Uno de los dos usuarios ya no existe"
+        if q["rol"] not in ROLES_APP or s_["rol"] not in ROLES_APP:
+            return None, "Solo se unen usuarios de choferes"
+        if q["rol"] == CORP and s_["rol"] == CORP:
+            return None, "Los dos son corporativos y cada uno tiene sus rendiciones: no se pueden unir"
+        if s_["rol"] == CORP:                    # siempre queda el corporativo
+            q, s_ = s_, q
+        # «También figura como»: el nombre y los alias del que sale
+        propias = _claves_de(q["nombre"])
+        alias, ks = [], set()
+        for a in [x.strip() for x in q["alias"].split(";")] + [s_["nombre"]] + [x.strip() for x in s_["alias"].split(";")]:
+            k = clave_persona(a)
+            if a and k and k not in propias and k not in ks:
+                ks.add(k)
+                alias.append(a.upper())
+        conn.execute("""UPDATE usuarios SET alias_planilla=?, app_confirmado_el=?, app_modo=?, ultimo_acceso=? WHERE id=?""",
+                     ("; ".join(alias)[:500], q["app_confirmado_el"] or s_["app_confirmado_el"],
+                      q["app_modo"] or s_["app_modo"],
+                      max(q["ultimo_acceso"] or "", s_["ultimo_acceso"] or "") or None, q["id"]))
+        try:
+            conn.execute("UPDATE push_subs SET usuario_id=? WHERE usuario_id=?", (q["id"], s_["id"]))
+        except Exception:
+            conn.rollback()
+            raise
+        conn.execute("DELETE FROM usuarios WHERE id=?", (s_["id"],))
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None, f"No se pudo unir: {e}"
+    finally:
+        conn.close()
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=quien or "?", rol="admin", accion="Unió dos usuarios de la misma persona",
+                            categoria="Usuarios", detalle=f"Quedó {q['usuario']} ({q['nombre']}); se borró {s_['usuario']} ({s_['nombre']})")
+    except Exception:
+        pass
+    return {"queda": {"id": q["id"], "usuario": q["usuario"], "nombre": q["nombre"], "rol": q["rol"]},
+            "sale": {"usuario": s_["usuario"], "nombre": s_["nombre"]}}, None
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # RUTAS
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -644,21 +830,22 @@ def _yo():
                             WHERE id=?""", (uid or 0,)).fetchone()
     finally:
         conn.close()
-    if not u or (u["rol"] != ROL and not _es_admin()):
+    if not u or u["rol"] not in ROLES_APP:
         return None, hoy
     d = dict(u)
     d["claves"] = _claves_de(d["nombre"], d["alias"])
+    d["corp"] = d["usuario"] if d["rol"] == CORP else None
     return d, hoy
 
 
 @bp_choferes_app.route("/mi")
 def pantalla_mi():
-    if session.get("rol") not in (ROL, "admin"):
+    if session.get("rol") not in (ROL, CORP, "admin"):
         from flask import redirect
         return redirect("/")
     from app_movil import COLOR_TEMA
     html = render_template("mi.html", nombre=session.get("nombre") or "", tema=COLOR_TEMA,
-                           admin=_es_admin())
+                           admin=_es_admin(), es_corp=session.get("rol") == CORP)
     r = make_response(html)
     r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return r
@@ -671,16 +858,16 @@ def api_inicio():
         return jsonify({"ok": False, "msg": "Elegí un chofer para ver su app" if _es_admin() else "Sin permiso"}), 403
     conn = get_connection()
     try:
-        prox = proximos(conn, yo["claves"], hoy)
-        mes = produccion(conn, yo["claves"], hoy[:7], hoy)
-        ant = _comparar(conn, yo["claves"], hoy[:7], hoy)
+        prox = proximos(conn, yo["claves"], hoy, yo["corp"])
+        mes = produccion(conn, yo["claves"], hoy[:7], hoy, usuario_corp=yo["corp"])
+        ant = _comparar(conn, yo["claves"], hoy[:7], hoy, yo["corp"])
     finally:
         conn.close()
     pila = (yo["nombre"].split(",", 1)[-1] if "," in yo["nombre"] else yo["nombre"].split()[0]).strip().split()[0]
     from hora_local import ahora as _ahora_local
     ahora = _ahora_local().strftime("%H:%M") if hoy == _hoy_local() else "00:00"
     return jsonify({"ok": True, "hoy": hoy, "ahora": ahora, "hoy_txt": _dia_largo(hoy), "nombre": yo["nombre"],
-                    "pila": pila.capitalize(), "usuario_id": yo["id"],
+                    "pila": pila.capitalize(), "usuario_id": yo["id"], "corp": bool(yo["corp"]),
                     "proximos": [dict(i, dia_txt=_dia_txt(i["fecha"], hoy), dia_largo=_dia_largo(i["fecha"]))
                                  for i in prox],
                     "mes": mes, "anterior": ant})
@@ -696,8 +883,8 @@ def api_mes():
         return jsonify({"ok": False, "msg": "Mes inválido"}), 400
     conn = get_connection()
     try:
-        p = produccion(conn, yo["claves"], mes, hoy)
-        a = _comparar(conn, yo["claves"], mes, hoy)
+        p = produccion(conn, yo["claves"], mes, hoy, usuario_corp=yo["corp"])
+        a = _comparar(conn, yo["claves"], mes, hoy, yo["corp"])
     finally:
         conn.close()
     return jsonify({"ok": True, "mes": p, "anterior": a})
@@ -715,6 +902,7 @@ def api_accesos():
     try:
         trips = tripulantes(conn, solo_activos=False)
         cands = candidatos(conn)
+        dups = duplicados(conn)
         from servicios import leer_servicios
         servs = leer_servicios(conn, hoy[:7] + "-01", hoy)
     finally:
@@ -733,14 +921,14 @@ def api_accesos():
     try:
         corp = [dict(r) for r in conn.execute("""
             SELECT id, usuario, nombre, ultimo_acceso, COALESCE(app_confirmado_el,'') AS confirmado_el,
-                   COALESCE(app_modo,'') AS modo
+                   COALESCE(app_modo,'') AS modo, COALESCE(alias_planilla,'') AS alias
             FROM usuarios WHERE rol='chofer_corp' AND COALESCE(activo,1)=1 ORDER BY nombre""").fetchall()]
     finally:
         conn.close()
     for c in corp:
         c["avisos"] = cel.get(c["id"], 0)
     activos = [x for x in lista if x["activo"]]
-    return jsonify({"ok": True, "choferes": lista, "faltan": cands, "corp": corp,
+    return jsonify({"ok": True, "choferes": lista, "faltan": cands, "corp": corp, "duplicados": dups,
                     "con_avisos": sum(1 for x in lista if x["avisos"]),
                     "confirmaron": sum(1 for x in activos if x["confirmado_el"]), "activos": len(activos),
                     "corp_confirmaron": sum(1 for x in corp if x["confirmado_el"]),
@@ -763,6 +951,35 @@ def api_crear():
     return jsonify({"ok": True, "creados": creados})
 
 
+@bp_choferes_app.route("/api/choferes_app/unir", methods=["POST"])
+def api_unir():
+    """Une dos usuarios de la misma persona. Con {todos: true}, todos los que
+    se detectaron solos."""
+    if not _es_admin():
+        return jsonify({"ok": False, "msg": "Solo administración"}), 403
+    d = request.get_json(silent=True) or {}
+    quien = session.get("nombre") or session.get("usuario") or ""
+    if d.get("todos"):
+        conn = get_connection()
+        try:
+            pares = duplicados(conn)
+        finally:
+            conn.close()
+        hechos, errores = [], []
+        for p in pares:
+            r, err = unir(p["queda"]["id"], p["sale"]["id"], quien)
+            (hechos.append(r) if r else errores.append(f"{p['sale']['nombre']}: {err}"))
+        return jsonify({"ok": True, "unidos": hechos, "errores": errores})
+    try:
+        q, s_ = int(d.get("queda") or 0), int(d.get("sale") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "Faltan datos"}), 400
+    r, err = unir(q, s_, quien)
+    if not r:
+        return jsonify({"ok": False, "msg": err}), 400
+    return jsonify({"ok": True, "unidos": [r]})
+
+
 @bp_choferes_app.route("/api/choferes_app/<int:uid>/alias", methods=["POST"])
 def api_alias(uid):
     if not _es_admin():
@@ -771,7 +988,7 @@ def api_alias(uid):
     alias = "; ".join(x.strip().upper() for x in re.split(r"[;\n]", alias) if x.strip())[:500]
     conn = get_connection()
     try:
-        conn.execute("UPDATE usuarios SET alias_planilla=? WHERE id=? AND rol=?", (alias, uid, ROL))
+        conn.execute("UPDATE usuarios SET alias_planilla=? WHERE id=? AND rol IN (?,?)", (alias, uid, ROL, CORP))
         conn.commit()
     finally:
         conn.close()
@@ -786,7 +1003,7 @@ def api_reset_clave(uid):
     from database import _hash_password
     conn = get_connection()
     try:
-        u = conn.execute("SELECT usuario FROM usuarios WHERE id=? AND rol=?", (uid, ROL)).fetchone()
+        u = conn.execute("SELECT usuario FROM usuarios WHERE id=? AND rol IN (?,?)", (uid, ROL, CORP)).fetchone()
         if not u:
             return jsonify({"ok": False, "msg": "No existe"}), 404
         conn.execute("UPDATE usuarios SET password_hash=? WHERE id=?", (_hash_password(u["usuario"]), uid))
@@ -814,8 +1031,8 @@ def api_lista_choferes():
         return jsonify({"ok": False}), 403
     conn = get_connection()
     try:
-        filas = conn.execute("""SELECT id, nombre, usuario FROM usuarios WHERE rol=? AND COALESCE(activo,1)=1
-                                ORDER BY nombre""", (ROL,)).fetchall()
+        filas = conn.execute("""SELECT id, nombre, usuario, rol FROM usuarios WHERE rol IN (?,?) AND COALESCE(activo,1)=1
+                                ORDER BY nombre""", (ROL, CORP)).fetchall()
     finally:
         conn.close()
     return jsonify({"ok": True, "choferes": [dict(f) for f in filas]})
@@ -885,9 +1102,8 @@ def revisar(uid, dias=3):
         claves = _claves_de(u["nombre"], u["alias"])
         res = {"nombre": u["nombre"], "usuario": u["usuario"], "rol": u["rol"], "alias": u["alias"],
                "como_lo_busca": sorted(claves), "dias": [], "avisos": []}
-        if u["rol"] != ROL:
-            res["avisos"].append("Este usuario es de corporativos: su pantalla es la de rendiciones y ahí no se ven los "
-                                 "servicios de tráfico ni de turismo (sí le llega el aviso al celular).")
+        if u["rol"] not in ROLES_APP:
+            res["avisos"].append("Este usuario no es chofer: no tiene la app de choferes.")
         if not u["activo"]:
             res["avisos"].append("El usuario está desactivado.")
         for n in range(dias):
