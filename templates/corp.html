@@ -806,5 +806,41 @@
 
     init();
   </script>
+<!-- Avisos al celular: cuando se publica la asignación le llega al chofer. Solo esta tarjetita. -->
+<div id="av-corp" hidden style="position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:50;max-width:460px;margin:0 auto;
+  background:#fff;border-radius:16px;box-shadow:0 12px 34px -12px rgba(0,0,0,.35);padding:12px 12px 12px 14px;display:flex;gap:12px;align-items:center;font-family:Inter,system-ui,sans-serif">
+  <span style="width:38px;height:38px;border-radius:11px;background:#FCEBED;color:#DC2641;display:grid;place-items:center;font-size:19px;flex:none"><i class="ti ti-bell-ringing"></i></span>
+  <div style="flex:1;min-width:0"><b style="display:block;font-size:14px;color:#1A1A18">Enterate al toque</b>
+    <span style="display:block;font-size:12.5px;color:#6E6D66;line-height:1.35">Te llega tu asignación al celular apenas se publica.</span></div>
+  <button id="av-corp-si" style="border:0;border-radius:10px;background:#131312;color:#fff;font:600 13.5px Inter,sans-serif;padding:9px 13px">Activar</button>
+  <button id="av-corp-no" aria-label="Ahora no" style="border:0;background:none;color:#6E6D66;font-size:18px;padding:4px"><i class="ti ti-x"></i></button>
+</div>
+<script>
+(function () {
+  if (!("serviceWorker" in navigator && "PushManager" in window && "Notification" in window)) return;
+  const caja = document.getElementById("av-corp");
+  const b64 = s => { const p = "=".repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...b].map(c => c.charCodeAt(0))); };
+  const guardar = sub => fetch("/api/push/suscribir", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: sub.toJSON() }) });
+  let ahoraNo = false; try { ahoraNo = Date.now() - (+localStorage.getItem("av-corp-no") || 0) < 3 * 864e5; } catch (e) {}
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => {
+    if (sub && Notification.permission === "granted") { guardar(sub).catch(() => {}); return; }
+    if (Notification.permission !== "denied" && !ahoraNo) caja.hidden = false, caja.style.display = "flex";
+  }).catch(() => {});
+  document.getElementById("av-corp-no").onclick = () => { caja.style.display = "none"; try { localStorage.setItem("av-corp-no", Date.now()); } catch (e) {} };
+  document.getElementById("av-corp-si").onclick = async () => {
+    try {
+      if (await Notification.requestPermission() !== "granted") { caja.style.display = "none"; return; }
+      const k = await fetch("/api/push/clave", { credentials: "same-origin" }).then(r => r.json());
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(k.clave) });
+      await guardar(sub);
+      fetch("/api/push/probar", { method: "POST", credentials: "same-origin" }).catch(() => {});
+      caja.innerHTML = '<b style="font-size:14px;color:#2F7C46;padding:6px 4px">✓ Listo, te van a llegar tus asignaciones</b>';
+      setTimeout(() => (caja.style.display = "none"), 3000);
+    } catch (e) { caja.style.display = "none"; }
+  };
+})();
+</script>
 </body>
 </html>

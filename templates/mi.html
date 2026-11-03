@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Mi servicio — La Santaniana</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#14263D">
+  <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
+  <link rel="apple-touch-icon" href="/static/app/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});</script>
+  <style>
+    :root {
+      --bg: #F3F2EE; --card: #FFFFFF; --ink: #14263D; --ink2: #3D4A5C; --muted: #7A8494; --line: #E7E4DD;
+      --soft: #ECEAE4; --red: #DC2641; --blue: #1E5A96; --sky: #8CBDEB; --green: #1F8A5B; --amber: #B7791F;
+      --hero1: #14263D; --hero2: #1F3D5E; --dot0: #E7E4DD; --dot1: #B9D3EE; --dot2: #5E95CF; --dot3: #1E5A96;
+      --sombra: 0 1px 2px rgba(20,38,61,.05), 0 6px 20px -8px rgba(20,38,61,.16);
+      --r: 20px;
+      --disp: "Barlow Semi Condensed", "Arial Narrow", sans-serif;
+      --txt: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0B131E; --card: #121D2B; --ink: #EEF2F7; --ink2: #C3CCD8; --muted: #8592A3; --line: #213044;
+        --soft: #182638; --hero1: #18304D; --hero2: #0F2136; --dot0: #1B2939; --dot1: #24476D; --dot2: #3B74B0;
+        --dot3: #8CBDEB; --sombra: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -10px rgba(0,0,0,.6);
+      }
+      .cal .d.n1 { color: #DCE8F5 !important; }
+      .cal .d.n3 { color: #0B131E !important; }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { background: var(--bg); }
+    body { font-family: var(--txt); color: var(--ink); min-height: 100vh; min-height: 100dvh;
+           padding-bottom: calc(84px + env(safe-area-inset-bottom)); -webkit-font-smoothing: antialiased; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    .app { max-width: 480px; margin: 0 auto; padding: 0 18px; }
+
+    /* Encabezado */
+    .top { display: flex; align-items: center; gap: 12px; padding: calc(18px + env(safe-area-inset-top)) 0 18px; }
+    .top-txt { flex: 1; min-width: 0; }
+    .top small { display: block; font-size: 12.5px; color: var(--muted); font-weight: 500; letter-spacing: .01em; }
+    .top h1 { font-family: var(--disp); font-size: 30px; font-weight: 700; line-height: 1.05; letter-spacing: -.01em; }
+    .yo { width: 42px; height: 42px; border-radius: 50%; background: var(--card); box-shadow: var(--sombra);
+          display: grid; place-items: center; font-family: var(--disp); font-weight: 700; font-size: 16px; position: relative; }
+    .yo .pto { position: absolute; top: 1px; right: 1px; width: 11px; height: 11px; border-radius: 50%;
+               background: var(--green); border: 2px solid var(--bg); display: none; }
+    .yo.con-avisos .pto { display: block; }
+
+    /* Tarjeta del próximo servicio */
+    .hero { position: relative; overflow: hidden; border-radius: 26px; padding: 22px 22px 20px; color: #fff;
+            background: linear-gradient(150deg, var(--hero1) 0%, var(--hero2) 100%);
+            box-shadow: 0 18px 40px -18px rgba(20,38,61,.65); }
+    .hero::before, .hero::after { content: ""; position: absolute; border-radius: 6px; transform: skewX(-28deg); pointer-events: none; }
+    .hero::before { width: 70px; height: 190px; right: 34px; top: -40px; background: rgba(220,38,65,.22); }
+    .hero::after { width: 120px; height: 34px; right: -26px; top: 46px; background: rgba(140,189,235,.18); }
+    .hero-et { display: flex; flex-wrap: wrap; gap: 6px; position: relative; }
+    .pill { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 5px 10px;
+            border-radius: 999px; background: rgba(255,255,255,.12); color: #fff; }
+    .pill.roja { background: var(--red); }
+    .hero-hora { font-family: var(--disp); font-weight: 800; font-size: 72px; line-height: .95; margin-top: 16px;
+                 letter-spacing: -.02em; position: relative; font-variant-numeric: tabular-nums; }
+    .hero-falta { font-size: 13.5px; color: rgba(255,255,255,.75); margin-top: 6px; font-weight: 500; position: relative; }
+    .hero-falta b { color: #fff; font-weight: 600; }
+    .ruta { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; margin-top: 22px; position: relative; }
+    .ruta small { display: block; font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: rgba(255,255,255,.55); font-weight: 600; }
+    .ruta strong { display: block; font-family: var(--disp); font-size: 21px; font-weight: 700; line-height: 1.1; margin-top: 3px; }
+    .ruta .der { text-align: right; }
+    .ruta-linea { width: 56px; display: flex; align-items: center; gap: 4px; color: var(--sky); }
+    .ruta-linea::before, .ruta-linea::after { content: ""; flex: 1; height: 2px; background: rgba(140,189,235,.45); border-radius: 2px; }
+    .ruta-linea i { font-size: 18px; }
+    .hero-pie { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 22px; position: relative; }
+    .chapa { display: inline-flex; flex-direction: column; border-radius: 6px; overflow: hidden; background: #fff; color: #111;
+             box-shadow: 0 1px 0 rgba(0,0,0,.2); line-height: 1; }
+    .chapa::before { content: "COCHE"; font-size: 7.5px; font-weight: 800; letter-spacing: .14em; color: #fff; background: #1E5A96;
+                     padding: 2px 8px; text-align: center; }
+    .chapa b { font-family: var(--disp); font-weight: 800; font-size: 19px; padding: 3px 10px 4px; letter-spacing: .04em; text-align: center; }
+    .chapa.vacia b { color: #8A94A3; font-size: 13px; padding: 5px 10px 6px; }
+    .junto { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: rgba(255,255,255,.85); padding: 7px 11px 7px 8px;
+             border-radius: 999px; background: rgba(255,255,255,.1); }
+    .junto .av { width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,.18); display: grid; place-items: center;
+                 font-size: 10px; font-weight: 700; }
+    .hero-nota { margin-top: 14px; font-size: 13px; color: rgba(255,255,255,.8); display: flex; gap: 8px; position: relative; }
+    .tag { font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 6px; background: rgba(255,255,255,.12); color: #fff; }
+
+    /* Vacío */
+    .vacio { text-align: center; padding: 34px 22px 30px; background: var(--card); border-radius: 26px; box-shadow: var(--sombra); }
+    .vacio svg { width: 120px; height: auto; margin-bottom: 14px; }
+    .vacio h3 { font-family: var(--disp); font-size: 22px; font-weight: 700; }
+    .vacio p { font-size: 14px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+    /* Avisos */
+    .avisar { margin-top: 14px; display: flex; align-items: center; gap: 14px; padding: 14px 14px 14px 16px; border-radius: var(--r);
+              background: var(--card); box-shadow: var(--sombra); }
+    .avisar .ic { width: 42px; height: 42px; border-radius: 13px; background: rgba(220,38,65,.1); color: var(--red);
+                  display: grid; place-items: center; font-size: 21px; flex: none; }
+    .avisar div { flex: 1; min-width: 0; }
+    .avisar b { display: block; font-size: 14.5px; font-weight: 600; }
+    .avisar span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 2px; line-height: 1.35; }
+    .btn { padding: 10px 16px; border-radius: 12px; background: var(--ink); color: var(--bg); font-weight: 600; font-size: 14px; flex: none; }
+    .btn:active { transform: scale(.97); }
+
+    /* Secciones */
+    .sec { display: flex; align-items: baseline; justify-content: space-between; margin: 30px 2px 12px; }
+    .sec h2 { font-family: var(--disp); font-size: 15px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+    .sec span { font-size: 12.5px; color: var(--muted); }
+
+    /* Lo que viene */
+    .dia { margin-bottom: 18px; }
+    .dia-t { font-size: 13px; font-weight: 600; color: var(--ink2); margin: 0 2px 8px; display: flex; gap: 6px; align-items: center; }
+    .dia-t b { color: var(--ink); }
+    .lista { background: var(--card); border-radius: var(--r); box-shadow: var(--sombra); overflow: hidden; }
+    .fila { display: grid; grid-template-columns: 58px 1fr auto; gap: 12px; align-items: center; padding: 14px 14px 14px 16px; }
+    .fila + .fila { border-top: 1px solid var(--line); }
+    .fila .h { font-family: var(--disp); font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .fila .h small { display: block; font-family: var(--txt); font-size: 10.5px; font-weight: 600; color: var(--muted); letter-spacing: .04em; }
+    .fila .q { min-width: 0; }
+    .fila .q b { display: block; font-size: 14.5px; font-weight: 600; line-height: 1.3; }
+    .fila .q span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+    .lado { font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; padding: 4px 8px; border-radius: 6px;
+            background: var(--soft); color: var(--ink2); }
+    .lado.vuelta { background: rgba(30,90,150,.1); color: var(--blue); }
+    .lado.tur { background: rgba(183,121,31,.12); color: var(--amber); }
+    .lado.res { background: rgba(220,38,65,.1); color: var(--red); }
+    .fila.paso { opacity: .45; }
+    .fila.paso .h::after { content: "ya salió"; display: block; font-family: var(--txt); font-size: 10px; font-weight: 600; color: var(--muted); }
+
+    /* Mi mes */
+    .meses { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 16px; }
+    .meses button { width: 40px; height: 40px; border-radius: 12px; background: var(--card); box-shadow: var(--sombra); font-size: 19px; display: grid; place-items: center; }
+    .meses button:disabled { opacity: .3; }
+    .meses h2 { font-family: var(--disp); font-size: 22px; font-weight: 700; }
+    .total { background: var(--card); border-radius: 26px; padding: 22px; box-shadow: var(--sombra); position: relative; overflow: hidden; }
+    .total small { font-size: 12.5px; color: var(--muted); font-weight: 500; }
+    .total .num { font-family: var(--disp); font-weight: 800; font-size: 84px; line-height: .9; letter-spacing: -.03em; margin-top: 8px;
+                  font-variant-numeric: tabular-nums; }
+    .total .num span { font-size: 22px; font-weight: 600; letter-spacing: 0; color: var(--muted); margin-left: 6px; }
+    .delta { display: inline-flex; align-items: center; gap: 4px; margin-top: 12px; font-size: 12.5px; font-weight: 600; padding: 5px 10px;
+             border-radius: 999px; background: var(--soft); color: var(--ink2); }
+    .delta.sube { background: rgba(31,138,91,.12); color: var(--green); }
+    .delta.baja { background: rgba(220,38,65,.1); color: var(--red); }
+    .prog { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+    .grilla { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .dato { background: var(--card); border-radius: var(--r); padding: 16px; box-shadow: var(--sombra); }
+    .dato i { font-size: 19px; color: var(--blue); }
+    .dato b { display: block; font-family: var(--disp); font-size: 30px; font-weight: 700; margin-top: 8px; line-height: 1; font-variant-numeric: tabular-nums; }
+    .dato span { display: block; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+    .tarj { background: var(--card); border-radius: var(--r); padding: 18px; box-shadow: var(--sombra); }
+    .tope { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; margin-top: 14px; }
+    .tope i { height: 12px; border-radius: 4px; background: var(--dot0); }
+    .tope i.h { background: var(--blue); }
+    .tope i.p { background: repeating-linear-gradient(-45deg, var(--blue) 0 3px, transparent 3px 6px); opacity: .55; }
+    .tope i.x { background: var(--red); }
+    .tarj-t { display: flex; justify-content: space-between; align-items: baseline; }
+    .tarj-t b { font-size: 14.5px; font-weight: 600; }
+    .tarj-t span { font-family: var(--disp); font-size: 22px; font-weight: 700; }
+    .tarj p { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+    .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 12px; }
+    .cal .ds { font-size: 10.5px; font-weight: 600; color: var(--muted); text-align: center; padding-bottom: 2px; }
+    .cal .d { aspect-ratio: 1; border-radius: 10px; display: grid; place-items: center; font-size: 12.5px; font-weight: 600;
+              background: var(--dot0); color: var(--muted); font-variant-numeric: tabular-nums; }
+    .cal .d.n1 { background: var(--dot1); color: #14263D; }
+    .cal .d.n2 { background: var(--dot2); color: #fff; }
+    .cal .d.n3 { background: var(--dot3); color: #fff; }
+    .cal .d.hoy { box-shadow: inset 0 0 0 2px var(--red); }
+    .cal .d.fut { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+    .cal .d.fut.hoy { box-shadow: inset 0 0 0 2px var(--red); }
+    .cal .d.vac { background: transparent; }
+    .leyenda { display: flex; align-items: center; gap: 6px; justify-content: flex-end; font-size: 11px; color: var(--muted); margin-top: 12px; }
+    .leyenda i { width: 12px; height: 12px; border-radius: 4px; display: inline-block; }
+    .tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; padding: 10px 0; }
+    .tr + .tr { border-top: 1px solid var(--line); }
+    .tr b { font-size: 14px; font-weight: 500; }
+    .tr span { font-family: var(--disp); font-weight: 700; font-size: 18px; }
+    .tr em { grid-column: 1 / -1; height: 5px; border-radius: 3px; background: var(--soft); overflow: hidden; display: block; }
+    .tr em::after { content: ""; display: block; height: 100%; width: var(--w); background: var(--blue); border-radius: 3px; }
+
+    /* Pestañas */
+    .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; padding: 8px 18px calc(10px + env(safe-area-inset-bottom));
+            background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+            border-top: 1px solid var(--line); }
+    .tabs div { max-width: 480px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+                background: var(--soft); border-radius: 16px; padding: 4px; }
+    .tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 11px 0; border-radius: 12px;
+                   font-weight: 600; font-size: 14px; color: var(--muted); transition: background .2s, color .2s; }
+    .tabs button i { font-size: 19px; }
+    .tabs button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(20,38,61,.12); }
+
+    /* Hoja de perfil */
+    .velo { position: fixed; inset: 0; background: rgba(8,15,25,.45); z-index: 20; opacity: 0; pointer-events: none; transition: opacity .2s; }
+    .velo.on { opacity: 1; pointer-events: auto; }
+    .hoja { position: fixed; left: 0; right: 0; bottom: 0; z-index: 21; background: var(--card); border-radius: 26px 26px 0 0;
+            padding: 10px 20px calc(22px + env(safe-area-inset-bottom)); transform: translateY(105%); transition: transform .28s cubic-bezier(.2,.8,.2,1);
+            max-width: 520px; margin: 0 auto; }
+    .hoja.on { transform: none; }
+    .hoja .asa { width: 40px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 18px; }
+    .hoja h3 { font-family: var(--disp); font-size: 24px; font-weight: 700; }
+    .hoja > p { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .op { display: flex; align-items: center; gap: 14px; width: 100%; padding: 15px 4px; text-align: left; font-size: 15px; font-weight: 500; }
+    .op + .op { border-top: 1px solid var(--line); }
+    .op i { font-size: 21px; color: var(--muted); width: 24px; }
+    .op small { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 1px; }
+    .op.roja, .op.roja i { color: var(--red); }
+    .ops { margin-top: 14px; }
+
+    /* Aviso flotante */
+    .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom)); transform: translate(-50%, 20px); z-index: 30;
+             background: var(--ink); color: var(--bg); padding: 12px 16px; border-radius: 14px; font-size: 13.5px; font-weight: 500;
+             opacity: 0; transition: all .25s; max-width: calc(100% - 36px); box-shadow: 0 10px 30px -10px rgba(0,0,0,.4); }
+    .toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+    /* Vista del admin */
+    .admin { margin: 0 0 14px; padding: 10px 12px; border-radius: 14px; background: rgba(30,90,150,.1); color: var(--blue);
+             font-size: 12.5px; display: flex; gap: 8px; align-items: center; }
+    .admin select, .admin input { font: inherit; font-size: 12.5px; padding: 5px 6px; border-radius: 8px; border: 1px solid var(--line);
+                                  background: var(--card); color: var(--ink); min-width: 0; }
+    .admin select { flex: 1; }
+
+    /* Movimiento */
+    .entra { animation: entra .5s cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes entra { from { opacity: 0; transform: translateY(12px); } }
+    .esqueleto { border-radius: 26px; background: linear-gradient(90deg, var(--soft) 0%, var(--card) 50%, var(--soft) 100%);
+                 background-size: 200% 100%; animation: brillo 1.2s infinite linear; }
+    @keyframes brillo { to { background-position: -200% 0; } }
+    @media (prefers-reduced-motion: reduce) { .entra, .esqueleto { animation: none; } }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="top-txt">
+      <small id="hoy-txt">&nbsp;</small>
+      <h1 id="hola">Hola</h1>
+    </div>
+    <button class="yo" id="yo" onclick="abrirHoja()" aria-label="Mi cuenta y avisos"><span id="ini">·</span><i class="pto"></i></button>
+  </header>
+
+  {% if admin %}
+  <div class="admin" id="admin">
+    <i class="ti ti-eye"></i>
+    <select id="adm-u" onchange="admCambio()" aria-label="Ver la app como"><option value="">Elegí un chofer…</option></select>
+    <input type="date" id="adm-hoy" onchange="admCambio()" aria-label="Día">
+  </div>
+  {% endif %}
+
+  <main>
+    <section id="v-serv">
+      <div id="hero"><div class="esqueleto" style="height:300px"></div></div>
+      <div id="avisar"></div>
+      <div id="viene"></div>
+    </section>
+
+    <section id="v-mes" hidden>
+      <div class="meses">
+        <button id="m-ant" onclick="moverMes(-1)" aria-label="Mes anterior"><i class="ti ti-chevron-left"></i></button>
+        <h2 id="m-txt">—</h2>
+        <button id="m-sig" onclick="moverMes(1)" aria-label="Mes siguiente"><i class="ti ti-chevron-right"></i></button>
+      </div>
+      <div id="mes"></div>
+    </section>
+  </main>
+</div>
+
+<nav class="tabs" aria-label="Secciones">
+  <div>
+    <button class="on" id="t-serv" onclick="verTab('serv')"><i class="ti ti-bus"></i> Mis servicios</button>
+    <button id="t-mes" onclick="verTab('mes')"><i class="ti ti-chart-bar"></i> Mi mes</button>
+  </div>
+</nav>
+
+<div class="velo" id="velo" onclick="cerrarHoja()"></div>
+<div class="hoja" id="hoja" role="dialog" aria-modal="true" aria-labelledby="h-nom">
+  <div class="asa"></div>
+  <h3 id="h-nom">—</h3>
+  <p id="h-sub">Chofer · La Santaniana</p>
+  <div class="ops">
+    <button class="op" id="op-avisos" onclick="activarAvisos(true)"><i class="ti ti-bell"></i><div>Avisos en el celular<small id="op-avisos-t">—</small></div></button>
+    <button class="op" onclick="cerrarHoja(); cargar(true)"><i class="ti ti-refresh"></i><div>Actualizar<small>Traer lo último que publicó la oficina</small></div></button>
+    <button class="op roja" onclick="salir()"><i class="ti ti-logout"></i><div>Salir</div></button>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+const ES_ADMIN = {{ 'true' if admin else 'false' }};
+const S = { d: null, mes: null, mesVer: null, tab: "serv", timer: null };
+const $ = id => document.getElementById(id);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const DIAS = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+const miles = n => Number(n || 0).toLocaleString("es-PY");
+
+function qs(extra) {
+  const p = new URLSearchParams(extra || {});
+  if (ES_ADMIN) {
+    const u = $("adm-u") && $("adm-u").value, h = $("adm-hoy") && $("adm-hoy").value;
+    if (u) p.set("u", u);
+    if (h) p.set("hoy", h);
+  }
+  const s = p.toString();
+  return s ? "?" + s : "";
+}
+async function api(url, opt) {
+  const r = await fetch(url, Object.assign({ credentials: "same-origin" }, opt || {}));
+  if (r.status === 401) { location.href = "/login"; throw new Error("sin sesión"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j.msg || "Error"), { j });
+  return j;
+}
+function toast(t) {
+  const e = $("toast"); e.textContent = t; e.classList.add("on");
+  clearTimeout(e._t); e._t = setTimeout(() => e.classList.remove("on"), 3600);
+}
+
+// ── Carga ────────────────────────────────────────────────────────────────
+async function cargar(avisar) {
+  try {
+    const d = await api("/api/mi/inicio" + qs());
+    S.d = d; S.mes = d.mes; S.mesAnt = null; S.mesVer = d.hoy.slice(0, 7); S.base = Date.now();
+    pintarCabecera(); pintarServicios(); pintarMes();
+    if (avisar) toast("Actualizado");
+  } catch (e) {
+    $("hero").innerHTML = `<div class="vacio entra"><h3>${ES_ADMIN ? "Vista previa" : "No se pudo cargar"}</h3><p>${esc(e.message)}</p></div>`;
+    $("viene").innerHTML = "";
+  }
+}
+function pintarCabecera() {
+  const d = S.d;
+  $("hoy-txt").textContent = d.hoy_txt.charAt(0).toUpperCase() + d.hoy_txt.slice(1);
+  $("hola").textContent = `Hola, ${d.pila}`;
+  const partes = d.nombre.split(",");
+  $("ini").textContent = ((partes[1] || "").trim()[0] || "") + (partes[0].trim()[0] || "");
+  $("h-nom").textContent = lindo(d.nombre);
+}
+
+// ── Mis servicios ────────────────────────────────────────────────────────
+// La hora de ahora corre sola desde que se cargó (con la del servidor como base)
+function ahoraMs() { return new Date(S.d.hoy + "T" + (S.d.ahora || "00:00")).getTime() + (Date.now() - (S.base || Date.now())); }
+function yaPaso(it) {
+  if (!it.hora || it.origen !== "trafico") return false;
+  return new Date(it.fecha + "T" + it.hora).getTime() < ahoraMs() - 20 * 60000;
+}
+function cuandoFalta(it) {
+  if (!it.hora) return "";
+  const m = Math.round((new Date(it.fecha + "T" + it.hora).getTime() - ahoraMs()) / 60000);
+  if (m < -20) return "";
+  if (m <= 0) return "<b>Sale ahora</b>";
+  if (m < 60) return `Sale en <b>${m} min</b>`;
+  const h = Math.floor(m / 60), r = m % 60;
+  if (h < 24) return `Sale en <b>${h} h${r ? ` ${r} min` : ""}</b>`;
+  const dd = Math.round(m / 1440);
+  return `Faltan <b>${dd} día${dd > 1 ? "s" : ""}</b>`;
+}
+const POR = x => x.startsWith("X ") ? "por " + x.slice(2).toLowerCase().replace(/\b\w/g, c => c.toUpperCase()) : x.charAt(0) + x.slice(1).toLowerCase();
+const may = t => String(t).charAt(0).toUpperCase() + String(t).slice(1);
+// "OJEDA, PEDRO" → "Ojeda, Pedro" (se lee mejor en la pantalla)
+const lindo = n => String(n || "").toLowerCase().replace(/(^|[\s,(-])([a-záéíóúñü])/g, (m, a, b) => a + b.toUpperCase());
+function iniciales(n) { const p = String(n).split(","); return ((p[1] || "").trim()[0] || "") + (p[0].trim()[0] || ""); }
+function etiquetaTipo(it) {
+  if (it.origen === "turismo") return "Turismo";
+  if (it.origen === "reserva") return "Reserva";
+  return it.tipo === "internacional" ? "Internacional" : "Línea nacional";
+}
+
+function pintarServicios() {
+  const d = S.d, lista = d.proximos;
+  const futuros = lista.filter(it => !yaPaso(it));
+  const prox = futuros.find(it => it.origen !== "reserva") || futuros[0];
+  if (!prox) {
+    $("hero").innerHTML = `<div class="vacio entra">
+      <svg viewBox="0 0 120 70" fill="none" aria-hidden="true"><rect x="8" y="10" width="96" height="40" rx="9" fill="var(--soft)"/>
+      <rect x="16" y="18" width="18" height="13" rx="3" fill="var(--card)"/><rect x="38" y="18" width="18" height="13" rx="3" fill="var(--card)"/>
+      <rect x="60" y="18" width="18" height="13" rx="3" fill="var(--card)"/><path d="M84 18h10a4 4 0 0 1 4 4v9H84z" fill="var(--card)"/>
+      <rect x="8" y="38" width="96" height="4" fill="var(--red)" opacity=".8"/><circle cx="30" cy="52" r="7" fill="var(--ink)"/><circle cx="84" cy="52" r="7" fill="var(--ink)"/>
+      <path d="M4 62h112" stroke="var(--line)" stroke-width="2" stroke-dasharray="6 6"/></svg>
+      <h3>Sin servicios publicados</h3>
+      <p>Cuando la oficina publique la planilla con tu servicio, aparece acá${"Notification" in window ? " y te llega un aviso al celular" : ""}.</p></div>`;
+  } else {
+    $("hero").innerHTML = heroHTML(prox);
+  }
+  // Lo que viene, agrupado por día
+  const resto = lista.filter(it => it !== prox);
+  if (!resto.length) { $("viene").innerHTML = ""; }
+  else {
+    const dias = {};
+    resto.forEach(it => (dias[it.fecha] = dias[it.fecha] || []).push(it));
+    $("viene").innerHTML = `<div class="sec"><h2>Lo que viene</h2><span>${resto.length} más</span></div>` +
+      Object.keys(dias).sort().map((f, k) => {
+        const its = dias[f], x = its[0];
+        const cab = (x.dia_txt === "hoy" || x.dia_txt === "mañana") ? `<b>${may(x.dia_txt)}</b> · ${esc(x.dia_largo)}` : `<b>${esc(may(x.dia_largo))}</b>`;
+        return `<div class="dia entra" style="animation-delay:${.08 + k * .05}s"><div class="dia-t">${cab}</div>
+          <div class="lista">${its.map(filaHTML).join("")}</div></div>`;
+      }).join("");
+  }
+  pintarAvisar();
+}
+
+function heroHTML(it) {
+  const dia = it.dia_txt === "hoy" || it.dia_txt === "mañana" ? `${it.dia_txt} · ${it.dia_largo}` : it.dia_largo;
+  const falta = cuandoFalta(it);
+  let ruta;
+  if (it.origen === "reserva") {
+    ruta = `<div class="ruta" style="grid-template-columns:1fr"><div><small>De reserva en</small><strong>${esc(it.corredor)} · ${it.lado === "ida" ? "ida" : "vuelta"}</strong></div></div>`;
+  } else {
+    ruta = `<div class="ruta"><div><small>Sale de</small><strong>${esc(it.desde || "—")}</strong></div>
+      <div class="ruta-linea"><i class="ti ti-bus"></i></div>
+      <div class="der"><small>Llega a</small><strong>${esc(it.hasta || "—")}</strong></div></div>`;
+  }
+  const tags = (it.extras || []).map(x => `<span class="tag">${esc(POR(x))}</span>`).join("");
+  const con = (it.con || []).map(n => `<span class="junto"><span class="av">${esc(iniciales(n))}</span>con ${esc(lindo(n))}</span>`).join("");
+  const extra = it.origen === "turismo"
+    ? `${it.cliente ? `<span class="tag">${esc(it.cliente)}</span>` : ""}${it.fecha_fin && it.fecha_fin !== it.fecha ? `<span class="tag">Vuelve el ${esc(fechaCorta(it.fecha_fin))}</span>` : ""}${it.pasajeros ? `<span class="tag">${esc(it.pasajeros)} pasajeros</span>` : ""}`
+    : "";
+  return `<div class="hero entra">
+    <div class="hero-et"><span class="pill roja">${esc(dia)}</span><span class="pill">${etiquetaTipo(it)}${it.lado && it.origen === "trafico" ? ` · ${it.lado === "ida" ? "ida" : "vuelta"}` : ""}</span></div>
+    <div class="hero-hora">${esc(it.hora || "--:--")}</div>
+    ${falta ? `<div class="hero-falta">${falta}</div>` : ""}
+    ${ruta}
+    <div class="hero-pie">${it.coche ? `<span class="chapa"><b>${esc(it.coche)}</b></span>` : `<span class="chapa vacia"><b>a confirmar</b></span>`}${con}${tags}${extra}</div>
+    ${it.nota ? `<div class="hero-nota"><i class="ti ti-message-2"></i><span>${esc(it.nota)}</span></div>` : ""}
+  </div>`;
+}
+function fechaCorta(f) { const d = new Date(f + "T12:00"); return `${DIAS[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`; }
+
+function filaHTML(it) {
+  let q, sub = [], lado;
+  if (it.origen === "reserva") {
+    q = `Reserva · ${esc(it.corredor)}`; lado = `<span class="lado res">Reserva</span>`;
+  } else if (it.origen === "turismo") {
+    q = it.desde && it.hasta ? `${esc(it.desde)} → ${esc(it.hasta)}` : esc(it.hasta || it.desde || "Turismo");
+    if (it.cliente) sub.push(esc(it.cliente));
+    if (it.fecha_fin && it.fecha_fin !== it.fecha) sub.push(`hasta el ${esc(fechaCorta(it.fecha_fin))}`);
+    lado = `<span class="lado tur">Turismo</span>`;
+  } else {
+    q = `${esc(it.desde)} → ${esc(it.hasta)}`;
+    lado = `<span class="lado ${it.lado === "ida" ? "" : "vuelta"}">${it.lado === "ida" ? "Ida" : "Vuelta"}</span>`;
+  }
+  sub.unshift(it.coche ? `Coche ${esc(it.coche)}` : "Coche a confirmar");
+  (it.con || []).forEach(n => sub.push(`con ${esc(lindo(n))}`));
+  (it.extras || []).forEach(x => sub.push(esc(POR(x))));
+  if (it.tipo === "internacional") sub.push("Internacional");
+  return `<div class="fila ${yaPaso(it) ? "paso" : ""}"><div class="h">${esc(it.hora || "—")}</div>
+    <div class="q"><b>${q}</b><span>${sub.join(" · ")}</span></div>${lado}</div>`;
+}
+
+// ── Mi mes ───────────────────────────────────────────────────────────────
+async function moverMes(n) {
+  const [a, m] = S.mesVer.split("-").map(Number);
+  const f = new Date(a, m - 1 + n, 1);
+  const mes = `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}`;
+  if (mes > S.d.hoy.slice(0, 7)) return;
+  S.mesVer = mes;
+  $("mes").style.opacity = .4;
+  try {
+    const r = await api("/api/mi/mes" + qs({ mes }));
+    S.mes = r.mes; S.mesAnt = r.anterior;
+  } catch (e) { toast(e.message); }
+  $("mes").style.opacity = 1;
+  pintarMes();
+}
+function pintarMes() {
+  const m = S.mes, ant = S.mesAnt || S.d.anterior;
+  const enCurso = m.mes === S.d.hoy.slice(0, 7);
+  $("m-txt").textContent = m.mes_txt;
+  $("m-sig").disabled = enCurso;
+  const dif = m.servicios - ant.servicios;
+  const delta = ant.servicios || m.servicios ? `<span class="delta ${dif > 0 ? "sube" : dif < 0 ? "baja" : ""}">
+      <i class="ti ti-${dif > 0 ? "trending-up" : dif < 0 ? "trending-down" : "equal"}"></i>${dif === 0 ? "Igual" : (dif > 0 ? "+" : "") + dif} que ${ant.a_la_altura ? "a esta altura de" : "en"} ${esc(ant.mes_txt.split(" ")[0].toLowerCase())}</span>` : "";
+  const prog = enCurso ? `Hasta hoy${m.programados ? ` · <b>${m.programados}</b> más ya programado${m.programados > 1 ? "s" : ""} este mes` : ""}` : "";
+  let html = `<div class="total entra"><small>Servicios hechos</small>
+      <div class="num">${m.servicios}<span>servicio${m.servicios === 1 ? "" : "s"}</span></div>
+      ${delta}${prog ? `<div class="prog">${prog}</div>` : ""}</div>
+    <div class="grilla">
+      ${datoHTML("ti-route", m.km ? miles(m.km) : "—", m.km ? `km recorridos${m.km_completo ? "" : " (aprox.)"}` : "km recorridos")}
+      ${datoHTML("ti-calendar-check", m.dias, `día${m.dias === 1 ? "" : "s"} trabajado${m.dias === 1 ? "" : "s"}`)}
+      ${datoHTML("ti-bolt", m.refuerzos, `refuerzo${m.refuerzos === 1 ? "" : "s"}`)}
+      ${datoHTML("ti-bus", m.coches, `coche${m.coches === 1 ? "" : "s"} distinto${m.coches === 1 ? "" : "s"}`)}
+    </div>`;
+  if (m.internacional) {
+    const x = m.internacional, celdas = [];
+    for (let i = 0; i < Math.max(x.tope, x.viajes); i++)
+      celdas.push(`<i class="${i >= x.tope ? "x" : i < x.hechos ? "h" : i < x.viajes ? "p" : ""}"></i>`);
+    const queda = x.tope - x.viajes;
+    html += `<div class="sec"><h2>Internacional</h2></div><div class="tarj entra">
+      <div class="tarj-t"><b>Viajes a Buenos Aires</b><span>${x.viajes} / ${x.tope}</span></div>
+      <div class="tope" style="grid-template-columns:repeat(${Math.max(x.tope, x.viajes)},1fr)">${celdas.join("")}</div>
+      <p>${x.hechos} hecho${x.hechos === 1 ? "" : "s"}${x.viajes > x.hechos ? ` · ${x.viajes - x.hechos} programado${x.viajes - x.hechos === 1 ? "" : "s"}` : ""} · ${queda > 0 ? `te queda${queda === 1 ? "" : "n"} ${queda}` : queda === 0 ? "llegaste al tope del mes" : `pasaste el tope por ${-queda}`}. Ida y vuelta cuentan como un viaje.</p></div>`;
+  }
+  html += `<div class="sec"><h2>Días trabajados</h2><span>${m.dias} de ${new Date(m.hasta + "T12:00").getDate()}</span></div>
+    <div class="tarj entra">${calendarioHTML(m)}
+    <div class="leyenda">menos <i style="background:var(--dot0)"></i><i style="background:var(--dot1)"></i><i style="background:var(--dot2)"></i><i style="background:var(--dot3)"></i> más</div></div>`;
+  if (m.tramos.length) {
+    const max = m.tramos[0].n;
+    html += `<div class="sec"><h2>Lo que más hiciste</h2></div><div class="tarj entra" style="padding:6px 18px">
+      ${m.tramos.map(t => `<div class="tr"><b>${esc(t.tramo)}</b><span>${t.n}</span><em style="--w:${Math.round(t.n / max * 100)}%"></em></div>`).join("")}</div>`;
+  }
+  if (m.turismo_lista.length) {
+    html += `<div class="sec"><h2>Turismo</h2><span>${m.turismo_lista.length} servicio${m.turismo_lista.length === 1 ? "" : "s"}</span></div>
+      <div class="lista entra">${m.turismo_lista.map(t => `<div class="fila ${t.hecho ? "" : "paso"}" style="${t.hecho ? "" : "opacity:.7"}">
+        <div class="h" style="font-size:16px">${esc(fechaCorta(t.fecha).split(" ")[1])}<small>${esc(fechaCorta(t.fecha).split(" ")[0].slice(0, 3))}</small></div>
+        <div class="q"><b>${esc(t.desde && t.hasta ? `${t.desde} → ${t.hasta}` : (t.hasta || t.desde || "Turismo"))}</b>
+        <span>${[t.cliente, t.coche ? "Coche " + t.coche : "", t.dias > 1 ? `${t.dias} días` : ""].filter(Boolean).map(esc).join(" · ")}</span></div>
+        <span class="lado tur">${t.hecho ? "Hecho" : "Viene"}</span></div>`).join("")}</div>`;
+  }
+  $("mes").innerHTML = html;
+}
+function datoHTML(ic, n, t) { return `<div class="dato entra"><i class="ti ${ic}"></i><b>${n}</b><span>${t}</span></div>`; }
+function calendarioHTML(m) {
+  const ini = new Date(m.desde + "T12:00"), fin = new Date(m.hasta + "T12:00");
+  const vacias = (ini.getDay() + 6) % 7;
+  let h = ["L", "M", "M", "J", "V", "S", "D"].map(x => `<div class="ds">${x}</div>`).join("");
+  for (let i = 0; i < vacias; i++) h += `<div class="d vac"></div>`;
+  for (let d = 1; d <= fin.getDate(); d++) {
+    const f = `${m.mes}-${String(d).padStart(2, "0")}`, n = m.por_dia[f] || 0;
+    const fut = f > m.hoy, hoy = f === m.hoy;
+    h += `<div class="d ${fut ? "fut" : n >= 3 ? "n3" : n === 2 ? "n2" : n === 1 ? "n1" : ""} ${hoy ? "hoy" : ""}" title="${n} servicio(s)">${d}</div>`;
+  }
+  return `<div class="cal">${h}</div>`;
+}
+
+// ── Pestañas y hoja ──────────────────────────────────────────────────────
+function verTab(t) {
+  S.tab = t;
+  $("v-serv").hidden = t !== "serv"; $("v-mes").hidden = t !== "mes";
+  $("t-serv").classList.toggle("on", t === "serv"); $("t-mes").classList.toggle("on", t === "mes");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function abrirHoja() { $("velo").classList.add("on"); $("hoja").classList.add("on"); estadoAvisos(); }
+function cerrarHoja() { $("velo").classList.remove("on"); $("hoja").classList.remove("on"); }
+async function salir() {
+  await fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
+  location.href = "/login";
+}
+
+// ── Avisos al celular ────────────────────────────────────────────────────
+const AVISOS_OK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+function b64aBytes(s) {
+  const p = "=".repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from([...b].map(c => c.charCodeAt(0)));
+}
+async function suscripcion() {
+  if (!AVISOS_OK) return null;
+  const reg = await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+async function estadoAvisos() {
+  let txt, on = false;
+  if (!AVISOS_OK) txt = "Este celular no permite avisos desde el navegador";
+  else if (Notification.permission === "denied") txt = "Bloqueados: habilitalos en Ajustes → Notificaciones";
+  else { const s = await suscripcion().catch(() => null); on = !!s && Notification.permission === "granted";
+         txt = on ? "Activados · tocá para mandarte uno de prueba" : "Desactivados · tocá para activarlos"; }
+  $("op-avisos-t").textContent = txt;
+  $("yo").classList.toggle("con-avisos", on);
+  return on;
+}
+async function pintarAvisar() {
+  const box = $("avisar");
+  if (ES_ADMIN || !AVISOS_OK) { box.innerHTML = ""; return; }
+  const on = await estadoAvisos();
+  if (on) { box.innerHTML = ""; return; }
+  const bloq = Notification.permission === "denied";
+  box.innerHTML = `<div class="avisar entra" style="animation-delay:.1s"><span class="ic"><i class="ti ti-bell-ringing"></i></span>
+    <div><b>${bloq ? "Avisos bloqueados" : "Enterate al toque"}</b><span>${bloq
+      ? "Para recibir tu servicio, habilitá las notificaciones de la app en los ajustes del celular."
+      : "Activá los avisos y te llega tu servicio apenas la oficina lo publica."}</span></div>
+    ${bloq ? "" : `<button class="btn" onclick="activarAvisos()">Activar</button>`}</div>`;
+}
+async function activarAvisos(desdeHoja) {
+  if (!AVISOS_OK) { toast("Este celular no permite avisos"); return; }
+  try {
+    let s = await suscripcion();
+    if (s && Notification.permission === "granted") {
+      await api("/api/push/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: s.toJSON() }) });
+      if (desdeHoja) { await api("/api/push/probar", { method: "POST" }); toast("Te mandamos un aviso de prueba"); }
+      return;
+    }
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Sin permiso no te podemos avisar"); pintarAvisar(); return; }
+    const { clave } = await api("/api/push/clave");
+    const reg = await navigator.serviceWorker.ready;
+    s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64aBytes(clave) });
+    await api("/api/push/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: s.toJSON() }) });
+    await api("/api/push/probar", { method: "POST" }).catch(() => {});
+    toast("¡Listo! Te van a llegar tus servicios");
+  } catch (e) {
+    const m = String((e && e.message) || "");
+    toast(/[áéíóúñ]|No |Sin /.test(m) ? m : "No se pudieron activar los avisos en este celular. Probá de nuevo en un rato.");
+  }
+  pintarAvisar(); estadoAvisos();
+}
+// Si ya dio permiso, mantener la suscripción al día (por si el celular la renovó)
+async function refrescarSuscripcion() {
+  if (ES_ADMIN || !AVISOS_OK || Notification.permission !== "granted") return;
+  const s = await suscripcion().catch(() => null);
+  if (s) api("/api/push/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: s.toJSON() }) }).catch(() => {});
+}
+
+// ── Vista previa del admin ───────────────────────────────────────────────
+async function admIniciar() {
+  const p = new URLSearchParams(location.search);
+  const r = await api("/api/mi/choferes").catch(() => ({ choferes: [] }));
+  $("adm-u").innerHTML = `<option value="">Elegí un chofer…</option>` + r.choferes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
+  if (p.get("u")) $("adm-u").value = p.get("u");
+  if (p.get("hoy")) $("adm-hoy").value = p.get("hoy");
+  if ($("adm-u").value) cargar();
+  else $("hero").innerHTML = `<div class="vacio entra"><h3>Vista previa de la app</h3><p>Elegí un chofer arriba para ver su app tal cual la ve él. Con la fecha podés mirar otro día.</p></div>`;
+}
+function admCambio() {
+  const p = new URLSearchParams();
+  if ($("adm-u").value) p.set("u", $("adm-u").value);
+  if ($("adm-hoy").value) p.set("hoy", $("adm-hoy").value);
+  history.replaceState(null, "", "/mi" + (p.toString() ? "?" + p : ""));
+  if ($("adm-u").value) cargar();
+}
+
+// ── Arranque ─────────────────────────────────────────────────────────────
+if (ES_ADMIN) admIniciar(); else { cargar(); refrescarSuscripcion(); }
+// Al volver a la app, traer lo último (por si se publicó algo mientras tanto)
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && S.d && (!ES_ADMIN || $("adm-u").value)) cargar();
+});
+setInterval(() => { if (S.d && S.tab === "serv" && !document.hidden) pintarServicios(); }, 60000);
+</script>
+</body>
+</html>
