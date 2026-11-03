@@ -21010,7 +21010,7 @@ async function renderPersonal() {
     </div>
     <div class="section pv-raiz pt-raiz">
       <div class="pv-tabs" role="tablist">
-        ${[["trabajo", "chart-bar", "Trabajo"], ["lista", "id-badge-2", "Personal y números"]]
+        ${[["trabajo", "chart-bar", "Trabajo"], ["horas", "clock-hour-4", "Horas trabajadas"], ["lista", "id-badge-2", "Personal y números"]]
           .map(([k, i, t]) => `<button role="tab" class="pv-tab ${pt.tab === k ? "on" : ""}" data-t="${k}" onclick="ptIr('${k}')"><i class="ti ti-${i}"></i><span>${t}</span></button>`).join("")}
       </div>
       <div id="pt-cuerpo">${pvCargando()}</div>
@@ -21024,10 +21024,147 @@ function ptIr(tab) {
   if (acc) acc.innerHTML = tab === "lista"
     ? `<button class="btn btn-ghost" onclick="window.open('/api/personal/pdf','_blank')"><i class="ti ti-printer"></i> Imprimir la lista</button>
        ${ptPuede() ? `<button class="btn btn-primary" onclick="ptEditar()"><i class="ti ti-user-plus"></i> Agregar persona</button>` : ""}`
+    : tab === "horas" ? `<button class="btn btn-primary" onclick="phExcel()"><i class="ti ti-file-spreadsheet"></i> Descargar Excel</button>`
     : `<button class="btn btn-ghost" id="pt-btn-pdf" onclick="ptInformePdf()"><i class="ti ti-file-type-pdf"></i> ${pt.turno ? `Producción del turno ${(PT_TURNO[pt.turno] || "").toLowerCase()} (PDF)` : "Informe PDF"}</button>`;
   const c = $("#pt-cuerpo");
   if (c) c.innerHTML = pvCargando();
-  (tab === "lista" ? ptLista : ptTrabajo)();
+  (tab === "lista" ? ptLista : tab === "horas" ? phAbrir : ptTrabajo)();
+}
+
+// ─── HORAS TRABAJADAS (de las horas cargadas en cada OT) ───
+const ph = { p: "mes", desde: "", hasta: "", turno: "", puesto: "", d: null, abierto: null, seq: 0 };
+const PH_PERIODOS = [["hoy", "Hoy"], ["ayer", "Ayer"], ["semana", "Esta semana"], ["mes", "Este mes"], ["mes_pasado", "Mes pasado"], ["30", "30 días"], ["rango", "Elegir fechas"]];
+const phHM = h => { const m = Math.round((h || 0) * 60); return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`; };
+const phH = h => `<b>${phHM(h)}</b><small> h</small>`;
+function phQuery() {
+  const q = ph.p === "rango" ? `desde=${ph.desde}&hasta=${ph.hasta}` : `p=${ph.p}`;
+  return q + (ph.turno ? `&turno=${ph.turno}` : "") + (ph.puesto ? `&puesto=${encodeURIComponent(ph.puesto)}` : "");
+}
+function phExcel() {
+  if (ph.p === "rango" && (!ph.desde || !ph.hasta)) { toast("Elegí desde y hasta", "error"); return; }
+  location.href = `/api/personal/horas.xlsx?${phQuery()}`;
+}
+function phAbrir() {
+  const c = $("#pt-cuerpo");
+  if (!c || pt.tab !== "horas") return;
+  if (!ph.desde) { const h = new Date(); ph.hasta = h.toISOString().slice(0, 10); ph.desde = ph.hasta.slice(0, 8) + "01"; }
+  c.innerHTML = `
+    <div class="pt-filtros ph-filtros">
+      <div class="pt-seg" role="tablist" aria-label="Período">
+        ${PH_PERIODOS.map(([k, t]) => `<button role="tab" class="${ph.p === k ? "on" : ""}" data-hp="${k}" onclick="phPeriodo('${k}')">${t}</button>`).join("")}
+      </div>
+      <span class="ph-rango" id="ph-rango" ${ph.p === "rango" ? "" : "hidden"}>
+        <input type="date" value="${ph.desde}" onchange="ph.desde=this.value;phTraer()" aria-label="Desde"> a
+        <input type="date" value="${ph.hasta}" onchange="ph.hasta=this.value;phTraer()" aria-label="Hasta">
+      </span>
+      <select class="rv-sel" onchange="ph.turno=this.value;phTraer()" aria-label="Turno">
+        <option value="">Todos los turnos</option>${Object.entries(PT_TURNO).map(([k, v]) => `<option value="${k}" ${ph.turno === k ? "selected" : ""}>Turno ${v.toLowerCase()}</option>`).join("")}
+      </select>
+      <select class="rv-sel" id="ph-puesto" onchange="ph.puesto=this.value;phPintar()" aria-label="Puesto"><option value="">Todos los puestos</option></select>
+    </div>
+    <div id="ph-datos">${pvCargando()}</div>`;
+  phTraer();
+}
+function phPeriodo(k) {
+  ph.p = k; ph.abierto = null;
+  document.querySelectorAll("[data-hp]").forEach(b => b.classList.toggle("on", b.dataset.hp === k));
+  const r = $("#ph-rango"); if (r) r.hidden = k !== "rango";
+  phTraer();
+}
+async function phTraer() {
+  if (ph.p === "rango" && (!ph.desde || !ph.hasta)) return;
+  const seq = ++ph.seq, box = $("#ph-datos");
+  if (box && ph.d) box.classList.add("cargando");
+  const d = await api(`/api/personal/horas?${phQuery()}`).catch(() => null);
+  if (seq !== ph.seq || !$("#ph-datos")) return;
+  $("#ph-datos").classList.remove("cargando");
+  if (!d || !d.ok) { $("#ph-datos").innerHTML = pvError("No se pudieron traer las horas"); return; }
+  ph.d = d;
+  const puestos = [...new Set(d.tecnicos.map(r => r.puesto).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es"));
+  if (ph.puesto && !puestos.includes(ph.puesto)) ph.puesto = "";
+  const sel = $("#ph-puesto");
+  if (sel) sel.innerHTML = `<option value="">Todos los puestos</option>` + puestos.map(p => `<option ${p === ph.puesto ? "selected" : ""}>${ptEsc(p)}</option>`).join("");
+  phPintar();
+}
+function phPerTxt() {
+  const d = ph.d;
+  if (ph.p === "rango" || ph.p === "mes_pasado" || ph.p === "mes") return `del ${ptFC(d.desde)} al ${ptFC(d.hasta)}`;
+  return PT_PERIODO_TXT[ph.p] || "";
+}
+function phPintar() {
+  const d = ph.d, box = $("#ph-datos");
+  if (!d || !box) return;
+  const rk = d.tecnicos.filter(r => !ph.puesto || r.puesto === ph.puesto);
+  const con = rk.filter(r => r.horas || r.abiertas.length), sin = rk.filter(r => !r.horas && !r.abiertas.length && r.activo);
+  const total = rk.reduce((a, r) => a + r.horas, 0), n = rk.filter(r => r.horas).length;
+  const abiertas = rk.flatMap(r => r.abiertas.map(t => ({ ...t, r })));
+  const largas = rk.reduce((a, r) => a + r.largas, 0);
+  const max = Math.max(1, ...rk.map(r => r.horas));
+  const fila = r => `
+    <div class="pt-fila ph-fila ${r.horas ? "" : "cero"} ${ph.abierto === r.id ? "abierta" : ""}" role="row" tabindex="0"
+         onclick="phDetalle(${r.id})" onkeydown="if(event.key==='Enter')phDetalle(${r.id})">
+      <span class="pt-num">${r.numero}</span>
+      <span class="pt-quien"><b>${ptEsc(r.nombre)}</b><small>${ptEsc(r.puesto || "—")}${r.turno ? ` · <span class="pt-turno-tag">${PT_TURNO[r.turno] || ""}</span>` : ""}</small></span>
+      <span class="pt-t">${ptBarra(r.horas, max)}<span class="ph-h">${phH(r.horas)}</span></span>
+      <span class="num">${r.dias_trabajados || "—"}</span>
+      <span class="num">${r.dias_trabajados ? phHM(r.promedio) : "—"}</span>
+      <span class="num">${r.ots || "—"}</span>
+      <span class="ph-ahora">${r.abiertas.length ? `<span class="ph-vivo" title="Empezó a las ${ptEsc(r.abiertas[0].inicio.slice(11, 16))} y todavía no tiene hora de fin"><i></i>${ptEsc(r.abiertas[0].coche || "OT " + r.abiertas[0].ot_id)} · desde ${ptEsc(r.abiertas[0].inicio.slice(11, 16))}</span>` : r.largas ? `<span class="ph-ojo"><i class="ti ti-alert-triangle"></i> revisar</span>` : ""}</span>
+    </div>
+    ${ph.abierto === r.id ? phTandas(r) : ""}`;
+  box.innerHTML = `
+    <div class="pv-hero pt-hero">
+      <div class="pv-hero-num">
+        <span class="pv-et">Horas trabajadas · ${ptEsc(phPerTxt())}${ph.turno ? ` · turno ${PT_TURNO[ph.turno].toLowerCase()}` : ""}${ph.puesto ? " · " + ptEsc(ph.puesto) : ""}</span>
+        <b>${phHM(total)}<small style="font-size:.45em;font-weight:600"> h</small></b>
+        <span class="pv-hero-sub">${n ? `Entre <strong>${n}</strong> técnico${n === 1 ? "" : "s"} · promedio <strong>${phHM(total / n)} h</strong> por técnico. Sale de las horas cargadas en cada OT (inicio y fin), sin contar el almuerzo de 12 a 14.`
+          : `No hay horas cargadas en este período. Se cargan en la OT, en <strong>Horas del personal</strong> («Empezó ahora» / «Terminó ahora»).`}</span>
+      </div>
+      <div class="pv-hero-der ph-alertas">
+        ${abiertas.length ? `<div class="ph-al vivo"><i class="ti ti-player-play"></i><span><b>${abiertas.length} trabajando ahora</b> · tanda abierta, todavía no cuenta: ${abiertas.slice(0, 3).map(t => `N°${t.r.numero}`).join(", ")}${abiertas.length > 3 ? "…" : ""}</span></div>` : ""}
+        ${largas ? `<div class="ph-al ojo"><i class="ti ti-alert-triangle"></i><span><b>${largas} tanda${largas === 1 ? "" : "s"} de más de 12 h</b> · puede ser que se olvidaron de poner el fin. Están marcadas en el detalle.</span></div>` : ""}
+        ${sin.length ? `<div class="ph-al"><i class="ti ti-user-off"></i><span><b>${sin.length} sin horas cargadas</b> ${ptEsc(phPerTxt())}</span></div>` : ""}
+        ${!abiertas.length && !largas && !sin.length ? `<div class="ph-al ok"><i class="ti ti-circle-check"></i><span>Todos tienen horas cargadas y no hay nada raro.</span></div>` : ""}
+      </div>
+    </div>
+    ${phGrilla(d, con)}
+    <div class="pv-card">
+      <div class="pv-card-cab"><h3>Horas por técnico</h3><span>Tocá a alguien para ver cada tanda (OT, coche, inicio y fin)</span></div>
+      <div class="pt-tabla ph-tabla" role="table">
+        <div class="pt-fila ph-fila pt-th" role="row"><span>N°</span><span>Técnico</span><span>Horas</span><span class="num">Días</span><span class="num">Prom./día</span><span class="num">OTs</span><span>Ahora</span></div>
+        ${con.map(fila).join("") || `<div class="pt-vacio-r"><i class="ti ti-clock-off"></i> Nadie tiene horas cargadas ${ptEsc(phPerTxt())}.</div>`}
+        ${sin.length ? `<div class="pt-sep" role="row"><i class="ti ti-user-off"></i> Sin horas cargadas <span>${sin.length}</span></div>${sin.map(fila).join("")}` : ""}
+      </div>
+    </div>`;
+}
+// Una fila por técnico y una columna por día, con las horas de cada día
+function phGrilla(d, gente) {
+  const dias = d.dias || [];
+  if (!dias.length || dias.length > 31 || !gente.length) return "";
+  const maxD = Math.max(1, ...gente.flatMap(r => Object.values(r.por_dia)));
+  const DS = ["D", "L", "M", "M", "J", "V", "S"];
+  return `<div class="pv-card ph-grilla-card">
+    <div class="pv-card-cab"><h3>Día por día</h3><span>Horas de cada uno, cada día</span></div>
+    <div class="ph-grilla-w"><table class="ph-grilla"><thead><tr><th>Técnico</th>${dias.map(f => { const x = new Date(f + "T12:00"); return `<th class="${x.getDay() === 0 ? "dom" : ""}"><small>${DS[x.getDay()]}</small>${x.getDate()}</th>`; }).join("")}<th>Total</th></tr></thead>
+    <tbody>${gente.slice().sort((a, b) => a.numero - b.numero).map(r => `<tr><td><b>N°${r.numero}</b> ${ptEsc(r.nombre.split(" ").slice(0, 2).join(" "))}</td>${dias.map(f => {
+      const h = r.por_dia[f] || 0;
+      const a = 0.18 + 0.82 * h / maxD;
+      return `<td class="${new Date(f + "T12:00").getDay() === 0 ? "dom" : ""} ${h && a < 0.5 ? "claro" : ""}" ${h ? `style="--a:${a.toFixed(2)}" title="${phHM(h)} h"` : ""}>${h ? `<i>${phHM(h)}</i>` : ""}</td>`;
+    }).join("")}<td class="tot">${phHM(r.horas)}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+function phDetalle(id) { ph.abierto = ph.abierto === id ? null : id; phPintar(); }
+function phTandas(r) {
+  const ts = [...r.abiertas.map(t => ({ ...t, abierta: true })), ...r.tandas].sort((a, b) => b.inicio.localeCompare(a.inicio));
+  if (!ts.length) return `<div class="ph-det"><p class="pt-nota">No tiene horas cargadas en este período.</p></div>`;
+  return `<div class="ph-det" onclick="event.stopPropagation()">
+    ${r.coches_top.length ? `<div class="ph-det-top">Donde más horas: ${r.coches_top.map(c => `<span>Coche <b>${ptEsc(c.coche)}</b> ${phHM(c.horas)} h</span>`).join("")}</div>` : ""}
+    <table class="ph-det-t"><thead><tr><th>Día</th><th>OT</th><th>Coche</th><th>Inicio</th><th>Fin</th><th class="num">Horas</th><th></th></tr></thead><tbody>
+    ${ts.map(t => `<tr class="${t.abierta ? "vivo" : t.larga ? "ojo" : ""}">
+      <td>${ptFC(t.fecha)}</td><td><button class="pv-link" onclick="abrirOT(${t.ot_id})">#${t.ot_id}</button></td><td>${ptEsc(t.coche || "—")}</td>
+      <td>${ptEsc(t.inicio.slice(11, 16))}</td><td>${t.abierta ? "<em>sigue</em>" : ptEsc((t.fin.slice(0, 10) !== t.inicio.slice(0, 10) ? ptFC(t.fin) + " " : "") + t.fin.slice(11, 16))}</td>
+      <td class="num">${t.abierta ? "—" : phHM(t.horas)}</td>
+      <td>${t.abierta ? `<span class="ph-vivo"><i></i>trabajando</span>` : t.larga ? `<span class="ph-ojo"><i class="ti ti-alert-triangle"></i> más de 12 h</span>` : ptEsc(t.nota || "")}</td></tr>`).join("")}
+    </tbody></table></div>`;
 }
 function ptQuery() {
   return `p=${encodeURIComponent(pt.p)}${pt.vid ? `&vehiculo_id=${pt.vid}` : ""}${pt.turno ? `&turno=${pt.turno}` : ""}`;
