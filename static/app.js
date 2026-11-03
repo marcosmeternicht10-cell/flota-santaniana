@@ -11481,7 +11481,7 @@ function renderDossierCompleto(d) {
       <!-- Acción de imprimir -->
       <div class="dossier-acciones">
         <button class="btn btn-ghost" onclick="window.print()"><i class="ti ti-printer"></i> Imprimir / Guardar PDF</button>
-        <button class="btn btn-primary" onclick="informeCoche(dossierVehiculoId, $('#dossier-desde').value, $('#dossier-hasta').value)"><i class="ti ti-file-type-pdf"></i> Informe completo del coche</button>
+        <button class="btn btn-primary" onclick="informeCoche(dossierVehiculoId)" title="Toda la historia del coche, no solo las fechas de arriba"><i class="ti ti-file-type-pdf"></i> Informe completo del coche</button>
       </div>
 
     </div>`;
