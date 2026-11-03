@@ -251,6 +251,9 @@ app.register_blueprint(bp_agencias)
 # Panel del gerente: operación del día y plata del mes, solo lectura
 from gerencia import bp_gerencia
 app.register_blueprint(bp_gerencia)
+# La app para el celular y la Play Store: manifiesto, service worker, assetlinks y privacidad
+from app_movil import bp_movil, es_publica as es_ruta_movil
+app.register_blueprint(bp_movil)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -389,6 +392,9 @@ def proteger_rutas():
     if p == "/login" or p == "/api/login":
         return None
     if p.startswith("/static/"):
+        return None
+    # Lo que leen Android y la Play Store sin sesión (manifiesto, service worker, privacidad)
+    if es_ruta_movil(p):
         return None
     if "usuario_id" not in session:
         if p.startswith("/api/"):
