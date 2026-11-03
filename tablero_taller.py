@@ -569,10 +569,17 @@ def mover(d, quien=""):
                                  (fecha, a)).fetchone()["n"]
             ya = conn.execute("SELECT id FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?",
                               (fecha, a, c["ot_id"])).fetchone()
+            # Si se soltó en una hora (vista por horas), queda a esa hora en el que la recibe
+            hi = _hora(d.get("hora_ini")) or c["hora_ini"]
+            hf = _hora(d.get("hora_fin")) or (c["hora_fin"] if not d.get("hora_ini") else "")
+            if hi and hf and hf <= hi:
+                hf = ""
             if not ya:
                 conn.execute("""INSERT INTO taller_tablero_plan (fecha, personal_id, ot_id, hora_ini, hora_fin, nota, orden,
                                 creado_por, creado_el) VALUES (?,?,?,?,?,?,?,?,?)""",
-                             (fecha, a, c["ot_id"], c["hora_ini"], c["hora_fin"], c["nota"], orden, quien[:80], ahora_iso()))
+                             (fecha, a, c["ot_id"], hi, hf, c["nota"], orden, quien[:80], ahora_iso()))
+            elif d.get("hora_ini"):
+                conn.execute("UPDATE taller_tablero_plan SET hora_ini=?, hora_fin=? WHERE id=?", (hi, hf, ya["id"]))
             if modo == "pasar":
                 conn.execute("DELETE FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?",
                              (fecha, de, c["ot_id"]))
@@ -607,6 +614,49 @@ def mover(d, quien=""):
     if cambiados:
         msg += f" · {cambiados} trabajo{'s' if cambiados != 1 else ''} reasignado{'s' if cambiados != 1 else ''}"
     return {"ok": True, "msg": msg}
+
+
+def cambiar_hora(d, quien=""):
+    """Arrastrar la pieza a otra hora en la misma fila (vista por horas)."""
+    fecha = _fecha(d.get("fecha"))
+    try:
+        pid = int(d.get("personal_id") or 0)
+    except (TypeError, ValueError):
+        return {"ok": False, "msg": "Faltan datos"}
+    clave = str(d.get("clave") or "")
+    hi, hf = _hora(d.get("hora_ini")), _hora(d.get("hora_fin"))
+    if not pid or not clave or not hi:
+        return {"ok": False, "msg": "Faltan datos"}
+    if hf and hf <= hi:
+        hf = ""
+    c = _celda_de(fecha, pid, clave)
+    if not c:
+        return {"ok": False, "msg": "Esa OT ya no está en el tablero de ese técnico"}
+    conn = get_connection()
+    try:
+        if c["ot_id"]:
+            ya = conn.execute("SELECT id FROM taller_tablero_plan WHERE fecha=? AND personal_id=? AND ot_id=?",
+                              (fecha, pid, c["ot_id"])).fetchone()
+            if ya:
+                conn.execute("UPDATE taller_tablero_plan SET hora_ini=?, hora_fin=? WHERE id=?", (hi, hf, ya["id"]))
+            else:
+                orden = conn.execute("SELECT COALESCE(MAX(orden),0)+1 AS n FROM taller_tablero_plan WHERE fecha=? AND personal_id=?",
+                                     (fecha, pid)).fetchone()["n"]
+                conn.execute("""INSERT INTO taller_tablero_plan (fecha, personal_id, ot_id, hora_ini, hora_fin, nota, orden,
+                                creado_por, creado_el) VALUES (?,?,?,?,?,?,?,?,?)""",
+                             (fecha, pid, c["ot_id"], hi, hf, c.get("nota") or "", orden, quien[:80], ahora_iso()))
+        elif c.get("turno_id"):
+            conn.execute("UPDATE taller_turnos SET hora=? WHERE id=?", (hi, c["turno_id"]))
+        else:
+            return {"ok": False, "msg": "A esa pieza no se le puede cambiar la hora"}
+        conn.commit()
+    except Exception as e:
+        _rollback(conn)
+        return {"ok": False, "msg": f"No se pudo cambiar la hora: {e}"}
+    finally:
+        conn.close()
+    que = f"OT {c['ot_id']}" if c["ot_id"] else "El turno"
+    return {"ok": True, "msg": f"{que} quedó de {hi}" + (f" a {hf}" if hf else "")}
 
 
 def ordenar(d, quien=""):
@@ -1087,12 +1137,12 @@ def api_plan_quitar(plan_id):
 
 @bp_tablero.route("/api/taller/tablero/<accion>", methods=["POST"])
 def api_mover(accion):
-    if accion not in ("mover", "orden", "sacar"):
+    if accion not in ("mover", "orden", "sacar", "hora"):
         return jsonify({"ok": False, "msg": "No existe"}), 404
     if not _puede_editar():
         return jsonify({"ok": False, "msg": "Sin permiso"}), 403
     d = request.get_json(silent=True) or {}
-    r = {"mover": mover, "orden": ordenar, "sacar": sacar}[accion](d, _quien())
+    r = {"mover": mover, "orden": ordenar, "sacar": sacar, "hora": cambiar_hora}[accion](d, _quien())
     if r.get("ok") and accion != "orden":
         try:
             from database import registrar_auditoria
