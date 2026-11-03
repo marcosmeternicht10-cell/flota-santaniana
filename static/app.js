@@ -11481,6 +11481,7 @@ function renderDossierCompleto(d) {
       <!-- Acción de imprimir -->
       <div class="dossier-acciones">
         <button class="btn btn-ghost" onclick="window.print()"><i class="ti ti-printer"></i> Imprimir / Guardar PDF</button>
+        <button class="btn btn-primary" onclick="informeCoche(dossierVehiculoId, $('#dossier-desde').value, $('#dossier-hasta').value)"><i class="ti ti-file-type-pdf"></i> Informe completo del coche</button>
       </div>
 
     </div>`;
@@ -16898,6 +16899,7 @@ async function mtCargarCoche(armar = false) {
           <h2>${v.patente || ""} <span>${[v.marca, v.modelo].filter(Boolean).join(" ")}</span></h2>
           <div class="mt-cab-chips" id="mt-resumen"></div>
         </div>
+        <button class="btn btn-primary" style="margin-left:auto;align-self:center" onclick="informeCoche(${vid})"><i class="ti ti-file-type-pdf"></i> Informe completo</button>
       </div>
 
       <div class="card mt-form">
@@ -24589,4 +24591,15 @@ async function caeCopiar(btn) {
     `\n\nAdentro tocá «Activar» para que te llegue tu servicio al celular.`;
   try { await navigator.clipboard.writeText(txt); toast("Accesos copiados: pegalos en el grupo de WhatsApp", "success"); }
   catch (e) { toast("No se pudo copiar", "error"); }
+}
+
+
+// Informe completo de un coche en PDF: todo lo que se le hizo, con sus números.
+// Sin fechas, toma toda la historia del coche.
+function informeCoche(vid, desde, hasta) {
+  if (!vid) { toast("Elegí un coche", "error"); return; }
+  const p = new URLSearchParams();
+  if (desde) p.set("desde", desde);
+  if (hasta) p.set("hasta", hasta);
+  window.open(`/api/vehiculos/${vid}/informe.pdf${p.toString() ? "?" + p : ""}`, "_blank");
 }
