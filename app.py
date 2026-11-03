@@ -261,6 +261,9 @@ app.register_blueprint(bp_push)
 from choferes_app import bp_choferes_app, init_choferes_app
 init_choferes_app()
 app.register_blueprint(bp_choferes_app)
+# Informe completo de un coche en PDF (todo lo que se le hizo y sus números)
+from informe_coche import bp_informe_coche
+app.register_blueprint(bp_informe_coche)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
