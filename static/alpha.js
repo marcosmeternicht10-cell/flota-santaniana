@@ -1407,8 +1407,8 @@ function alBoletoArts(v, copias, reimp) {
       <div class="as-t"><b>${e(d.piso)}</b><span>${e(d.pos)}</span>${conMapa ? mapa : ""}<small>${e(d.tipo)} · ${e(servicio)}</small></div>
     </div>`;
   const bultos = alBultosDe(v);
-  const extra = `${v.menor ? `<span>Con un menor en brazos: ${e(v.menor.nombre)}${v.menor.edad != null ? `, ${v.menor.edad} años` : ""}${v.menor.doc ? `, doc. ${e(v.menor.doc)}` : ""}</span>` : ""}${bultos ? `<span>Bultos en bodega: ${bultos}</span>` : ""}`;
-  const pas = `<div class="pas"><b>${e(v.nombre)}</b><span>${docTxt}</span>${v.mig ? `<span>${e(v.mig.nacionalidad)}, nac. ${e(String(v.mig.nac || "").split("-").reverse().join("/"))}</span>` : ""}${extra}</div>`;
+  const extra = `${v.menor ? `<span>Con un menor en brazos: ${e(alApellidoPrimero(v.menor.nombre))}${v.menor.edad != null ? `, ${v.menor.edad} años` : ""}${v.menor.doc ? `, doc. ${e(v.menor.doc)}` : ""}</span>` : ""}${bultos ? `<span>Bultos en bodega: ${bultos}</span>` : ""}`;
+  const pas = `<div class="pas"><b>${e(alApNom(v))}</b><span>${docTxt}</span>${v.mig ? `<span>${e(v.mig.nacionalidad)}, nac. ${e(String(v.mig.nac || "").split("-").reverse().join("/"))}</span>` : ""}${extra}</div>`;
   const precio = (detalle) => `
     <div class="pre">
       <div class="r"><span>${e(d.tipo)}, tarifa ${e(tarifa)}</span><span>${fmtNum(v.total)}</span></div>
@@ -1459,7 +1459,7 @@ function alComprobanteArt(v) {
     ${alCabTicket()}
     <div class="cv-t">Comprobante de viaje</div>
     <p class="cv-p">Dejamos constancia de que <b>${e(v.nombre)}</b>, ${e(doc)}, ${viajo ? "viajó" : paso ? "tenía pasaje para viajar" : "tiene pasaje para viajar"} con La Santaniana el <b>${alDiaTxt(f).toLowerCase()} de ${f.getFullYear()}</b>, en el servicio ${e(v.tramo || "")} que sale a las <b>${v.sale || v.hora}</b>, de <b>${e(v.origen)}</b> a <b>${e(v.destino)}</b>${v.asiento === "P" ? ", con pasaje parado" : `, en el asiento ${v.asiento}`}.</p>
-    <p class="cv-p">Boleto 001-001-${alNro(v.nro)}, por Gs. ${fmtNum(v.total)}.${v.menor ? ` Con un menor en brazos: ${e(v.menor.nombre)}.` : ""}</p>
+    <p class="cv-p">Boleto 001-001-${alNro(v.nro)}, por Gs. ${fmtNum(v.total)}.${v.menor ? ` Con un menor en brazos: ${e(alApellidoPrimero(v.menor.nombre))}.` : ""}</p>
     <p class="cv-p s">Se extiende a pedido del pasajero el ${ahora.slice(8, 10)}/${ahora.slice(5, 7)}/${ahora.slice(0, 4)} a las ${ahora.slice(11, 16)}, por ${e(alVendedor())}.</p>
     <div class="fi">Firma y sello</div>
     <div class="maq">Maqueta de Alpha: sin valor fiscal</div>
@@ -2009,7 +2009,7 @@ function alManImprimir() {
   const pas = alManifiestoDatos(sv, fecha).filter(v => v.estado === "vendido"), e = trEsc, intl = sv.intl;
   const menores = pas.filter(v => v.menor).length, bultos = pas.reduce((a, v) => a + alBultosDe(v), 0);
   const emb = v => v.embarque ? (v.embarque.estado === "subio" ? "✓" : "✗") : "☐";
-  const filas = pas.map((v, i) => `<tr><td>${i + 1}</td><td class="c"><b>${v.asiento}</b></td><td><b>${e(v.mig ? v.mig.apellidos : v.nombre)}</b>${v.mig ? `<br>${e(v.mig.nombres)}` : ""}${v.menor ? `<br><span class="m">+ menor en brazos: ${e(v.menor.nombre)}${v.menor.edad != null ? ` (${v.menor.edad})` : ""}${v.menor.doc ? `, doc. ${e(v.menor.doc)}` : ""}</span>` : ""}</td>
+  const filas = pas.map((v, i) => `<tr><td>${i + 1}</td><td class="c"><b>${v.asiento}</b></td><td><b>${e(v.mig ? v.mig.apellidos : alApellidoPrimero(v.nombre))}</b>${v.mig ? `<br>${e(v.mig.nombres)}` : ""}${v.menor ? `<br><span class="m">+ menor en brazos: ${e(v.menor.nombre)}${v.menor.edad != null ? ` (${v.menor.edad})` : ""}${v.menor.doc ? `, doc. ${e(v.menor.doc)}` : ""}</span>` : ""}</td>
     <td>${v.mig ? e(v.tipoDoc) : "CI"} ${e(v.doc)}</td>${intl ? `<td>${e(v.mig?.nacionalidad || "")}</td><td>${v.mig?.nac ? v.mig.nac.split("-").reverse().join("/") : ""}</td><td class="c">${e(v.mig?.sexo || "")}</td><td>${e(v.mig?.residencia || "")}</td>` : ""}
     <td>${e(v.sube)}</td><td>${e(v.baja)}</td><td class="c">${alBultosDe(v) || ""}</td><td class="c">${emb(v)}</td></tr>`).join("");
   const hr = alHojaRuta(sv, pas);
@@ -2545,3 +2545,43 @@ async function alPlanoBorrar() {
 document.addEventListener("keydown", e => {
   if (e.key === "F9" && document.getElementById("al-raiz") && al.vista === "vender") { e.preventDefault(); alCobrar(); }
 });
+
+// ── Apellido primero en lo que se imprime (igual que nombres.py del servidor) ──
+const AL_PILA = new Set("abel abelardo abraham adan adolfo adrian agustin agustina aida alan alba alberto alcides alejandra alejandro alexis alfonso alfredo alicia alma amado amalia amanda ambrosio ana anacleto anahi analia andrea andres angel angela angelica angelino angelo anibal antonia antonio araceli ariel armando arnaldo arturo asterio augusto aurelio aurora axel beatriz belen benicio benigno benito bernardino bernardo blanca blas braulio brenda bruno carina carla carlos carmen carolina catalina catalino cecilia celeste celestino cesar cinthia cipriano clara claudia claudio clemente concepcion crispin cristhian cristian cristina cristobal cynthia dahiana daisy dalila damian daniel daniela dario david debora delia denis derlis diana diego dionisio domingo dora edgar edgardo edith eduardo efrain elena elias eliodoro elisa eliseo elizabeth elva elvio emilia emiliano emilio emmanuel enrique erica erico ernesto esteban estela ester eugenio eusebio eva evelyn ezequiel fabian fabio fatima federico felipe felix fermin fernanda fernando fidel filomena flavia flavio florencia francisca francisco fredy fulgencio gabriel gabriela gaspar gerardo german gilberto gisela gladys gloria graciela gregorio guadalupe guido guillermo gustavo heber heberlino hector helena heriberto hernan hilda hugo humberto ignacio ines ingrid irma isaac isabel isidro ismael israel ivan jacinto jaime javier jazmin jesus joaquin joel johana jonas jonathan jorge jose josefa josefina juan juana julia julian juliana julio justo karen karina laura leandro leonardo leonel leticia lider lidia liliana lorena lourdes lucas lucia luciano lucio luis luisa lujan luz macarena magdalena manuel marcela marcelo marcial marco marcos margarita maria mariano marina mario marisa marta martin matias mauricio maximiliano mayra melisa mercedes micaela miguel milagros milciades miriam moises monica natalia nelson nery nestor nicolas nidia nilda nilton noelia norma octavio olga omar orlando oscar osmar osvaldo pablino pablo pamela paola pascual patricia patricio paula pedro perla pilar rafael ramon ramona raquel raul rebeca reinaldo ricardo richard robert roberto rocio rodi rodolfo rodrigo rody rogelio rolando romina roque rosa rosalia rosana rosario ruben rufino ruth sabrina salvador samuel sandra santiago sara sebastian selso sergio silvia silvio simon sofia sonia susana tamara tatiana teodoro teofilo teresa timoteo tomas ulises valentin valeria vanesa vanessa veronica vicente victor victoria vilma virginia walter wilfrido william willian ximena yanina yesica yolanda zulma".split(" "));
+const AL_DEVOC = new Set("angeles asuncion carmen concepcion cruz dios dolores fatima guadalupe jesus lourdes lujan luz mercedes milagros pena pilar rosario socorro".split(" "));
+const AL_PART = new Set("da das de del do dos la las los van von y".split(" "));
+const AL_NOPER = new Set("afuera agencia asignar chaperia chofer deposito electricidad empresa externo gomeria ltda mecanica oficina prueba rectificadora ruta s.a. sa servicio sin srl taller talleres tecnico tercero torneria".split(" "));
+function alLlano(t) { return String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
+function alApellidoPrimero(nombre) {
+  let s = String(nombre || "").split(/\s+/).filter(Boolean).join(" ");
+  if (!s) return "";
+  let pre = "";
+  const m = s.match(/^\s*((?:N[°º]|N\.|#)\s*\d+\s*[-·:]?\s*)/i);
+  if (m) { pre = m[1].trim() + " "; s = s.slice(m[0].length).trim(); }
+  if (!s || s.includes(",")) return pre + s;
+  const p = s.split(" "), L = x => alLlano(x).replace(/\.$/, "");
+  if (p.length < 2 || /\d/.test(s) || p.some(x => AL_NOPER.has(L(x)))) return pre + s;
+  if (!AL_PILA.has(L(p[0])) && !AL_PART.has(L(p[0]))) {
+    let t = 0;
+    while (t < p.length - 1 && t < 2 && AL_PILA.has(L(p[p.length - 1 - t]))) t++;
+    if (t) return pre + p.slice(0, -t).join(" ") + ", " + p.slice(-t).join(" ");
+  }
+  let j = 1, k;
+  while (j < p.length && AL_PART.has(L(p[j]))) j++;
+  if (j > 1 && j < p.length - 1 && (AL_PILA.has(L(p[j])) || AL_DEVOC.has(L(p[j])))) {
+    k = j + 1;
+    if (p.length - k >= 3 && AL_PILA.has(L(p[k]))) k++;
+  } else {
+    const n = p.length;
+    k = n === 2 ? 1 : n === 3 ? (AL_PILA.has(L(p[1])) ? 2 : 1) : (n >= 5 && AL_PILA.has(L(p[2])) ? 3 : 2);
+    while (k > 1 && k < p.length && AL_PART.has(L(p[k - 1]))) k--;
+  }
+  if (k >= p.length) return pre + s;
+  return pre + p.slice(k).join(" ") + ", " + p.slice(0, k).join(" ");
+}
+// El pasajero como se imprime: los internacionales ya traen apellidos y nombres por separado
+function alApNom(v) {
+  const g = v && v.mig;
+  if (g && String(g.apellidos || "").trim()) return (String(g.apellidos).trim() + ", " + String(g.nombres || "").trim()).toUpperCase();
+  return alApellidoPrimero(v && v.nombre);
+}
