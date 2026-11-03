@@ -7,3 +7,4 @@ gunicorn>=21.0
 psycopg2-binary>=2.9
 pypdfium2>=4.30
 pillow>=10.0
+cryptography>=42
