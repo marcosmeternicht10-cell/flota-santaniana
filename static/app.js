@@ -24116,8 +24116,10 @@ function ttHorasTabla(lista) {
     }).join("");
     const realB = x.celdas.map((c, i) => (c.b_real || []).map(([a, b, sigue, antes]) => {
       const w = pct(b) - pct(a);
-      return `<button type="button" class="th-b real e-${c.estado} ${sigue ? "vivo" : ""} ${antes ? "antes" : ""}" style="left:${pct(a)}%;width:${Math.max(w, 1)}%"
-        onclick="ttVer(${x.id}, ${i})" title="OT ${c.ot_id || ""} · ${antes ? "desde antes" : hm(a)} – ${sigue ? "trabajando" : hm(b)} · ${TT_EST[c.estado]}">
+      const mov = tt.d.puede && c.ot_id;
+      return `<button type="button" class="th-b real e-${c.estado} ${sigue ? "vivo" : ""} ${antes ? "antes" : ""}${mov ? " movible" : ""}" style="left:${pct(a)}%;width:${Math.max(w, 1)}%"
+        ${mov ? `data-pid="${x.id}" data-i="${i}" data-clave="${ttEsc(c.clave)}" data-a="${a}" data-b="${b}" data-real="1" onpointerdown="ttTomarH(event, this)" onclick="event.stopPropagation()"` : `onclick="ttVer(${x.id}, ${i})"`}
+        title="OT ${c.ot_id || ""} · ${antes ? "desde antes" : hm(a)} – ${sigue ? "trabajando" : hm(b)} · ${TT_EST[c.estado]}${mov ? " · arrastrala a otro técnico para pasársela" : ""}">
         <b>${c.ot_id ? "OT " + c.ot_id : ""}</b><span>${antes ? "‹ antes" : hm(a)}–${sigue ? "ahora" : hm(b)}</span></button>`;
     }).join("")).join("");
     const lista_ = (l, f) => l.length ? l.map(f).join("") : `<span class="th-vacio">—</span>`;
@@ -24125,7 +24127,9 @@ function ttHorasTabla(lista) {
       <div class="th-n"><span class="tt-num">${x.numero}</span></div>
       <div class="th-tec"><b>${ttEsc(x.nombre)}</b>
         <small>${r.planificadas ? `${r.terminadas}/${r.planificadas} hechas` : x.celdas.length ? "" : "Sin OT"}${r.horas ? ` · ${ttHoras(r.horas)}` : ""}${r.trabajando ? ` · <em class="vivo"><span class="tt-punto"></span>trabajando</em>` : ""}</small>
-        ${sinHora.length ? `<span class="th-sinhora">Sin hora: ${sinHora.map(([c, i]) => `<button type="button" class="e-${c.estado}" onclick="ttVer(${x.id}, ${i})">OT ${c.ot_id || "–"}</button>`).join("")}</span>` : ""}</div>
+        ${sinHora.length ? `<span class="th-sinhora">Sin hora: ${sinHora.map(([c, i]) => tt.d.puede
+          ? `<button type="button" class="e-${c.estado} movible" data-pid="${x.id}" data-i="${i}" data-clave="${ttEsc(c.clave)}" data-a="0" data-b="60" data-sinhora="1" onpointerdown="ttTomarH(event, this)" onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();ttVer(${x.id}, ${i})}" title="OT ${c.ot_id || ""} · arrastrala a una hora o a otro técnico">OT ${c.ot_id || "–"}</button>`
+          : `<button type="button" class="e-${c.estado}" onclick="ttVer(${x.id}, ${i})">OT ${c.ot_id || "–"}</button>`).join("")}</span>` : ""}</div>
       <div class="th-esp">${ttEsc(x.puesto || "")}</div>
       <div class="th-et"><span class="plan">PLAN</span><span class="real">INICIO/FIN</span></div>
       <div class="th-eje">
@@ -24857,7 +24861,9 @@ function ttTomarH(e, el) {
     g.style.cssText = `position:fixed;left:0;top:0;width:${r.width}px;height:${r.height}px;margin:0;z-index:9999;pointer-events:none`;
     document.body.appendChild(g);
     tt.arr = { el, g, libre, pid: +el.dataset.pid || 0, clave: el.dataset.clave || "", ot: +el.dataset.ot || 0,
-               a0: +el.dataset.a || 0, dur, dx: p0.x - r.left, dy: p0.y - r.top };
+               a0: +el.dataset.a || 0, dur, dx: p0.x - r.left, dy: p0.y - r.top, sinHora: el.dataset.sinhora === "1" };
+    // un botoncito "Sin hora" es chico: el fantasma se ve como un bloque de una hora
+    if (tt.arr.sinHora) { tt.arr.dx = 12; tt.arr.dy = r.height / 2; }
     el.classList.add("tt-levantada");
     document.body.classList.add("tt-arrastrando");
     if (navigator.vibrate && tactil) navigator.vibrate(15);
@@ -24870,13 +24876,23 @@ function ttTomarH(e, el) {
     a.g.style.visibility = "hidden";
     const bajo = document.elementFromPoint(x, y);
     a.g.style.visibility = "";
-    document.querySelectorAll(".th-carril.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".th-carril.tt-sobre, .th-fila.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
     document.querySelectorAll(".th-previa").forEach(h => h.remove());
     a.dest = null;
     const tacho = bajo && bajo.closest(".tt-tacho");
     if (tacho && !a.libre) { tacho.classList.add("tt-sobre"); a.dest = { tacho: true }; }
     const carril = bajo && (bajo.closest(".th-carril.plan") || bajo.closest(".th-fila")?.querySelector(".th-carril.plan"));
-    if (carril && !tacho) {
+    const real = el.dataset.real === "1";
+    if (carril && !tacho && (x < carril.getBoundingClientRect().left || real)) {
+      // soltada sobre el nombre (o es lo real): otro técnico, sin cambiar la hora
+      const pid = +carril.dataset.pid;
+      const t = tt.d.tecnicos.find(z => z.id === pid);
+      if (pid !== a.pid || !real) {
+        carril.closest(".th-fila").classList.add("tt-sobre");
+        a.dest = { pid, m: null };
+        a.g.setAttribute("data-hora", pid === a.pid ? "Llevala a una hora" : `→ N°${t ? t.numero : ""}${a.libre ? "" : " · misma hora"}`);
+      } else a.g.setAttribute("data-hora", "Llevala a otro técnico");
+    } else if (carril && !tacho) {
       const r = carril.getBoundingClientRect();
       // el bloque se ubica por su borde izquierdo (donde está agarrado), cada 15 minutos
       const izq = x - (a.libre ? 0 : a.dx);
@@ -24935,7 +24951,7 @@ function ttTomarH(e, el) {
     if (tt.arr && tt.arr.g) tt.arr.g.remove();
     el.classList.remove("tt-levantada");
     document.body.classList.remove("tt-arrastrando");
-    document.querySelectorAll(".th-carril.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".th-carril.tt-sobre, .th-fila.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
     document.querySelectorAll(".th-previa").forEach(h => h.remove());
   };
   const cancelar = () => { cancelado = true; limpiar(); tt.arr = null; };
@@ -24949,7 +24965,7 @@ function ttSoltarH(a, x, y) {
   const dest = a && a.dest;
   if (!dest) return;
   const nombre = pid => { const t = tt.d.tecnicos.find(z => z.id === pid); return t ? `N°${t.numero} ${t.nombre.split(" ").slice(0, 2).join(" ")}` : ""; };
-  if (a.libre) { if (dest.pid) ttPlanificar(dest.pid, a.ot, ttHM(dest.m), ttHM(dest.fin)); return; }
+  if (a.libre) { if (dest.pid) dest.m == null ? ttPlanificar(dest.pid, a.ot) : ttPlanificar(dest.pid, a.ot, ttHM(dest.m), ttHM(dest.fin)); return; }
   const origen = tt.d.tecnicos.find(t => t.id === a.pid);
   const celda = origen && origen.celdas.find(c => c.clave === a.clave);
   if (!celda) return;
@@ -24962,9 +24978,17 @@ function ttSoltarH(a, x, y) {
     ]);
     return;
   }
+  if (dest.m == null) {                                           // soltada sobre el nombre: sin cambiar la hora
+    if (dest.pid === a.pid) return;
+    ttElegir(x, y, `${que} → ${nombre(dest.pid)}`, [
+      { txt: `Pasársela (se la saco a ${nombre(a.pid)})`, ic: "arrow-right", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "pasar" }) },
+      { txt: "Que la hagan los dos", ic: "users", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "sumar" }) },
+    ]);
+    return;
+  }
   const hi = ttHM(dest.m), hf = ttHM(dest.fin);
   if (dest.pid === a.pid) {
-    if (dest.m === a.a0) return;                                  // quedó donde estaba
+    if (dest.m === a.a0 && !a.sinHora) return;                    // quedó donde estaba
     ttPost("hora", { personal_id: a.pid, clave: a.clave, hora_ini: hi, hora_fin: celda.ot_id ? hf : "" });
     return;
   }

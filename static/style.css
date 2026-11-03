@@ -8604,3 +8604,10 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 .us-cuenta{font-size:13px;color:var(--muted);font-weight:600}
 .us-nada{padding:28px;text-align:center;color:var(--muted);font-size:14px}
 .us-nada .ti{font-size:20px;vertical-align:-3px;margin-right:4px}
+
+/* Tablero por horas: también se arrastran los "Sin hora" y lo real */
+.th-sinhora button.movible, .th-b.real.movible { cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.th-sinhora button.movible:hover { box-shadow: 0 0 0 2px var(--brand-blue, #1E5A96); }
+.th-sinhora button.tt-levantada, .th-b.real.tt-levantada { opacity: .35; }
+.th-fila.tt-sobre > .th-tec { background: #EAF3FC; box-shadow: inset 3px 0 0 var(--brand-blue, #1E5A96); }
+.th-fantasma[data-sinhora] { display: flex; align-items: center; padding: 0 10px; border: 1px solid #9DC3E6; background: #DDEBF7; color: #1E5A96; border-radius: 6px; font: 700 12px "Inter", sans-serif; min-width: 64px; height: 26px !important; }
