@@ -24046,6 +24046,7 @@ function ttVista(v) {
 // que hacer a qué hora y la fila INICIO/FIN con lo que hizo de verdad.
 function ttHorasTabla(lista) {
   const e = tt.d.eje || { desde: 450, hasta: 1380, marcas: [], pausa: [720, 900] };
+  tt.ejeH = e;
   // Cada columna de hora del mismo ancho, como en la planilla (la de 07:30 es media hora)
   const ms = e.marcas.map(x => x.m), nCol = ms.length || 1;
   const pct = m => {
@@ -24072,8 +24073,10 @@ function ttHorasTabla(lista) {
       if (!c.b_plan) return "";
       const [a, b, sup] = c.b_plan;
       const w = pct(b) - pct(a);
-      return `<button type="button" class="th-b plan e-${c.estado} ${sup ? "sup" : ""} ${c.planificado ? "" : "np"}" style="left:${pct(a)}%;width:${Math.max(w, 1.2)}%"
-        onclick="event.stopPropagation();ttVer(${x.id}, ${i})" title="OT ${c.ot_id || ""} · coche ${ttEsc(c.coche)} · ${hm(a)}–${sup ? "?" : hm(b)} · ${TT_EST[c.estado]}">
+      return `<button type="button" class="th-b plan e-${c.estado} ${sup ? "sup" : ""} ${c.planificado ? "" : "np"}${tt.d.puede ? " movible" : ""}" style="left:${pct(a)}%;width:${Math.max(w, 1.2)}%"
+        data-pid="${x.id}" data-i="${i}" data-clave="${ttEsc(c.clave)}" data-a="${a}" data-b="${sup ? a + 60 : b}"
+        ${tt.d.puede ? `onpointerdown="ttTomarH(event, this)" onclick="event.stopPropagation()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();ttVer(${x.id}, ${i})}"` : `onclick="event.stopPropagation();ttVer(${x.id}, ${i})"`}
+        title="OT ${c.ot_id || ""} · coche ${ttEsc(c.coche)} · ${hm(a)}–${sup ? "?" : hm(b)} · ${TT_EST[c.estado]}${tt.d.puede ? " · arrastrala a otra hora o a otro técnico" : ""}">
         <b>${c.ot_id ? "OT " + c.ot_id : "Turno"}</b>${c.coche ? `<span>${ttEsc(c.coche)}</span>` : ""}</button>`;
     }).join("");
     const realB = x.celdas.map((c, i) => (c.b_real || []).map(([a, b, sigue, antes]) => {
@@ -24119,7 +24122,7 @@ function ttHorasEnganchar() {
   if (!tt.d.puede) return;
   const e = tt.d.eje;
   document.querySelectorAll(".th-carril.plan").forEach(c => c.addEventListener("click", ev => {
-    if (ev.target.closest(".th-b")) return;
+    if (ev.target.closest(".th-b") || Date.now() - (tt.soltadoEl || 0) < 600) return;   // recién se soltó un bloque
     const r = c.getBoundingClientRect();
     let m = e.desde + (ev.clientX - r.left) / r.width * (e.hasta - e.desde);
     m = Math.max(e.desde, Math.min(e.hasta - 30, Math.round(m / 30) * 30));
@@ -24294,6 +24297,7 @@ function ttBandeja() {
   </div>`;
 }
 function ttTomar(e, el) {
+  if (tt.vista === "horas") return ttTomarH(e, el);
   if (e.button !== undefined && e.button !== 0) return;
   const tactil = e.pointerType === "touch";
   const p0 = { x: e.clientX, y: e.clientY };
@@ -24777,4 +24781,160 @@ async function trElegirCh(k) {
 function trCerrarCh() {
   if (tr.ch?.caja) tr.ch.caja.remove();
   tr.ch = null;
+}
+
+
+// ─── Vista por horas: arrastrar los bloques del PLAN ────────────────────
+// Se toma el bloque (con el mouse, o manteniendo apretado en el celular) y se
+// suelta: más a la derecha o a la izquierda = otra hora; en otro técnico = se
+// le pasa o la hacen los dos, a la hora donde se soltó; en el tacho = se saca
+// del plan. Las OTs de la bandeja también se sueltan en la fila, a una hora.
+function ttPctH(m) {
+  const e = tt.ejeH, ms = e.marcas.map(x => x.m), n = ms.length || 1;
+  m = Math.max(e.desde, Math.min(e.hasta, m));
+  let k = ms.length - 1;
+  while (k > 0 && ms[k] > m) k--;
+  const ini = ms[k] ?? e.desde, fin = ms[k + 1] ?? e.hasta;
+  return (k + (fin > ini ? (m - ini) / (fin - ini) : 0)) / n * 100;
+}
+function ttMinH(p) {                       // de % del carril a minutos del día
+  const e = tt.ejeH, ms = e.marcas.map(x => x.m), n = ms.length || 1;
+  const pos = Math.max(0, Math.min(1, p)) * n, k = Math.min(Math.floor(pos), n - 1);
+  const ini = ms[k] ?? e.desde, fin = ms[k + 1] ?? e.hasta;
+  return ini + (pos - k) * (fin - ini);
+}
+const ttHM = x => `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(Math.round(x) % 60).padStart(2, "0")}`;
+
+function ttTomarH(e, el) {
+  if (e.button !== undefined && e.button !== 0) return;
+  const tactil = e.pointerType === "touch";
+  const p0 = { x: e.clientX, y: e.clientY };
+  const libre = el.classList.contains("tt-pieza-libre");
+  const dur = libre ? 60 : Math.max(15, (+el.dataset.b || 0) - (+el.dataset.a || 0) || 60);
+  let arrancado = false, cancelado = false, larga = null;
+  const arrancar = () => {
+    if (arrancado || cancelado) return;
+    arrancado = true;
+    const r = el.getBoundingClientRect();
+    const g = el.cloneNode(true);
+    g.removeAttribute("onpointerdown"); g.removeAttribute("onclick");
+    g.className = el.className + " tt-fantasma th-fantasma";
+    g.style.cssText = `position:fixed;left:0;top:0;width:${r.width}px;height:${r.height}px;margin:0;z-index:9999;pointer-events:none`;
+    document.body.appendChild(g);
+    tt.arr = { el, g, libre, pid: +el.dataset.pid || 0, clave: el.dataset.clave || "", ot: +el.dataset.ot || 0,
+               a0: +el.dataset.a || 0, dur, dx: p0.x - r.left, dy: p0.y - r.top };
+    el.classList.add("tt-levantada");
+    document.body.classList.add("tt-arrastrando");
+    if (navigator.vibrate && tactil) navigator.vibrate(15);
+    seguir(p0.x, p0.y);
+  };
+  const seguir = (x, y) => {
+    const a = tt.arr;
+    if (!a) return;
+    a.g.style.transform = `translate(${x - a.dx}px, ${y - a.dy}px) rotate(-1.5deg)`;
+    a.g.style.visibility = "hidden";
+    const bajo = document.elementFromPoint(x, y);
+    a.g.style.visibility = "";
+    document.querySelectorAll(".th-carril.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".th-previa").forEach(h => h.remove());
+    a.dest = null;
+    const tacho = bajo && bajo.closest(".tt-tacho");
+    if (tacho && !a.libre) { tacho.classList.add("tt-sobre"); a.dest = { tacho: true }; }
+    const carril = bajo && (bajo.closest(".th-carril.plan") || bajo.closest(".th-fila")?.querySelector(".th-carril.plan"));
+    if (carril && !tacho) {
+      const r = carril.getBoundingClientRect();
+      // el bloque se ubica por su borde izquierdo (donde está agarrado), cada 15 minutos
+      const izq = x - (a.libre ? 0 : a.dx);
+      let m = Math.round(ttMinH((izq - r.left) / r.width) / 15) * 15;
+      m = Math.max(tt.ejeH.desde, Math.min(tt.ejeH.hasta - 15, m));
+      const fin = Math.min(tt.ejeH.hasta, m + a.dur);
+      carril.classList.add("tt-sobre");
+      const pv = document.createElement("span");
+      pv.className = "th-previa";
+      pv.style.left = ttPctH(m) + "%";
+      pv.style.width = Math.max(ttPctH(fin) - ttPctH(m), 1.5) + "%";
+      pv.textContent = `${ttHM(m)}–${ttHM(fin)}`;
+      carril.appendChild(pv);
+      a.dest = { pid: +carril.dataset.pid, m, fin };
+      const t = tt.d.tecnicos.find(z => z.id === a.dest.pid);
+      a.g.setAttribute("data-hora", `${ttHM(m)}–${ttHM(fin)}${t && a.dest.pid !== a.pid ? ` · N°${t.numero}` : ""}`);
+    } else a.g.setAttribute("data-hora", tacho ? "Sacar del plan" : "");
+    // que la pantalla acompañe al arrastrar cerca de los bordes
+    clearInterval(tt.scrollT);
+    const sc = document.getElementById("content") || document.scrollingElement, w = document.querySelector(".th-wrap");
+    const alto = window.innerHeight, borde = 70;
+    let vy = y < borde ? -14 : y > alto - borde ? 14 : 0, vx = 0;
+    if (w) { const rw = w.getBoundingClientRect(); vx = x < rw.left + 40 ? -16 : x > rw.right - 40 ? 16 : 0; }
+    if (vx || vy) tt.scrollT = setInterval(() => { if (vy) sc.scrollTop += vy; if (vx && w) w.scrollLeft += vx; }, 16);
+  };
+  const alMover = ev => {
+    if (!arrancado) {
+      const dist = Math.hypot(ev.clientX - p0.x, ev.clientY - p0.y);
+      if (tactil) { if (dist > 10) { cancelado = true; limpiar(); } return; }
+      if (dist > 5) arrancar(); else return;
+    }
+    ev.preventDefault();
+    seguir(ev.clientX, ev.clientY);
+  };
+  const tocarMover = ev => { if (arrancado) ev.preventDefault(); };
+  const soltar = ev => {
+    const a = tt.arr;
+    limpiar();
+    tt.arr = null;
+    if (!arrancado) {
+      if (cancelado) return;
+      if (libre) toast("Arrastrala hasta la fila de un técnico, a la hora que querés", "");
+      else ttVer(+el.dataset.pid, +el.dataset.i);
+      return;
+    }
+    tt.soltadoEl = Date.now();
+    ttSoltarH(a, ev.clientX, ev.clientY);
+  };
+  const limpiar = () => {
+    clearTimeout(larga);
+    clearInterval(tt.scrollT);
+    document.removeEventListener("pointermove", alMover);
+    document.removeEventListener("pointerup", soltar);
+    document.removeEventListener("pointercancel", cancelar);
+    document.removeEventListener("touchmove", tocarMover);
+    if (tt.arr && tt.arr.g) tt.arr.g.remove();
+    el.classList.remove("tt-levantada");
+    document.body.classList.remove("tt-arrastrando");
+    document.querySelectorAll(".th-carril.tt-sobre, .tt-tacho.tt-sobre").forEach(z => z.classList.remove("tt-sobre"));
+    document.querySelectorAll(".th-previa").forEach(h => h.remove());
+  };
+  const cancelar = () => { cancelado = true; limpiar(); tt.arr = null; };
+  document.addEventListener("pointermove", alMover, { passive: false });
+  document.addEventListener("pointerup", soltar);
+  document.addEventListener("pointercancel", cancelar);
+  document.addEventListener("touchmove", tocarMover, { passive: false });
+  if (tactil) larga = setTimeout(arrancar, 320);
+}
+function ttSoltarH(a, x, y) {
+  const dest = a && a.dest;
+  if (!dest) return;
+  const nombre = pid => { const t = tt.d.tecnicos.find(z => z.id === pid); return t ? `N°${t.numero} ${t.nombre.split(" ").slice(0, 2).join(" ")}` : ""; };
+  if (a.libre) { if (dest.pid) ttPlanificar(dest.pid, a.ot, ttHM(dest.m), ttHM(dest.fin)); return; }
+  const origen = tt.d.tecnicos.find(t => t.id === a.pid);
+  const celda = origen && origen.celdas.find(c => c.clave === a.clave);
+  if (!celda) return;
+  const que = celda.ot_id ? `OT ${celda.ot_id}` : "el turno";
+  if (dest.tacho) {
+    const pend = celda.trabajos.filter(t => t.estado !== "completado").length;
+    ttElegir(x, y, `¿Sacar ${que} a ${nombre(a.pid)}?`, [
+      { txt: "Sacar del plan del día", ic: "calendar-minus", fn: () => ttPost("sacar", { personal_id: a.pid, clave: a.clave }) },
+      ...(pend ? [{ txt: `Sacar y desasignarle ${pend} trabajo${pend === 1 ? "" : "s"}`, ic: "user-minus", peligro: true, fn: () => ttPost("sacar", { personal_id: a.pid, clave: a.clave, desasignar: true }) }] : []),
+    ]);
+    return;
+  }
+  const hi = ttHM(dest.m), hf = ttHM(dest.fin);
+  if (dest.pid === a.pid) {
+    if (dest.m === a.a0) return;                                  // quedó donde estaba
+    ttPost("hora", { personal_id: a.pid, clave: a.clave, hora_ini: hi, hora_fin: celda.ot_id ? hf : "" });
+    return;
+  }
+  ttElegir(x, y, `${que} → ${nombre(dest.pid)} · ${hi}–${hf}`, [
+    { txt: `Pasársela a las ${hi} (se la saco a ${nombre(a.pid)})`, ic: "arrow-right", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "pasar", hora_ini: hi, hora_fin: hf }) },
+    { txt: `Que la hagan los dos (${nombre(dest.pid)} a las ${hi})`, ic: "users", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "sumar", hora_ini: hi, hora_fin: hf }) },
+  ]);
 }

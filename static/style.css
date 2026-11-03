@@ -8574,3 +8574,19 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .tr-ch-av.sin { background: rgba(183,121,31,.12); border-color: transparent; color: #B7791F; font-size: 15px; }
 .tr-ch-it small i { color: #1F8A5B; }
 .tr-trip.sin-usuario, .tr-res-trip.sin-usuario { box-shadow: inset 0 -2px 0 #E0A12B; background-color: rgba(224,161,43,.08); }
+
+/* Tablero por horas: arrastrar los bloques del plan */
+.th-b.plan.movible { cursor: grab; touch-action: pan-y; }
+.th-b.plan.movible:active { cursor: grabbing; }
+.th-b.tt-levantada { opacity: .3; }
+.th-fantasma { box-shadow: 0 14px 30px -10px rgba(0,0,0,.45); opacity: .95; }
+.th-carril.plan.tt-sobre { background-color: rgba(30,90,150,.08); }
+.th-previa { position: absolute; top: 3px; bottom: 3px; border-radius: 6px; border: 2px dashed #1E5A96; background: rgba(30,90,150,.14);
+  color: #1E5A96; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; white-space: nowrap;
+  pointer-events: none; z-index: 5; min-width: 54px; }
+body.tt-arrastrando .th-b { pointer-events: none; }
+body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
+.th-fantasma { overflow: visible !important; }
+.th-fantasma::after { content: attr(data-hora); position: absolute; left: 0; top: -24px; background: #14263D; color: #fff; font-size: 11px;
+  font-weight: 700; padding: 3px 8px; border-radius: 6px; white-space: nowrap; box-shadow: 0 4px 12px -4px rgba(0,0,0,.4); }
+.th-fantasma[data-hora=""]::after { display: none; }
