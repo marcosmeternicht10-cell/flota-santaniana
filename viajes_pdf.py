@@ -8,6 +8,7 @@ que menos, contra el tope de 8 (un viaje es la ida y la vuelta).
   generar(datos)    datos = trafico.resumen_viajes(mes)
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 from reportlab.lib.colors import white, HexColor
 
 from trafico_pdf import Hoja, W, H, NAVY, NAVY3, AZUL, ROJO, TINTA, GRIS, GRIS2, LINEA, CEBRA, AMBAR, AMBAR_F, ROJO_F
@@ -100,7 +101,7 @@ class Hojas:
             h.rect(M - 6, y, W - 2 * M + 12, FILA, fill=CEBRA, r=4)
         base = y + FILA / 2 + 3.4
         h.texto(COLS[0][1], base, str(i + 1), "D8", 9, GRIS2)
-        nombre, s = h.ajustar(c["chofer"], "D8", 10, COLS[1][2] - 6, 7.5)
+        nombre, s = h.ajustar(apellido_primero_varios(c["chofer"]), "D8", 10, COLS[1][2] - 6, 7.5)
         h.texto(COLS[1][1], base, nombre, "D8", s, TINTA)
         h.texto(COLS[2][1] + COLS[2][2] / 2, base, str(c["idas"]), "I5", 9.5, TINTA, align="c")
         h.texto(COLS[3][1] + COLS[3][2] / 2, base, str(c["regresos"]), "I5", 9.5, TINTA, align="c")

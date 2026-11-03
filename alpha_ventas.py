@@ -37,6 +37,7 @@ Enganche en app.py:
     app.register_blueprint(bp_alpha_ventas)
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import json
 import re
 import unicodedata
@@ -1713,14 +1714,16 @@ def pdf_boleto(v, cfg_boleto, descuentos):
     txt(x2, asd.get("tipo") or "", "Helvetica", 8, dy=13.5 * mm)
     baja(17 * mm)
     corte()
-    txt(M, d.get("nombre") or "", "Helvetica-Bold", 12)
+    mg = d.get("mig") if isinstance(d.get("mig"), dict) else {}
+    txt(M, (f"{mg['apellidos']}, {mg.get('nombres') or ''}".upper() if str(mg.get("apellidos") or "").strip()
+            else apellido_primero(d.get("nombre"))) or "", "Helvetica-Bold", 12)
     baja(5 * mm)
     doc = f"{d.get('tipoDoc')} {d.get('doc')}" if d.get("mig") else f"CI {d.get('doc') or ''}"
     txt(M, doc, "Helvetica", 9)
     baja(4.5 * mm)
     if d.get("menor"):
         m = d["menor"]
-        parrafo(f"Con un menor en brazos (sin asiento): {m.get('nombre')}"
+        parrafo(f"Con un menor en brazos (sin asiento): {apellido_primero(m.get('nombre'))}"
                 f"{', ' + str(m['edad']) + ' años' if m.get('edad') is not None else ''}{', doc. ' + m['doc'] if m.get('doc') else ''}", 8)
     bultos = int(d.get("bultos") or 0) + sum(int(e.get("bultos") or 0) for e in d.get("equipaje") or [])
     if bultos:

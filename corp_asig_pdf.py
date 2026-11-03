@@ -15,6 +15,7 @@ y lo que falta asignar en ámbar.
   generar_imagen(info)    la misma hoja como imagen (para el grupo)
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 
 from reportlab.lib.colors import white
@@ -35,12 +36,8 @@ W_CHAPA = 40
 
 
 def _nombre(n):
-    """'PEREZ, WALTER' → 'WALTER PEREZ', como en la hoja del tráfico."""
-    s = str(n or "").strip()
-    if "," in s:
-        ap, no = s.split(",", 1)
-        s = f"{no.strip()} {ap.strip()}"
-    return s.upper()
+    """Apellido primero: 'WALTER PEREZ' → 'PEREZ, WALTER' ('PEREZ, WALTER' queda igual)."""
+    return apellido_primero_varios(str(n or "").strip()).upper()
 
 
 def _clave_var(s):

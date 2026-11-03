@@ -16,6 +16,7 @@ Los viajes de varios días que siguen en curso se listan al pie de cada día.
   datos(desde, hasta, cliente, cancelados)   arma info desde la agenda
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 from datetime import date, timedelta
 
@@ -229,7 +230,7 @@ def _chips(s):
 
 def _trip_lineas(h, t, maxw):
     """La tripulación en hasta dos renglones (a veces son dos o tres nombres)."""
-    t = " ".join(str(t or "").split()).upper()
+    t = apellido_primero_varios(" ".join(str(t or "").split())).upper()
     if h.ancho(t, "D5", 8.6) <= maxw:
         return [t], 8.6
     rs = h.partir(t, "D5", 7.6, maxw)

@@ -14,6 +14,7 @@ en el Excel, todo se recalcula. Además se guarda el resultado ya calculado en
 cada fórmula, para que el archivo se vea completo aunque se abra en un visor
 que no calcula (la vista previa de WhatsApp o del celular).
 """
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import re
 import zipfile
@@ -193,7 +194,7 @@ def _filas(cargas):
             "vid": c.get("vehiculo_id"),
             "patente": c.get("patente") or "",
             "modelo": " ".join(x for x in (c.get("marca") or "", c.get("modelo") or "") if x).strip(),
-            "chofer": (c.get("chofer") or "").strip() or "Sin chofer",
+            "chofer": apellido_primero_varios((c.get("chofer") or "").strip()) or "Sin chofer",
             "cliente": (c.get("cliente") or "").strip() or "Sin cliente",
             "lugar": lugar_txt,
             "punto": punto,

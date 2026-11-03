@@ -20,6 +20,7 @@ Enganche en app.py:
     app.register_blueprint(bp_personal)
 """
 
+from nombres import apellido_primero, clave_orden
 import io
 import re
 import unicodedata
@@ -1013,7 +1014,7 @@ def pdf_lista(personas):
     pad = 4 if len(activos) <= 21 else 2.5 if len(activos) <= 27 else 1.5
     data = [["N°", "Nombre y apellido", "Puesto"]]
     for p in activos:
-        data.append([Paragraph(str(p["numero"]), num), Paragraph(p["nombre"], nom), Paragraph(p["puesto"] or "—", pue)])
+        data.append([Paragraph(str(p["numero"]), num), Paragraph(apellido_primero(p["nombre"]), nom), Paragraph(p["puesto"] or "—", pue)])
     t = Table(data, colWidths=[20 * mm, 92 * mm, 66 * mm], repeatRows=1)
     estilo = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(AZUL)),
@@ -1034,7 +1035,7 @@ def pdf_lista(personas):
     if bajas:
         story.append(Spacer(1, 4 * mm))
         story.append(Paragraph("Números que no se vuelven a usar (de baja): " +
-                               ", ".join(f"N°{p['numero']} {p['nombre']}" for p in bajas), sub))
+                               ", ".join(f"N°{p['numero']} {apellido_primero(p['nombre'])}" for p in bajas), sub))
     doc.build(story)
     buf.seek(0)
     return buf
@@ -1085,7 +1086,7 @@ def pdf_informe(res):
 
     data = [["N°", "Nombre", "Puesto", "Trabajos", "Prev.", "Corr.", "Coches", "En curso", "Último"]]
     for r in res["ranking"]:
-        data.append([str(r["numero"]), Paragraph(r["nombre"] + ("" if r["activo"] else " (baja)"), sm),
+        data.append([str(r["numero"]), Paragraph(apellido_primero(r["nombre"]) + ("" if r["activo"] else " (baja)"), sm),
                      Paragraph(r["puesto"] or "—", smg), str(r["trabajos"]),
                      str(r["tipos"].get("preventivo", 0)), str(r["tipos"].get("correctivo", 0)),
                      str(r["coches"]), str(r["en_curso"] or "—"), _fdm(r["ultimo"])[:5] if r["ultimo"] else "—"])
@@ -1213,7 +1214,7 @@ def pdf_ahora(res, puesto=""):
             inicio = fila
             for i, a in enumerate(r["ahora"]):
                 data.append([Paragraph(f"<b>{r['numero']}</b>", grande) if i == 0 else "",
-                             Paragraph(f"<b>{e(r['nombre'])}</b><br/><font color='{GRIS}'>{e(r['puesto'] or '')}</font>", sm) if i == 0 else "",
+                             Paragraph(f"<b>{e(apellido_primero(r['nombre']))}</b><br/><font color='{GRIS}'>{e(r['puesto'] or '')}</font>", sm) if i == 0 else "",
                              Paragraph(f"<b>{e(a['coche'] or '—')}</b>", grande),
                              Paragraph(", ".join(f"#{o}" for o in a["ots"]), sm),
                              Paragraph(estado(a), sm), Paragraph(trabajos(a), sm)])
@@ -1236,7 +1237,7 @@ def pdf_ahora(res, puesto=""):
         num = lambda c: int(re.sub(r"\D", "", c) or 0)
         data, estilo = [["Coche", "OT", "Quiénes están", "Estado"]], list(base)
         for k, c in enumerate(sorted(coches.values(), key=lambda c: num(c["coche"])), 1):
-            gente = "<br/>".join(f"<b>N°{r['numero']}</b> {e(r['nombre'])}" for r in sorted(c["gente"], key=lambda r: r["numero"]))
+            gente = "<br/>".join(f"<b>N°{r['numero']}</b> {e(apellido_primero(r['nombre']))}" for r in sorted(c["gente"], key=lambda r: r["numero"]))
             data.append([Paragraph(f"<b>{e(c['coche'] or '—')}</b>", grande), Paragraph(", ".join(f"#{o}" for o in sorted(c["ots"])), sm),
                          Paragraph(gente, sm), Paragraph(estado(c), sm)])
             estilo.append(("LINEBELOW", (0, k), (-1, k), 0.4, colors.HexColor(LINEA)))
@@ -1246,7 +1247,7 @@ def pdf_ahora(res, puesto=""):
 
     if libres:
         story += [Spacer(1, 4 * mm), Paragraph(f"Sin nada asignado ahora ({len(libres)})", h2),
-                  Paragraph(" · ".join(f"<b>N°{r['numero']}</b> {e(r['nombre'])}" for r in libres), sm),
+                  Paragraph(" · ".join(f"<b>N°{r['numero']}</b> {e(apellido_primero(r['nombre']))}" for r in libres), sm),
                   Spacer(1, 1 * mm),
                   Paragraph("Puede ser que estén haciendo algo que no está cargado en una OT, o que falte poner su número.", smg)]
     doc.build(story)
@@ -1327,7 +1328,7 @@ def pdf_turno(res, detalle):
     cab += ["Total", "Días con\ntrabajo", "Coches", "En curso"]
     data = [cab]
     for r in gente:
-        fila = [str(r["numero"]), Paragraph(r["nombre"] + ("" if r["activo"] else " (baja)"), sm)]
+        fila = [str(r["numero"]), Paragraph(apellido_primero(r["nombre"]) + ("" if r["activo"] else " (baja)"), sm)]
         if con_dias:
             fila += [str(r["por_dia"].get(d, 0) or ("0" if d in habiles else "·")) for d in dias]
         dias_con = len([d for d, n in r["por_dia"].items() if n])
@@ -1394,13 +1395,13 @@ def pdf_turno(res, detalle):
             if not trab:
                 if not r["activo"]:
                     continue
-                filas.append([str(r["numero"]), Paragraph(r["nombre"], smg), "", "",
+                filas.append([str(r["numero"]), Paragraph(apellido_primero(r["nombre"]), smg), "", "",
                               Paragraph("<i>Sin trabajos terminados con su número</i>", smg)])
                 estilo_d.append(("TEXTCOLOR", (0, len(filas) - 1), (-1, len(filas) - 1), colors.HexColor(GRIS)))
                 continue
             for k, x in enumerate(trab):
                 txt = x["descripcion"] + (f" <font color='{GRIS}'>· con N°{', '.join(map(str, x['con']))}</font>" if x["con"] else "")
-                filas.append([str(r["numero"]) if k == 0 else "", Paragraph(r["nombre"], sm) if k == 0 else "",
+                filas.append([str(r["numero"]) if k == 0 else "", Paragraph(apellido_primero(r["nombre"]), sm) if k == 0 else "",
                               x["coche"], f"#{x['ot_id']}", Paragraph(txt, sm)])
             if len(trab) > 1:
                 estilo_d.append(("LINEBELOW", (0, len(filas) - 1), (-1, len(filas) - 1), 0.6, colors.HexColor("#B9C6D8")))
@@ -1472,7 +1473,7 @@ def pdf_ficha(f, etiqueta_periodo="", coche=""):
     p = f["persona"]
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
-    c.setTitle(f"N°{p['numero']} {p['nombre']} - trabajos")
+    c.setTitle(f"N°{p['numero']} {apellido_primero(p['nombre'])} - trabajos")
     c.setAuthor("La Santaniana")
 
     def ancho(t, fu, sz):
@@ -1534,7 +1535,7 @@ def pdf_ficha(f, etiqueta_periodo="", coche=""):
 
     def pie():
         linea(M, H - 30, W - M, H - 30, LINEA, 0.5)
-        texto(M, H - 18, f"N°{p['numero']} {p['nombre']} · trabajos {per_txt}", "I5", 7.5, GRIS)
+        texto(M, H - 18, f"N°{p['numero']} {apellido_primero(p['nombre'])} · trabajos {per_txt}", "I5", 7.5, GRIS)
         texto(W - M, H - 18, f"Hoja {pagina[0]} · impresa el {impresa}", "I5", 7.5, GRIS, align="r")
 
     def encabezado(primera):
@@ -1551,7 +1552,7 @@ def pdf_ficha(f, etiqueta_periodo="", coche=""):
         rect(M + aw * 0.4 + 3, y + 47, aw * 0.6 - 3, 3, fill=AZUL)
         y += 64
         if not primera:
-            texto(M, y + 4, f"{p['nombre'].upper()} · SIGUE", "I7", 8, NAVY)
+            texto(M, y + 4, f"{apellido_primero(p['nombre']).upper()} · SIGUE", "I7", 8, NAVY)
             return y + 14
         return y
 
@@ -1563,7 +1564,7 @@ def pdf_ficha(f, etiqueta_periodo="", coche=""):
 
     # ── Primera hoja: quién es y sus números ──
     y = encabezado(True)
-    texto(M, y + 18, p["nombre"].upper(), "D9", 22, TINTA)
+    texto(M, y + 18, apellido_primero(p["nombre"]).upper(), "D9", 22, TINTA)
     datos = [p.get("puesto") or "Sin puesto"]
     if p.get("edad_actual"):
         datos.append(f"{p['edad_actual']} años")
@@ -1651,7 +1652,7 @@ def pdf_ficha(f, etiqueta_periodo="", coche=""):
             desc = t.get("descripcion") or ""
             con = t.get("con") or []
             lineas = partir(desc, "I5", 8.6, COLS[3][1] - 12)
-            extra = ("con " + ", ".join(f"N°{x['numero']} {x['nombre'].split(' ')[0]}" for x in con)) if con else ""
+            extra = ("con " + ", ".join(f"N°{x['numero']} {apellido_primero(x['nombre']).split(',')[0]}" for x in con)) if con else ""
             alto = 8 + len(lineas) * 11 + (10 if extra else 0) + 2
             if y + alto > LIM:
                 y = nueva_pagina()
@@ -1750,14 +1751,14 @@ def hojas_de_ot(ot, cuales="pendientes"):
             continue
         for p in gente:
             g = grupos.setdefault(f"p{p['id']}", {"clave": f"p{p['id']}", "numero": p["numero"],
-                                                   "nombre": p["nombre"], "puesto": p.get("puesto") or "",
+                                                   "nombre": apellido_primero(p["nombre"]), "puesto": p.get("puesto") or "",
                                                    "items": []})
             g["items"].append({**it, "con": [etiqueta(x) for x in gente if x["id"] != p["id"]] + otros})
         for t in otros:
-            g = grupos.setdefault("o:" + _norm(t), {"clave": "o:" + _norm(t), "numero": None, "nombre": t.strip(),
+            g = grupos.setdefault("o:" + _norm(t), {"clave": "o:" + _norm(t), "numero": None, "nombre": apellido_primero(t.strip()),
                                                     "puesto": "", "items": []})
             g["items"].append({**it, "con": [etiqueta(x) for x in gente] + [o for o in otros if o != t]})
-    hojas = sorted(grupos.values(), key=lambda g: (g["numero"] is None, g["numero"] or 0, _norm(g["nombre"])))
+    hojas = sorted(grupos.values(), key=lambda g: (g["numero"] is None, g["numero"] or 0, clave_orden(g["nombre"])))
     return hojas, sin_nadie
 
 
@@ -1969,7 +1970,7 @@ def pdf_hojas(ot, hojas, en_blanco=False):
             lineas = partir(it.get("descripcion") or "", "I5", 11.5, aw - 40)
             extra = []
             if it.get("con"):
-                extra.append("con " + ", ".join(it["con"]))
+                extra.append("con " + " · ".join(apellido_primero(x) for x in it["con"]))
             if it.get("estado") == "completado":
                 extra.append("ya completado")
             filas.append((lineas, " · ".join(extra)))

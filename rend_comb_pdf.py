@@ -6,6 +6,7 @@ rend_comb_pdf.py — PDF de la rendición de combustible (La Santaniana)
   pdf_lista(d, f)    el listado de sobres filtrado, apaisado, con totales.
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import os
 
@@ -233,7 +234,7 @@ def pdf_sobre(s):
             coche = f"{s['coche']}" + (f" · {s['patente']}" if s.get("patente") and str(s["patente"]) != s["coche"] else "")
             caja(M, y, aw * 0.30 - 6, 40, "Coche", coche, grande=True,
                  sub=" ".join(x for x in (s.get("marca"), s.get("modelo")) if x))
-            caja(M + aw * 0.30, y, aw * 0.45 - 6, 40, "Chofer", s.get("chofer") or "")
+            caja(M + aw * 0.30, y, aw * 0.45 - 6, 40, "Chofer", apellido_primero_varios(s.get("chofer")) or "")
             caja(M + aw * 0.75, y, aw * 0.25, 40, "Dónde carga", _lugar(s.get("cuenta")))
             y += 50
             # Consumo: números grandes
@@ -300,7 +301,7 @@ def pdf_sobre(s):
                 x = M + k * (tercio + 12)
                 L.linea(x, yf, x + tercio, yf, NAVY, 0.8)
                 L.texto(x + tercio / 2, yf + 12, t.upper(), "I6", 7, GRIS, align="c")
-                nombre = {"Chofer": s.get("chofer"), "Operador": s.get("cerrado_por") or s.get("abierto_por"),
+                nombre = {"Chofer": apellido_primero_varios(s.get("chofer")), "Operador": s.get("cerrado_por") or s.get("abierto_por"),
                           "Administración": s.get("rendido_por")}[t]
                 if nombre:
                     L.texto(x + tercio / 2, yf + 22, L.cortar(nombre, "I4", 7.5, tercio), "I4", 7.5, GRIS2, align="c")
@@ -308,7 +309,7 @@ def pdf_sobre(s):
             L.texto(W / 2, y + 6, "Sigue en la página siguiente", "I5", 9, GRIS, align="c")
 
         L.linea(M, H - 30, W - M, H - 30, LINEA, 0.5)
-        L.texto(M, H - 18, f"Sobre {s['numero']} · Coche {s['coche']} · {s.get('chofer') or ''}", "I5", 7.5, GRIS)
+        L.texto(M, H - 18, f"Sobre {s['numero']} · Coche {s['coche']} · {apellido_primero_varios(s.get('chofer')) or ''}", "I5", 7.5, GRIS)
         L.texto(W - M, H - 18, f"Hoja {n_pag} de {total_pag} · impresa el {impresa}", "I5", 7.5, GRIS, align="r")
         c.showPage()
     c.save()
@@ -398,7 +399,7 @@ def pdf_lista(d, filtro):
             desvio = ""
             if comp.get("desvio_pct") is not None and not comp.get("sin_datos"):
                 desvio = ("+" if comp["desvio_pct"] > 0 else "") + _miles(comp["desvio_pct"], 1) + "%"
-            vals = [str(s["numero"]), s["coche"], s.get("chofer") or "—", _lugar(s.get("cuenta"), True),
+            vals = [str(s["numero"]), s["coche"], apellido_primero_varios(s.get("chofer")) or "—", _lugar(s.get("cuenta"), True),
                     _dmy(s.get("fecha_apertura")), _dmy(s.get("fecha_cierre")) or "—",
                     _miles(s.get("km_inicial")) if s.get("km_inicial") else "—",
                     _miles(s.get("km_final")) if est != "abierto" and s.get("km_final") else "—",

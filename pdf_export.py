@@ -10,6 +10,8 @@ import os
 import io
 import datetime
 
+from nombres import apellido_primero, apellido_primero_varios
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib import colors
@@ -523,7 +525,7 @@ def generar_reporte_gerencial_pdf(reporte, ruta_salida):
             info = []
             if ot.get('fecha_apertura'): info.append(f"<b>Fecha:</b> {ot['fecha_apertura']}")
             if ot.get('km'): info.append(f"<b>KM:</b> {int(ot['km']):,}".replace(',','.'))
-            if ot.get('conductor'): info.append(f"<b>Conductor:</b> {ot['conductor']}")
+            if ot.get('conductor'): info.append(f"<b>Conductor:</b> {apellido_primero_varios(ot['conductor'])}")
             if ot.get('procedencia'): info.append(f"<b>Procedencia:</b> {ot['procedencia']}")
             if info:
                 story.append(Paragraph(" · ".join(info), small_style))
@@ -575,7 +577,7 @@ def generar_reporte_gerencial_pdf(reporte, ruta_salida):
         data = [["#", "Técnico", "Trabajos", "Preventivos", "Correctivos", "Costo total"]]
         for i, t in enumerate(reporte["tecnicos"], 1):
             data.append([
-                str(i), t["nombre"],
+                str(i), apellido_primero(t["nombre"]),
                 str(t["total"]), str(t.get("preventivos", 0)),
                 str(t.get("correctivos", 0)), gs(t.get("costo", 0))
             ])
@@ -674,7 +676,7 @@ LABEL_ESTADO_OT = {
 def _tecnico_corto(t, largo=20):
     """Para la columna angosta del técnico: si son varios con número y no
     entra, quedan solo los números (N°20 · N°21)."""
-    t = (t or "").strip() or "—"
+    t = apellido_primero_varios((t or "").strip()) or "—"
     if len(t) <= largo:
         return t
     import re
@@ -716,7 +718,7 @@ def _dia_trabajos(fecha, items):
     quienes = []
     for it in items:
         o, r = it.get("origen") or "", (it.get("reportado_por") or "").strip()
-        q = (f"reportó {r} (chofer)" if o == "chofer" and r else "reporte del chofer" if o == "chofer"
+        q = (f"reportó {apellido_primero(r)} (chofer)" if o == "chofer" and r else "reporte del chofer" if o == "chofer"
              else "turno del preventivo" if o == "preventivo" else "cargado en el taller")
         if q not in quienes:
             quienes.append(q)
@@ -803,7 +805,7 @@ def generar_ot_pdf(ot, ruta_salida, coches=None):
              Paragraph("<b>Fecha apertura</b>", small), Paragraph(oc.get("fecha_apertura","—"), small)],
             [Paragraph("<b>Kilómetros</b>", small), Paragraph(f"{int(oc.get('km',0) or 0):,}".replace(",","."), small),
              Paragraph("<b>Fecha cierre</b>", small), Paragraph(oc.get("fecha_cierre") or "—", small)],
-            [Paragraph("<b>Conductor</b>", small), Paragraph(oc.get("conductor") or "—", small),
+            [Paragraph("<b>Conductor</b>", small), Paragraph(apellido_primero_varios(oc.get("conductor")) or "—", small),
              Paragraph("<b>Procedencia</b>", small), Paragraph(oc.get("procedencia") or "—", small)],
         ]
         tabla_datos = Table(datos, colWidths=[30*mm, 54*mm, 30*mm, 54*mm])
@@ -864,7 +866,7 @@ def generar_ot_pdf(ot, ruta_salida, coches=None):
                     Paragraph(desc, small),
                     Paragraph(LABEL_TIPO_OT.get(it.get("tipo",""), it.get("tipo","")), small),
                     Paragraph(LABEL_ESTADO_ITEM.get(it.get("estado",""), it.get("estado","")), small),
-                    Paragraph(it.get("tecnico") or "—", small),
+                    Paragraph(apellido_primero_varios(it.get("tecnico")) or "—", small),
                     Paragraph(gs(it.get("costo")), small),
                 ])
             # Fila total
@@ -1559,7 +1561,7 @@ def generar_presupuesto_compras_pdf(ot, ruta_salida):
             Paragraph(str(i), small),
             Paragraph(it.get("descripcion", ""), small),
             Paragraph(it.get("material_pedido") or "—", small),
-            Paragraph(it.get("tecnico") or "—", small),
+            Paragraph(apellido_primero_varios(it.get("tecnico")) or "—", small),
             Paragraph(gs(precio), small),
         ])
     filas.append([

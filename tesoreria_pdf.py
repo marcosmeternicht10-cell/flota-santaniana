@@ -15,6 +15,7 @@ entregue la plata. Una hoja (o las que hagan falta) por OT:
   pdf_pedido_fondos(d)           arma el PDF y devuelve un BytesIO
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 
 from reportlab.pdfgen import canvas
@@ -361,7 +362,7 @@ def _dibujar(d, c, total_pag):
             lineas = _partir(L, f"{n_t}. {t['descripcion']}", "I6", 8.4, cols[0][1] - 14)
             extra = []
             if t.get("tecnico"):
-                extra.append(("Mecánico: " + t["tecnico"], GRIS2))
+                extra.append(("Mecánico: " + apellido_primero_varios(t["tecnico"]), GRIS2))
             if t.get("estado_pago") == "espera":
                 extra.append(("ESPERA FONDOS", AMBAR))
             elif t.get("estado_pago") == "habilitado":

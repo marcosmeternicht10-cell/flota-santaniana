@@ -21,6 +21,7 @@ Enganche en app.py:
     app.register_blueprint(bp_corp_servicios)
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import re
 from datetime import date, timedelta
@@ -379,7 +380,7 @@ def pdf_ranking(p, orden="servicios"):
     data = [["#", "Servicio", "Empresa", "Veces", "A medias", "Pasajeros", "Prom.", "Km", "Costo (Gs.)",
              "Gs. por pas.", "Susp.", "Choferes que más lo hacen"]]
     for i, r in enumerate(filas, 1):
-        quien = ", ".join(f"{e(c['nombre'].split(',')[0].title())} ({c['n']})" for c in r["choferes_top"][:3])
+        quien = ", ".join(f"{e(apellido_primero(c['nombre']).split(',')[0].title())} ({c['n']})" for c in r["choferes_top"][:3])
         data.append([str(i), Paragraph(f"<b>{e(r['corto'])}</b>" + (f" <font color='{GRIS}'>{e(r['hora'])}</font>" if r["hora"] else ""), sm),
                      r["cliente"], str(r["servicios"]), str(r["a_medias"] or "—"), _gs(r["pasajeros"]),
                      str(r["pasajeros_prom"]).replace(".", ","), _gs(r["km"]), _gs(r["costo"]),

@@ -22,6 +22,7 @@ Enganche en app.py:
     app.register_blueprint(bp_servicios)
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import json
 import statistics
@@ -643,13 +644,13 @@ def excel(desde, hasta, corredor=None, trafico=""):
         filas.append([d.strftime("%d/%m/%Y"), DIAS_SEMANA[d.weekday()].capitalize(), s["hora"],
                       "Internacional" if s["trafico"] == "internacional" else "Nacional", s["corredor"],
                       "Ida" if s["lado"] == "ida" else "Regreso", s["destino"], "Sí" if s["refuerzo"] else "",
-                      int(s["coche"]) if s["coche"] else "A CONFIRMAR", s["trips"][0] if s["trips"] else "",
-                      s["trips"][1] if len(s["trips"]) > 1 else "", s["km"] or None, s["asientos"] or None])
+                      int(s["coche"]) if s["coche"] else "A CONFIRMAR", apellido_primero_varios(s["trips"][0]) if s["trips"] else "",
+                      apellido_primero_varios(s["trips"][1]) if len(s["trips"]) > 1 else "", s["km"] or None, s["asientos"] or None])
     hoja(wb.active, "Servicios", ["Fecha", "Día", "Hora", "Tráfico", "Corredor", "Sentido", "Tramo", "Refuerzo", "Coche",
                                   "Tripulante 1", "Tripulante 2", "Km", "Asientos"],
          filas, [12, 11, 8, 13, 26, 10, 28, 10, 12, 26, 26, 9, 10])
     hoja(wb.create_sheet(), "Por tripulante", ["Tripulante", "Servicios", "Días", "Refuerzos", "Coches distintos", "Km"],
-         [[p["nombre"], p["servicios"], p["dias"], p["refuerzos"], p["coches"], p["km"] or None]
+         [[apellido_primero_varios(p["nombre"]), p["servicios"], p["dias"], p["refuerzos"], p["coches"], p["km"] or None]
           for p in _por_tripulante(servs)], [30, 11, 8, 11, 16, 10])
     hoja(wb.create_sheet(), "Por coche", ["Coche", "Modelo", "Servicios", "Días", "Refuerzos", "Corredor principal", "Km"],
          [[int(c["coche"]), c["modelo"], c["servicios"], c["dias"], c["refuerzos"], c["corredor"], c["km"] or None]

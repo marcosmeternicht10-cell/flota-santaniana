@@ -22,6 +22,7 @@ Dos cosas del proceso real que el módulo respeta:
     viaje" (el coche y el chofer están afuera).
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 from flask import Blueprint, request, jsonify, session
 from db_compat import get_connection, USE_POSTGRES
 from hora_local import ahora_iso, hoy
@@ -664,7 +665,7 @@ def generar_pdf_agenda(servicios, desde, hasta):
             s.get("cliente", ""), s.get("ot_nr", "") or "—",
             (s.get("salida", "") or "")[:26], (s.get("destino", "") or "")[:26],
             "\n".join(c["coche_interno"] or "A DEF" for c in cs),
-            "\n".join((c["tripulacion"] or "A DEF")[:22] for c in cs),
+            "\n".join((apellido_primero_varios(c["tripulacion"]) or "A DEF")[:22] for c in cs),
             s.get("dia_servicio", "") + (f"\na {s.get('dia_fin', '')}\n({s['dias']} días)" if varios_dias else ""),
         ])
 

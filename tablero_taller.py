@@ -27,6 +27,7 @@ formato de la planilla.
   GET    /api/taller/tablero.xlsx | .pdf ?fecha=
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import re
 from datetime import date, datetime, timedelta
@@ -831,7 +832,7 @@ def xlsx(d):
 
     fila = 3
     for tec in d["tecnicos"]:
-        for col, v in ((2, tec["numero"]), (3, tec["nombre"]), (4, tec["puesto"])):
+        for col, v in ((2, tec["numero"]), (3, apellido_primero(tec["nombre"])), (4, tec["puesto"])):
             ws.cell(row=fila, column=col, value=v)
             ws.merge_cells(start_row=fila, start_column=col, end_row=fila + 1, end_column=col)
             ws.cell(row=fila, column=col).alignment = centro
@@ -987,7 +988,7 @@ def pdf(d):
             pag += 1
             y = cabecera(pag)
         x = M
-        for v, w, f, tam in ((str(tec["numero"]), w_num, "D8", 9.5), (tec["nombre"], w_nom, "I6", 7),
+        for v, w, f, tam in ((str(tec["numero"]), w_num, "D8", 9.5), (apellido_primero(tec["nombre"]), w_nom, "I6", 7),
                              (tec["puesto"], w_esp, "I4", 6.4)):
             L.rect(x, y, w, alto, stroke=LINEA)
             L.texto(x + w / 2, y + alto / 2 + 2.5, L.cortar(v or "", f, tam, w - 5), f, tam, TINTA, "c")

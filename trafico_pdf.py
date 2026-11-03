@@ -14,6 +14,7 @@ dentro del PDF desde static/fonts. Si faltan, se usa Helvetica y el PDF
 sale igual.
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import os
 from datetime import date
@@ -532,7 +533,7 @@ def _celda(h, x0, y, s, lado, cambiada, i, primera, ultima):
     h.chapa(x0 + X_CHAPA, medio - 7.5, W_CHAPA, 15, s.get("coche"), 10.5)
 
     # Tripulantes: uno arriba del otro, como en la planilla
-    trips = [t for t in (s.get("trip1"), s.get("trip2")) if t]
+    trips = [apellido_primero_varios(t) for t in (s.get("trip1"), s.get("trip2")) if t]
     maxn = CW - X_NOMBRES - 3
     if len(trips) == 2:
         for k, t in enumerate(trips):

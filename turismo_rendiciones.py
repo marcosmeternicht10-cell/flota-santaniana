@@ -34,6 +34,7 @@ Enganche en app.py:
     app.register_blueprint(bp_rendiciones)
 """
 
+from nombres import apellido_primero, apellido_primero_varios
 import io
 import json
 from datetime import date, timedelta
@@ -1566,7 +1567,7 @@ def generar_pdf(d):
         dias = d["dias"]
         fechas = f"{_f(d.get('fecha_salida'))} al {_f(d.get('fecha_regreso') or d.get('fecha_salida'))} · {dias} día{'s' if dias != 1 else ''}"
         c.drawRightString(W - M, H - 93, fechas)
-        choferes = " y ".join(z for z in (d.get("chofer"), d.get("chofer2")) if z)
+        choferes = " y ".join(apellido_primero_varios(z) for z in (d.get("chofer"), d.get("chofer2")) if z)
         datos = " · ".join(z for z in (d.get("coche") and f"Coche {d['coche']}",
                                        choferes and (f"Choferes: {choferes}" if d.get("chofer2") else f"Rinde: {choferes}"),
                                        d.get("km_recorridos") and f"{_n(d['km_recorridos'], 0)} km",
@@ -1738,7 +1739,7 @@ def generar_pdf(d):
     fs = lambda t, n: Paragraph(t, st("f" + n, f=F["I6"], s=8, alignment=TA_CENTER))
     fsub = lambda t, n: Paragraph(t, st("fs" + n, s=7, c=GRIS, alignment=TA_CENTER))
     firmas = Table([["", "", "", "", ""],
-                    [fs(d.get("chofer") or "Chofer", "1"), "", fs("Encargado de turismo", "2"), "", fs("Administración", "3")],
+                    [fs(apellido_primero_varios(d.get("chofer")) or "Chofer", "1"), "", fs("Encargado de turismo", "2"), "", fs("Administración", "3")],
                     [fsub("Recibí el anticipo y rindo estos gastos", "1"), "", fsub("Controló los comprobantes", "2"), "",
                      fsub("Aprobó", "3")]],
                    colWidths=[col, hueco, col, hueco, col], rowHeights=[42, 14, 12])
