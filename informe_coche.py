@@ -628,3 +628,53 @@ def api_informe(vid):
     num = d["vehiculo"].get("n_interno") or d["vehiculo"].get("patente") or vid
     return send_file(io.BytesIO(pdf), mimetype="application/pdf", as_attachment=False,
                      download_name=f"Informe coche {num}.pdf")
+
+
+# ── Para revisar qué hay cargado de un coche en cada parte del sistema ──────
+
+_FUENTES_DIAG = [
+    ("Órdenes de trabajo", "ordenes_trabajo", "substr(fecha_apertura,1,10)", ""),
+    ("Trabajos dentro de las OT", "ot_items i JOIN ordenes_trabajo o ON o.id=i.ot_id", "substr(COALESCE(i.fecha_completado, o.fecha_apertura),1,10)", "o."),
+    ("Correctivos", "correctivos", "fecha", ""),
+    ("Preventivos hechos", "mantenimientos_realizados", "fecha", " AND COALESCE(origen,'manual') <> 'inicial'"),
+    ("Preventivos de arranque del plan", "mantenimientos_realizados", "fecha", " AND COALESCE(origen,'manual') = 'inicial'"),
+    ("Libro de a bordo (cargado del papel)", "historial_eventos", "fecha", ""),
+    ("Combustible", "combustible", "substr(fecha,1,10)", ""),
+    ("Servicios (sección Servicios del coche)", "servicios", "substr(fecha,1,10)", ""),
+    ("Costos (sección Costos)", "costos", "mes", ""),
+    ("Fuera de servicio", "fuera_servicio", "fecha_desde", ""),
+    ("Cubiertas puestas", "instalaciones_neumaticos", "fecha_instalacion", ""),
+    ("Turnos de taller", "taller_turnos", "fecha", ""),
+]
+
+
+@bp_informe_coche.route("/api/informe_diag", methods=["GET"])
+def api_informe_diag():
+    """Qué hay cargado de un coche y de qué fechas, fuente por fuente (solo admin)."""
+    if session.get("rol") != "admin":
+        return jsonify({"ok": False, "msg": "Solo administración"}), 403
+    coche = (request.args.get("coche") or "").strip()
+    conn = get_connection()
+    try:
+        v = _q(conn, "SELECT id, n_interno, patente FROM vehiculos WHERE n_interno=? OR patente=?", (coche, coche.upper()))
+        if not v:
+            return f"<p>No encontré el coche «{coche}». Probá así: /api/informe_diag?coche=22330</p>", 404
+        vid = v[0]["id"]
+        filas = []
+        anio = _hoy()[:4]
+        for nombre, tabla, col, extra in _FUENTES_DIAG:
+            pre = "o." if extra == "o." else ""
+            cond = (extra if extra and extra != "o." else "")
+            r = _q(conn, f"""SELECT COUNT(*) AS n, MIN({col}) AS desde, MAX({col}) AS hasta,
+                                    SUM(CASE WHEN {col} < ? THEN 1 ELSE 0 END) AS antes
+                             FROM {tabla} WHERE {pre}vehiculo_id=?{cond}""", (anio + "-01-01", vid))
+            r = r[0] if r else {"n": "error", "desde": "", "hasta": "", "antes": ""}
+            filas.append((nombre, r.get("n"), r.get("antes") or 0, r.get("desde") or "—", r.get("hasta") or "—"))
+    finally:
+        conn.close()
+    tr = "".join(f"<tr><td>{a}</td><td>{b}</td><td><b>{c}</b></td><td>{d}</td><td>{e}</td></tr>" for a, b, c, d, e in filas)
+    return (f"""<!doctype html><meta charset="utf-8"><title>Qué hay del coche {coche}</title>
+<style>body{{font-family:system-ui,sans-serif;margin:24px;color:#14263D}}table{{border-collapse:collapse}}
+td,th{{border-bottom:1px solid #ddd;padding:8px 14px;text-align:left}}th{{font-size:12px;color:#5B6B7F;text-transform:uppercase}}</style>
+<h2>Qué hay cargado del coche {v[0]['n_interno']} ({v[0]['patente']}) · id {vid}</h2>
+<table><tr><th>Dónde</th><th>Registros</th><th>Antes de {anio}</th><th>El más viejo</th><th>El más nuevo</th></tr>{tr}</table>""")
