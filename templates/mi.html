@@ -105,6 +105,32 @@
     .btn { padding: 10px 16px; border-radius: 12px; background: var(--ink); color: var(--bg); font-weight: 600; font-size: 14px; flex: none; }
     .btn:active { transform: scale(.97); }
 
+    /* Confirmar que ya tiene la app */
+    .confirma { margin-bottom: 14px; border-radius: 22px; padding: 18px; background: var(--card); box-shadow: var(--sombra);
+                display: grid; grid-template-columns: 48px 1fr; gap: 6px 14px; align-items: center; overflow: hidden;
+                transition: max-height .45s ease, opacity .35s ease, margin .45s ease, padding .45s ease; max-height: 260px; }
+    .confirma .ic { width: 48px; height: 48px; border-radius: 15px; background: var(--ink); color: var(--bg);
+                    display: grid; place-items: center; font-size: 24px; }
+    .confirma b { font-size: 16px; font-weight: 700; }
+    .confirma p { grid-column: 1 / -1; font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+    .confirma .si { grid-column: 1 / -1; margin-top: 8px; width: 100%; padding: 14px; border-radius: 14px; background: var(--red);
+                    color: #fff; font-weight: 700; font-size: 15.5px; display: flex; align-items: center; justify-content: center; gap: 8px;
+                    box-shadow: 0 10px 22px -12px rgba(220,38,65,.7); }
+    .confirma .si:active { transform: scale(.98); }
+    .confirma .si:disabled { opacity: .7; }
+    .confirma.listo { grid-template-columns: 1fr; justify-items: center; text-align: center; padding: 22px 18px; }
+    .confirma.listo b { font-size: 19px; font-family: var(--disp); }
+    .confirma.chau { max-height: 0; opacity: 0; margin-bottom: 0; padding-top: 0; padding-bottom: 0; }
+    .tilde { width: 64px; height: 64px; }
+    .tilde circle { fill: rgba(31,138,91,.12); }
+    .tilde path { fill: none; stroke: var(--green); stroke-width: 5; stroke-linecap: round; stroke-linejoin: round;
+                  stroke-dasharray: 40; stroke-dashoffset: 40; animation: tilde .5s .15s cubic-bezier(.6,0,.3,1) forwards; }
+    @keyframes tilde { to { stroke-dashoffset: 0; } }
+    .confirma.listo .tilde { animation: pop .45s cubic-bezier(.2,.9,.3,1.4) both; }
+    @keyframes pop { from { transform: scale(.4); opacity: 0; } }
+    .ti-loader-2 { display: inline-block; animation: girar .8s linear infinite; }
+    @keyframes girar { to { transform: rotate(360deg); } }
+
     /* Secciones */
     .sec { display: flex; align-items: baseline; justify-content: space-between; margin: 30px 2px 12px; }
     .sec h2 { font-family: var(--disp); font-size: 15px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
@@ -251,6 +277,7 @@
 
   <main>
     <section id="v-serv">
+      <div id="confirmar"></div>
       <div id="hero"><div class="esqueleto" style="height:300px"></div></div>
       <div id="avisar"></div>
       <div id="viene"></div>
@@ -323,7 +350,7 @@ async function cargar(avisar) {
   try {
     const d = await api("/api/mi/inicio" + qs());
     S.d = d; S.mes = d.mes; S.mesAnt = null; S.mesVer = d.hoy.slice(0, 7); S.base = Date.now();
-    pintarCabecera(); pintarServicios(); pintarMes();
+    pintarCabecera(); pintarServicios(); pintarMes(); pintarConfirmar();
     if (avisar) toast("Actualizado");
   } catch (e) {
     $("hero").innerHTML = `<div class="vacio entra"><h3>${ES_ADMIN ? "Vista previa" : "No se pudo cargar"}</h3><p>${esc(e.message)}</p></div>`;
@@ -559,6 +586,39 @@ async function estadoAvisos() {
   $("yo").classList.toggle("con-avisos", on);
   return on;
 }
+// ── "Ya tengo la app" ────────────────────────────────────────────────────
+function modoApp() {
+  const sola = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true || document.referrer.startsWith("android-app://");
+  return sola ? "app" : "navegador";
+}
+async function pintarConfirmar() {
+  const box = $("confirmar");
+  if (ES_ADMIN) { box.innerHTML = ""; return; }
+  const r = await api("/api/push/confirmacion").catch(() => null);
+  if (!r || !r.pide || r.confirmado_el) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="confirma entra" id="conf-caja">
+    <span class="ic"><i class="ti ti-device-mobile-check"></i></span><b>¿Ya tenés la app?</b>
+    <p>Confirmá con un toque, así la oficina sabe que ya te llegan tus servicios.</p>
+    <button class="si" id="conf-si" onclick="confirmarApp()"><i class="ti ti-check"></i> Sí, ya la tengo</button></div>`;
+}
+async function confirmarApp() {
+  const b = $("conf-si");
+  b.disabled = true; b.innerHTML = `<i class="ti ti-loader-2"></i> Confirmando…`;
+  try {
+    await api("/api/push/confirmar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ modo: modoApp() }) });
+    const c = $("conf-caja");
+    c.classList.add("listo");
+    c.innerHTML = `<svg class="tilde" viewBox="0 0 64 64" aria-hidden="true"><circle cx="32" cy="32" r="32"/><path d="M19 33l9 9 17-19"/></svg>
+      <b>¡Gracias, ${esc(S.d.pila)}!</b><p style="grid-column:auto">Listo, la oficina ya sabe que tenés la app.</p>`;
+    if (navigator.vibrate) navigator.vibrate(30);
+    setTimeout(() => c.classList.add("chau"), 2600);
+    setTimeout(() => { $("confirmar").innerHTML = ""; }, 3200);
+  } catch (e) {
+    b.disabled = false; b.innerHTML = `<i class="ti ti-check"></i> Sí, ya la tengo`;
+    toast(e.message || "No se pudo confirmar, probá de nuevo");
+  }
+}
+
 async function pintarAvisar() {
   const box = $("avisar");
   if (ES_ADMIN || !AVISOS_OK) { box.innerHTML = ""; return; }

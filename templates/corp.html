@@ -806,40 +806,74 @@
 
     init();
   </script>
-<!-- Avisos al celular: cuando se publica la asignación le llega al chofer. Solo esta tarjetita. -->
+<!-- Abajo, una tarjetita: primero «¿Ya tenés la app?» y después los avisos al celular. Solo eso. -->
 <div id="av-corp" hidden style="position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:50;max-width:460px;margin:0 auto;
-  background:#fff;border-radius:16px;box-shadow:0 12px 34px -12px rgba(0,0,0,.35);padding:12px 12px 12px 14px;display:flex;gap:12px;align-items:center;font-family:Inter,system-ui,sans-serif">
-  <span style="width:38px;height:38px;border-radius:11px;background:#FCEBED;color:#DC2641;display:grid;place-items:center;font-size:19px;flex:none"><i class="ti ti-bell-ringing"></i></span>
-  <div style="flex:1;min-width:0"><b style="display:block;font-size:14px;color:#1A1A18">Enterate al toque</b>
-    <span style="display:block;font-size:12.5px;color:#6E6D66;line-height:1.35">Te llega tu asignación al celular apenas se publica.</span></div>
-  <button id="av-corp-si" style="border:0;border-radius:10px;background:#131312;color:#fff;font:600 13.5px Inter,sans-serif;padding:9px 13px">Activar</button>
+  background:#fff;border-radius:16px;box-shadow:0 12px 34px -12px rgba(0,0,0,.35);padding:12px 12px 12px 14px;gap:12px;align-items:center;font-family:Inter,system-ui,sans-serif">
+  <span id="av-corp-ic" style="width:38px;height:38px;border-radius:11px;background:#FCEBED;color:#DC2641;display:grid;place-items:center;font-size:19px;flex:none"><i class="ti ti-bell-ringing"></i></span>
+  <div style="flex:1;min-width:0"><b id="av-corp-t" style="display:block;font-size:14px;color:#1A1A18">Enterate al toque</b>
+    <span id="av-corp-s" style="display:block;font-size:12.5px;color:#6E6D66;line-height:1.35">Te llega tu asignación al celular apenas se publica.</span></div>
+  <button id="av-corp-si" style="border:0;border-radius:10px;background:#131312;color:#fff;font:600 13.5px Inter,sans-serif;padding:9px 13px;white-space:nowrap">Activar</button>
   <button id="av-corp-no" aria-label="Ahora no" style="border:0;background:none;color:#6E6D66;font-size:18px;padding:4px"><i class="ti ti-x"></i></button>
 </div>
 <script>
 (function () {
-  if (!("serviceWorker" in navigator && "PushManager" in window && "Notification" in window)) return;
-  const caja = document.getElementById("av-corp");
+  const caja = document.getElementById("av-corp"), si = document.getElementById("av-corp-si"), no = document.getElementById("av-corp-no");
+  const ver = () => { caja.hidden = false; caja.style.display = "flex"; }, ocultar = () => { caja.style.display = "none"; };
+  const post = (u, b) => fetch(u, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b || {}) });
+  const PUSH = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
   const b64 = s => { const p = "=".repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from([...b].map(c => c.charCodeAt(0))); };
-  const guardar = sub => fetch("/api/push/suscribir", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: sub.toJSON() }) });
-  let ahoraNo = false; try { ahoraNo = Date.now() - (+localStorage.getItem("av-corp-no") || 0) < 3 * 864e5; } catch (e) {}
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
-  navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => {
-    if (sub && Notification.permission === "granted") { guardar(sub).catch(() => {}); return; }
-    if (Notification.permission !== "denied" && !ahoraNo) caja.hidden = false, caja.style.display = "flex";
-  }).catch(() => {});
-  document.getElementById("av-corp-no").onclick = () => { caja.style.display = "none"; try { localStorage.setItem("av-corp-no", Date.now()); } catch (e) {} };
-  document.getElementById("av-corp-si").onclick = async () => {
-    try {
-      if (await Notification.requestPermission() !== "granted") { caja.style.display = "none"; return; }
-      const k = await fetch("/api/push/clave", { credentials: "same-origin" }).then(r => r.json());
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(k.clave) });
-      await guardar(sub);
-      fetch("/api/push/probar", { method: "POST", credentials: "same-origin" }).catch(() => {});
-      caja.innerHTML = '<b style="font-size:14px;color:#2F7C46;padding:6px 4px">✓ Listo, te van a llegar tus asignaciones</b>';
-      setTimeout(() => (caja.style.display = "none"), 3000);
-    } catch (e) { caja.style.display = "none"; }
-  };
+  const guardar = sub => post("/api/push/suscribir", { sub: sub.toJSON() });
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+  // 2) Los avisos al celular
+  function avisos() {
+    if (!PUSH) return;
+    let ahoraNo = false; try { ahoraNo = Date.now() - (+localStorage.getItem("av-corp-no") || 0) < 3 * 864e5; } catch (e) {}
+    navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => {
+      if (sub && Notification.permission === "granted") { guardar(sub).catch(() => {}); return; }
+      if (Notification.permission === "denied" || ahoraNo) return;
+      document.getElementById("av-corp-ic").innerHTML = '<i class="ti ti-bell-ringing"></i>';
+      document.getElementById("av-corp-t").textContent = "Enterate al toque";
+      document.getElementById("av-corp-s").textContent = "Te llega tu asignación al celular apenas se publica.";
+      si.textContent = "Activar"; si.disabled = false; no.style.display = "";
+      no.onclick = () => { ocultar(); try { localStorage.setItem("av-corp-no", Date.now()); } catch (e) {} };
+      si.onclick = async () => {
+        try {
+          if (await Notification.requestPermission() !== "granted") { ocultar(); return; }
+          const k = await fetch("/api/push/clave", { credentials: "same-origin" }).then(r => r.json());
+          const reg = await navigator.serviceWorker.ready;
+          await guardar(await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(k.clave) }));
+          post("/api/push/probar").catch(() => {});
+          caja.innerHTML = '<b style="font-size:14px;color:#2F7C46;padding:6px 4px">✓ Listo, te van a llegar tus asignaciones</b>';
+          setTimeout(ocultar, 3000);
+        } catch (e) { ocultar(); }
+      };
+      ver();
+    }).catch(() => {});
+  }
+
+  // 1) «¿Ya tenés la app?»: un toque y la oficina sabe que la tiene
+  fetch("/api/push/confirmacion", { credentials: "same-origin" }).then(r => r.json()).then(r => {
+    if (!r || !r.pide || r.confirmado_el) { avisos(); return; }
+    document.getElementById("av-corp-ic").innerHTML = '<i class="ti ti-device-mobile-check"></i>';
+    document.getElementById("av-corp-ic").style.cssText += ";background:#131312;color:#fff";
+    document.getElementById("av-corp-t").textContent = "¿Ya tenés la app?";
+    document.getElementById("av-corp-s").textContent = "Confirmá con un toque, así la oficina sabe que la tenés.";
+    si.textContent = "Sí, ya la tengo"; si.style.background = "#DC2641"; no.style.display = "none";
+    si.onclick = async () => {
+      si.disabled = true;
+      const sola = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true || document.referrer.startsWith("android-app://");
+      const r2 = await post("/api/push/confirmar", { modo: sola ? "app" : "navegador" }).then(x => x.json()).catch(() => null);
+      if (!r2 || !r2.ok) { si.disabled = false; return; }
+      const ic = document.getElementById("av-corp-ic");
+      ic.innerHTML = '<i class="ti ti-check"></i>'; ic.style.background = "#E9F3EC"; ic.style.color = "#2F7C46";
+      document.getElementById("av-corp-t").textContent = "¡Gracias!";
+      document.getElementById("av-corp-s").textContent = "La oficina ya sabe que tenés la app.";
+      si.style.display = "none";
+      setTimeout(() => { ocultar(); si.style.display = ""; si.style.background = "#131312"; document.getElementById("av-corp-ic").style.cssText = "width:38px;height:38px;border-radius:11px;background:#FCEBED;color:#DC2641;display:grid;place-items:center;font-size:19px;flex:none"; setTimeout(avisos, 400); }, 2400);
+    };
+    ver();
+  }).catch(() => avisos());
 })();
 </script>
 </body>
