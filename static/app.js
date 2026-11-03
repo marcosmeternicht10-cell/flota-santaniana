@@ -11784,7 +11784,10 @@ function hiPintarFicha(d) {
     <div class="hi-ficha">
       <div class="hi-nav">
         <button class="hi-volver" onclick="hiVolver()"><i class="ti ti-arrow-left"></i> Toda la flota</button>
-        ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
+        <span style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick="informeCoche(${c.id})"><i class="ti ti-file-type-pdf"></i> Informe completo</button>
+          ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
+        </span>
       </div>
       <section class="hi-hero">
         <div class="hi-hero-cartel">
