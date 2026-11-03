@@ -839,14 +839,24 @@
       no.onclick = () => { ocultar(); try { localStorage.setItem("av-corp-no", Date.now()); } catch (e) {} };
       si.onclick = async () => {
         try {
-          if (await Notification.requestPermission() !== "granted") { ocultar(); return; }
+          if (await Notification.requestPermission() !== "granted") {
+            const app = matchMedia("(display-mode: standalone)").matches || document.referrer.startsWith("android-app://");
+            document.getElementById("av-corp-t").textContent = "Avisos bloqueados en el celular";
+            document.getElementById("av-corp-s").textContent = app
+              ? "Mantené apretado el ícono de la app → Información de la app → Notificaciones → activalas. Después tocá Activar de nuevo."
+              : "Tocá el candado al lado de la dirección → Permisos → Notificaciones → Permitir. Después tocá Activar de nuevo.";
+            si.textContent = "Activar"; return;
+          }
           const k = await fetch("/api/push/clave", { credentials: "same-origin" }).then(r => r.json());
           const reg = await navigator.serviceWorker.ready;
           await guardar(await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(k.clave) }));
           post("/api/push/probar").catch(() => {});
           caja.innerHTML = '<b style="font-size:14px;color:#2F7C46;padding:6px 4px">✓ Listo, te van a llegar tus asignaciones</b>';
           setTimeout(ocultar, 3000);
-        } catch (e) { ocultar(); }
+        } catch (e) {
+          document.getElementById("av-corp-t").textContent = "No se pudieron activar";
+          document.getElementById("av-corp-s").textContent = "Cerrá la app, abrila de nuevo y probá otra vez (" + String((e && (e.message || e.name)) || "error").slice(0, 50) + ").";
+        }
       };
       ver();
     }).catch(() => {});

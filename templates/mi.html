@@ -558,7 +558,10 @@ function verTab(t) {
   $("t-serv").classList.toggle("on", t === "serv"); $("t-mes").classList.toggle("on", t === "mes");
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
-function abrirHoja() { $("velo").classList.add("on"); $("hoja").classList.add("on"); estadoAvisos(); }
+function abrirHoja() {
+  if (!$("op-avisos")) location.reload();      // se había usado para la ayuda de avisos
+  $("velo").classList.add("on"); $("hoja").classList.add("on"); estadoAvisos();
+}
 function cerrarHoja() { $("velo").classList.remove("on"); $("hoja").classList.remove("on"); }
 async function salir() {
   await fetch("/api/logout", { method: "POST", credentials: "same-origin" }).catch(() => {});
@@ -571,10 +574,34 @@ function b64aBytes(s) {
   const p = "=".repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, "+").replace(/_/g, "/"));
   return Uint8Array.from([...b].map(c => c.charCodeAt(0)));
 }
+// El service worker listo, sin quedarse colgado para siempre si algo falla
+async function swListo(ms = 8000) {
+  try { await navigator.serviceWorker.register("/sw.js"); } catch (e) { /* ya estaba o no se pudo: se espera igual */ }
+  return Promise.race([navigator.serviceWorker.ready,
+    new Promise((_, no) => setTimeout(() => no(new Error("El celular tardó demasiado en preparar los avisos. Cerrá la app, abrila de nuevo y probá otra vez.")), ms))]);
+}
 async function suscripcion() {
   if (!AVISOS_OK) return null;
-  const reg = await navigator.serviceWorker.ready;
+  const reg = await swListo();
   return reg.pushManager.getSubscription();
+}
+function enLaApp() {
+  return matchMedia("(display-mode: standalone)").matches || navigator.standalone === true || document.referrer.startsWith("android-app://");
+}
+// Cómo se habilitan los avisos cuando el celular los tiene bloqueados
+function ayudaAvisos() {
+  const ios = /iphone|ipad/i.test(navigator.userAgent);
+  const pasos = enLaApp()
+    ? (ios ? ["Abrí <b>Ajustes</b> del iPhone", "Entrá a <b>Notificaciones</b>", "Buscá <b>La Santaniana</b> y activá <b>Permitir notificaciones</b>"]
+           : ["Mantené apretado el ícono de <b>La Santaniana</b> en el celular", "Tocá <b>Información de la app</b> (la «i»)", "Entrá a <b>Notificaciones</b> y activalas"])
+    : ["Tocá el <b>candado</b> o los <b>⋮</b> al lado de la dirección", "Entrá a <b>Permisos</b> o <b>Configuración del sitio</b>", "En <b>Notificaciones</b> elegí <b>Permitir</b>"];
+  $("hoja").querySelector(".ops").innerHTML = `<p style="font-size:14px;color:var(--ink2);margin:4px 0 12px">El celular tiene bloqueados los avisos de la app. Para habilitarlos:</p>
+    <ol style="padding-left:20px;display:flex;flex-direction:column;gap:10px;font-size:15px;line-height:1.4">${pasos.map(p => `<li>${p}</li>`).join("")}</ol>
+    <p style="font-size:13px;color:var(--muted);margin-top:14px">Después volvé acá y tocá <b>Activar</b> de nuevo.</p>
+    <button class="btn" style="width:100%;margin-top:16px;padding:14px" onclick="cerrarHoja(); setTimeout(() => location.reload(), 250)">Listo</button>`;
+  $("h-nom").textContent = "Activar los avisos";
+  $("h-sub").textContent = "";
+  $("velo").classList.add("on"); $("hoja").classList.add("on");
 }
 async function estadoAvisos() {
   let txt, on = false;
@@ -582,7 +609,7 @@ async function estadoAvisos() {
   else if (Notification.permission === "denied") txt = "Bloqueados: habilitalos en Ajustes → Notificaciones";
   else { const s = await suscripcion().catch(() => null); on = !!s && Notification.permission === "granted";
          txt = on ? "Activados · tocá para mandarte uno de prueba" : "Desactivados · tocá para activarlos"; }
-  $("op-avisos-t").textContent = txt;
+  if ($("op-avisos-t")) $("op-avisos-t").textContent = txt;
   $("yo").classList.toggle("con-avisos", on);
   return on;
 }
@@ -629,28 +656,39 @@ async function pintarAvisar() {
     <div><b>${bloq ? "Avisos bloqueados" : "Enterate al toque"}</b><span>${bloq
       ? "Para recibir tu servicio, habilitá las notificaciones de la app en los ajustes del celular."
       : "Activá los avisos y te llega tu servicio apenas la oficina lo publica."}</span></div>
-    ${bloq ? "" : `<button class="btn" onclick="activarAvisos()">Activar</button>`}</div>`;
+    ${bloq ? `<button class="btn" onclick="ayudaAvisos()">Cómo</button>` : `<button class="btn" onclick="activarAvisos()">Activar</button>`}</div>`;
 }
 async function activarAvisos(desdeHoja) {
-  if (!AVISOS_OK) { toast("Este celular no permite avisos"); return; }
+  if (!AVISOS_OK) {
+    toast(/iphone|ipad/i.test(navigator.userAgent) && !enLaApp()
+      ? "En iPhone: tocá Compartir → «Agregar a inicio» y abrí la app desde el ícono para activar los avisos"
+      : "Este celular no permite avisos desde acá");
+    return;
+  }
+  const b = document.querySelector("#avisar .btn");
+  if (b) { b.disabled = true; b.textContent = "Activando…"; }
   try {
+    // Primero el permiso, enseguida del toque (si se espera otra cosa antes, algunos celulares no lo piden)
+    const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+    if (perm !== "granted") { pintarAvisar(); ayudaAvisos(); return; }
     let s = await suscripcion();
-    if (s && Notification.permission === "granted") {
+    if (s) {
       await api("/api/push/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: s.toJSON() }) });
       if (desdeHoja) { await api("/api/push/probar", { method: "POST" }); toast("Te mandamos un aviso de prueba"); }
+      else toast("¡Listo! Te van a llegar tus servicios");
+      pintarAvisar(); estadoAvisos();
       return;
     }
-    const perm = await Notification.requestPermission();
-    if (perm !== "granted") { toast("Sin permiso no te podemos avisar"); pintarAvisar(); return; }
     const { clave } = await api("/api/push/clave");
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await swListo();
     s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64aBytes(clave) });
     await api("/api/push/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: s.toJSON() }) });
     await api("/api/push/probar", { method: "POST" }).catch(() => {});
     toast("¡Listo! Te van a llegar tus servicios");
   } catch (e) {
-    const m = String((e && e.message) || "");
-    toast(/[áéíóúñ]|No |Sin /.test(m) ? m : "No se pudieron activar los avisos en este celular. Probá de nuevo en un rato.");
+    const m = String((e && (e.message || e.name)) || "");
+    if (/denied|permission/i.test(m)) { ayudaAvisos(); }
+    else toast(/[áéíóúñ]/.test(m) ? m : `No se pudieron activar los avisos (${m.slice(0, 60) || "error"}). Probá de nuevo en un rato.`);
   }
   pintarAvisar(); estadoAvisos();
 }
