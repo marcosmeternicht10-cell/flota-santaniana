@@ -199,6 +199,13 @@
     @keyframes jfade{from{opacity:0}to{opacity:1}}
     @keyframes jsube{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
   </style>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#1D344E">
+  <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
+  <link rel="apple-touch-icon" href="/static/app/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>
 </head>
 <body>
   <div class="topbar">
