@@ -456,7 +456,9 @@ MESES_TXT = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "ag
 
 
 def _clave_trip(nombre):
-    return " ".join(_sin_tildes(nombre).upper().replace(".", " ").replace(",", " ").split())
+    """La misma persona escrita en cualquier orden da la misma clave
+    ('VICTOR AMARILLA' y 'AMARILLA, VICTOR'), para contar bien sus viajes."""
+    return " ".join(sorted(_sin_tildes(nombre).upper().replace(".", " ").replace(",", " ").split()))
 
 
 def viajes_del_mes(conn, mes):

@@ -974,3 +974,40 @@ def api_revisar(uid):
     if not r:
         return jsonify({"ok": False, "msg": "No existe"}), 404
     return jsonify({"ok": True, **r})
+
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# LA LISTA DE CHOFERES PARA ELEGIR EN TRÁFICO
+# ════════════════════════════════════════════════════════════════════════════
+
+def nombre_planilla(nombre):
+    """'AMARILLA, VICTOR' → 'VICTOR AMARILLA', como se escribe en la planilla
+    de tráfico (el PDF igual lo imprime con el apellido primero)."""
+    n = " ".join(str(nombre or "").split()).upper()
+    if "," in n:
+        ape, nom = [x.strip() for x in n.split(",", 1)]
+        return f"{nom} {ape}".strip()
+    return n
+
+
+@bp_choferes_app.route("/api/trafico/choferes", methods=["GET"])
+def api_choferes_trafico():
+    """Los choferes con usuario, para elegirlos en la planilla: así el nombre
+    queda igual al del usuario y el viaje le aparece en la app seguro."""
+    if session.get("rol") not in ("admin", "taller", "auditor"):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    import push
+    conn = get_connection()
+    try:
+        filas = conn.execute("""SELECT id, usuario, nombre, rol, COALESCE(alias_planilla,'') AS alias,
+                                       COALESCE(app_confirmado_el,'') AS conf
+                                FROM usuarios WHERE rol IN ('tripulante','chofer_corp') AND COALESCE(activo,1)=1
+                                ORDER BY nombre""").fetchall()
+    finally:
+        conn.close()
+    cel = push.con_avisos()
+    return jsonify({"ok": True, "choferes": [{
+        "id": f["id"], "n": nombre_planilla(f["nombre"]), "nombre": f["nombre"], "usuario": f["usuario"],
+        "corp": f["rol"] == "chofer_corp", "app": bool(f["conf"]), "avisos": bool(cel.get(f["id"])),
+        "alias": [a.strip() for a in f["alias"].split(";") if a.strip()]} for f in filas]})

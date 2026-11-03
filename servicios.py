@@ -76,7 +76,8 @@ def nombre_tramo(clave):
 
 
 def _clave_persona(n):
-    return _sin_tildes(limpiar(n))
+    """Sin tildes y sin importar el orden: 'VICTOR AMARILLA' = 'AMARILLA, VICTOR'."""
+    return " ".join(sorted(_sin_tildes(limpiar(n)).replace(",", " ").replace(".", " ").split()))
 
 
 TRAFICOS = ("nacional", "internacional")
