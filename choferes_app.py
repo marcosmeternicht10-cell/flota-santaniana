@@ -84,6 +84,25 @@ def _claves_de(nombre, alias=""):
     return {k for k in ks if k}
 
 
+def coincide(nombre, claves):
+    """Si el nombre de la planilla es de esta persona. Además de la forma exacta
+    acepta que en la planilla tenga algo de más: un segundo nombre o segundo
+    apellido ("VICTOR HUGO AMARILLA" es de "AMARILLA, VICTOR"), o un número
+    o una letra suelta ("AMARILLA V. 0981…"). Hacen falta al menos nombre y
+    apellido completos, y como mucho dos palabras de más."""
+    k = clave_persona(nombre)
+    if not k:
+        return False
+    if k in claves:
+        return True
+    tk = {x for x in k.split() if not any(ch.isdigit() for ch in x) and len(x) > 1}
+    for c in claves:
+        tc = set(c.split())
+        if len(tc) >= 2 and tc <= tk and len(tk - tc) <= 2:
+            return True
+    return False
+
+
 def tripulantes(conn, solo_activos=True, con_corp=False):
     """Los usuarios choferes de línea y turismo con sus claves de nombre.
     con_corp: también los de corporativos (para avisarles si les toca un
@@ -191,11 +210,11 @@ def _salidas_foto(fecha, tipo, foto):
 
 def _para(item, claves):
     """Si el item es de esta persona; le pone el compañero."""
-    mios = [t for t in item["trips"] if clave_persona(t) in claves]
+    mios = [t for t in item["trips"] if coincide(t, claves)]
     if not mios:
         return None
     it = {k: v for k, v in item.items() if k != "trips"}
-    it["con"] = [apellido_primero(t) for t in item["trips"] if clave_persona(t) not in claves]
+    it["con"] = [apellido_primero(t) for t in item["trips"] if not coincide(t, claves)]
     return it
 
 
@@ -275,7 +294,7 @@ def produccion(conn, claves, mes, hoy, hasta_dia=None):
     hechos, por_dia, tramos = [], {}, {}
     if ini.isoformat() <= tope_hecho:
         for s in leer_servicios(conn, ini.isoformat(), tope_hecho):
-            if not any(clave_persona(t) in claves for t in s["trips"]):
+            if not any(coincide(t, claves) for t in s["trips"]):
                 continue
             hechos.append(s)
             por_dia[s["fecha"]] = por_dia.get(s["fecha"], 0) + 1
@@ -288,7 +307,7 @@ def produccion(conn, claves, mes, hoy, hasta_dia=None):
         manana = (date.fromisoformat(hoy) + timedelta(days=1)).isoformat()
         for fecha, tipo, foto in _fotos(conn, max(manana, ini.isoformat()), fin.isoformat()):
             for s in _salidas_foto(fecha, tipo, foto):
-                if s["origen"] == "trafico" and any(clave_persona(t) in claves for t in s["trips"]):
+                if s["origen"] == "trafico" and any(coincide(t, claves) for t in s["trips"]):
                     programados.append({"fecha": fecha, "tipo": tipo, "lado": s["lado"]})
     # Internacional: un viaje = ida + vuelta
     int_h = [s for s in hechos if s["trafico"] == "internacional"]
@@ -472,7 +491,7 @@ def avisar_turismo(servicios_por_fecha):
         for c in s.get("coches") or []:
             personas = separar_personas(c.get("tripulacion") or "")
             for p in personas:
-                t = idx.get(clave_persona(p))
+                t = idx.get(clave_persona(p)) or next((x for x in trips if coincide(p, x["claves"])), None)
                 if not t:
                     sin_usuario.setdefault(clave_persona(p), apellido_primero(p))
                     continue
@@ -703,7 +722,7 @@ def api_accesos():
     cel = push.con_avisos()
     lista = []
     for t in trips:
-        n = sum(1 for s in servs if any(clave_persona(x) in t["claves"] for x in s["trips"]))
+        n = sum(1 for s in servs if any(coincide(x, t["claves"]) for x in s["trips"]))
         lista.append({"id": t["id"], "usuario": t["usuario"], "nombre": t["nombre"], "alias": t["alias"],
                       "activo": bool(t["activo"] if t["activo"] is not None else 1),
                       "ultimo_acceso": t["ultimo_acceso"] or "", "avisos": cel.get(t["id"], 0),
@@ -826,4 +845,132 @@ def api_avisar_turismo():
                           "coches": [{"coche": c.get("coche") or c.get("coche_interno") or "",
                                       "tripulacion": c.get("tripulacion") or ""} for c in s.get("coches") or []]})
     r = avisar_turismo(servs)
+    return jsonify({"ok": True, **r})
+
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ¿POR QUÉ NO LE APARECE? (para la oficina)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _parecido(nombre, claves):
+    """Un nombre de la planilla que se parece pero no alcanza: comparte el
+    apellido o el nombre, o está escrito con un error."""
+    k = clave_persona(nombre)
+    if not k or coincide(nombre, claves):
+        return False
+    tk = set(k.split())
+    for c in claves:
+        tc = set(c.split())
+        if len(tk & tc) >= 1 and len(tc) >= 2 and (len(tk & tc) >= len(tc) - 1):
+            return True
+        if len(k) >= 8 and _distancia(k, c, 3) <= 2:
+            return True
+    return False
+
+
+def revisar(uid, dias=3):
+    """Revisa, día por día, por qué un chofer no ve su servicio: si el día
+    está armado, si está publicado, si después se cambió y no se volvió a
+    publicar, si figura en la planilla, y si figura escrito de otra forma."""
+    from trafico import LADOS
+    hoy = _hoy_local()
+    conn = get_connection()
+    try:
+        u = conn.execute("""SELECT id, usuario, nombre, rol, COALESCE(alias_planilla,'') AS alias, COALESCE(activo,1) AS activo
+                            FROM usuarios WHERE id=?""", (uid,)).fetchone()
+        if not u:
+            return None
+        u = dict(u)
+        claves = _claves_de(u["nombre"], u["alias"])
+        res = {"nombre": u["nombre"], "usuario": u["usuario"], "rol": u["rol"], "alias": u["alias"],
+               "como_lo_busca": sorted(claves), "dias": [], "avisos": []}
+        if u["rol"] != ROL:
+            res["avisos"].append("Este usuario es de corporativos: su pantalla es la de rendiciones y ahí no se ven los "
+                                 "servicios de tráfico ni de turismo (sí le llega el aviso al celular).")
+        if not u["activo"]:
+            res["avisos"].append("El usuario está desactivado.")
+        for n in range(dias):
+            fecha = (date.fromisoformat(hoy) + timedelta(days=n)).isoformat()
+            for tipo in ("nacional", "internacional"):
+                dia = conn.execute("""SELECT id, version, COALESCE(publicado_el,'') AS publicado_el, COALESCE(modificado,0) AS modificado
+                                      FROM trafico_dias WHERE fecha=? AND COALESCE(tipo,'nacional')=?""", (fecha, tipo)).fetchone()
+                if not dia:
+                    continue
+                dia = dict(dia)
+                # Lo que está en la planilla ahora (borrador incluido)
+                filas = conn.execute("""SELECT s.hora, s.destino, s.lado, s.coche, s.trip1, s.trip2, b.nombre AS corredor
+                                        FROM trafico_salidas s JOIN trafico_bloques b ON b.id = s.bloque_id
+                                        WHERE s.dia_id=?""", (dia["id"],)).fetchall()
+                bloques = conn.execute("SELECT * FROM trafico_bloques WHERE id IN (SELECT DISTINCT bloque_id FROM trafico_salidas WHERE dia_id=?)",
+                                       (dia["id"],)).fetchall()
+                ahora, parecidos = [], set()
+                for f in filas:
+                    for t in (f["trip1"], f["trip2"]):
+                        if not (t or "").strip():
+                            continue
+                        if coincide(t, claves):
+                            ahora.append(f"{f['hora'] or '--:--'} {f['destino'] or ''} · coche {f['coche'] or 'a confirmar'}".strip())
+                        elif _parecido(t, claves):
+                            parecidos.add(t.strip())
+                for b in bloques:
+                    b = dict(b)
+                    for lado in LADOS:
+                        t = b.get(f"reserva_{lado}_trip") or ""
+                        if t.strip() and coincide(t, claves):
+                            ahora.append(f"Reserva {b.get('nombre')} ({lado})")
+                        elif t.strip() and _parecido(t, claves):
+                            parecidos.add(t.strip())
+                # Lo publicado
+                publicado = []
+                for fe, ti, foto in _fotos(conn, fecha, fecha):
+                    if ti == tipo:
+                        publicado = [x for x in (_para(i, claves) for i in _salidas_foto(fe, ti, foto)) if x]
+                estado, que_hacer = "ok", ""
+                if not ahora and not publicado:
+                    if parecidos:
+                        estado = "escrito_distinto"
+                        que_hacer = ("En la planilla figura escrito de otra forma. Agregá ese nombre en «También figura como» "
+                                     "(lápiz en la lista de choferes) y le aparece al toque.")
+                    else:
+                        estado = "no_figura"
+                        que_hacer = "Ese día no figura en la planilla de tráfico " + tipo + "."
+                elif not dia["publicado_el"]:
+                    estado = "sin_publicar"
+                    que_hacer = "Figura en la planilla pero el día todavía no se publicó. Publicalo en Tráfico y le llega."
+                elif ahora and not publicado:
+                    estado = "cambio_sin_publicar"
+                    que_hacer = "Se lo agregó después de publicar y no se volvió a publicar. Publicá de nuevo el día."
+                elif dia["modificado"]:
+                    estado = "hay_cambios"
+                    que_hacer = "Ve lo publicado. Hay cambios en la planilla sin publicar: publicá de nuevo para que vea lo último."
+                res["dias"].append({"fecha": fecha, "dia": _dia_txt(fecha, hoy), "tipo": tipo, "existe": True,
+                                    "publicado": bool(dia["publicado_el"]), "version": dia["version"],
+                                    "en_planilla": ahora, "en_lo_publicado": [_linea_aviso(i) for i in publicado],
+                                    "parecidos": sorted(parecidos), "estado": estado, "que_hacer": que_hacer})
+        # Turismo de esos días
+        hasta = (date.fromisoformat(hoy) + timedelta(days=dias - 1)).isoformat()
+        tur, tur_par = [], set()
+        for s_ in _turismo(conn, hoy, hasta):
+            if any(coincide(t, claves) for t in s_["trips"]):
+                tur.append(f"{s_['fecha']} {s_['hora'] or ''} {s_['desde']} → {s_['hasta']}".strip())
+            for t in s_["trips"]:
+                if _parecido(t, claves):
+                    tur_par.add(t)
+        res["turismo"] = tur
+        res["turismo_parecidos"] = sorted(tur_par)
+        import push
+        res["celulares_con_avisos"] = push.con_avisos([uid]).get(uid, 0)
+    finally:
+        conn.close()
+    return res
+
+
+@bp_choferes_app.route("/api/choferes_app/<int:uid>/revisar", methods=["GET"])
+def api_revisar(uid):
+    if not _es_admin():
+        return jsonify({"ok": False, "msg": "Solo administración"}), 403
+    r = revisar(uid, dias=max(1, min(7, request.args.get("dias", 3, type=int))))
+    if not r:
+        return jsonify({"ok": False, "msg": "No existe"}), 404
     return jsonify({"ok": True, **r})
