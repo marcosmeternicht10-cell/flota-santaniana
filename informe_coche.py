@@ -76,7 +76,7 @@ def _primer_registro(conn, vid):
     fechas = []
     for sql in ("SELECT MIN(substr(fecha_apertura,1,10)) AS f FROM ordenes_trabajo WHERE vehiculo_id=?",
                 "SELECT MIN(fecha) AS f FROM correctivos WHERE vehiculo_id=?",
-                "SELECT MIN(fecha) AS f FROM mantenimientos_realizados WHERE vehiculo_id=?",
+                "SELECT MIN(fecha) AS f FROM mantenimientos_realizados WHERE vehiculo_id=? AND COALESCE(origen,'manual') <> 'inicial'",
                 "SELECT MIN(fecha) AS f FROM historial_eventos WHERE vehiculo_id=?",
                 "SELECT MIN(substr(fecha,1,10)) AS f FROM combustible WHERE vehiculo_id=?"):
         r = _q(conn, sql, (vid,))
@@ -131,10 +131,13 @@ def datos(vid, desde=None, hasta=None):
 
         correctivos = _q(conn, """SELECT * FROM correctivos WHERE vehiculo_id=? AND fecha >= ? AND fecha <= ?
                                   ORDER BY fecha DESC""", (vid, desde, hasta))
+        # Los «inicial» son el punto de partida que se cargó al asignar el plan, no trabajos hechos
         preventivos = _q(conn, """SELECT m.*, t.tarea, t.categoria FROM mantenimientos_realizados m
                                   LEFT JOIN tareas_plan t ON t.id = m.tarea_plan_id
-                                  WHERE m.vehiculo_id=? AND m.fecha >= ? AND m.fecha <= ? ORDER BY m.fecha DESC""",
+                                  WHERE m.vehiculo_id=? AND m.fecha >= ? AND m.fecha <= ?
+                                  AND COALESCE(m.origen,'manual') <> 'inicial' ORDER BY m.fecha DESC""",
                          (vid, desde, hasta))
+        primero = _primer_registro(conn, vid)
         eventos = _q(conn, """SELECT * FROM historial_eventos WHERE vehiculo_id=? AND fecha >= ? AND fecha <= ?
                               ORDER BY fecha DESC""", (vid, desde, hasta))
         cubiertas = _q(conn, """SELECT i.*, n.codigo, n.marca, n.medida FROM instalaciones_neumaticos i
@@ -255,6 +258,8 @@ def datos(vid, desde=None, hasta=None):
     # Los preventivos del mismo día y la misma OT (o el mismo km) van juntos en una fila
     grupos = {}
     for p in preventivos:
+        if (p.get("origen") or "") == "ot":
+            continue                          # ya figura dentro de su OT
         k = (p["fecha"], p.get("ot_id") or "", p.get("km") or "")
         g = grupos.setdefault(k, {"fecha": p["fecha"], "ot": p.get("ot_id"), "km": p.get("km"), "tareas": [], "costo": 0, "obs": []})
         g["tareas"].append(p.get("tarea") or "Tarea del plan")
@@ -311,6 +316,7 @@ def datos(vid, desde=None, hasta=None):
 
     return {
         "vehiculo": veh, "plan": plan[0]["nombre"] if plan else "", "desde": desde, "hasta": hasta, "hoy": hoy,
+        "primer_registro": primero,
         "km_actual": km_actual, "ots": ots, "correctivos": correctivos, "preventivos": preventivos,
         "eventos": eventos, "cubiertas_puestas": cubiertas_puestas, "parado": parado, "documentos": documentos,
         "costos": costos, "servicios": servs, "turismo": turismo, "historia": hist, "repetidos": repetidos,
@@ -467,7 +473,11 @@ def generar_pdf(d, generado_por=""):
     kt.setStyle(TableStyle([("BOX", (0, 0), (-1, -1), 0.6, LINEA), ("INNERGRID", (0, 0), (-1, -1), 0.6, LINEA),
                             ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 7),
                             ("BOTTOMPADDING", (0, 0), (-1, -1), 8), ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
-    el += [Spacer(1, 6), Paragraph("Los números", st["sec"]), Paragraph(esc(periodo) + ". El costo suma OTs (repuestos), correctivos y lo cargado en el libro; el combustible va aparte.", st["sub"]), kt]
+    aviso = (f" El primer registro de este coche en el sistema es del {dmy(d['primer_registro'])}: lo anterior "
+             "(libro de a bordo, papeles) se suma desde Historial por coche → «Cargar del papel».")
+    el += [Spacer(1, 6), Paragraph("Los números", st["sec"]),
+           Paragraph(esc(periodo) + ". El costo suma OTs (repuestos), correctivos y lo cargado en el libro; el combustible va aparte."
+                     + esc(aviso), st["sub"]), kt]
 
     # ── Gráficos por mes ──
     pm = d["por_mes"][-18:]
