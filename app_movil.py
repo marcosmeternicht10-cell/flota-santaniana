@@ -28,7 +28,7 @@ sin sesión.
 import json
 import os
 
-from flask import Blueprint, Response, render_template_string
+from flask import Blueprint, Response, abort, current_app, render_template_string, send_from_directory
 
 bp_movil = Blueprint("movil", __name__)
 
@@ -101,6 +101,25 @@ self.addEventListener("fetch", e => {
   e.respondWith(fetch(e.request).catch(() => caches.match("/offline")));
 });
 """
+
+
+_ICONOS = {"icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png",
+           "apple-touch-icon.png", "favicon-48.png"}
+
+
+@bp_movil.route("/static/app/<nombre>")
+def icono(nombre):
+    """Los íconos de la app: se buscan en static/app y, si no están ahí, sueltos en
+    static (así funciona igual si se subieron a una carpeta o a la otra)."""
+    if nombre not in _ICONOS:
+        abort(404)
+    base = current_app.static_folder
+    for carpeta in (os.path.join(base, "app"), base):
+        if os.path.isfile(os.path.join(carpeta, nombre)):
+            r = send_from_directory(carpeta, nombre, mimetype="image/png")
+            r.headers["Cache-Control"] = "no-cache"
+            return r
+    abort(404)
 
 
 @bp_movil.route("/sw.js")
