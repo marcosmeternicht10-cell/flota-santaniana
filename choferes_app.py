@@ -89,7 +89,8 @@ def tripulantes(conn, solo_activos=True, con_corp=False):
     con_corp: también los de corporativos (para avisarles si les toca un
     servicio de tráfico o de turismo; el aviso les abre su pantalla)."""
     roles = (ROL, "chofer_corp") if con_corp else (ROL,)
-    filas = conn.execute(f"""SELECT id, usuario, nombre, rol, COALESCE(alias_planilla,'') AS alias, activo, ultimo_acceso
+    filas = conn.execute(f"""SELECT id, usuario, nombre, rol, COALESCE(alias_planilla,'') AS alias, activo, ultimo_acceso,
+                                    COALESCE(app_confirmado_el,'') AS app_confirmado_el, COALESCE(app_modo,'') AS app_modo
                              FROM usuarios WHERE rol IN ({",".join("?" * len(roles))})
                              {"AND COALESCE(activo,1)=1" if solo_activos else ""}
                              ORDER BY rol DESC, nombre""", roles).fetchall()
@@ -706,9 +707,25 @@ def api_accesos():
         lista.append({"id": t["id"], "usuario": t["usuario"], "nombre": t["nombre"], "alias": t["alias"],
                       "activo": bool(t["activo"] if t["activo"] is not None else 1),
                       "ultimo_acceso": t["ultimo_acceso"] or "", "avisos": cel.get(t["id"], 0),
+                      "confirmado_el": t["app_confirmado_el"], "modo": t["app_modo"],
                       "servicios_mes": n})
-    return jsonify({"ok": True, "choferes": lista, "faltan": cands,
-                    "con_avisos": sum(1 for x in lista if x["avisos"]), "mes_txt": MESES[int(hoy[5:7]) - 1]})
+    # Los de corporativos: solo si confirmaron la app y si tienen los avisos
+    conn = get_connection()
+    try:
+        corp = [dict(r) for r in conn.execute("""
+            SELECT id, usuario, nombre, ultimo_acceso, COALESCE(app_confirmado_el,'') AS confirmado_el,
+                   COALESCE(app_modo,'') AS modo
+            FROM usuarios WHERE rol='chofer_corp' AND COALESCE(activo,1)=1 ORDER BY nombre""").fetchall()]
+    finally:
+        conn.close()
+    for c in corp:
+        c["avisos"] = cel.get(c["id"], 0)
+    activos = [x for x in lista if x["activo"]]
+    return jsonify({"ok": True, "choferes": lista, "faltan": cands, "corp": corp,
+                    "con_avisos": sum(1 for x in lista if x["avisos"]),
+                    "confirmaron": sum(1 for x in activos if x["confirmado_el"]), "activos": len(activos),
+                    "corp_confirmaron": sum(1 for x in corp if x["confirmado_el"]),
+                    "mes_txt": MESES[int(hoy[5:7]) - 1]})
 
 
 @bp_choferes_app.route("/api/choferes_app/crear", methods=["POST"])

@@ -79,6 +79,16 @@ def init_push():
         fallos INTEGER DEFAULT 0)""")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_push_subs_usuario ON push_subs (usuario_id)")
     conn.commit()
+    # Cuándo confirmó el chofer que ya tiene la app, y desde dónde (app instalada o navegador)
+    for col in ("app_confirmado_el", "app_modo"):
+        try:
+            conn.execute(f"ALTER TABLE usuarios ADD COLUMN {col} TEXT DEFAULT ''")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     conn.close()
 
 
@@ -322,3 +332,53 @@ def api_probar():
     if not r["enviados"]:
         return jsonify({"ok": False, "msg": "No llegó a tu celular. Probá desactivar y volver a activar los avisos."}), 400
     return jsonify({"ok": True, **r})
+
+
+# ── "Ya tengo la app": el chofer lo confirma con un botón ───────────────────
+
+ROLES_CHOFER = ("tripulante", "chofer_corp", "chofer")
+MODOS = {"app": "App instalada", "navegador": "Navegador"}
+
+
+def _equipo(ua):
+    ua = (ua or "").lower()
+    return "iPhone" if ("iphone" in ua or "ipad" in ua) else "Android" if "android" in ua else "Compu"
+
+
+@bp_push.route("/api/push/confirmacion", methods=["GET"])
+def api_confirmacion():
+    if not _uid():
+        return jsonify({"ok": False}), 401
+    conn = get_connection()
+    try:
+        r = conn.execute("SELECT COALESCE(app_confirmado_el,'') AS el, COALESCE(app_modo,'') AS modo FROM usuarios WHERE id=?",
+                         (_uid(),)).fetchone()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "confirmado_el": r["el"] if r else "", "modo": r["modo"] if r else "",
+                    "pide": session.get("rol") in ROLES_CHOFER})
+
+
+@bp_push.route("/api/push/confirmar", methods=["POST"])
+def api_confirmar():
+    if not _uid():
+        return jsonify({"ok": False}), 401
+    if session.get("rol") not in ROLES_CHOFER:
+        return jsonify({"ok": False, "msg": "Solo los choferes confirman la app"}), 403
+    d = request.get_json(silent=True) or {}
+    modo = d.get("modo") if d.get("modo") in MODOS else "navegador"
+    detalle = f"{MODOS[modo]} · {_equipo(request.headers.get('User-Agent'))}"
+    cuando = ahora_iso()
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE usuarios SET app_confirmado_el=?, app_modo=? WHERE id=?", (cuando, detalle, _uid()))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        from database import registrar_auditoria
+        registrar_auditoria(usuario=session.get("nombre") or session.get("usuario") or "?", rol=session.get("rol") or "",
+                            accion="Confirmó que tiene la app", categoria="Acceso", detalle=detalle)
+    except Exception:
+        pass
+    return jsonify({"ok": True, "confirmado_el": cuando, "modo": detalle})
