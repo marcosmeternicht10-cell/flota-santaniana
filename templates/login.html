@@ -2,113 +2,238 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Ingresar — La Santaniana</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: linear-gradient(135deg, #0A0F1A 0%, #16447A 100%);
-      min-height: 100vh; display: grid; place-items: center; padding: 20px;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(120% 90% at 20% 10%, #1B3A5E 0%, #0F2033 55%, #0A1522 100%);
+      min-height: 100vh; min-height: 100dvh; display: grid; place-items: center;
+      padding: 24px 18px calc(24px + env(safe-area-inset-bottom)); overflow: hidden; position: relative;
+      -webkit-font-smoothing: antialiased;
     }
+
+    /* Las rayas del logo, que entran en diagonal */
+    .raya { position: absolute; border-radius: 10px; transform: skewX(-28deg); pointer-events: none; }
+    .r1 { width: 120px; height: 72vh; right: 9%; top: -12vh; background: #DC2641; opacity: .85; }
+    .r2 { width: 46vw; height: 64px; right: -8vw; top: 22vh; background: #8CBDEB; opacity: .16; }
+    .r3 { width: 34vw; height: 40px; left: -6vw; bottom: 24vh; background: #8CBDEB; opacity: .10; }
+    .r4 { width: 70px; height: 40vh; left: 7%; bottom: -10vh; background: #1E5A96; opacity: .55; }
+    .anim .raya { animation: raya 1.1s cubic-bezier(.2,.8,.2,1) both; }
+    .anim .r1 { animation-delay: .05s; } .anim .r2 { animation-delay: .18s; }
+    .anim .r3 { animation-delay: .28s; } .anim .r4 { animation-delay: .12s; }
+    @keyframes raya { from { opacity: 0; translate: -60vw 0; } }
+
+    /* La ruta y el colectivo que pasa */
+    .ruta { position: absolute; left: 0; right: 0; bottom: calc(46px + env(safe-area-inset-bottom)); height: 2px;
+            background: repeating-linear-gradient(90deg, rgba(255,255,255,.22) 0 26px, transparent 26px 50px); }
+    .bus { position: absolute; bottom: calc(48px + env(safe-area-inset-bottom)); left: -180px; width: 150px; height: auto; opacity: 0; }
+    .anim .bus { animation: pasa 3.2s cubic-bezier(.45,.05,.4,1) .3s both; }
+    .bus.sale { animation: sale .7s cubic-bezier(.55,0,.8,.3) both !important; }
+    @keyframes pasa { 0% { opacity: 1; transform: translateX(0); } 100% { opacity: 1; transform: translateX(calc(100vw + 360px)); } }
+    @keyframes sale { from { opacity: 1; transform: translateX(-10px); } to { opacity: 1; transform: translateX(calc(100vw + 360px)); } }
+    .bus .rueda { transform-box: fill-box; transform-origin: center; }
+    .anim .bus .rueda { animation: gira .5s linear infinite; }
+    @keyframes gira { to { transform: rotate(360deg); } }
+
+    /* La tarjeta */
     .login-card {
-      background: #fff; border-radius: 16px; padding: 40px 36px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3); width: 100%; max-width: 400px;
+      position: relative; z-index: 2; background: #fff; border-radius: 26px; padding: 38px 32px 28px;
+      box-shadow: 0 40px 90px -30px rgba(0,0,0,.65), 0 2px 6px rgba(0,0,0,.08); width: 100%; max-width: 400px;
     }
-    .login-logo {
-      width: 80px; height: 80px; margin: 0 auto 20px; border-radius: 18px;
-      background: white; display: flex; align-items: center; justify-content: center;
-      padding: 12px; box-shadow: 0 6px 20px rgba(220,38,65,0.25);
-      border: 1px solid #eee;
-    }
-    .login-logo img { max-width: 100%; max-height: 100%; object-fit: contain; }
-    h1 { font-size: 22px; text-align: center; color: #0F172A; margin-bottom: 4px; }
-    .sub { text-align: center; color: #64748B; font-size: 13px; margin-bottom: 28px; }
-    .field { margin-bottom: 16px; }
-    .field label { display: block; font-size: 12.5px; font-weight: 600; color: #475569; margin-bottom: 6px; }
+    .anim .login-card { animation: sube .8s cubic-bezier(.2,.9,.25,1.05) .2s both; }
+    @keyframes sube { from { opacity: 0; transform: translateY(46px) scale(.96); } }
+    .login-card.chau { animation: chau .45s cubic-bezier(.5,0,.75,0) both !important; }
+    @keyframes chau { to { opacity: 0; transform: translateY(-24px) scale(.97); } }
+    .login-card.mal { animation: mal .45s cubic-bezier(.36,.07,.19,.97) both !important; }
+    @keyframes mal { 20%, 60% { transform: translateX(-9px); } 40%, 80% { transform: translateX(9px); } }
+
+    /* El logo se arma pieza por pieza */
+    .logo { display: block; width: 132px; height: auto; margin: 0 auto 18px; overflow: visible; }
+    .logo path { transform-box: fill-box; transform-origin: center; }
+    .anim .logo path { animation: pieza .75s cubic-bezier(.2,.9,.25,1.15) both; animation-delay: calc(.45s + var(--i) * .07s); }
+    @keyframes pieza { from { opacity: 0; transform: translate(var(--dx), var(--dy)) rotate(var(--r)) scale(.6); } }
+
+    h1 { font-family: "Barlow Semi Condensed", Arial, sans-serif; font-weight: 800; font-size: 34px; letter-spacing: -.005em;
+         text-align: center; color: #14263D; line-height: 1.05; }
+    h1 .l { display: inline-block; white-space: pre; }
+    .anim h1 .l { animation: letra .5s cubic-bezier(.2,.9,.3,1.2) both; animation-delay: calc(.95s + var(--k) * .03s); }
+    @keyframes letra { from { opacity: 0; transform: translateY(14px) rotate(6deg); } }
+    .sub { text-align: center; color: #6B7685; font-size: 13.5px; margin: 6px 0 26px; }
+
+    .anim .aparece { animation: aparece .6s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--d); }
+    @keyframes aparece { from { opacity: 0; transform: translateY(14px); } }
+
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 12.5px; font-weight: 600; color: #3D4A5C; margin-bottom: 6px; }
+    .caja { position: relative; display: flex; align-items: center; }
+    .caja > i { position: absolute; left: 13px; font-size: 19px; color: #94A0B0; transition: color .2s; pointer-events: none; }
     .field input {
-      width: 100%; padding: 11px 14px; border: 1px solid #E2E8F0; border-radius: 9px;
-      font-size: 14px; transition: border 0.15s;
+      width: 100%; padding: 13px 14px 13px 42px; border: 1.5px solid #E3E1DA; border-radius: 12px; background: #FAFAF8;
+      font: inherit; font-size: 15.5px; color: #14263D; transition: border-color .2s, box-shadow .2s, background .2s;
     }
-    .field input:focus { outline: none; border-color: #1E5A96; box-shadow: 0 0 0 3px rgba(30,90,150,0.1); }
+    .field input:focus { outline: none; border-color: #1E5A96; background: #fff; box-shadow: 0 0 0 4px rgba(30,90,150,.12); }
+    .caja:focus-within > i { color: #1E5A96; }
+    .ojo { position: absolute; right: 6px; width: 40px; height: 40px; border: 0; background: none; border-radius: 10px;
+           color: #94A0B0; font-size: 19px; cursor: pointer; display: grid; place-items: center; }
+    .ojo:hover { color: #14263D; background: #F1EFEA; }
+    #password { padding-right: 50px; }
+
     .btn-login {
-      width: 100%; padding: 12px; background: #1E5A96; color: #fff; border: none;
-      border-radius: 9px; font-size: 15px; font-weight: 600; cursor: pointer;
-      transition: background 0.15s; margin-top: 8px;
+      position: relative; overflow: hidden; width: 100%; padding: 14px; margin-top: 10px; border: none; border-radius: 12px;
+      background: #14263D; color: #fff; font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px; transition: background .2s, transform .1s;
     }
-    .btn-login:hover { background: #16447A; }
-    .btn-login:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-login:hover { background: #1E5A96; }
+    .btn-login:active { transform: scale(.985); }
+    .btn-login:disabled { opacity: .75; cursor: default; }
+    .btn-login::after { content: ""; position: absolute; top: 0; bottom: 0; width: 60%; left: -80%;
+                        background: linear-gradient(100deg, transparent, rgba(255,255,255,.28), transparent); transform: skewX(-20deg); }
+    .anim .btn-login::after { animation: brillo 1s ease 1.9s both; }
+    @keyframes brillo { to { left: 130%; } }
+    .btn-login .ti-loader-2 { animation: gira .8s linear infinite; }
+
     .error {
-      background: #FEE2E5; color: #B91C32; padding: 10px 14px; border-radius: 9px;
-      font-size: 13px; margin-bottom: 16px; display: none; align-items: center; gap: 8px;
+      background: #FDECEF; color: #B91C32; padding: 11px 14px; border-radius: 12px;
+      font-size: 13.5px; margin-bottom: 14px; display: none; align-items: center; gap: 8px;
     }
-    .error.show { display: flex; }
-    .foot { text-align: center; font-size: 11.5px; color: #94A3B8; margin-top: 22px; }
+    .error.show { display: flex; animation: aparece .3s ease both; }
+    .foot { text-align: center; font-size: 11.5px; color: #94A0B0; margin-top: 22px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      .bus { display: none; }
+    }
   </style>
   <link rel="manifest" href="/manifest.webmanifest">
-  <meta name="theme-color" content="#1D344E">
+  <meta name="theme-color" content="#0F2033">
   <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
   <link rel="apple-touch-icon" href="/static/app/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>
+  <script>
+    if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+    // Las animaciones se encienden solo si hay JavaScript (sin él, la pantalla se ve igual, quieta)
+    document.documentElement.classList.add("anim");
+  </script>
 </head>
 <body>
-  <div class="login-card">
-    <div class="login-logo"><img src="/static/logo.png" alt="La Santaniana"></div>
-    <h1>La Santaniana</h1>
-    <p class="sub">Sistema de Gestión de Flota</p>
+  <i class="raya r1" aria-hidden="true"></i>
+  <i class="raya r2" aria-hidden="true"></i>
+  <i class="raya r3" aria-hidden="true"></i>
+  <i class="raya r4" aria-hidden="true"></i>
+  <div class="ruta" aria-hidden="true"></div>
+  <svg class="bus" id="bus" viewBox="0 0 150 56" aria-hidden="true">
+    <rect x="2" y="4" width="144" height="40" rx="9" fill="#ffffff"/>
+    <rect x="10" y="10" width="20" height="14" rx="3" fill="#1E3A5C"/>
+    <rect x="34" y="10" width="20" height="14" rx="3" fill="#1E3A5C"/>
+    <rect x="58" y="10" width="20" height="14" rx="3" fill="#1E3A5C"/>
+    <rect x="82" y="10" width="20" height="14" rx="3" fill="#1E3A5C"/>
+    <path d="M108 10h24a6 6 0 0 1 6 6v8h-30z" fill="#1E3A5C"/>
+    <rect x="2" y="30" width="144" height="5" fill="#DC2641"/>
+    <rect x="140" y="26" width="6" height="4" rx="1" fill="#FFD27A"/>
+    <circle class="rueda" cx="32" cy="46" r="8" fill="#0B1422" stroke="#C9D3DF" stroke-width="2.5" stroke-dasharray="4 3"/>
+    <circle class="rueda" cx="118" cy="46" r="8" fill="#0B1422" stroke="#C9D3DF" stroke-width="2.5" stroke-dasharray="4 3"/>
+  </svg>
 
-    <div class="error" id="error"><i class="ti ti-alert-circle"></i> <span id="error-msg"></span></div>
+  <main class="login-card" id="card">
+    <svg class="logo" viewBox="-28 -28 2515 1616" role="img" aria-label="La Santaniana">
+      <path style="--i:0;--dx:-700px;--dy:-500px;--r:-24deg" d="M774,151 L407,19 L16,828 L36,994 L380,1017 Z" fill="#EF3146" stroke="#EF3146" stroke-width="28" stroke-linejoin="round"/>
+      <path style="--i:1;--dx:-800px;--dy:300px;--r:30deg" d="M122,1129 L115,1160 L189,1317 L216,1341 L251,1301 L317,1139 L295,1127 Z" fill="#EF3146" stroke="#EF3146" stroke-width="28" stroke-linejoin="round"/>
+      <path style="--i:2;--dx:-300px;--dy:700px;--r:-10deg" d="M275,1455 L438,1558 L2129,1557 L2218,1467 L1588,1127 L446,1127 Z" fill="#EF3146" stroke="#EF3146" stroke-width="28" stroke-linejoin="round"/>
+      <path style="--i:3;--dx:600px;--dy:-600px;--r:18deg" d="M1190,191 L1232,278 L1807,549 L2331,537 L2130,129 L1280,127 Z" fill="#255B97" stroke="#255B97" stroke-width="28" stroke-linejoin="round"/>
+      <path style="--i:4;--dx:0px;--dy:-700px;--r:-30deg" d="M1024,525 L1085,554 L1597,543 L1147,321 L1106,346 Z" fill="#255B97" stroke="#255B97" stroke-width="28" stroke-linejoin="round"/>
+      <path style="--i:5;--dx:900px;--dy:100px;--r:-14deg" d="M952,684 L1625,1041 L2398,1045 L2457,985 L1826,637 L1020,626 Z" fill="#255B97" stroke="#255B97" stroke-width="28" stroke-linejoin="round"/>
+      <path style="--i:6;--dx:700px;--dy:700px;--r:26deg" d="M1860,1136 L1885,1169 L2261,1350 L2307,1318 L2379,1154 L2343,1117 L1986,1114 Z" fill="#255B97" stroke="#255B97" stroke-width="28" stroke-linejoin="round"/>
+    </svg>
+    <h1 id="titulo">La Santaniana</h1>
+    <p class="sub aparece" style="--d:1.35s">Sistema de Gestión de Flota</p>
+
+    <div class="error" id="error" role="alert"><i class="ti ti-alert-circle"></i> <span id="error-msg"></span></div>
 
     <form id="login-form">
-      <div class="field">
-        <label>Usuario</label>
-        <input type="text" id="usuario" autocomplete="username" autofocus required>
+      <div class="field aparece" style="--d:1.45s">
+        <label for="usuario">Usuario</label>
+        <div class="caja"><i class="ti ti-user"></i>
+          <input type="text" id="usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        </div>
       </div>
-      <div class="field">
-        <label>Contraseña</label>
-        <input type="password" id="password" autocomplete="current-password" required>
+      <div class="field aparece" style="--d:1.55s">
+        <label for="password">Contraseña</label>
+        <div class="caja"><i class="ti ti-lock"></i>
+          <input type="password" id="password" autocomplete="current-password" required>
+          <button type="button" class="ojo" id="ojo" aria-label="Mostrar la contraseña"><i class="ti ti-eye"></i></button>
+        </div>
       </div>
-      <button type="submit" class="btn-login" id="btn">Ingresar</button>
+      <button type="submit" class="btn-login aparece" style="--d:1.65s" id="btn">Ingresar <i class="ti ti-arrow-right"></i></button>
     </form>
 
-    <p class="foot">© 2026 La Santaniana · Gestión de Flota</p>
-  </div>
+    <p class="foot aparece" style="--d:1.8s">© 2026 La Santaniana · Gestión de Flota</p>
+  </main>
 
   <script>
     const form = document.getElementById("login-form");
     const errorBox = document.getElementById("error");
     const errorMsg = document.getElementById("error-msg");
     const btn = document.getElementById("btn");
+    const card = document.getElementById("card");
+    const usuario = document.getElementById("usuario");
+    const password = document.getElementById("password");
+    const BTN = btn.innerHTML;
+
+    // El título aparece letra por letra
+    const t = document.getElementById("titulo");
+    t.setAttribute("aria-label", t.textContent);
+    t.innerHTML = [...t.textContent].map((c, k) => `<span class="l" aria-hidden="true" style="--k:${k}">${c}</span>`).join("");
+
+    // En la compu, el cursor queda en Usuario cuando termina de aparecer (en el celular no, para no tapar todo con el teclado)
+    if (matchMedia("(pointer: fine)").matches) setTimeout(() => usuario.focus({ preventScroll: true }), 1500);
+
+    document.getElementById("ojo").addEventListener("click", e => {
+      const ver = password.type === "password";
+      password.type = ver ? "text" : "password";
+      e.currentTarget.innerHTML = `<i class="ti ti-eye${ver ? "-off" : ""}"></i>`;
+      e.currentTarget.setAttribute("aria-label", ver ? "Ocultar la contraseña" : "Mostrar la contraseña");
+    });
+
+    function mal(msg) {
+      errorMsg.textContent = msg;
+      errorBox.classList.add("show");
+      btn.disabled = false; btn.innerHTML = BTN;
+      card.classList.remove("mal"); void card.offsetWidth; card.classList.add("mal");
+    }
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       errorBox.classList.remove("show");
-      btn.disabled = true; btn.textContent = "Ingresando...";
-
+      btn.disabled = true; btn.innerHTML = `<i class="ti ti-loader-2"></i> Ingresando…`;
       try {
         const r = await fetch("/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            usuario: document.getElementById("usuario").value,
-            password: document.getElementById("password").value,
-          })
+          body: JSON.stringify({ usuario: usuario.value.trim(), password: password.value })
         });
         const data = await r.json();
         if (data.ok) {
-          window.location.href = "/";
+          // Sale la tarjeta y pasa el colectivo, después entra
+          const quieto = matchMedia("(prefers-reduced-motion: reduce)").matches;
+          if (!quieto) {
+            const bus = document.getElementById("bus");
+            bus.classList.remove("sale"); void bus.offsetWidth; bus.classList.add("sale");
+            card.classList.add("chau");
+          }
+          setTimeout(() => { window.location.href = "/"; }, quieto ? 0 : 480);
         } else {
-          errorMsg.textContent = data.msg || "Error al ingresar";
-          errorBox.classList.add("show");
-          btn.disabled = false; btn.textContent = "Ingresar";
+          mal(data.msg || "Usuario o contraseña incorrectos");
         }
       } catch (err) {
-        errorMsg.textContent = "Error de conexión";
-        errorBox.classList.add("show");
-        btn.disabled = false; btn.textContent = "Ingresar";
+        mal("No hay conexión. Revisá internet y probá de nuevo.");
       }
     });
   </script>
