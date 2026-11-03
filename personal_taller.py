@@ -676,6 +676,9 @@ def periodo(p, desde=None, hasta=None):
         return f"{h.year}-01-01", h.isoformat(), "anio"
     if p == "mes":
         return h.replace(day=1).isoformat(), h.isoformat(), "mes"
+    if p == "mes_pasado":
+        fin = h.replace(day=1) - timedelta(days=1)
+        return fin.replace(day=1).isoformat(), fin.isoformat(), "mes_pasado"
     try:
         n = max(1, min(3650, int(p)))
     except ValueError:
@@ -874,6 +877,206 @@ def resumen(desde, hasta, vehiculo_id=None, turno=""):
         }
     finally:
         conn.close()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# HORAS TRABAJADAS POR TÉCNICO (de las horas cargadas en cada OT)
+# ════════════════════════════════════════════════════════════════════════════
+
+TANDA_LARGA = 12              # una tanda de más horas probablemente está mal cargada
+
+
+def horas_tecnicos(desde, hasta, turno="", vehiculo_id=None):
+    """Las horas de cada técnico en el período: suma de sus tandas cerradas
+    (inicio y fin cargados en la OT, sin el almuerzo de 12 a 14). La tanda
+    cuenta en el día en que empezó. Las que siguen abiertas se muestran aparte
+    («trabajando ahora»)."""
+    from ot_horas import horas_trabajadas, almuerzo_en
+    conn = get_connection()
+    try:
+        todas = [_persona(r) for r in conn.execute("SELECT * FROM taller_personal ORDER BY numero").fetchall()]
+        sql = """SELECT h.id, h.ot_id, h.personal_id, h.inicio, COALESCE(h.fin,'') AS fin, COALESCE(h.nota,'') AS nota,
+                        o.vehiculo_id, v.n_interno, v.patente
+                 FROM ot_horas h
+                 LEFT JOIN ordenes_trabajo o ON o.id = h.ot_id
+                 LEFT JOIN vehiculos v ON v.id = o.vehiculo_id
+                 WHERE ((h.inicio >= ? AND h.inicio <= ?) OR (COALESCE(h.fin,'') = '' AND h.inicio <= ?))"""
+        args = [desde, hasta + "T23:59", hasta + "T23:59"]
+        if vehiculo_id:
+            sql += " AND o.vehiculo_id = ?"
+            args.append(int(vehiculo_id))
+        try:
+            tandas = [dict(r) for r in conn.execute(sql + " ORDER BY h.inicio", tuple(args)).fetchall()]
+        except Exception:
+            _rollback(conn)
+            tandas = []
+    finally:
+        conn.close()
+    turno = turno if turno in TURNOS else ""
+    personas = [p for p in todas if not turno or p["turno"] == turno]
+    por = {p["id"]: {"horas": 0.0, "dias": {}, "ots": set(), "coches": {}, "tandas": [], "abiertas": [],
+                     "largas": 0, "almuerzo": 0.0} for p in personas}
+    coches_tot = {}
+    for t in tandas:
+        x = por.get(t["personal_id"])
+        if x is None:
+            continue
+        coche = _coche(t)
+        fila = {"id": t["id"], "ot_id": t["ot_id"], "coche": coche, "inicio": t["inicio"][:16], "fin": (t["fin"] or "")[:16],
+                "nota": t["nota"], "fecha": t["inicio"][:10]}
+        if not t["fin"]:
+            x["abiertas"].append(fila)
+            continue
+        h = horas_trabajadas(t["inicio"], t["fin"])
+        fila["horas"] = h
+        fila["larga"] = h > TANDA_LARGA
+        x["horas"] += h
+        x["almuerzo"] += almuerzo_en(t["inicio"], t["fin"])
+        x["largas"] += 1 if fila["larga"] else 0
+        x["dias"][fila["fecha"]] = round(x["dias"].get(fila["fecha"], 0) + h, 2)
+        x["ots"].add(t["ot_id"])
+        if coche:
+            x["coches"][coche] = round(x["coches"].get(coche, 0) + h, 2)
+            coches_tot[coche] = round(coches_tot.get(coche, 0) + h, 2)
+        x["tandas"].append(fila)
+    lista = []
+    for p in personas:
+        x = por[p["id"]]
+        if not p["activo"] and not x["tandas"] and not x["abiertas"]:
+            continue
+        dias_n = len(x["dias"])
+        lista.append({
+            "id": p["id"], "numero": p["numero"], "nombre": p["nombre"], "puesto": p["puesto"] or "",
+            "turno": p["turno"] or "", "horario": p["horario"] or "", "activo": p["activo"],
+            "horas": round(x["horas"], 2), "dias_trabajados": dias_n,
+            "promedio": round(x["horas"] / dias_n, 2) if dias_n else 0,
+            "ots": len(x["ots"]), "coches": len(x["coches"]),
+            "coches_top": [{"coche": c, "horas": h} for c, h in sorted(x["coches"].items(), key=lambda kv: -kv[1])[:3]],
+            "por_dia": x["dias"], "tandas": x["tandas"], "abiertas": x["abiertas"], "largas": x["largas"],
+            "almuerzo": round(x["almuerzo"], 2),
+        })
+    lista.sort(key=lambda r: (-r["horas"], r["numero"]))
+    con = [r for r in lista if r["horas"]]
+    total = round(sum(r["horas"] for r in lista), 2)
+    return {
+        "desde": desde, "hasta": hasta, "hoy": _hoy_txt(), "turno": turno, "dias": _dias(desde, hasta),
+        "tecnicos": lista,
+        "totales": {"horas": total, "personas": len(con), "activos": len([r for r in lista if r["activo"]]),
+                    "promedio": round(total / len(con), 2) if con else 0,
+                    "tandas": sum(len(r["tandas"]) for r in lista),
+                    "abiertas": sum(len(r["abiertas"]) for r in lista),
+                    "largas": sum(r["largas"] for r in lista),
+                    "sin_horas": len([r for r in lista if r["activo"] and not r["horas"]])},
+        "por_coche": [{"coche": c, "horas": h} for c, h in sorted(coches_tot.items(), key=lambda kv: -kv[1])[:10]],
+    }
+
+
+def _hhmm(h):
+    m = int(round((h or 0) * 60))
+    return f"{m // 60}:{m % 60:02d}"
+
+
+def xlsx_horas(d, etiqueta=""):
+    """Excel de las horas: el resumen por técnico, el día por día y cada tanda."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    azul = PatternFill("solid", fgColor="14263D")
+    blanco = Font(bold=True, color="FFFFFF")
+    fino = Side(style="thin", color="D9D9D9")
+    borde = Border(bottom=fino)
+    titulo = f"Horas trabajadas por técnico · {_fdm(d['desde'])} al {_fdm(d['hasta'])}"
+
+    def cabecera(ws, cols, fila=3):
+        ws.cell(row=1, column=1, value=titulo).font = Font(bold=True, size=13)
+        ws.cell(row=2, column=1, value=(etiqueta + " · " if etiqueta else "") +
+                "Sale de las horas cargadas en cada OT. No cuenta el almuerzo (12 a 14). Cada tanda cuenta el día que empezó.").font = Font(italic=True, size=9, color="666666")
+        for k, (t, w) in enumerate(cols, start=1):
+            c = ws.cell(row=fila, column=k, value=t)
+            c.font, c.fill = blanco, azul
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            ws.column_dimensions[get_column_letter(k)].width = w
+        ws.row_dimensions[fila].height = 30
+        ws.freeze_panes = ws.cell(row=fila + 1, column=3)
+
+    # 1) Resumen
+    ws = wb.active
+    ws.title = "Resumen"
+    cabecera(ws, [("N°", 6), ("Técnico", 32), ("Puesto", 20), ("Turno", 10), ("Horas", 9), ("Horas (h:mm)", 11),
+                  ("Días trabajados", 10), ("Promedio por día", 10), ("OTs", 7), ("Coches", 8), ("Coche con más horas", 20)])
+    f = 4
+    for r in d["tecnicos"]:
+        top = r["coches_top"][0] if r["coches_top"] else None
+        vals = [r["numero"], apellido_primero(r["nombre"]), r["puesto"], TURNOS.get(r["turno"], ""), r["horas"],
+                r["horas"] / 24 if r["horas"] else 0, r["dias_trabajados"], r["promedio"], r["ots"], r["coches"],
+                f"{top['coche']} ({_hhmm(top['horas'])} h)" if top else ""]
+        for k, v in enumerate(vals, start=1):
+            c = ws.cell(row=f, column=k, value=v)
+            c.border = borde
+        ws.cell(row=f, column=5).number_format = "0.0"
+        ws.cell(row=f, column=6).number_format = "[h]:mm"
+        ws.cell(row=f, column=8).number_format = "0.0"
+        f += 1
+    ws.cell(row=f, column=2, value="TOTAL").font = Font(bold=True)
+    c = ws.cell(row=f, column=5, value=f"=SUM(E4:E{f - 1})"); c.font = Font(bold=True); c.number_format = "0.0"
+    c = ws.cell(row=f, column=6, value=f"=SUM(F4:F{f - 1})"); c.font = Font(bold=True); c.number_format = "[h]:mm"
+
+    # 2) Día por día (si el período no es muy largo)
+    if d["dias"]:
+        ws2 = wb.create_sheet("Día por día")
+        dias = d["dias"]
+        cols = [("N°", 6), ("Técnico", 30)] + [(f"{x[8:10]}/{x[5:7]}", 6.5) for x in dias] + [("Total", 8)]
+        cabecera(ws2, cols)
+        f = 4
+        gris = PatternFill("solid", fgColor="F2F2F2")
+        for r in d["tecnicos"]:
+            ws2.cell(row=f, column=1, value=r["numero"])
+            ws2.cell(row=f, column=2, value=apellido_primero(r["nombre"]))
+            for k, dia in enumerate(dias, start=3):
+                h = r["por_dia"].get(dia)
+                c = ws2.cell(row=f, column=k, value=h or None)
+                c.number_format = "0.0"
+                c.alignment = Alignment(horizontal="center")
+                if date.fromisoformat(dia).weekday() == 6:
+                    c.fill = gris
+            c = ws2.cell(row=f, column=3 + len(dias), value=f"=SUM({get_column_letter(3)}{f}:{get_column_letter(2 + len(dias))}{f})")
+            c.font, c.number_format = Font(bold=True), "0.0"
+            f += 1
+        ws2.cell(row=f, column=2, value="TOTAL").font = Font(bold=True)
+        for k in range(3, 4 + len(dias)):
+            L = get_column_letter(k)
+            c = ws2.cell(row=f, column=k, value=f"=SUM({L}4:{L}{f - 1})")
+            c.font, c.number_format = Font(bold=True), "0.0"
+
+    # 3) Cada tanda
+    ws3 = wb.create_sheet("Detalle")
+    cabecera(ws3, [("Fecha", 11), ("N°", 6), ("Técnico", 30), ("OT", 8), ("Coche", 9), ("Inicio", 8), ("Fin", 14),
+                   ("Horas", 8), ("Nota", 30), ("Revisar", 26)])
+    filas = []
+    for r in d["tecnicos"]:
+        for t in r["tandas"]:
+            filas.append((t["inicio"], r, t, False))
+        for t in r["abiertas"]:
+            filas.append((t["inicio"], r, t, True))
+    filas.sort(key=lambda x: (x[0], x[1]["numero"]))
+    f = 4
+    for _, r, t, abierta in filas:
+        fin = "" if abierta else (t["fin"][11:16] if t["fin"][:10] == t["inicio"][:10] else f"{_fdm(t['fin'][:10])} {t['fin'][11:16]}")
+        revisar = "Sigue abierta (sin hora de fin)" if abierta else (f"Más de {TANDA_LARGA} h: ¿está bien cargada?" if t.get("larga") else "")
+        vals = [_fdm(t["inicio"][:10]), r["numero"], apellido_primero(r["nombre"]), t["ot_id"], t["coche"],
+                t["inicio"][11:16], fin, None if abierta else t["horas"], t["nota"], revisar]
+        for k, v in enumerate(vals, start=1):
+            c = ws3.cell(row=f, column=k, value=v)
+            c.border = borde
+        ws3.cell(row=f, column=8).number_format = "0.00"
+        if revisar:
+            ws3.cell(row=f, column=10).font = Font(color="B7791F")
+        f += 1
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
 
 
 def _sugerir(clave, personas):
@@ -2155,6 +2358,31 @@ def api_resumen():
         return _no()
     desde, hasta, _ = _periodo_req()
     return jsonify(resumen(desde, hasta, request.args.get("vehiculo_id") or None, request.args.get("turno") or ""))
+
+
+@bp_personal.route("/api/personal/horas", methods=["GET"])
+def api_horas():
+    if not _puede_ver():
+        return _no()
+    desde, hasta, _ = _periodo_req()
+    return jsonify({"ok": True, **horas_tecnicos(desde, hasta, request.args.get("turno") or "",
+                                                  request.args.get("vehiculo_id") or None)})
+
+
+@bp_personal.route("/api/personal/horas.xlsx", methods=["GET"])
+def api_horas_xlsx():
+    if not _puede_ver():
+        return _no()
+    desde, hasta, _ = _periodo_req()
+    turno = request.args.get("turno") or ""
+    d = horas_tecnicos(desde, hasta, turno, request.args.get("vehiculo_id") or None)
+    puesto = request.args.get("puesto") or ""
+    if puesto:
+        d["tecnicos"] = [r for r in d["tecnicos"] if r["puesto"] == puesto]
+    et = " · ".join(x for x in ((f"Turno {TURNOS[turno].lower()}" if turno in TURNOS else ""), puesto) if x)
+    nombre = f"Horas por tecnico {desde} al {hasta}.xlsx"
+    return send_file(xlsx_horas(d, et), as_attachment=True, download_name=nombre,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @bp_personal.route("/api/personal/<int:pid>/trabajos", methods=["GET"])
