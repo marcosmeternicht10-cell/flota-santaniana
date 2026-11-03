@@ -3394,6 +3394,7 @@ async function trConfirmarPublicar(btn) {
       <svg viewBox="0 0 52 52" class="tr-listo-check"><circle cx="26" cy="26" r="24"/><path d="M15 27l7 7 15-16"/></svg>
       <b>${r.sin_cambios ? `La versión ${v} ya estaba publicada` : `Versión ${v} publicada`}</b>
       <span>Ahora mandalo al grupo de WhatsApp de los choferes.</span>
+      ${r.avisos && (r.avisos.avisados || (r.avisos.sin_app || []).length) ? `<span style="margin-top:6px;font-size:12.5px;color:var(--muted)"><i class="ti ti-device-mobile"></i> ${avisosTxt(r.avisos)}</span>` : ""}
     </div>`;
   if (pie) pie.innerHTML = `
     <button class="btn btn-ghost" onclick="trDescargar(${v}, 'pdf', this)"><i class="ti ti-file-type-pdf"></i> PDF</button>
@@ -9636,7 +9637,7 @@ async function cerrarSesion() {
   window.location.href = "/login";
 }
 
-const LABEL_ROL = { admin: "Administración", contabilidad: "Contabilidad", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", agencia: "Agencia", gerente: "Gerente" };
+const LABEL_ROL = { admin: "Administración", contabilidad: "Contabilidad", taller: "Taller", compras: "Compras", auditor: "Auditor", chofer: "Chofer", chofer_corp: "Chofer corporativo", tripulante: "Chofer de línea y turismo", agencia: "Agencia", gerente: "Gerente" };
 
 // Los roles que se pueden asignar, en un solo lugar para no repetirlos
 const ROLES_DISPONIBLES = [
@@ -9647,6 +9648,7 @@ const ROLES_DISPONIBLES = [
   ["auditor", "Auditor (combustible e historial)"],
   ["chofer", "Chofer (solo reportar)"],
   ["chofer_corp", "Chofer corporativo (rendiciones)"],
+  ["tripulante", "Chofer de línea y turismo (su app)"],
   ["agencia", "Agencia de pasajes (solo vende en Alpha)"],
   ["gerente", "Gerente (solo mira su panel)"],
 ];
@@ -9681,9 +9683,10 @@ async function renderUsuarios() {
   window._usuarios = usuarios;
 
   content.innerHTML = `
-    <div class="page-header">
-      <h1><i class="ti ti-users"></i> Usuarios del sistema</h1>
-      <p>Gestión de accesos — crear usuarios y asignar permisos</p>
+    <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
+      <div><h1><i class="ti ti-users"></i> Usuarios del sistema</h1>
+      <p>Gestión de accesos — crear usuarios y asignar permisos</p></div>
+      <button class="btn btn-primary" onclick="caeAbrir()"><i class="ti ti-device-mobile"></i> Choferes de línea y turismo</button>
     </div>
     <div class="section">
 
@@ -15363,6 +15366,7 @@ function agCompartirAsignacion() {
     pie: `<div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;width:100%">
       <button class="btn btn-ghost" onclick="agcPdf()"><i class="ti ti-file-type-pdf"></i> Ver PDF</button>
       <button class="btn btn-ghost" onclick="agcDescargar(this)"><i class="ti ti-download"></i> Descargar imagen</button>
+      <button class="btn btn-ghost" onclick="agcAvisar(this)"><i class="ti ti-bell-ringing"></i> Avisar a los choferes</button>
       <button class="btn btn-primary" onclick="agcCompartir(this)"><i class="ti ti-brand-whatsapp"></i> Compartir imagen</button></div>`,
   });
   agcDias().then(agcPrevista);
@@ -15494,6 +15498,18 @@ async function agcCompartir(btn) {
 }
 
 function agcPdf() { window.open(`/api/turismo/asignacion/pdf?${agcQs()}`, "_blank"); }
+
+// Les manda al celular a cada chofer su servicio de turismo (los de la app)
+async function agcAvisar(btn) {
+  const antes = btn.innerHTML;
+  btn.disabled = true; btn.innerHTML = `<i class="ti ti-loader-2 gira"></i> Avisando…`;
+  const r = await fetch(`/api/turismo/asignacion/avisar?${agcQs()}`, { method: "POST" }).then(x => x.json()).catch(() => null);
+  btn.disabled = false; btn.innerHTML = antes;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo avisar", "error"); return; }
+  const partes = [avisosTxt(r)];
+  if (r.sin_usuario && r.sin_usuario.length) partes.push(`sin usuario: ${r.sin_usuario.join(", ")}`);
+  toast(partes.filter(Boolean).join(" · ") || "No hay choferes con servicio en esas fechas", r.avisados ? "success" : "info");
+}
 
 
 // Compara el consumo del bus con lo esperado para su motor: un Scania K410 y
@@ -22179,6 +22195,7 @@ async function caPublicar(btn) {
   if (!r || !r.ok) { toast((r && r.msg) || "No se pudo publicar", "error"); return; }
   const p = r.publicado || {};
   await caAplicar(r, p.sin_cambios ? "No había cambios para publicar" : `Versión ${p.version} publicada${p.cambios && p.cambios.length ? ` · ${p.cambios.length} cambio${p.cambios.length === 1 ? "" : "s"}` : ""}`);
+  if (p.avisos && (p.avisos.avisados || (p.avisos.sin_app || []).length)) setTimeout(() => toast(avisosTxt(p.avisos), "info"), 1800);
   caCargar(ca.fecha, true);
 }
 
@@ -24422,4 +24439,134 @@ async function ttPost(accion, cuerpo, callado) {
   if (!r || !r.ok) { toast((r && r.msg) || "No se pudo", "error"); ttCargar(); return; }
   if (!callado) toast(r.msg, "success");
   ttCargar();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHOFERES DE LÍNEA Y TURISMO: sus usuarios para la app del celular
+// ═══════════════════════════════════════════════════════════════════════════
+// "Aviso enviado a 5 choferes · 3 todavía sin la app (Pérez, Gómez…)"
+function avisosTxt(a) {
+  if (!a) return "";
+  const sin = a.sin_app || [];
+  const p = [];
+  if (a.avisados) p.push(`Aviso enviado a ${a.avisados} chofer${a.avisados === 1 ? "" : "es"}`);
+  if (sin.length) p.push(`${sin.length} todavía sin la app${sin.length <= 3 ? ` (${sin.join(", ")})` : ""}`);
+  return p.join(" · ");
+}
+
+const cae = { d: null, filtro: "", ver: "todos" };
+async function caeAbrir() {
+  rvModal({
+    titulo: "Choferes de línea y turismo", icono: "device-mobile", ancho: 860, clase: "cae-modal",
+    sub: "Cada chofer entra al sistema desde el celular y ve el servicio que le toca y su producción del mes. Usuario y clave son su nombre de pila.",
+    cuerpo: `<div id="cae-cuerpo"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
+    pie: `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;width:100%">
+      <button class="btn btn-ghost" onclick="window.open('/mi','_blank')"><i class="ti ti-eye"></i> Ver la app como un chofer</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="caeCopiar(this)"><i class="ti ti-copy"></i> Copiar accesos</button>
+        <button class="btn btn-primary" id="cae-crear" onclick="caeCrear(this)" hidden><i class="ti ti-user-plus"></i> Crear usuarios</button>
+      </div></div>`,
+  });
+  await caeCargar();
+}
+async function caeCargar() {
+  const r = await api("/api/choferes_app/accesos").catch(e => ({ ok: false, msg: e.message }));
+  if (!r || !r.ok) { $("#cae-cuerpo").innerHTML = `<div class="empty">${trEsc((r && r.msg) || "No se pudo cargar")}</div>`; return; }
+  cae.d = r;
+  const b = $("#cae-crear");
+  if (b) { b.hidden = !r.faltan.length; b.innerHTML = `<i class="ti ti-user-plus"></i> Crear ${r.faltan.length} usuario${r.faltan.length === 1 ? "" : "s"}`; }
+  caePintar();
+}
+function caePintar() {
+  const r = cae.d, f = cae.filtro.trim().toLowerCase();
+  const total = r.choferes.length, conAv = r.con_avisos;
+  const lista = r.choferes.filter(c => (!f || (c.nombre + " " + c.usuario + " " + c.alias).toLowerCase().includes(f))
+    && (cae.ver === "todos" || (cae.ver === "con" ? c.avisos : !c.avisos)));
+  const chip = (k, t) => `<button class="chip ${cae.ver === k ? "activo" : ""}" onclick="cae.ver='${k}';caePintar()">${t}</button>`;
+  $("#cae-cuerpo").innerHTML = `
+    <div class="cae-kpis">
+      <div><b>${total}</b><span>choferes con usuario</span></div>
+      <div><b>${conAv}</b><span>con avisos en el celular</span></div>
+      <div><b>${r.faltan.length}</b><span>figuran en las planillas sin usuario</span></div>
+    </div>
+    ${r.faltan.length ? `<div class="cae-faltan"><i class="ti ti-user-question"></i><div><b>Sin usuario todavía:</b>
+      ${r.faltan.slice(0, 12).map(x => trEsc(x.nombre)).join(" · ")}${r.faltan.length > 12 ? ` y ${r.faltan.length - 12} más` : ""}.
+      <span>Tocá «Crear usuarios»: a cada uno se le arma usuario y clave con su nombre de pila.</span></div></div>` : ""}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 10px">
+      <input class="cae-buscar" placeholder="Buscar chofer…" value="${trEsc(cae.filtro)}" oninput="cae.filtro=this.value;caePintarLista()">
+      ${chip("todos", "Todos")}${chip("con", "Con avisos")}${chip("sin", "Sin avisos")}
+    </div>
+    <div id="cae-lista">${caeFilas(lista)}</div>`;
+}
+function caePintarLista() {
+  const r = cae.d, f = cae.filtro.trim().toLowerCase();
+  const lista = r.choferes.filter(c => (!f || (c.nombre + " " + c.usuario + " " + c.alias).toLowerCase().includes(f))
+    && (cae.ver === "todos" || (cae.ver === "con" ? c.avisos : !c.avisos)));
+  $("#cae-lista").innerHTML = caeFilas(lista);
+}
+function caeFilas(lista) {
+  if (!lista.length) return `<div class="empty" style="padding:28px">Nadie con ese filtro</div>`;
+  return `<div class="table-wrap cae-tabla"><table><thead><tr><th>Chofer</th><th>Usuario y clave</th><th>Avisos</th><th>Servicios de ${trEsc(cae.d.mes_txt)}</th><th>Último ingreso</th><th></th></tr></thead><tbody>
+    ${lista.map(c => `<tr>
+      <td><b>${trEsc(c.nombre)}</b>${c.alias ? `<div class="cae-alias" title="También figura así en las planillas">también: ${trEsc(c.alias)}</div>` : ""}</td>
+      <td><code>${trEsc(c.usuario)}</code></td>
+      <td>${c.avisos ? `<span class="cae-on"><i class="ti ti-bell-ringing"></i> Activos</span>` : `<span class="cae-off">Sin activar</span>`}</td>
+      <td style="text-align:center">${c.servicios_mes}</td>
+      <td style="font-size:12px;color:var(--muted)">${c.ultimo_acceso ? trEsc(String(c.ultimo_acceso).slice(0, 16).replace("T", " ")) : "nunca"}</td>
+      <td style="white-space:nowrap;text-align:right">
+        <button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
+        <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>
+        <button class="icon-btn" title="Mandarle un aviso de prueba" onclick="caeProbar(${c.id}, this)"><i class="ti ti-bell"></i></button>
+        <button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>
+      </td></tr>`).join("")}</tbody></table></div>`;
+}
+async function caeCrear(btn) {
+  const n = cae.d.faltan.length;
+  if (!confirm(`Se van a crear ${n} usuario${n === 1 ? "" : "s"} con rol «Chofer de línea y turismo».\nUsuario y clave: el nombre de pila en minúscula (si se repite, con la inicial del apellido).\n\n¿Crear?`)) return;
+  btn.disabled = true;
+  const r = await fetch("/api/choferes_app/crear", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(x => x.json()).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.msg) || "No se pudo crear", "error"); return; }
+  toast(`${r.creados.length} usuario${r.creados.length === 1 ? "" : "s"} creado${r.creados.length === 1 ? "" : "s"}`, "success");
+  await caeCargar();
+}
+function caeAlias(id) {
+  const c = cae.d.choferes.find(x => x.id === id);
+  const o = rvModal({
+    titulo: trEsc(c.nombre), icono: "pencil", ancho: 480,
+    sub: "Si en la planilla de tráfico o de turismo este chofer figura escrito de otra forma (o con un error), anotalo acá para que le aparezcan sus servicios.",
+    cuerpo: `<div class="emp-campo"><label>También figura como (uno por renglón)</label>
+      <textarea id="cae-alias" rows="4" style="width:100%" placeholder="Ej: FERNANDDEZ LIDER">${trEsc((c.alias || "").split(";").map(x => x.trim()).filter(Boolean).join("\n"))}</textarea></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+      <button class="btn btn-primary" id="cae-alias-ok">Guardar</button>`,
+  });
+  o.querySelector("#cae-alias-ok").onclick = async () => {
+    const r = await fetch(`/api/choferes_app/${id}/alias`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alias: $("#cae-alias").value }) }).then(x => x.json()).catch(() => null);
+    if (!r || !r.ok) { toast("No se pudo guardar", "error"); return; }
+    o.remove(); toast("Guardado", "success"); caeCargar();
+  };
+}
+async function caeProbar(id, btn) {
+  btn.disabled = true;
+  const r = await fetch(`/api/choferes_app/avisar_prueba/${id}`, { method: "POST" }).then(x => x.json()).catch(() => null);
+  btn.disabled = false;
+  toast(r && r.ok ? "Aviso de prueba enviado" : ((r && r.msg) || "No se pudo mandar"), r && r.ok ? "success" : "info");
+}
+async function caeClave(id) {
+  const c = cae.d.choferes.find(x => x.id === id);
+  if (!confirm(`¿Volver la clave de ${c.nombre} a «${c.usuario}»?`)) return;
+  const r = await fetch(`/api/choferes_app/${id}/clave`, { method: "POST" }).then(x => x.json()).catch(() => null);
+  toast(r && r.ok ? `La clave quedó: ${r.clave}` : "No se pudo", r && r.ok ? "success" : "error");
+}
+// Texto para mandar por WhatsApp: cada chofer con su usuario y clave
+async function caeCopiar(btn) {
+  const r = cae.d;
+  if (!r || !r.choferes.length) { toast("Todavía no hay usuarios creados", "info"); return; }
+  const txt = `*App de choferes · La Santaniana*\nEntrá desde el celular a ${location.origin} con tu usuario y clave:\n\n` +
+    r.choferes.filter(c => c.activo).map(c => `• ${c.nombre}: usuario *${c.usuario}* · clave *${c.usuario}*`).join("\n") +
+    `\n\nAdentro tocá «Activar» para que te llegue tu servicio al celular.`;
+  try { await navigator.clipboard.writeText(txt); toast("Accesos copiados: pegalos en el grupo de WhatsApp", "success"); }
+  catch (e) { toast("No se pudo copiar", "error"); }
 }

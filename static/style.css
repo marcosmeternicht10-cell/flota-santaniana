@@ -8526,3 +8526,20 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
   .th-tabla { min-width: 1240px; }
 }
 .oh-alm { display: block; font-size: 9.5px; font-weight: 500; color: var(--muted); white-space: normal; line-height: 1.15; max-width: 56px; margin-left: auto; }
+
+/* Choferes de línea y turismo (accesos a la app) */
+.cae-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.cae-kpis > div { background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.cae-kpis b { display: block; font-family: "Barlow Semi Condensed", sans-serif; font-size: 28px; font-weight: 700; line-height: 1; }
+.cae-kpis span { font-size: 12px; color: var(--muted); }
+.cae-faltan { display: flex; gap: 10px; margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: rgba(183,121,31,.1);
+  color: var(--text); font-size: 13px; line-height: 1.45; }
+.cae-faltan > i { color: #B7791F; font-size: 20px; }
+.cae-faltan span { display: block; color: var(--muted); margin-top: 4px; }
+.cae-buscar { flex: 1; min-width: 180px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.cae-tabla { max-height: 46vh; overflow: auto; }
+.cae-tabla code { font-size: 12.5px; background: var(--surface2); padding: 2px 7px; border-radius: 6px; }
+.cae-alias { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.cae-on { color: #1F8A5B; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.cae-off { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+@media (max-width: 640px) { .cae-kpis { grid-template-columns: 1fr; } }
