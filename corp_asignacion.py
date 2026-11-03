@@ -1565,6 +1565,11 @@ def api_publicar(fecha):
         return jsonify({"ok": False, "msg": err}), 400
     if not r.get("sin_cambios"):
         _auditar("Publicó la asignación corporativa", f"{fecha} versión {r['version']}")
+        try:                                   # a cada chofer le llega su asignación al celular
+            from choferes_app import avisar_corp
+            r["avisos"] = avisar_corp(fecha)
+        except Exception as e:
+            print("avisos corporativos:", e)
     return _respuesta(fecha, publicado=r)
 
 

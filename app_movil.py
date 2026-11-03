@@ -41,7 +41,7 @@ COLOR_TEMA = "#1D344E"     # azul marino de la marca: la barra de arriba del cel
 COLOR_FONDO = "#FFFFFF"    # la pantalla de carga: blanca, con el logo
 
 # Si se cambia algo del service worker o de la pantalla sin internet, subir este número
-VERSION_SW = "1"
+VERSION_SW = "2"
 
 
 def es_publica(path):
@@ -100,11 +100,38 @@ self.addEventListener("fetch", e => {
   if (e.request.mode !== "navigate") return;
   e.respondWith(fetch(e.request).catch(() => caches.match("/offline")));
 });
+
+// Los avisos que manda el sistema (servicio publicado, cambios)
+self.addEventListener("push", e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (x) { d = { cuerpo: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.titulo || "La Santaniana", {
+    body: d.cuerpo || "",
+    icon: "/static/app/icon-192.png",
+    badge: "/static/app/badge-96.png",
+    tag: d.tag || undefined,
+    renotify: !!d.tag,
+    data: { url: d.url || "/" },
+    vibrate: [120, 60, 120],
+  }));
+});
+
+// Tocar el aviso abre la app en la pantalla que corresponde
+self.addEventListener("notificationclick", e => {
+  e.notification.close();
+  const url = new URL((e.notification.data && e.notification.data.url) || "/", self.location.origin).href;
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then(ws => {
+    for (const w of ws) {
+      if (w.url.startsWith(self.location.origin)) { w.focus(); return w.navigate(url).catch(() => {}); }
+    }
+    return self.clients.openWindow(url);
+  }));
+});
 """
 
 
 _ICONOS = {"icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png",
-           "apple-touch-icon.png", "favicon-48.png"}
+           "apple-touch-icon.png", "favicon-48.png", "badge-96.png"}
 
 
 @bp_movil.route("/static/app/<nombre>")

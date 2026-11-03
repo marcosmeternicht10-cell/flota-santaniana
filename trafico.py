@@ -2655,6 +2655,11 @@ def api_publicar(fecha):
     if not r.get("sin_cambios"):
         _auditar(f"Publicó el tráfico{_etq(tipo)} del {fecha} (versión {r['version']})",
                  f"{len(r['cambios'])} cambio(s)" if r["cambios"] else "")
+        try:                                   # a cada chofer le llega su servicio al celular
+            from choferes_app import avisar_trafico
+            r["avisos"] = avisar_trafico(fecha, tipo)
+        except Exception as e:
+            print("avisos tráfico:", e)
     return jsonify({"ok": True, **r, "estado": dia_completo(fecha, tipo)})
 
 

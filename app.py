@@ -254,6 +254,13 @@ app.register_blueprint(bp_gerencia)
 # La app para el celular y la Play Store: manifiesto, service worker, assetlinks y privacidad
 from app_movil import bp_movil, es_publica as es_ruta_movil
 app.register_blueprint(bp_movil)
+# Avisos al celular (Web Push) y la app del chofer de línea y turismo
+from push import bp_push, init_push
+init_push()
+app.register_blueprint(bp_push)
+from choferes_app import bp_choferes_app, init_choferes_app
+init_choferes_app()
+app.register_blueprint(bp_choferes_app)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -454,6 +461,7 @@ def proteger_rutas():
         permitido = (
             p == "/" or p == "/corp" or
             p.startswith("/api/corp/") or
+            p.startswith("/api/push/") or     # avisos al celular
             p.startswith("/static/") or
             p == "/api/logout" or p == "/api/me" or
             p.startswith("/api/vehiculos")  # buscador de bus por Nº interno
@@ -462,6 +470,18 @@ def proteger_rutas():
             if p.startswith("/api/"):
                 return jsonify({"error": "Sin permiso"}), 403
             return redirect(url_for("pantalla_corp"))
+
+    # El chofer de línea y turismo: solo su app (servicio que le toca y su mes).
+    if session.get("rol") == "tripulante":
+        permitido = (
+            p in ("/", "/mi", "/api/logout", "/api/me") or
+            p.startswith("/api/mi/") or p.startswith("/api/push/") or
+            p.startswith("/static/")
+        )
+        if not permitido:
+            if p.startswith("/api/"):
+                return jsonify({"error": "Sin permiso"}), 403
+            return redirect("/mi")
 
     # El gerente: solo su panel, y solo para mirar. Cualquier pedido que
     # escriba se rechaza, aunque llegue por fuera de la pantalla.
@@ -552,6 +572,8 @@ def index():
         return redirect(url_for("pantalla_chofer"))
     if session.get("rol") == "chofer_corp":
         return redirect(url_for("pantalla_corp"))
+    if session.get("rol") == "tripulante":
+        return redirect("/mi")
     if session.get("rol") == "agencia":
         return redirect("/boleteria")
     if session.get("rol") == "gerente":
@@ -704,8 +726,10 @@ def api_login():
                 session["agencia"] = (_r["nombre"] if _r else "") or ""
             except Exception:
                 pass
-        # Sesión NO permanente: se cierra al cerrar el navegador (más seguro)
-        session.permanent = False
+        # Sesión NO permanente: se cierra al cerrar el navegador (más seguro).
+        # El chofer de línea y turismo entra desde su propio celular, en la app:
+        # queda adentro (31 días) para no tener que poner la clave cada vez.
+        session.permanent = u["rol"] == "tripulante"
         auditar("Inició sesión", "Acceso")
         return jsonify({"ok": True, "usuario": u})
     # Registrar intento fallido (sin sesión, lo hacemos directo)

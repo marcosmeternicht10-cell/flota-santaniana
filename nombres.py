@@ -56,7 +56,8 @@ _PARTICULAS = {"de", "del", "la", "las", "los", "da", "das", "do", "dos", "van",
 # Si aparece una de estas palabras no es una persona («Taller Bosch», «Gomería Ruta 2»)
 _NO_PERSONA = {"taller", "talleres", "gomeria", "prueba", "chofer", "tecnico", "servicio", "ruta", "empresa",
                "sa", "s.a.", "srl", "ltda", "externo", "tercero", "afuera", "mecanica", "electricidad", "torneria",
-               "chaperia", "rectificadora", "agencia", "deposito", "oficina", "sin", "asignar"}
+               "chaperia", "rectificadora", "agencia", "deposito", "oficina", "sin", "asignar",
+               "def", "definir", "conf", "confirmar", "reserva", "vacante"}
 _PREFIJO = re.compile(r"^\s*((?:N[°º]|Nº|N\.|#)\s*\d+\s*[-·:]?\s*)", re.I)
 
 
@@ -151,3 +152,43 @@ def apellido_primero_varios(texto):
 def clave_orden(nombre):
     """Para ordenar por apellido (sin tildes ni mayúsculas)."""
     return _llano(apellido_primero(nombre)).replace(",", " ")
+
+
+def separar_personas(texto):
+    """Las personas de un campo que puede tener varias: 'JUAN PEREZ / CARLOS GOMEZ',
+    'N°3 Juan Pérez, N°5 Ana Gómez', 'Juan Pérez y Ana Gómez', una por renglón.
+    Devuelve los nombres sueltos, sin el N° y sin lo que no es una persona."""
+    s = str(texto or "")
+    if not s.strip():
+        return []
+    partes = [s]
+    for sep in ("\n", " / ", "/", " + ", " - ", " y ", " Y "):
+        partes = [y for x in partes for y in x.split(sep)]
+    out = []
+    for p in partes:
+        p = p.strip()
+        if not p:
+            continue
+        # «N°3 A, N°5 B» o «Juan Pérez, Ana Gómez»: la coma separa personas;
+        # «PEREZ, WALTER» es una sola
+        trozos = [x.strip() for x in p.split(",")]
+        if len(trozos) > 1 and (re.search(r",\s*(N[°º]|Nº|#)\s*\d", p, re.I) or len(trozos) > 2
+                                or all(len(x.split()) >= 2 for x in trozos)):
+            cands = trozos
+        else:
+            cands = [p]
+        for c in cands:
+            c = _PREFIJO.sub("", c).strip()
+            pal = c.replace(",", " ").split()
+            if len(pal) < 2 or any(ch.isdigit() for ch in c) or any(_llano(x).strip(".") in _NO_PERSONA for x in pal):
+                continue
+            out.append(c)
+    return out
+
+
+def clave_persona(nombre):
+    """La misma persona escrita de cualquier forma da la misma clave:
+    'JUAN PEREZ', 'Pérez, Juan' y 'PEREZ JUAN' → 'JUAN PEREZ'."""
+    t = _llano(_PREFIJO.sub("", str(nombre or ""))).upper()
+    partes = [x for x in "".join(ch if ch.isalnum() else " " for ch in t).split() if x]
+    return " ".join(sorted(partes))
