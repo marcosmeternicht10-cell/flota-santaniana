@@ -9704,9 +9704,9 @@ async function renderUsuarios() {
         <div class="card-head"><i class="ti ti-user-plus"></i> Nuevo usuario</div>
         <div class="card-body">
           <div class="form-row">
-            <div class="field"><label>Usuario *</label><input id="u-user" placeholder="jperez" style="width:140px"></div>
-            <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez"></div>
-            <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" style="width:140px"></div>
+            <div class="field"><label>Usuario *</label><input id="u-user" placeholder="jperez" autocomplete="off" style="width:140px"></div>
+            <div class="field" style="flex:1;min-width:180px"><label>Nombre completo</label><input id="u-nombre" placeholder="Juan Pérez" autocomplete="off"></div>
+            <div class="field"><label>Contraseña *</label><input id="u-pass" type="password" placeholder="••••••" autocomplete="new-password" style="width:140px"></div>
             <div class="field"><label>Rol</label>
               <select id="u-rol" style="width:230px" onchange="$('#u-secc-wrap').style.display = this.value === 'taller' ? '' : 'none'; $('#u-ag-wrap').style.display = this.value === 'agencia' ? '' : 'none'">
                 ${ROLES_DISPONIBLES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}
@@ -9730,6 +9730,18 @@ async function renderUsuarios() {
       </div>
 
       <div class="section-title"><i class="ti ti-list"></i> Usuarios registrados (${usuarios.length})</div>
+      <div class="us-buscar">
+        <div class="us-caja">
+          <i class="ti ti-search"></i>
+          <input id="us-q" type="search" name="buscar-usuario-x" autocomplete="off" placeholder="Buscar por usuario, nombre o apellido…" oninput="usFiltrar()" onkeydown="if(event.key==='Escape'){this.value='';usFiltrar()}">
+          <button class="us-borrar" id="us-borrar" onclick="$('#us-q').value='';usFiltrar();$('#us-q').focus()" title="Borrar" style="display:none"><i class="ti ti-x"></i></button>
+        </div>
+        <select id="us-rol" onchange="usFiltrar()">
+          <option value="">Todos los roles</option>
+          ${[...new Set(usuarios.map(u => u.rol))].map(r => `<option value="${r}">${LABEL_ROL[r] || r} (${usuarios.filter(u => u.rol === r).length})</option>`).join("")}
+        </select>
+        <span class="us-cuenta" id="us-cuenta"></span>
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
@@ -9740,7 +9752,7 @@ async function renderUsuarios() {
           </tr></thead>
           <tbody>
             ${usuarios.map(u => `
-              <tr>
+              <tr data-rol="${u.rol}" data-q="${usLlano([u.usuario, u.nombre, LABEL_ROL[u.rol], u.agencia].filter(Boolean).join(" "))}">
                 <td><b>${u.usuario}</b></td>
                 <td>${u.nombre || "—"}</td>
                 <td class="center"><span class="rol-badge ${u.rol}">${LABEL_ROL[u.rol] || u.rol}</span>${u.rol === "agencia" ? `<div style="font-size:11.5px;color:var(--muted);margin-top:3px">${trEsc(u.agencia || "sin agencia")}</div>` : ""}</td>
@@ -9759,8 +9771,31 @@ async function renderUsuarios() {
               </tr>`).join("")}
           </tbody>
         </table>
+        <div class="us-nada" id="us-nada" style="display:none"><i class="ti ti-user-search"></i> Nadie coincide con la búsqueda</div>
       </div>
     </div>`;
+}
+
+// Buscador de la lista de usuarios: filtra en el momento, sin acentos ni
+// mayúsculas, y cada palabra tiene que aparecer (en cualquier orden).
+function usLlano(t) {
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9ñ ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function usFiltrar() {
+  const qi = $("#us-q"); if (!qi) return;
+  const pal = usLlano(qi.value).split(" ").filter(Boolean);
+  const rol = ($("#us-rol") || {}).value || "";
+  const filas = document.querySelectorAll("tr[data-q]");
+  let n = 0;
+  filas.forEach(tr => {
+    const ve = (!rol || tr.dataset.rol === rol) && pal.every(p => tr.dataset.q.includes(p));
+    tr.style.display = ve ? "" : "none";
+    if (ve) n++;
+  });
+  const filtra = pal.length || rol;
+  $("#us-borrar").style.display = qi.value ? "" : "none";
+  $("#us-cuenta").textContent = filtra ? `${n} de ${filas.length}` : "";
+  $("#us-nada").style.display = filtra && !n ? "" : "none";
 }
 
 // Quién puede eliminar OTs: administración siempre; a taller y compras se
