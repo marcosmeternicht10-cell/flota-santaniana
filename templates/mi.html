@@ -153,6 +153,10 @@
     .lado.vuelta { background: rgba(30,90,150,.1); color: var(--blue); }
     .lado.tur { background: rgba(183,121,31,.12); color: var(--amber); }
     .lado.res { background: rgba(220,38,65,.1); color: var(--red); }
+    .lado.corp { background: rgba(47,124,70,.12); color: #2F7C46; }
+    .desglose { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+    .desglose span { font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: rgba(255,255,255,.14); }
+    .tabs div.tres { grid-template-columns: 1fr 1fr 1fr; }
     .fila.paso { opacity: .45; }
     .fila.paso .h::after { content: "ya salió"; display: block; font-family: var(--txt); font-size: 10px; font-weight: 600; color: var(--muted); }
 
@@ -295,9 +299,10 @@
 </div>
 
 <nav class="tabs" aria-label="Secciones">
-  <div>
-    <button class="on" id="t-serv" onclick="verTab('serv')"><i class="ti ti-bus"></i> Mis servicios</button>
+  <div{% if es_corp %} class="tres"{% endif %}>
+    <button class="on" id="t-serv" onclick="verTab('serv')"><i class="ti ti-bus"></i> {{ 'Servicios' if es_corp else 'Mis servicios' }}</button>
     <button id="t-mes" onclick="verTab('mes')"><i class="ti ti-chart-bar"></i> Mi mes</button>
+    {% if es_corp %}<button onclick="location.href='/corp'"><i class="ti ti-receipt"></i> Rendir</button>{% endif %}
   </div>
 </nav>
 
@@ -308,6 +313,7 @@
   <p id="h-sub">Chofer · La Santaniana</p>
   <div class="ops">
     <button class="op" id="op-avisos" onclick="activarAvisos(true)"><i class="ti ti-bell"></i><div>Avisos en el celular<small id="op-avisos-t">—</small></div></button>
+    {% if es_corp %}<button class="op" onclick="location.href='/corp'"><i class="ti ti-receipt"></i><div>Rendiciones corporativas<small>Cargar la rendición y el combustible</small></div></button>{% endif %}
     <button class="op" onclick="cerrarHoja(); cargar(true)"><i class="ti ti-refresh"></i><div>Actualizar<small>Traer lo último que publicó la oficina</small></div></button>
     <button class="op roja" onclick="salir()"><i class="ti ti-logout"></i><div>Salir</div></button>
   </div>
@@ -370,7 +376,13 @@ function pintarCabecera() {
 // La hora de ahora corre sola desde que se cargó (con la del servidor como base)
 function ahoraMs() { return new Date(S.d.hoy + "T" + (S.d.ahora || "00:00")).getTime() + (Date.now() - (S.base || Date.now())); }
 function yaPaso(it) {
-  if (!it.hora || it.origen !== "trafico") return false;
+  if (!it.hora || (it.origen !== "trafico" && it.origen !== "corp")) return false;
+  // corporativos: pasó cuando terminó el horario (si se sabe)
+  if (it.origen === "corp" && it.hora_fin) {
+    let fin = new Date(it.fecha + "T" + it.hora_fin).getTime();
+    if (it.hora_fin <= it.hora) fin += 86400000;
+    return fin < ahoraMs();
+  }
   return new Date(it.fecha + "T" + it.hora).getTime() < ahoraMs() - 20 * 60000;
 }
 function cuandoFalta(it) {
@@ -392,6 +404,7 @@ function iniciales(n) { const p = String(n).split(","); return ((p[1] || "").tri
 function etiquetaTipo(it) {
   if (it.origen === "turismo") return "Turismo";
   if (it.origen === "reserva") return "Reserva";
+  if (it.origen === "corp") return "Corporativo" + (it.lado ? " · " + it.lado : "");
   return it.tipo === "internacional" ? "Internacional" : "Línea nacional";
 }
 
@@ -434,6 +447,10 @@ function heroHTML(it) {
   let ruta;
   if (it.origen === "reserva") {
     ruta = `<div class="ruta" style="grid-template-columns:1fr"><div><small>De reserva en</small><strong>${esc(it.corredor)} · ${it.lado === "ida" ? "ida" : "vuelta"}</strong></div></div>`;
+  } else if (it.origen === "corp") {
+    ruta = `<div class="ruta"><div><small>Cliente</small><strong>${esc(it.cliente || "—")}</strong></div>
+      <div class="ruta-linea"><i class="ti ti-building"></i></div>
+      <div class="der"><small>Tramo</small><strong>${esc(it.tramo || "—")}</strong></div></div>`;
   } else {
     ruta = `<div class="ruta"><div><small>Sale de</small><strong>${esc(it.desde || "—")}</strong></div>
       <div class="ruta-linea"><i class="ti ti-bus"></i></div>
@@ -443,7 +460,7 @@ function heroHTML(it) {
   const con = (it.con || []).map(n => `<span class="junto"><span class="av">${esc(iniciales(n))}</span>con ${esc(lindo(n))}</span>`).join("");
   const extra = it.origen === "turismo"
     ? `${it.cliente ? `<span class="tag">${esc(it.cliente)}</span>` : ""}${it.fecha_fin && it.fecha_fin !== it.fecha ? `<span class="tag">Vuelve el ${esc(fechaCorta(it.fecha_fin))}</span>` : ""}${it.pasajeros ? `<span class="tag">${esc(it.pasajeros)} pasajeros</span>` : ""}`
-    : "";
+    : it.origen === "corp" && it.hora_fin ? `<span class="tag">Hasta las ${esc(it.hora_fin)}</span>` : "";
   return `<div class="hero entra">
     <div class="hero-et"><span class="pill roja">${esc(dia)}</span><span class="pill">${etiquetaTipo(it)}${it.lado && it.origen === "trafico" ? ` · ${it.lado === "ida" ? "ida" : "vuelta"}` : ""}</span></div>
     <div class="hero-hora">${esc(it.hora || "--:--")}</div>
@@ -459,6 +476,11 @@ function filaHTML(it) {
   let q, sub = [], lado;
   if (it.origen === "reserva") {
     q = `Reserva · ${esc(it.corredor)}`; lado = `<span class="lado res">Reserva</span>`;
+  } else if (it.origen === "corp") {
+    q = `${esc(it.cliente)} · ${esc(it.tramo)}`;
+    if (it.hora_fin) sub.push(`hasta las ${esc(it.hora_fin)}`);
+    if (it.lado) sub.push(esc(it.lado));
+    lado = `<span class="lado corp">Corp.</span>`;
   } else if (it.origen === "turismo") {
     q = it.desde && it.hasta ? `${esc(it.desde)} → ${esc(it.hasta)}` : esc(it.hasta || it.desde || "Turismo");
     if (it.cliente) sub.push(esc(it.cliente));
@@ -500,9 +522,11 @@ function pintarMes() {
   const delta = ant.servicios || m.servicios ? `<span class="delta ${dif > 0 ? "sube" : dif < 0 ? "baja" : ""}">
       <i class="ti ti-${dif > 0 ? "trending-up" : dif < 0 ? "trending-down" : "equal"}"></i>${dif === 0 ? "Igual" : (dif > 0 ? "+" : "") + dif} que ${ant.a_la_altura ? "a esta altura de" : "en"} ${esc(ant.mes_txt.split(" ")[0].toLowerCase())}</span>` : "";
   const prog = enCurso ? `Hasta hoy${m.programados ? ` · <b>${m.programados}</b> más ya programado${m.programados > 1 ? "s" : ""} este mes` : ""}` : "";
+  const partes = [[m.linea, "de línea"], [m.turismo, "de turismo"], [m.corp || 0, "corporativo" + ((m.corp || 0) === 1 ? "" : "s")]].filter(x => x[0]);
+  const desglose = partes.length > 1 ? `<div class="desglose">${partes.map(([n, t]) => `<span>${n} ${t}</span>`).join("")}</div>` : "";
   let html = `<div class="total entra"><small>Servicios hechos</small>
       <div class="num">${m.servicios}<span>servicio${m.servicios === 1 ? "" : "s"}</span></div>
-      ${delta}${prog ? `<div class="prog">${prog}</div>` : ""}</div>
+      ${delta}${prog ? `<div class="prog">${prog}</div>` : ""}${desglose}</div>
     <div class="grilla">
       ${datoHTML("ti-route", m.km ? miles(m.km) : "—", m.km ? `km recorridos${m.km_completo ? "" : " (aprox.)"}` : "km recorridos")}
       ${datoHTML("ti-calendar-check", m.dias, `día${m.dias === 1 ? "" : "s"} trabajado${m.dias === 1 ? "" : "s"}`)}
@@ -703,7 +727,7 @@ async function refrescarSuscripcion() {
 async function admIniciar() {
   const p = new URLSearchParams(location.search);
   const r = await api("/api/mi/choferes").catch(() => ({ choferes: [] }));
-  $("adm-u").innerHTML = `<option value="">Elegí un chofer…</option>` + r.choferes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join("");
+  $("adm-u").innerHTML = `<option value="">Elegí un chofer…</option>` + r.choferes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.rol === "chofer_corp" ? " (corporativo)" : ""}</option>`).join("");
   if (p.get("u")) $("adm-u").value = p.get("u");
   if (p.get("hoy")) $("adm-hoy").value = p.get("hoy");
   if ($("adm-u").value) cargar();

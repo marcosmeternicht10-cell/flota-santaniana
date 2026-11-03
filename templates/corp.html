@@ -45,6 +45,12 @@
     .wrap { max-width: 560px; margin: 0 auto; padding: 18px 16px; }
     .saludo { font-size: 15px; color: var(--muted); margin-bottom: 16px; }
     .saludo b { color: var(--texto); }
+    .ir-mi { display: flex; align-items: center; gap: 12px; margin: -4px 0 16px; padding: 12px 14px; border-radius: 14px;
+             background: #14263D; color: #fff; text-decoration: none; }
+    .ir-mi > .ti { font-size: 22px; color: #8CBDEB; }
+    .ir-mi div { flex: 1; font-size: 14px; font-weight: 700; line-height: 1.25; }
+    .ir-mi small { display: block; font-size: 12px; font-weight: 500; color: #B9C6D6; }
+    .ir-mi:active { transform: scale(.99); }
 
     .card {
       background: white; border-radius: 16px; padding: 20px 18px;
@@ -216,6 +222,7 @@
 
   <div class="wrap">
     <div class="saludo">Hola, <b>{{ usuario }}</b> 👋</div>
+    <a class="ir-mi" href="/mi"><i class="ti ti-bus"></i><div>Mis servicios y mi mes<small>Tu asignación, tráfico y turismo, y lo que hiciste en el mes</small></div><i class="ti ti-chevron-right"></i></a>
 
     <div class="tabs">
       <div class="tab on" id="tab-cargar" onclick="verTab('cargar')">Servicio</div>
