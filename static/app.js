@@ -2341,9 +2341,10 @@ async function renderTrafico() {
   trCerrarSug();
   const primera = !tr.fecha;
   if (primera) tr.fecha = trHoy();
-  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha)]);
+  const [listas] = await Promise.all([api(`/api/trafico/listas?${trT()}`), trCargar(tr.fecha), trCargarChoferes()]);
   tr.listas = listas && !listas.error ? listas : { tripulantes: [], destinos: [], coches: [] };
   trDatalists();
+  trMarcarTrips();
 }
 
 function trDatalists() {
@@ -2402,6 +2403,7 @@ function trVacio() {
 function trPintar(entrada = false) {
   const raiz = $("#tr-raiz");
   if (!raiz) return;
+  setTimeout(trMarcarTrips, 0);                // marca los tripulantes sin usuario
   const d = tr.d;
   raiz.classList.toggle("solo-ver", !trPuede());
   raiz.classList.toggle("int", trInt());
@@ -2900,8 +2902,8 @@ function trFila(s, lado, cambiada, k = 0) {
         <input class="tr-in tr-chapa" ${v("coche", 'placeholder="COCHE" autocomplete="off" maxlength="10" aria-label="Coche"')}>
       </span>
       <span class="tr-trips">
-        <input class="tr-in tr-trip" ${v("trip1", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Primer tripulante"')}>
-        <input class="tr-in tr-trip" ${v("trip2", 'list="tr-l-trip" placeholder="Tripulante" maxlength="60" aria-label="Segundo tripulante"')}>
+        <input class="tr-in tr-trip" ${v("trip1", 'placeholder="Tripulante" autocomplete="off" maxlength="60" aria-label="Primer tripulante"')}>
+        <input class="tr-in tr-trip" ${v("trip2", 'placeholder="Tripulante" autocomplete="off" maxlength="60" aria-label="Segundo tripulante"')}>
       </span>
       ${trPuede() ? `<span class="tr-acc-fila">
           <button class="tr-ref" onclick="trRefuerzo(${s.id})" title="Agregar un refuerzo: otro coche a la misma hora y el mismo tramo" tabindex="-1"><i class="ti ti-copy-plus"></i></button>
@@ -2954,6 +2956,7 @@ function trAplicar(d, { repintar = false } = {}) {
 function trRepintarColumna(b, lado) {
   const col = document.querySelector(`.tr-col[data-bid="${b.id}"][data-lado="${lado}"] .tr-filas`);
   if (!col) return;
+  setTimeout(trMarcarTrips, 0);
   const pend = new Set((tr.d.cambios_pendientes || []).map(c => c.id).filter(Boolean));
   // FLIP: cada fila se desliza de donde estaba a donde va
   const antes = {};
@@ -3002,6 +3005,7 @@ async function trGuardarCampo(el) {
   trAprender(campo, v);
   trAplicar(r);
   trRefrescarDias();
+  trMarcarTrips();
 }
 
 // Teclado: Enter pasa a la casilla siguiente, como en la planilla
@@ -3009,6 +3013,7 @@ function trTecla(e) {
   const el = e.target;
   if (!el.classList?.contains("tr-in")) return;
   if (tr.sug && el.classList.contains("tr-chapa") && trTeclaSug(e)) return;
+  if (tr.ch && el === tr.ch.input && trTeclaCh(e)) return;
   if (e.key === "Enter") {
     e.preventDefault();
     const todos = [...document.querySelectorAll("#tr-corredores .tr-in:not([readonly])")];
@@ -3997,6 +4002,7 @@ async function _trVaciar() {
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && tr.asignar) { trTomarCoche(null); return; }
     if (!dentro(e)) return;
+    if (tr.ch && e.target === tr.ch.input && e.target.classList.contains("tr-res-trip") && trTeclaCh(e)) return;
     if (e.target.matches(".tr-nota, .tr-corr-nombre, .tr-res-coche, .tr-res-trip") && e.key === "Enter") { e.preventDefault(); e.target.blur(); return; }
     trTecla(e);
   });
@@ -4004,10 +4010,13 @@ async function _trVaciar() {
     if (!dentro(e)) { if (tr.sug && !e.target.closest?.(".tr-sug")) trCerrarSug(); return; }
     if (e.target.classList.contains("tr-chapa")) trAbrirSug(e.target);
     else if (tr.sug && e.target !== tr.sug.input) trCerrarSug();
+    if (e.target.matches(".tr-trip, .tr-res-trip")) trAbrirCh(e.target);
+    else if (tr.ch && e.target !== tr.ch.input) trCerrarCh();
   });
   document.addEventListener("focusout", e => {
     if (!dentro(e)) return;
     if (tr.sug && e.target === tr.sug.input) setTimeout(() => { if (tr.sug && document.activeElement !== tr.sug.input) trCerrarSug(); }, 120);
+    if (tr.ch && e.target === tr.ch.input) setTimeout(() => { if (tr.ch && document.activeElement !== tr.ch.input) trCerrarCh(); }, 120);
     // Si la columna quedó desordenada por una hora nueva, se acomoda al salir de ella
     const col = e.target.closest(".tr-col");
     if (col && tr.reordenar.size) setTimeout(() => {
@@ -4021,6 +4030,7 @@ async function _trVaciar() {
   });
   document.addEventListener("input", e => {
     if (tr.sug && e.target === tr.sug.input) { tr.sug.sel = -1; trPintarSug(); }
+    if (tr.ch && e.target === tr.ch.input) { tr.ch.sel = 0; trPintarCh(); }
   });
   document.addEventListener("click", e => { if (dentro(e) && tr.asignar) trClickFila(e); }, true);
   // Arrastrar un coche de "dónde amanecen" a una salida
@@ -4052,8 +4062,8 @@ async function _trVaciar() {
     if (coche) trPonerCoche(f, coche, trCandDesdePanel(coche));
   });
   // La ventanita de sugerencias acompaña a la casilla si se mueve la pantalla
-  window.addEventListener("resize", () => trUbicarSug());
-  document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); }, true);
+  window.addEventListener("resize", () => { trUbicarSug(); trUbicarCh(); });
+  document.addEventListener("scroll", () => { if (tr.sug) trUbicarSug(); if (tr.ch) trUbicarCh(); }, true);
 })();
 
 // ════════════════════════════════════════════════════════════════════════
@@ -24643,4 +24653,128 @@ async function caeRevisar(id) {
     ${r.turismo_parecidos.length ? `<div class="caer-dia"><div class="caer-cab"><b>Turismo</b><em style="color:#DC2641"><i class="ti ti-user-question"></i> Escrito distinto</em></div>
       <div class="caer-l"><span>En la agenda figura:</span> <b>${r.turismo_parecidos.map(trEsc).join(" · ")}</b></div>
       <div class="caer-q">Si es él, agregá ese nombre en «También figura como» (lápiz en la lista).</div></div>` : ""}`;
+}
+
+
+// ─── Tripulantes: se eligen de la lista de choferes ─────────────────────
+// Al entrar en la casilla aparece un buscador con los choferes que tienen
+// usuario. Elegido de ahí, el nombre queda igual al del usuario y el viaje
+// le aparece en la app seguro. Se puede escribir otro nombre igual (por
+// ejemplo «A CONF»), pero queda marcado: a ese no le llega nada.
+async function trCargarChoferes() {
+  const r = await api("/api/trafico/choferes").catch(() => null);
+  tr.choferes = (r && r.choferes ? r.choferes : []).map(c => ({ ...c, claves: [c.n, c.nombre, ...(c.alias || [])].map(trClaveP).filter(Boolean),
+    busca: trLlano(`${c.n} ${c.nombre} ${(c.alias || []).join(" ")} ${c.usuario}`) }));
+}
+function trLlano(t) { return String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase(); }
+function trClaveP(t) { return trLlano(t).replace(/[^A-Z0-9Ñ ]/g, " ").split(/\s+/).filter(Boolean).sort().join(" "); }
+// El mismo criterio que el servidor: igual, o con un segundo nombre / algo de más
+function trEsChofer(nombre, c) {
+  const k = trClaveP(nombre);
+  if (!k) return false;
+  if (c.claves.includes(k)) return true;
+  const tk = new Set(k.split(" ").filter(x => x.length > 1 && !/\d/.test(x)));
+  return c.claves.some(cl => { const tc = cl.split(" "); return tc.length >= 2 && tc.every(x => tk.has(x)) && tk.size - tc.length <= 2; });
+}
+function trChoferDe(nombre) { return (tr.choferes || []).find(c => trEsChofer(nombre, c)) || null; }
+
+function trMarcarTrips() {
+  if (!tr.choferes) return;
+  document.querySelectorAll("#tr-raiz .tr-trip, #tr-raiz .tr-res-trip").forEach(i => {
+    const v = (i.value || "").trim();
+    const ok = !v || /^A ?CONF/i.test(v) || !!trChoferDe(v);
+    i.classList.toggle("sin-usuario", !ok);
+    i.title = ok ? (v ? "Tiene usuario: le aparece en la app" : "") : "No coincide con ningún chofer con usuario: a este no le aparece el viaje en la app";
+  });
+}
+
+function trAbrirCh(input) {
+  if (!trPuede() || input.readOnly) return;
+  if (tr.ch?.input === input) return;
+  trCerrarCh();
+  const caja = document.createElement("div");
+  caja.className = "tr-sug tr-ch";
+  caja.addEventListener("mousedown", e => e.preventDefault());
+  document.body.appendChild(caja);
+  tr.ch = { input, caja, items: [], sel: 0 };
+  if (!tr.choferes) trCargarChoferes().then(() => { trPintarCh(); trMarcarTrips(); });
+  trPintarCh();
+}
+function trUbicarCh() {
+  const s = tr.ch;
+  if (!s) return;
+  const r = s.input.getBoundingClientRect();
+  const w = Math.min(340, window.innerWidth - 16);
+  s.caja.style.width = w + "px";
+  s.caja.style.left = Math.max(8, Math.min(r.left - 8, window.innerWidth - w - 8)) + "px";
+  const alto = s.caja.offsetHeight || 300, abajo = window.innerHeight - r.bottom;
+  if (abajo < alto + 16 && r.top > abajo) { s.caja.style.top = ""; s.caja.style.bottom = (window.innerHeight - r.top + 6) + "px"; }
+  else { s.caja.style.bottom = ""; s.caja.style.top = (r.bottom + 6) + "px"; }
+}
+function trPintarCh() {
+  const s = tr.ch;
+  if (!s) return;
+  const q = trLlano(s.input.value).trim();
+  const palabras = q.split(/\s+/).filter(Boolean);
+  const todos = tr.choferes || [];
+  // Los que ya van en la otra casilla de esta salida, al final
+  const lista = palabras.length
+    ? todos.filter(c => palabras.every(p => c.busca.split(/[\s,]+/).some(w => w.startsWith(p))))
+    : todos;
+  const exacto = q && lista.some(c => trEsChofer(s.input.value, c));
+  s.items = lista.slice(0, 40).map(c => ({ tipo: "ch", c }));
+  if (q && !exacto && !/^A ?CONF/.test(q)) s.items.push({ tipo: "libre", v: s.input.value.trim().toUpperCase() });
+  if (s.sel >= s.items.length) s.sel = Math.max(0, s.items.length - 1);
+  const ini = n => { const p = n.split(","); return ((p[1] || "").trim()[0] || "") + (p[0].trim()[0] || ""); };
+  s.caja.innerHTML = `
+    <div class="tr-sug-cab"><b>Elegí el chofer</b><span>${todos.length} con usuario · al elegirlo de acá le aparece el viaje en su app</span></div>
+    <div class="tr-ch-lista">${s.items.map((it, k) => it.tipo === "ch" ? `
+      <button class="tr-sug-it tr-ch-it ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-ch-av">${trEsc(ini(it.c.nombre))}</span>
+        <span class="tr-sug-txt"><span><b>${trEsc(it.c.nombre)}</b></span>
+          <small>${it.c.corp ? "Corporativo · " : ""}${it.c.app ? `<i class="ti ti-device-mobile-check"></i> tiene la app` : "todavía no confirmó la app"}${it.c.avisos ? " · avisos activos" : ""}</small></span>
+      </button>` : `
+      <button class="tr-sug-it tr-ch-libre ${k === s.sel ? "on" : ""}" data-k="${k}">
+        <span class="tr-ch-av sin"><i class="ti ti-alert-triangle"></i></span>
+        <span class="tr-sug-txt"><span>Poner «${trEsc(it.v)}» igual</span><small>No tiene usuario: no le va a aparecer el viaje en la app</small></span>
+      </button>`).join("") || `<div class="tr-sug-nada">${todos.length ? "Nadie con ese nombre." : "Todavía no hay choferes con usuario."}</div>`}</div>
+    <div class="tr-sug-pie"><kbd>↑</kbd><kbd>↓</kbd> elegir · <kbd>Enter</kbd> poner · <kbd>Esc</kbd> cerrar</div>`;
+  s.caja.querySelectorAll(".tr-sug-it").forEach(b => b.onclick = () => trElegirCh(+b.dataset.k));
+  trUbicarCh();
+}
+function trTeclaCh(e) {
+  const s = tr.ch;
+  if (!s) return false;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const n = s.items.length;
+    if (n) { s.sel = e.key === "ArrowDown" ? (s.sel + 1) % n : (s.sel - 1 + n) % n; trPintarCh(); s.caja.querySelector(".tr-sug-it.on")?.scrollIntoView({ block: "nearest" }); }
+    return true;
+  }
+  if (e.key === "Enter") {
+    if (!s.input.value.trim()) { trCerrarCh(); return false; }       // vacío: sigue como siempre (borra)
+    e.preventDefault(); trElegirCh(s.sel); return true;
+  }
+  if (e.key === "Escape") { trCerrarCh(); return false; }
+  return false;
+}
+async function trElegirCh(k) {
+  const s = tr.ch;
+  const it = s?.items[k];
+  if (!it) return;
+  const input = s.input;
+  trCerrarCh();
+  input.value = it.tipo === "ch" ? it.c.n : it.v;
+  await trGuardarCampo(input);
+  trMarcarTrips();
+  // y sigue con la casilla siguiente
+  if (input.classList.contains("tr-trip")) {
+    const todos = [...document.querySelectorAll("#tr-corredores .tr-in:not([readonly])")];
+    const sig = todos[todos.indexOf(input) + 1];
+    if (sig) sig.focus(); else input.blur();
+  } else input.blur();
+}
+function trCerrarCh() {
+  if (tr.ch?.caja) tr.ch.caja.remove();
+  tr.ch = null;
 }

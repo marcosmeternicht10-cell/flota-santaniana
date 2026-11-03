@@ -8565,3 +8565,12 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .caer-l { font-size: 12.5px; margin-top: 6px; line-height: 1.45; }
 .caer-l span { color: var(--muted); }
 .caer-q { font-size: 12.5px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(30,90,150,.08); color: var(--text); }
+
+/* Tráfico: buscador de choferes en las casillas de tripulante */
+.tr-ch-lista { max-height: 300px; overflow-y: auto; }
+.tr-ch-it, .tr-ch-libre { align-items: center; }
+.tr-ch-av { width: 32px; height: 32px; flex: none; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border);
+  display: grid; place-items: center; font-size: 11.5px; font-weight: 700; color: var(--text); }
+.tr-ch-av.sin { background: rgba(183,121,31,.12); border-color: transparent; color: #B7791F; font-size: 15px; }
+.tr-ch-it small i { color: #1F8A5B; }
+.tr-trip.sin-usuario, .tr-res-trip.sin-usuario { box-shadow: inset 0 -2px 0 #E0A12B; background-color: rgba(224,161,43,.08); }
