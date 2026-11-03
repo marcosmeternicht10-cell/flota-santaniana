@@ -24533,6 +24533,7 @@ function caeFilas(lista) {
       <td style="white-space:nowrap;text-align:right">
         ${linea ? `<button class="icon-btn" title="Ver su app" onclick="window.open('/mi?u=${c.id}','_blank')"><i class="ti ti-eye"></i></button>
         <button class="icon-btn" title="Cómo figura en las planillas" onclick="caeAlias(${c.id})"><i class="ti ti-pencil"></i></button>` : ""}
+        <button class="icon-btn" title="¿Por qué no le aparece su servicio?" onclick="caeRevisar(${c.id})"><i class="ti ti-zoom-question"></i></button>
         <button class="icon-btn" title="Mandarle un aviso de prueba" onclick="caeProbar(${c.id}, this)"><i class="ti ti-bell"></i></button>
         ${linea ? `<button class="icon-btn" title="Volver la clave a la fácil" onclick="caeClave(${c.id})"><i class="ti ti-key"></i></button>` : ""}
       </td></tr>`).join("")}</tbody></table></div>`;
@@ -24605,4 +24606,41 @@ function informeCoche(vid, desde, hasta) {
   if (desde) p.set("desde", desde);
   if (hasta) p.set("hasta", hasta);
   window.open(`/api/vehiculos/${vid}/informe.pdf${p.toString() ? "?" + p : ""}`, "_blank");
+}
+
+
+// ¿Por qué no le aparece su servicio? Revisa hoy, mañana y pasado, tráfico y turismo
+const CAE_EST = {
+  ok: ["Le aparece", "#1F8A5B", "circle-check"], sin_publicar: ["Día sin publicar", "#B7791F", "clock-pause"],
+  cambio_sin_publicar: ["Se lo agregó y no se republicó", "#B7791F", "refresh-alert"],
+  hay_cambios: ["Ve lo publicado (hay cambios sin publicar)", "#1E5A96", "info-circle"],
+  escrito_distinto: ["Está escrito distinto en la planilla", "#DC2641", "user-question"],
+  no_figura: ["No figura en la planilla", "#5B6B7F", "minus"],
+};
+async function caeRevisar(id) {
+  const o = rvModal({ titulo: "¿Por qué no le aparece?", icono: "zoom-question", ancho: 640,
+    cuerpo: `<div id="caer"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+          <button class="btn btn-primary" onclick="window.open('/mi?u=${id}','_blank')"><i class="ti ti-eye"></i> Ver su app</button>` });
+  const r = await api(`/api/choferes_app/${id}/revisar?dias=3`).catch(e => ({ ok: false, msg: e.message }));
+  if (!r || !r.ok) { o.querySelector("#caer").innerHTML = `<div class="empty">${trEsc((r && r.msg) || "No se pudo revisar")}</div>`; return; }
+  const dias = r.dias.map(d => {
+    const [t, col, ic] = CAE_EST[d.estado] || CAE_EST.no_figura;
+    return `<div class="caer-dia">
+      <div class="caer-cab"><b>${trEsc(d.dia.charAt(0).toUpperCase() + d.dia.slice(1))}</b><span>${d.tipo === "internacional" ? "Internacional" : "Nacional"} · ${d.publicado ? `publicado (versión ${d.version})` : "sin publicar"}</span>
+        <em style="color:${col}"><i class="ti ti-${ic}"></i> ${t}</em></div>
+      ${d.en_planilla.length ? `<div class="caer-l"><span>En la planilla:</span> ${d.en_planilla.map(trEsc).join(" · ")}</div>` : ""}
+      ${d.en_lo_publicado.length ? `<div class="caer-l"><span>En lo publicado (lo que ve él):</span> ${d.en_lo_publicado.map(trEsc).join(" · ")}</div>` : ""}
+      ${d.parecidos.length ? `<div class="caer-l"><span>Parecidos en la planilla:</span> <b>${d.parecidos.map(trEsc).join(" · ")}</b></div>` : ""}
+      ${d.que_hacer ? `<div class="caer-q">${trEsc(d.que_hacer)}</div>` : ""}</div>`;
+  }).join("");
+  o.querySelector("#caer").innerHTML = `
+    <div class="caer-yo"><b>${trEsc(r.nombre)}</b> · usuario <code>${trEsc(r.usuario)}</code> · ${r.celulares_con_avisos ? "avisos activos" : "sin avisos en el celular"}
+      <div>Lo busca en las planillas como: ${r.como_lo_busca.map(x => `<code>${trEsc(x)}</code>`).join(" ")}${r.alias ? "" : " · sin otros nombres cargados"}</div></div>
+    ${r.avisos.map(a => `<div class="caer-q" style="margin-bottom:10px">${trEsc(a)}</div>`).join("")}
+    ${dias || `<div class="empty" style="padding:20px">No hay tráfico armado para hoy ni los próximos días.</div>`}
+    ${r.turismo.length ? `<div class="caer-dia"><div class="caer-cab"><b>Turismo</b><em style="color:#1F8A5B"><i class="ti ti-circle-check"></i> Le aparece</em></div><div class="caer-l">${r.turismo.map(trEsc).join(" · ")}</div></div>` : ""}
+    ${r.turismo_parecidos.length ? `<div class="caer-dia"><div class="caer-cab"><b>Turismo</b><em style="color:#DC2641"><i class="ti ti-user-question"></i> Escrito distinto</em></div>
+      <div class="caer-l"><span>En la agenda figura:</span> <b>${r.turismo_parecidos.map(trEsc).join(" · ")}</b></div>
+      <div class="caer-q">Si es él, agregá ese nombre en «También figura como» (lápiz en la lista).</div></div>` : ""}`;
 }

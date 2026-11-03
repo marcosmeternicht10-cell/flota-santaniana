@@ -8553,3 +8553,15 @@ body.tt-arrastrando .tt-tacho { display: inline-flex; }
 .cae-barra > i { display: block; height: 100%; background: #1F8A5B; border-radius: 3px; transition: width .4s; }
 .cae-falta { color: #B7791F; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .cae-on { white-space: nowrap; }
+
+.caer-yo { font-size: 13px; padding: 12px 14px; border-radius: 12px; background: var(--surface2); border: 1px solid var(--border); margin-bottom: 12px; line-height: 1.6; }
+.caer-yo div { font-size: 12px; color: var(--muted); }
+.caer-yo code, .caer-dia code { font-size: 11.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; border: 1px solid var(--border); }
+.caer-dia { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.caer-cab { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+.caer-cab b { font-size: 14px; }
+.caer-cab span { font-size: 12px; color: var(--muted); }
+.caer-cab em { margin-left: auto; font-style: normal; font-weight: 600; font-size: 12.5px; display: inline-flex; gap: 4px; align-items: center; }
+.caer-l { font-size: 12.5px; margin-top: 6px; line-height: 1.45; }
+.caer-l span { color: var(--muted); }
+.caer-q { font-size: 12.5px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: rgba(30,90,150,.08); color: var(--text); }
