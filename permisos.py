@@ -50,7 +50,7 @@ GRUPOS_SECCIONES = [
         ("proveedores", "Proveedores"),
     ]),
     ("Tesorería", [
-        ("cajas", "Cajas (débitos y créditos)"),
+        ("cajas", "Tesorería: cajas, flujo, pagos, cheques y conciliación"),
     ]),
     ("Reportes", [
         ("gerencial", "Reporte gerencial"),
@@ -100,7 +100,7 @@ MODULOS_API = [
     ({"agencias"},
      ("/api/agencias",)),
     ({"cajas"},
-     ("/api/cajas",)),
+     ("/api/cajas", "/api/teso/")),
     ({"gerencial", "oee"},
      ("/api/reporte_gerencial", "/api/exportar_reporte_gerencial",
       "/api/dossier", "/api/oee")),
