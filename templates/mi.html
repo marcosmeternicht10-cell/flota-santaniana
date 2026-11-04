@@ -319,6 +319,7 @@
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+{% if not admin %}<script src="/static/confirmar_app.js?v=1" defer></script>{% endif %}
 
 <script>
 const ES_ADMIN = {{ 'true' if admin else 'false' }};
@@ -740,6 +741,9 @@ function admCambio() {
   history.replaceState(null, "", "/mi" + (p.toString() ? "?" + p : ""));
   if ($("adm-u").value) cargar();
 }
+
+// La confirmación obligatoria (confirmar_app.js): al confirmar, se saca la tarjeta
+addEventListener("app-confirmada", () => { pintarConfirmar(); pintarAvisar(); });
 
 // ── Arranque ─────────────────────────────────────────────────────────────
 if (ES_ADMIN) admIniciar(); else { cargar(); refrescarSuscripcion(); }
