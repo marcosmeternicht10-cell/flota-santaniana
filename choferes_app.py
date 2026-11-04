@@ -264,18 +264,37 @@ def _turismo(conn, desde, hasta):
 LADO_CORP = {"completo": "", "entrante": "entrada", "saliente": "salida", "variable": ""}
 
 
-def _corp(conn, usuario, desde, hasta):
-    """La asignación corporativa PUBLICADA de este chofer en el rango."""
+def es_mio_corp(x, usuario, claves):
+    """Si una fila de la asignación corporativa es de esta persona: por el
+    usuario con que se la asignó, o por el nombre (así le aparece aunque entre
+    con otro usuario, o si se la asignaron a su usuario viejo)."""
+    u = (x.get("chofer_usuario") or "").strip().lower()
+    if usuario and u and u == usuario:
+        return True
+    n = x.get("chofer_nombre") or ""
+    return bool(claves and n.strip() and coincide(n, claves))
+
+
+def _corp(conn, usuario, desde, hasta, claves=None, publicado=True):
+    """La asignación corporativa PUBLICADA de esta persona en el rango.
+    publicado=False: lo que está cargado ahora (borrador incluido), para la revisión."""
     usuario = str(usuario or "").strip().lower()
-    if not usuario:
+    if not usuario and not claves:
         return
     try:
         import corp_asignacion as CA
-        filas = conn.execute("""
-            SELECT d.fecha, v.datos FROM corp_asig_dias d
-            JOIN corp_asig_versiones v ON v.dia_id = d.id AND v.version = d.version
-            WHERE d.fecha >= ? AND d.fecha <= ? AND COALESCE(d.publicado_el,'') <> ''
-            ORDER BY d.fecha""", (desde, hasta)).fetchall()
+        if publicado:
+            filas = conn.execute("""
+                SELECT d.fecha, v.datos FROM corp_asig_dias d
+                JOIN corp_asig_versiones v ON v.dia_id = d.id AND v.version = d.version
+                WHERE d.fecha >= ? AND d.fecha <= ? AND COALESCE(d.publicado_el,'') <> ''
+                ORDER BY d.fecha""", (desde, hasta)).fetchall()
+        else:
+            filas = []
+            for r in conn.execute("SELECT id, fecha FROM corp_asig_dias WHERE fecha >= ? AND fecha <= ? ORDER BY fecha",
+                                  (desde, hasta)).fetchall():
+                fs = [dict(x) for x in conn.execute("SELECT * FROM corp_asig WHERE dia_id=?", (r["id"],)).fetchall()]
+                filas.append({"fecha": r["fecha"], "datos": json.dumps({"filas": fs, "horarios": {}})})
     except Exception:
         try:
             conn.rollback()
@@ -289,7 +308,7 @@ def _corp(conn, usuario, desde, hasta):
             continue
         horarios = foto.get("horarios") or {}
         for k, x in enumerate(foto.get("filas") or []):
-            if (x.get("chofer_usuario") or "").strip().lower() != usuario or x.get("lado") == "no_corre":
+            if x.get("lado") == "no_corre" or not es_mio_corp(x, usuario, claves):
                 continue
             h = horarios.get(f"{x.get('cliente')}|{x.get('tramo')}")
             hora = hora_fin = ""
@@ -330,8 +349,7 @@ def proximos(conn, claves, hoy, usuario_corp=None):
         it = _para(s, claves)
         if it:
             items.append(it)
-    if usuario_corp:
-        items.extend(_corp(conn, usuario_corp, hoy, hasta))
+    items.extend(_corp(conn, usuario_corp, hoy, hasta, claves))
     items.sort(key=lambda x: (x["fecha"], x["hora"] or "99", x["origen"]))
     return items
 
@@ -399,13 +417,12 @@ def produccion(conn, claves, mes, hoy, hasta_dia=None, usuario_corp=None):
             d += timedelta(days=1)
     # Corporativos: lo asignado y publicado (hasta hoy cuenta como hecho)
     corp_h = corp_p = 0
-    if usuario_corp:
-        for it in _corp(conn, usuario_corp, ini.isoformat(), fin.isoformat()):
-            if it["fecha"] <= tope_hecho:
-                corp_h += 1
-                por_dia[it["fecha"]] = por_dia.get(it["fecha"], 0) + 1
-            elif not hasta_dia:
-                corp_p += 1
+    for it in _corp(conn, usuario_corp, ini.isoformat(), fin.isoformat(), claves):
+        if it["fecha"] <= tope_hecho:
+            corp_h += 1
+            por_dia[it["fecha"]] = por_dia.get(it["fecha"], 0) + 1
+        elif not hasta_dia:
+            corp_p += 1
     km_conocidos = [s["km"] for s in hechos if s["km"]]
     return {
         "mes": mes, "mes_txt": f"{MESES[ini.month - 1].capitalize()} {ini.year}",
@@ -443,6 +460,11 @@ def _comparar(conn, claves, mes, hoy, usuario_corp=None):
 def _firma(items):
     return sorted((i.get("hora") or "", i.get("desde") or "", i.get("hasta") or "", i.get("coche") or "",
                    i.get("lado") or "", i.get("corredor") or "", tuple(sorted(i.get("con") or []))) for i in items)
+
+
+def _linea_corp(it):
+    return " · ".join(x for x in (it.get("hora"), f"{it.get('cliente')} {it.get('tramo')}".strip(), it.get("lado"),
+                                  f"coche {it['coche']}" if it.get("coche") else "") if x)
 
 
 def _linea_aviso(it):
@@ -506,6 +528,7 @@ def avisar_corp(fecha):
                              WHERE d.fecha=? ORDER BY v.version DESC LIMIT 2""", (fecha,)).fetchall()
         usuarios = {r["usuario"]: r["id"] for r in conn.execute(
             "SELECT id, usuario FROM usuarios WHERE COALESCE(activo,1)=1").fetchall()}
+        trips = tripulantes(conn, con_corp=True)
     finally:
         conn.close()
     if not vs:
@@ -522,6 +545,14 @@ def avisar_corp(fecha):
         return d
 
     pn, pv = por_chofer(nueva), por_chofer(vieja)
+    # La misma persona con otro usuario (el de línea): le llega también, por el nombre
+    otros = {}
+    for x in ((nueva or {}).get("filas") or []) + ((vieja or {}).get("filas") or []):
+        u = (x.get("chofer_usuario") or "").strip().lower()
+        if not u or u in otros:
+            continue
+        otros[u] = [t["id"] for t in trips if t["usuario"].lower() != u and x.get("chofer_nombre")
+                    and coincide(x["chofer_nombre"], t["claves"])]
     con_cel = push.con_avisos()
     nombres = {}
     for x in ((nueva or {}).get("filas") or []):
@@ -546,7 +577,9 @@ def avisar_corp(fecha):
                               (f" · Coche {x['coche']}" if x.get("coche") else ""))
             cuerpo = "\n".join(lineas)
         avisos.append((uid, titulo, cuerpo, "/mi", f"corp-{fecha}"))
-        if not con_cel.get(uid):
+        for o in otros.get(u, []):
+            avisos.append((o, titulo, cuerpo, "/mi", f"corp-{fecha}"))
+        if not con_cel.get(uid) and not any(con_cel.get(o) for o in otros.get(u, [])):
             sin_app.append(nombres.get(u) or u)
     push.enviar_varios(avisos)
     return {"avisados": len(avisos) - len(sin_app), "sin_app": sorted(sin_app)}
@@ -1175,6 +1208,42 @@ def revisar(uid, dias=3):
                     tur_par.add(t)
         res["turismo"] = tur
         res["turismo_parecidos"] = sorted(tur_par)
+        # Asignación corporativa de esos días
+        usu = u["usuario"].lower()
+        corp = []
+        for n in range(dias):
+            fecha = (date.fromisoformat(hoy) + timedelta(days=n)).isoformat()
+            try:
+                dia = conn.execute("""SELECT id, version, COALESCE(publicado_el,'') AS publicado_el, COALESCE(modificado,0) AS modificado
+                                      FROM corp_asig_dias WHERE fecha=?""", (fecha,)).fetchone()
+            except Exception:
+                conn.rollback()
+                dia = None
+            if not dia:
+                continue
+            ahora_ = [_linea_corp(i) for i in _corp(conn, usu, fecha, fecha, claves, publicado=False)]
+            publ = [_linea_corp(i) for i in _corp(conn, usu, fecha, fecha, claves)]
+            par = set()
+            for f_ in conn.execute("SELECT chofer_usuario, chofer_nombre FROM corp_asig WHERE dia_id=?", (dia["id"],)).fetchall():
+                if f_["chofer_nombre"] and not es_mio_corp(dict(f_), usu, claves) and _parecido(f_["chofer_nombre"], claves):
+                    par.add(f"{f_['chofer_nombre']} (usuario {f_['chofer_usuario']})")
+            estado, que_hacer = "ok", ""
+            if not ahora_ and not publ:
+                estado, que_hacer = ("escrito_distinto", "En la asignación hay alguien parecido. Si es él, unilos (botón de unir) "
+                                     "o agregá ese nombre en «También figura como».") if par else ("no_figura", "No tiene asignación corporativa ese día.")
+            elif not dia["publicado_el"]:
+                estado, que_hacer = "sin_publicar", "Tiene asignación pero el día no se publicó. Publicalo en Asignación de corporativos."
+            elif ahora_ and not publ:
+                estado, que_hacer = "cambio_sin_publicar", "Se lo asignó después de publicar. Publicá de nuevo la asignación."
+            elif dia["modificado"]:
+                estado, que_hacer = "hay_cambios", "Ve lo publicado. Hay cambios sin publicar: publicá de nuevo para que vea lo último."
+            if estado == "no_figura" and not par:
+                continue
+            corp.append({"fecha": fecha, "dia": _dia_txt(fecha, hoy), "tipo": "corporativo", "existe": True,
+                         "publicado": bool(dia["publicado_el"]), "version": dia["version"], "en_planilla": ahora_,
+                         "en_lo_publicado": publ, "parecidos": sorted(par), "estado": estado, "que_hacer": que_hacer})
+        res["dias"].extend(corp)
+        res["dias"].sort(key=lambda x: (x["fecha"], x["tipo"]))
         import push
         res["celulares_con_avisos"] = push.con_avisos([uid]).get(uid, 0)
     finally:

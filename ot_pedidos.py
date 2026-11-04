@@ -978,6 +978,51 @@ def api_pendientes():
     return jsonify(pendientes())
 
 
+def del_coche(vehiculo_id, lineas=None):
+    """Los pedidos de los choferes de este coche que todavía no se decidieron
+    (nuevos, para más adelante o con turno), para avisar en «Nueva OT» antes de
+    cargar lo mismo dos veces. Con las líneas que se están escribiendo, marca
+    cuál parece el mismo pedido."""
+    lineas = [str(x or "") for x in (lineas or [])][:80]
+    conn = get_connection()
+    try:
+        filas = [dict(r) for r in conn.execute(
+            """SELECT p.id, p.descripcion, p.tipo, p.estado, p.sugerida, p.prioridad, p.revisar_el, p.nota,
+                      COALESCE(p.fecha_mantenimiento,'') AS fecha_turno, r.chofer, r.fecha, r.km
+               FROM ot_pedidos p JOIN ot_pedido_reportes r ON r.id = p.reporte_id
+               WHERE p.vehiculo_id = ? AND p.estado IN ('nuevo', 'espera', 'agendado')
+               ORDER BY r.fecha DESC, p.id DESC""", (int(vehiculo_id),)).fetchall()]
+    finally:
+        conn.close()
+    out = []
+    for f in filas:
+        pal = _palabras(f["descripcion"])
+        f["parecido_a"] = [i for i, l in enumerate(lineas) if pal and pal & _palabras(l)]
+        f["prioridad"] = f["prioridad"] or f["sugerida"] or "normal"
+        f["se_puede_pasar"] = f["estado"] != "agendado"
+        out.append(f)
+    return out
+
+
+def _puede_ver_coche():
+    return session.get("rol") in ("admin", "taller", "compras")
+
+
+@bp_ot_pedidos.route("/api/ot_pedidos/del_coche", methods=["POST"])
+def api_del_coche():
+    """Para «Nueva OT»: los pedidos sin decidir de ese coche."""
+    if not _puede_ver_coche():
+        return _no()
+    d = request.get_json(silent=True) or {}
+    try:
+        vid = int(d.get("vehiculo_id") or 0)
+    except (TypeError, ValueError):
+        vid = 0
+    if not vid:
+        return jsonify({"ok": True, "pedidos": []})
+    return jsonify({"ok": True, "pedidos": del_coche(vid, d.get("lineas")), "puede_pasar": _puede_ver()})
+
+
 @bp_ot_pedidos.route("/api/ot_pedidos/decidir", methods=["POST"])
 def api_decidir():
     if not _puede_ver():
