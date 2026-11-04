@@ -7534,8 +7534,10 @@ Control general"></textarea>
   overlay.addEventListener("click", e => { if (e.target === overlay) cerrarModalOT(); });
   window._vehiculosOT = vehiculos;
   window._otNuevaK = 1;
-  overlay.querySelector("#bc-ot-veh").closest(".form-row").insertAdjacentHTML("afterend", '<div class="ot-ya-abierta" id="ot-ya-ot-veh" hidden></div>');
+  overlay.querySelector("#bc-ot-veh").closest(".form-row").insertAdjacentHTML("afterend", '<div class="ot-ya-abierta" id="ot-ya-ot-veh" hidden></div><div id="ot-ped-ot-veh"></div>');
   window["_cocheCB_ot-veh"] = vid => otAvisoAbierta("ot-veh", vid);
+  window._otPed = {};
+  $("#ot-items-raw").addEventListener("input", () => otPedRevisar("ot-veh"));
   otChoferesLista().then(() => acNombres($("#ot-cond"), () => window._choferesOT));
 }
 
@@ -7548,6 +7550,7 @@ async function otAvisoAbierta(id, vid) {
   // El botón dice qué va a pasar: abrir una OT o sumar a la que ya tiene
   const boton = id === "ot-veh" ? document.querySelector("#modal-ot .btn-primary[onclick^='guardarNuevaOT']") : null;
   if (boton) boton.innerHTML = '<i class="ti ti-device-floppy"></i> Crear OT';
+  otPedidosDelCoche(id, vid);
   if (!vid) return;
   const a = await api(`/api/ots/abierta?vehiculo_id=${vid}`);
   if (!a || !a.ot_id || String(document.getElementById(id)?.value) !== String(vid)) return;
@@ -7557,6 +7560,82 @@ async function otAvisoAbierta(id, vid) {
     <b>OT #${a.numero}</b> (desde el ${trEsc(String(a.desde || "").slice(8, 10) + "/" + String(a.desde || "").slice(5, 7))},
     ${a.pendientes} trabajo${a.pendientes === 1 ? "" : "s"} sin terminar). Lo que cargues <b>se suma a esa OT</b>, con la fecha de hoy.</span>`;
   caja.hidden = false;
+}
+
+// Lo que los choferes ya pidieron para ese coche y nadie decidió todavía
+// (Pedidos de choferes): se avisa al elegir el coche, vienen marcados para
+// pasar a esta OT, y si lo que se escribe parece lo mismo, se marca.
+function otPedTexto(id) {
+  const caja = document.getElementById("ot-ped-" + id);
+  if (!caja) return "";
+  if (id === "ot-veh") return $("#ot-items-raw")?.value || "";
+  return caja.closest(".ot-nc")?.querySelector(".ot-nc-items")?.value || "";
+}
+async function otPedidosDelCoche(id, vid) {
+  const caja = document.getElementById("ot-ped-" + id);
+  if (!caja) return;
+  window._otPed = window._otPed || {};
+  delete window._otPed[id];
+  caja.innerHTML = "";
+  if (!vid) return;
+  const r = await api("/api/ot_pedidos/del_coche", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehiculo_id: vid, lineas: otLineas(otPedTexto(id)).map(x => x.descripcion) }) }).catch(() => null);
+  if (!r || !r.ok || String(document.getElementById(id)?.value) !== String(vid)) return;
+  window._otPed[id] = { vid, pedidos: r.pedidos, puede: !!r.puede_pasar, sacados: new Set() };
+  otPedPintar(id);
+}
+function otPedPintar(id) {
+  const caja = document.getElementById("ot-ped-" + id), st = (window._otPed || {})[id];
+  if (!caja) return;
+  if (!st || !st.pedidos.length) { caja.innerHTML = ""; return; }
+  const lineas = otLineas(otPedTexto(id)).map(x => x.descripcion);
+  const v = (window._vehiculosOT || []).find(x => x.id === st.vid) || {};
+  const n = st.pedidos.length, PR = { urgente: "Urgente", alta: "Alta", normal: "Normal", baja: "Baja" };
+  const est = p => p.estado === "agendado" ? `con turno${p.fecha_turno ? " el " + trEsc(ptFC(p.fecha_turno)) : ""}` : p.estado === "espera" ? `para más adelante${p.revisar_el ? " (" + trEsc(ptFC(p.revisar_el)) + ")" : ""}` : "nuevo";
+  caja.innerHTML = `<div class="ot-ped-caja">
+    <div class="ot-ped-cab"><i class="ti ti-inbox"></i><div><b>Ojo: el coche ${trEsc(v.n_interno || v.patente || "")} ya tiene ${n} pedido${n === 1 ? "" : "s"} de choferes sin decidir</b>
+      <span>${st.puede ? "Seguramente es lo mismo que vas a cargar. Los marcados <b>pasan a esta OT</b> y salen de Pedidos de choferes; no hace falta escribirlos de nuevo."
+                       : "Seguramente es lo mismo que vas a cargar. Para pasarlos a la OT, alguien de taller lo hace desde Pedidos de choferes."}</span></div></div>
+    ${st.pedidos.map(p => {
+      const par = (p.parecido_a || []).length ? lineas[p.parecido_a[0]] : "";
+      const marcado = st.puede && p.se_puede_pasar && !st.sacados.has(p.id);
+      return `<label class="ot-ped ${par ? "par" : ""} ${p.se_puede_pasar && st.puede ? "" : "fijo"}">
+        <input type="checkbox" data-pid="${p.id}" ${marcado ? "checked" : ""} ${p.se_puede_pasar && st.puede ? "" : "disabled"} onchange="otPedMarcar('${id}', ${p.id}, this.checked)">
+        <span class="ot-ped-d"><b>${trEsc(p.descripcion)}</b><small>${trEsc(p.chofer || "Chofer")} · ${trEsc(ptFC(p.fecha))} · ${est(p)} · <span class="pd-prio-chip ${p.prioridad}">${PR[p.prioridad] || ""}</span></small>
+          ${par ? `<em><i class="ti ti-copy"></i> Parece lo mismo que escribiste: «${trEsc(par)}»</em>` : ""}</span>
+      </label>`;
+    }).join("")}
+  </div>`;
+}
+function otPedMarcar(id, pid, si) {
+  const st = (window._otPed || {})[id];
+  if (!st) return;
+  si ? st.sacados.delete(pid) : st.sacados.add(pid);
+}
+// Mientras se escribe, volver a marcar los parecidos (sin trabarse)
+function otPedRevisar(id) {
+  const st = (window._otPed || {})[id];
+  if (!st || !st.pedidos.length) return;
+  clearTimeout(st.t);
+  st.t = setTimeout(async () => {
+    const r = await api("/api/ot_pedidos/del_coche", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vehiculo_id: st.vid, lineas: otLineas(otPedTexto(id)).map(x => x.descripcion) }) }).catch(() => null);
+    if (r && r.ok && window._otPed[id] === st) { st.pedidos = r.pedidos; otPedPintar(id); }
+  }, 450);
+}
+// Los pedidos marcados para pasar a la OT, y las líneas escritas que parecen repetidas
+function otPedElegidos() {
+  const ids = [], repetidos = [];
+  for (const [id, st] of Object.entries(window._otPed || {})) {
+    if (!st.puede) continue;
+    const lineas = otLineas(otPedTexto(id)).map(x => x.descripcion);
+    for (const p of st.pedidos) {
+      if (!p.se_puede_pasar || st.sacados.has(p.id)) continue;
+      ids.push(p.id);
+      (p.parecido_a || []).forEach(i => lineas[i] && repetidos.push(`«${lineas[i]}» y el pedido de ${p.chofer || "un chofer"}: «${p.descripcion}»`));
+    }
+  }
+  return { ids, repetidos };
 }
 
 // Otro coche en la OT nueva: su coche, km, chofer y trabajos
@@ -7572,8 +7651,8 @@ function otNuevaCocheMas() {
         <div class="field"><label>KM</label><input class="ot-nc-km" placeholder="765387" style="width:110px"></div>
         <div class="field" style="flex:1;min-width:160px"><label>Conductor</label><input class="ot-nc-cond" autocomplete="off" placeholder="Opcional"></div>
       </div>
-      <div class="ot-ya-abierta" id="ot-ya-ot-veh-${k}" hidden></div>
-      <textarea class="ot-nc-items" rows="4" placeholder="Trabajos de este coche, uno por línea"></textarea>
+      <div class="ot-ya-abierta" id="ot-ya-ot-veh-${k}" hidden></div><div id="ot-ped-ot-veh-${k}"></div>
+      <textarea class="ot-nc-items" rows="4" placeholder="Trabajos de este coche, uno por línea" oninput="otPedRevisar('ot-veh-${k}')"></textarea>
     </div>`);
   const bloque = box.lastElementChild;
   window["_cocheCB_ot-veh-" + k] = vid => otAvisoAbierta("ot-veh-" + k, vid);
@@ -7582,7 +7661,9 @@ function otNuevaCocheMas() {
   bloque.querySelector(".bcoche-input")?.focus();
 }
 function otNuevaCocheQuitar(btn) {
-  btn.closest(".ot-nc").remove();
+  const b = btn.closest(".ot-nc"), h = b.querySelector('input[type="hidden"]');
+  if (h && window._otPed) delete window._otPed[h.id];
+  b.remove();
   otNuevaNumerar();
 }
 function otNuevaNumerar() {
@@ -7637,6 +7718,10 @@ async function guardarNuevaOT() {
                  conductor: b.querySelector(".ot-nc-cond").value.trim() });
   }
 
+  // Pedidos de choferes del coche que pasan a esta OT
+  const ped = otPedElegidos();
+  if (ped.repetidos.length && !confirm(`Esto parece cargado dos veces:\n\n• ${ped.repetidos.slice(0, 5).join("\n• ")}\n\nEl pedido del chofer ya pasa a la OT. Si es lo mismo, borrá la línea que escribiste (o desmarcá el pedido).\n\n¿Crear igual?`)) return;
+
   const r = await api("/api/ots", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -7650,10 +7735,18 @@ async function guardarNuevaOT() {
     })
   });
   if (r.ok) {
+    let pasados = 0;
+    if (ped.ids.length) {
+      const rp = await api("/api/ot_pedidos/decidir", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: ped.ids, accion: "aceptar" }) }).catch(() => null);
+      if (rp && rp.ok) { pasados = (rp.resultado || []).length; if (typeof pdActualizarBadge === "function") pdActualizarBadge(rp.pendientes); }
+      else toast("La OT se creó, pero los pedidos de los choferes no se pudieron pasar: hacelo desde Pedidos de choferes", "error");
+    }
     const n = items.length + extra.reduce((s, e) => s + e.items.length, 0);
+    const mas = pasados ? ` · ${pasados} pedido${pasados === 1 ? "" : "s"} de choferes pasado${pasados === 1 ? "" : "s"}` : "";
     toast(r.sumada
-      ? `Se sumó${n ? ` ${n} trabajo${n === 1 ? "" : "s"}` : ""} a la OT #${r.numero || r.ot_id}, que el coche ya tenía abierta`
-      : `OT #${r.ot_id} creada${extra.length ? ` con ${extra.length + 1} coches` : ""} · ${n} trabajo${n === 1 ? "" : "s"}`, "success");
+      ? `Se sumó${n ? ` ${n} trabajo${n === 1 ? "" : "s"}` : ""} a la OT #${r.numero || r.ot_id}, que el coche ya tenía abierta${mas}`
+      : `OT #${r.ot_id} creada${extra.length ? ` con ${extra.length + 1} coches` : ""} · ${n} trabajo${n === 1 ? "" : "s"}${mas}`, "success");
     cerrarModalOT();
     await renderOts();
     abrirOT(r.ot_id);              // para cargar el material y los técnicos
@@ -24901,9 +24994,9 @@ async function caeRevisar(id) {
   const dias = r.dias.map(d => {
     const [t, col, ic] = CAE_EST[d.estado] || CAE_EST.no_figura;
     return `<div class="caer-dia">
-      <div class="caer-cab"><b>${trEsc(d.dia.charAt(0).toUpperCase() + d.dia.slice(1))}</b><span>${d.tipo === "internacional" ? "Internacional" : "Nacional"} · ${d.publicado ? `publicado (versión ${d.version})` : "sin publicar"}</span>
+      <div class="caer-cab"><b>${trEsc(d.dia.charAt(0).toUpperCase() + d.dia.slice(1))}</b><span>${d.tipo === "internacional" ? "Tráfico internacional" : d.tipo === "corporativo" ? "Asignación corporativa" : "Tráfico nacional"} · ${d.publicado ? `publicado (versión ${d.version})` : "sin publicar"}</span>
         <em style="color:${col}"><i class="ti ti-${ic}"></i> ${t}</em></div>
-      ${d.en_planilla.length ? `<div class="caer-l"><span>En la planilla:</span> ${d.en_planilla.map(trEsc).join(" · ")}</div>` : ""}
+      ${d.en_planilla.length ? `<div class="caer-l"><span>${d.tipo === "corporativo" ? "En la asignación:" : "En la planilla:"}</span> ${d.en_planilla.map(trEsc).join(" · ")}</div>` : ""}
       ${d.en_lo_publicado.length ? `<div class="caer-l"><span>En lo publicado (lo que ve él):</span> ${d.en_lo_publicado.map(trEsc).join(" · ")}</div>` : ""}
       ${d.parecidos.length ? `<div class="caer-l"><span>Parecidos en la planilla:</span> <b>${d.parecidos.map(trEsc).join(" · ")}</b></div>` : ""}
       ${d.que_hacer ? `<div class="caer-q">${trEsc(d.que_hacer)}</div>` : ""}</div>`;
