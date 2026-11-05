@@ -529,9 +529,9 @@ function pintarMes() {
       <div class="num">${m.servicios}<span>servicio${m.servicios === 1 ? "" : "s"}</span></div>
       ${delta}${prog ? `<div class="prog">${prog}</div>` : ""}${desglose}</div>
     <div class="grilla">
-      ${datoHTML("ti-route", m.km ? miles(m.km) : "—", m.km ? `km recorridos${m.km_completo ? "" : " (aprox.)"}` : "km recorridos")}
+      ${S.d.corp ? "" : datoHTML("ti-route", m.km ? miles(m.km) : "—", m.km ? `km recorridos${m.km_completo ? "" : " (aprox.)"}` : "km recorridos")}
       ${datoHTML("ti-calendar-check", m.dias, `día${m.dias === 1 ? "" : "s"} trabajado${m.dias === 1 ? "" : "s"}`)}
-      ${datoHTML("ti-bolt", m.refuerzos, `refuerzo${m.refuerzos === 1 ? "" : "s"}`)}
+      ${S.d.corp ? "" : datoHTML("ti-bolt", m.refuerzos, `refuerzo${m.refuerzos === 1 ? "" : "s"}`)}
       ${datoHTML("ti-bus", m.coches, `coche${m.coches === 1 ? "" : "s"} distinto${m.coches === 1 ? "" : "s"}`)}
     </div>`;
   if (m.internacional) {
@@ -544,7 +544,7 @@ function pintarMes() {
       <div class="tope" style="grid-template-columns:repeat(${Math.max(x.tope, x.viajes)},1fr)">${celdas.join("")}</div>
       <p>${x.hechos} hecho${x.hechos === 1 ? "" : "s"}${x.viajes > x.hechos ? ` · ${x.viajes - x.hechos} programado${x.viajes - x.hechos === 1 ? "" : "s"}` : ""} · ${queda > 0 ? `te queda${queda === 1 ? "" : "n"} ${queda}` : queda === 0 ? "llegaste al tope del mes" : `pasaste el tope por ${-queda}`}. Ida y vuelta cuentan como un viaje.</p></div>`;
   }
-  html += `<div class="sec"><h2>Días trabajados</h2><span>${m.dias} de ${new Date(m.hasta + "T12:00").getDate()}</span></div>
+  if (!S.d.corp) html += `<div class="sec"><h2>Días trabajados</h2><span>${m.dias} de ${new Date(m.hasta + "T12:00").getDate()}</span></div>
     <div class="tarj entra">${calendarioHTML(m)}
     <div class="leyenda">menos <i style="background:var(--dot0)"></i><i style="background:var(--dot1)"></i><i style="background:var(--dot2)"></i><i style="background:var(--dot3)"></i> más</div></div>`;
   if (m.tramos.length) {
