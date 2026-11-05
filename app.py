@@ -463,8 +463,9 @@ def proteger_rutas():
     # (sus viajes de tráfico, turismo y corporativos, y su mes).
     if session.get("rol") == "chofer_corp":
         permitido = (
-            p == "/" or p == "/corp" or p == "/mi" or
+            p == "/" or p == "/corp" or p == "/mi" or p == "/chofer" or
             p.startswith("/api/corp/") or p.startswith("/api/mi/") or
+            p.startswith("/api/chofer/") or   # reportar una falla del coche (va a Pedidos de choferes)
             p.startswith("/api/push/") or     # avisos al celular
             p.startswith("/static/") or
             p == "/api/logout" or p == "/api/me" or
@@ -639,7 +640,8 @@ def pantalla_gerencia():
 def pantalla_chofer():
     """Pantalla simplificada para que el chofer cargue su reporte/OT."""
     html = render_template("chofer.html",
-                           usuario=session.get("nombre") or session.get("usuario"))
+                           usuario=session.get("nombre") or session.get("usuario"),
+                           es_corp=session.get("rol") == "chofer_corp")
     resp = make_response(html)
     # Forzar que el navegador (sobre todo Safari/iPhone) no use caché viejo
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
