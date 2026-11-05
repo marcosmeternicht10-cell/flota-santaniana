@@ -376,6 +376,7 @@ def _armar(fecha, dia, filas, act, rends, horarios=None):
             continue
         clientes.append({"cliente": cliente, "opera": opera, "tramos": tramos, "variables": variables,
                          "otros": otros, "tipos_variable": _tipos_variable(cliente),
+                         "variables_a_completar": max(0, VARIABLES_DEL_DIA.get(cliente, 0) - len(variables)) if opera else 0,
                          "cuenta": _cuenta(tramos)})
 
     control = _control(fecha, clientes, rends) if rends is not None else None
@@ -398,6 +399,12 @@ def _armar(fecha, dia, filas, act, rends, horarios=None):
         "existe": bool(dia), "dia": dia, "borrador": borrador if dia else True,
         "clientes": clientes, "resumen": resumen, "control": control,
     }
+
+
+# Variables que un cliente suele tener todos los días que opera: aparecen
+# listos para completar (solo se les pone el horario). No se guardan ni se
+# publican hasta que se les pone la hora.
+VARIABLES_DEL_DIA = {"ADM": 2}
 
 
 def _tipos_variable(cliente):
