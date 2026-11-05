@@ -312,7 +312,7 @@
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-{% if not admin %}<script src="/static/confirmar_app.js?v=1" defer></script>{% endif %}
+{% if not admin %}<script src="/static/confirmar_app.js?v=1" defer></script><script src="/static/acuse_asig.js?v=1" defer></script>{% endif %}
 
 <script>
 const ES_ADMIN = {{ 'true' if admin else 'false' }};
@@ -654,6 +654,7 @@ function admCambio() {
 
 // La confirmación obligatoria (confirmar_app.js): al confirmar, se saca la tarjeta
 addEventListener("app-confirmada", () => { pintarConfirmar(); pintarAvisar(); });
+addEventListener("asignacion-recibida", () => cargar());
 
 // ── Arranque ─────────────────────────────────────────────────────────────
 if (ES_ADMIN) admIniciar(); else { cargar(); refrescarSuscripcion(); }
