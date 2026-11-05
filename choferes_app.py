@@ -5,8 +5,7 @@ Cada chofer de tráfico (nacional e internacional) y de turismo entra desde el
 celular y ve:
   · el servicio que le toca (lo que la oficina ya PUBLICÓ, nunca el borrador),
   · lo que viene en los próximos días,
-  · su producción del mes: servicios, km, días trabajados, refuerzos, viajes
-    internacionales contra el tope, y turismo.
+  (la pestaña «Mi mes» se sacó: los choferes no ven su producción).
 Y le llega una notificación al celular cuando se publica su servicio.
 
 Quién es quién: en las planillas el chofer figura por nombre ("JUAN PEREZ",
@@ -438,6 +437,13 @@ def produccion(conn, claves, mes, hoy, hasta_dia=None, usuario_corp=None):
                                                                    "hasta", "coche", "dias", "hecho")} for t in tur],
         "desde": ini.isoformat(), "hasta": fin.isoformat(), "hoy": hoy,
     }
+
+
+def _sin_km(p):
+    """Los corporativos no ven los km recorridos ni el calendario de días."""
+    if p:
+        p["km"], p["km_completo"], p["por_dia"] = None, True, {}
+    return p
 
 
 def _resumen_corto(p, a_la_altura=False):
@@ -892,8 +898,6 @@ def api_inicio():
     conn = get_connection()
     try:
         prox = proximos(conn, yo["claves"], hoy, yo["corp"])
-        mes = produccion(conn, yo["claves"], hoy[:7], hoy, usuario_corp=yo["corp"])
-        ant = _comparar(conn, yo["claves"], hoy[:7], hoy, yo["corp"])
     finally:
         conn.close()
     pila = (yo["nombre"].split(",", 1)[-1] if "," in yo["nombre"] else yo["nombre"].split()[0]).strip().split()[0]
@@ -902,25 +906,7 @@ def api_inicio():
     return jsonify({"ok": True, "hoy": hoy, "ahora": ahora, "hoy_txt": _dia_largo(hoy), "nombre": yo["nombre"],
                     "pila": pila.capitalize(), "usuario_id": yo["id"], "corp": bool(yo["corp"]),
                     "proximos": [dict(i, dia_txt=_dia_txt(i["fecha"], hoy), dia_largo=_dia_largo(i["fecha"]))
-                                 for i in prox],
-                    "mes": mes, "anterior": ant})
-
-
-@bp_choferes_app.route("/api/mi/mes", methods=["GET"])
-def api_mes():
-    yo, hoy = _yo()
-    if not yo:
-        return jsonify({"ok": False}), 403
-    mes = request.args.get("mes") or hoy[:7]
-    if not re.match(r"^\d{4}-\d{2}$", mes):
-        return jsonify({"ok": False, "msg": "Mes inválido"}), 400
-    conn = get_connection()
-    try:
-        p = produccion(conn, yo["claves"], mes, hoy, usuario_corp=yo["corp"])
-        a = _comparar(conn, yo["claves"], mes, hoy, yo["corp"])
-    finally:
-        conn.close()
-    return jsonify({"ok": True, "mes": p, "anterior": a})
+                                 for i in prox]})
 
 
 # ── Para el admin: los accesos ──────────────────────────────────────────────
