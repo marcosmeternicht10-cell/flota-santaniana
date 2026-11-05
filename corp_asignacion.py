@@ -394,7 +394,13 @@ def _armar(fecha, dia, filas, act, rends, horarios=None):
         "coches": len({_coche_norm(s["coche"]) for s in todos_slots if s.get("coche")}),
     }
     borrador = bool(dia and (dia["modificado"] or not dia["version"]))
+    try:                                   # quién confirmó que recibió lo publicado
+        from choferes_app import estado_acuses
+        acuses = estado_acuses(fecha) if dia and dia["version"] else {}
+    except Exception:
+        acuses = {}
     return {
+        "acuses": acuses,
         "fecha": fecha, "hoy": _hoy(), "nombre_dia": _nombre_dia(fecha), "dia_semana": w,
         "existe": bool(dia), "dia": dia, "borrador": borrador if dia else True,
         "clientes": clientes, "resumen": resumen, "control": control,

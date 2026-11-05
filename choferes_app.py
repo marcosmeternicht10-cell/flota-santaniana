@@ -43,7 +43,7 @@ from datetime import date, timedelta
 
 from flask import Blueprint, jsonify, make_response, render_template, request, session
 
-from db_compat import get_connection
+from db_compat import get_connection, USE_POSTGRES
 from hora_local import hoy as _hoy_local
 from nombres import apellido_primero, clave_persona, separar_personas, _llano
 
@@ -70,16 +70,23 @@ LUGAR_TXT = {
 
 def init_choferes_app():
     conn = get_connection()
-    try:
-        conn.execute("ALTER TABLE usuarios ADD COLUMN alias_planilla TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
+    pk = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    for sql in ("ALTER TABLE usuarios ADD COLUMN alias_planilla TEXT DEFAULT ''",
+                # El chofer confirma que recibió su asignación corporativa de cada día.
+                # firma = lo que tenía asignado cuando confirmó: si después cambia, confirma de nuevo.
+                f"""CREATE TABLE IF NOT EXISTS corp_asig_acuses (
+                    id {pk}, fecha TEXT NOT NULL, chofer_usuario TEXT NOT NULL, firma TEXT DEFAULT '',
+                    confirmado_el TEXT DEFAULT '', usuario_id INTEGER, equipo TEXT DEFAULT '')""",
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_corp_acuse ON corp_asig_acuses (fecha, chofer_usuario)"):
         try:
-            conn.rollback()
+            conn.execute(sql)
+            conn.commit()
         except Exception:
-            pass
-    finally:
-        conn.close()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    conn.close()
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -329,7 +336,74 @@ def _corp(conn, usuario, desde, hasta, claves=None, publicado=True):
                 "lado": LADO_CORP.get(x.get("lado"), ""), "desde": "", "hasta": tramo,
                 "coche": str(x.get("coche") or "").strip(), "nota": x.get("nota") or x.get("detalle") or "",
                 "extras": [], "refuerzo": False, "con": [],
+                "chofer_usuario": (x.get("chofer_usuario") or "").strip().lower(),
             }
+
+
+# ── «Recibí mi asignación» ───────────────────────────────────────────────────
+
+def _firma_corp(items):
+    return "|".join(sorted(f"{i.get('hora')}~{i.get('cliente')}~{i.get('tramo')}~{i.get('lado')}~{i.get('coche')}"
+                           for i in items))
+
+
+def _acuses(conn, fechas):
+    if not fechas:
+        return {}
+    try:
+        filas = conn.execute(f"""SELECT fecha, chofer_usuario, firma, confirmado_el FROM corp_asig_acuses
+                                 WHERE fecha IN ({",".join("?" * len(fechas))})""", list(fechas)).fetchall()
+    except Exception:
+        conn.rollback()
+        return {}
+    return {(r["fecha"], r["chofer_usuario"]): dict(r) for r in filas}
+
+
+def acuses_pendientes(conn, usuario, claves, hoy):
+    """Las asignaciones publicadas (de hoy en adelante) que este chofer todavía
+    no confirmó que recibió, o que cambiaron después de confirmarlas."""
+    hasta = (date.fromisoformat(hoy) + timedelta(days=DIAS_ADELANTE)).isoformat()
+    grupos = {}
+    for it in _corp(conn, usuario, hoy, hasta, claves):
+        grupos.setdefault((it["fecha"], it["chofer_usuario"] or (usuario or "")), []).append(it)
+    hechos = _acuses(conn, {f for f, _ in grupos})
+    out = []
+    for (fecha, u), its in sorted(grupos.items()):
+        firma = _firma_corp(its)
+        a = hechos.get((fecha, u))
+        if a and a["firma"] == firma:
+            continue
+        its.sort(key=lambda i: i.get("hora") or "99")
+        out.append({"fecha": fecha, "chofer_usuario": u, "firma": firma, "cambio": bool(a),
+                    "dia_txt": _dia_txt(fecha, hoy), "dia_largo": _dia_largo(fecha),
+                    "items": [{"hora": i["hora"], "hora_fin": i.get("hora_fin") or "", "cliente": i["cliente"],
+                               "tramo": i["tramo"], "lado": i["lado"], "coche": i["coche"]} for i in its]})
+    return out
+
+
+def estado_acuses(fecha):
+    """Para la pantalla de la asignación: quién confirmó que recibió lo
+    publicado ese día. {usuario: {confirmado_el, al_dia}}"""
+    conn = get_connection()
+    try:
+        fila = conn.execute("""SELECT v.datos FROM corp_asig_dias d
+                               JOIN corp_asig_versiones v ON v.dia_id = d.id AND v.version = d.version
+                               WHERE d.fecha=? AND COALESCE(d.publicado_el,'') <> ''""", (fecha,)).fetchone()
+        if not fila:
+            return {}
+        usuarios = {(x.get("chofer_usuario") or "").strip().lower()
+                    for x in (json.loads(fila["datos"]).get("filas") or []) if x.get("chofer_usuario")}
+        actual = {}
+        for u in usuarios:
+            actual[u] = _firma_corp(list(_corp(conn, u, fecha, fecha, None)))
+        hechos = _acuses(conn, {fecha})
+    finally:
+        conn.close()
+    out = {}
+    for u, firma in actual.items():
+        a = hechos.get((fecha, u))
+        out[u] = {"confirmado_el": a["confirmado_el"] if a else "", "al_dia": bool(a and a["firma"] == firma)}
+    return out
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -581,7 +655,7 @@ def avisar_corp(fecha):
                 lado = {"entrante": " (entrada)", "saliente": " (salida)"}.get(x.get("lado"), "")
                 lineas.append(f"{x.get('cliente')} · {x.get('tramo')}{lado}" +
                               (f" · Coche {x['coche']}" if x.get("coche") else ""))
-            cuerpo = "\n".join(lineas)
+            cuerpo = "\n".join(lineas) + "\nTocá para confirmar que la recibiste."
         avisos.append((uid, titulo, cuerpo, "/mi", f"corp-{fecha}"))
         for o in otros.get(u, []):
             avisos.append((o, titulo, cuerpo, "/mi", f"corp-{fecha}"))
@@ -849,6 +923,12 @@ def unir(queda_id, sale_id, quien=""):
 # RUTAS
 # ════════════════════════════════════════════════════════════════════════════
 
+def _pila(nombre):
+    n = str(nombre or "").strip() or "?"
+    p = (n.split(",", 1)[-1] if "," in n else n.split()[0]).strip().split() or ["?"]
+    return p[0].capitalize()
+
+
 def _es_admin():
     return session.get("rol") == "admin"
 
@@ -898,15 +978,60 @@ def api_inicio():
     conn = get_connection()
     try:
         prox = proximos(conn, yo["claves"], hoy, yo["corp"])
+        acuses = acuses_pendientes(conn, yo["corp"], yo["claves"], hoy)
     finally:
         conn.close()
-    pila = (yo["nombre"].split(",", 1)[-1] if "," in yo["nombre"] else yo["nombre"].split()[0]).strip().split()[0]
+    pila = _pila(yo["nombre"])
     from hora_local import ahora as _ahora_local
     ahora = _ahora_local().strftime("%H:%M") if hoy == _hoy_local() else "00:00"
     return jsonify({"ok": True, "hoy": hoy, "ahora": ahora, "hoy_txt": _dia_largo(hoy), "nombre": yo["nombre"],
                     "pila": pila.capitalize(), "usuario_id": yo["id"], "corp": bool(yo["corp"]),
                     "proximos": [dict(i, dia_txt=_dia_txt(i["fecha"], hoy), dia_largo=_dia_largo(i["fecha"]))
-                                 for i in prox]})
+                                 for i in prox],
+                    "acuses": acuses})
+
+
+@bp_choferes_app.route("/api/mi/asignacion", methods=["GET"])
+def api_acuses():
+    """Las asignaciones que el chofer tiene que confirmar que recibió."""
+    yo, hoy = _yo()
+    if not yo:
+        return jsonify({"ok": False, "pendientes": []}), 403
+    conn = get_connection()
+    try:
+        pend = acuses_pendientes(conn, yo["corp"], yo["claves"], hoy)
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "pendientes": pend, "pila": _pila(yo["nombre"])})
+
+
+@bp_choferes_app.route("/api/mi/asignacion/recibido", methods=["POST"])
+def api_acuse_recibido():
+    """El chofer toca «Recibí mi asignación»: queda confirmada lo que tiene
+    asignado ahora (si después cambia, se le vuelve a pedir)."""
+    if _es_admin():
+        return jsonify({"ok": False, "msg": "La vista previa no confirma por el chofer"}), 400
+    yo, hoy = _yo()
+    if not yo:
+        return jsonify({"ok": False}), 403
+    from hora_local import ahora_iso
+    import push
+    equipo = push._equipo(request.headers.get("User-Agent"))
+    cuando = ahora_iso()
+    conn = get_connection()
+    try:
+        pend = acuses_pendientes(conn, yo["corp"], yo["claves"], hoy)
+        for p in pend:
+            conn.execute("DELETE FROM corp_asig_acuses WHERE fecha=? AND chofer_usuario=?", (p["fecha"], p["chofer_usuario"]))
+            conn.execute("""INSERT INTO corp_asig_acuses (fecha, chofer_usuario, firma, confirmado_el, usuario_id, equipo)
+                            VALUES (?,?,?,?,?,?)""", (p["fecha"], p["chofer_usuario"], p["firma"], cuando, yo["id"], equipo))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "confirmadas": len(pend)})
 
 
 # ── Para el admin: los accesos ──────────────────────────────────────────────
