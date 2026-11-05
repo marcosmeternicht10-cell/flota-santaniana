@@ -46,6 +46,7 @@
       display: grid; place-items: center; cursor: pointer;
     }
     .topbar .salir:active { background: rgba(200,30,55,0.4); }
+    .topbar a.volver { text-decoration: none; }
 
     .wrap { max-width: 560px; margin: 0 auto; padding: 18px 16px; }
 
@@ -259,10 +260,11 @@
 </head>
 <body>
   <div class="topbar">
+    {% if es_corp %}<a class="salir volver" href="/corp" title="Volver a mis rendiciones" aria-label="Volver"><i class="ti ti-arrow-left"></i></a>{% endif %}
     <div class="logo"><img src="/static/logo.png" alt="LS" onerror="this.style.display='none'"></div>
     <div class="titulo">
       <b>La Santaniana</b>
-      <span>Reporte de chofer</span>
+      <span>{{ 'Reportar una falla' if es_corp else 'Reporte de chofer' }}</span>
     </div>
     <button class="salir" onclick="salir()" title="Salir"><i class="ti ti-logout"></i></button>
   </div>

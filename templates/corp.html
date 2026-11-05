@@ -51,6 +51,10 @@
     .ir-mi div { flex: 1; font-size: 14px; font-weight: 700; line-height: 1.25; }
     .ir-mi small { display: block; font-size: 12px; font-weight: 500; color: #B9C6D6; }
     .ir-mi:active { transform: scale(.99); }
+    .ir-mi.falla { background: #fff; color: #1A1A18; border: 1px solid #ECEAE5; margin-top: -6px; }
+    .ir-mi.falla > .ti:first-child { color: #DC2641; }
+    .ir-mi.falla small { color: #6E6D66; }
+    .ir-mi.falla > .ti:last-child { color: #6E6D66; }
 
     .card {
       background: white; border-radius: 16px; padding: 20px 18px;
@@ -224,7 +228,8 @@
 
   <div class="wrap">
     <div class="saludo">Hola, <b>{{ usuario }}</b> 👋</div>
-    <a class="ir-mi" href="/mi"><i class="ti ti-bus"></i><div>Mis servicios y mi mes<small>Tu asignación, tráfico y turismo, y lo que hiciste en el mes</small></div><i class="ti ti-chevron-right"></i></a>
+    <a class="ir-mi" href="/mi"><i class="ti ti-bus"></i><div>Mis servicios<small>Tu asignación, tráfico y turismo</small></div><i class="ti ti-chevron-right"></i></a>
+    <a class="ir-mi falla" href="/chofer"><i class="ti ti-tool"></i><div>Reportar una falla del coche<small>Contá qué le pasa y el taller lo recibe</small></div><i class="ti ti-chevron-right"></i></a>
 
     <div class="tabs">
       <div class="tab on" id="tab-cargar" onclick="verTab('cargar')">Servicio</div>

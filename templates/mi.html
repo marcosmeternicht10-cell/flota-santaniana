@@ -157,6 +157,7 @@
     .desglose { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
     .desglose span { font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: rgba(255,255,255,.14); }
     body.sin-tabs { padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
+    .tabs div.tres { grid-template-columns: 1fr 1fr 1fr; }
     .fila.paso { opacity: .45; }
     .fila.paso .h::after { content: "ya salió"; display: block; font-family: var(--txt); font-size: 10px; font-weight: 600; color: var(--muted); }
 
@@ -291,9 +292,10 @@
 </div>
 
 {% if es_corp %}<nav class="tabs" aria-label="Secciones">
-  <div>
+  <div class="tres">
     <button class="on" id="t-serv"><i class="ti ti-bus"></i> Servicios</button>
     <button onclick="location.href='/corp'"><i class="ti ti-receipt"></i> Rendir</button>
+    <button onclick="location.href='/chofer'"><i class="ti ti-tool"></i> Falla</button>
   </div>
 </nav>{% endif %}
 
