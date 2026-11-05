@@ -156,7 +156,7 @@
     .lado.corp { background: rgba(47,124,70,.12); color: #2F7C46; }
     .desglose { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
     .desglose span { font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: rgba(255,255,255,.14); }
-    .tabs div.tres { grid-template-columns: 1fr 1fr 1fr; }
+    body.sin-tabs { padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
     .fila.paso { opacity: .45; }
     .fila.paso .h::after { content: "ya salió"; display: block; font-family: var(--txt); font-size: 10px; font-weight: 600; color: var(--muted); }
 
@@ -261,7 +261,7 @@
     [hidden] { display: none !important; }
   </style>
 </head>
-<body>
+<body{% if not es_corp %} class="sin-tabs"{% endif %}>
 <div class="app">
   <header class="top">
     <div class="top-txt">
@@ -287,24 +287,15 @@
       <div id="viene"></div>
     </section>
 
-    <section id="v-mes" hidden>
-      <div class="meses">
-        <button id="m-ant" onclick="moverMes(-1)" aria-label="Mes anterior"><i class="ti ti-chevron-left"></i></button>
-        <h2 id="m-txt">—</h2>
-        <button id="m-sig" onclick="moverMes(1)" aria-label="Mes siguiente"><i class="ti ti-chevron-right"></i></button>
-      </div>
-      <div id="mes"></div>
-    </section>
   </main>
 </div>
 
-<nav class="tabs" aria-label="Secciones">
-  <div{% if es_corp %} class="tres"{% endif %}>
-    <button class="on" id="t-serv" onclick="verTab('serv')"><i class="ti ti-bus"></i> {{ 'Servicios' if es_corp else 'Mis servicios' }}</button>
-    <button id="t-mes" onclick="verTab('mes')"><i class="ti ti-chart-bar"></i> Mi mes</button>
-    {% if es_corp %}<button onclick="location.href='/corp'"><i class="ti ti-receipt"></i> Rendir</button>{% endif %}
+{% if es_corp %}<nav class="tabs" aria-label="Secciones">
+  <div>
+    <button class="on" id="t-serv"><i class="ti ti-bus"></i> Servicios</button>
+    <button onclick="location.href='/corp'"><i class="ti ti-receipt"></i> Rendir</button>
   </div>
-</nav>
+</nav>{% endif %}
 
 <div class="velo" id="velo" onclick="cerrarHoja()"></div>
 <div class="hoja" id="hoja" role="dialog" aria-modal="true" aria-labelledby="h-nom">
@@ -323,7 +314,7 @@
 
 <script>
 const ES_ADMIN = {{ 'true' if admin else 'false' }};
-const S = { d: null, mes: null, mesVer: null, tab: "serv", timer: null };
+const S = { d: null, timer: null };
 const $ = id => document.getElementById(id);
 const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
@@ -356,8 +347,8 @@ function toast(t) {
 async function cargar(avisar) {
   try {
     const d = await api("/api/mi/inicio" + qs());
-    S.d = d; S.mes = d.mes; S.mesAnt = null; S.mesVer = d.hoy.slice(0, 7); S.base = Date.now();
-    pintarCabecera(); pintarServicios(); pintarMes(); pintarConfirmar();
+    S.d = d; S.base = Date.now();
+    pintarCabecera(); pintarServicios(); pintarConfirmar();
     if (avisar) toast("Actualizado");
   } catch (e) {
     $("hero").innerHTML = `<div class="vacio entra"><h3>${ES_ADMIN ? "Vista previa" : "No se pudo cargar"}</h3><p>${esc(e.message)}</p></div>`;
@@ -499,90 +490,7 @@ function filaHTML(it) {
     <div class="q"><b>${q}</b><span>${sub.join(" · ")}</span></div>${lado}</div>`;
 }
 
-// ── Mi mes ───────────────────────────────────────────────────────────────
-async function moverMes(n) {
-  const [a, m] = S.mesVer.split("-").map(Number);
-  const f = new Date(a, m - 1 + n, 1);
-  const mes = `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}`;
-  if (mes > S.d.hoy.slice(0, 7)) return;
-  S.mesVer = mes;
-  $("mes").style.opacity = .4;
-  try {
-    const r = await api("/api/mi/mes" + qs({ mes }));
-    S.mes = r.mes; S.mesAnt = r.anterior;
-  } catch (e) { toast(e.message); }
-  $("mes").style.opacity = 1;
-  pintarMes();
-}
-function pintarMes() {
-  const m = S.mes, ant = S.mesAnt || S.d.anterior;
-  const enCurso = m.mes === S.d.hoy.slice(0, 7);
-  $("m-txt").textContent = m.mes_txt;
-  $("m-sig").disabled = enCurso;
-  const dif = m.servicios - ant.servicios;
-  const delta = ant.servicios || m.servicios ? `<span class="delta ${dif > 0 ? "sube" : dif < 0 ? "baja" : ""}">
-      <i class="ti ti-${dif > 0 ? "trending-up" : dif < 0 ? "trending-down" : "equal"}"></i>${dif === 0 ? "Igual" : (dif > 0 ? "+" : "") + dif} que ${ant.a_la_altura ? "a esta altura de" : "en"} ${esc(ant.mes_txt.split(" ")[0].toLowerCase())}</span>` : "";
-  const prog = enCurso ? `Hasta hoy${m.programados ? ` · <b>${m.programados}</b> más ya programado${m.programados > 1 ? "s" : ""} este mes` : ""}` : "";
-  const partes = [[m.linea, "de línea"], [m.turismo, "de turismo"], [m.corp || 0, "corporativo" + ((m.corp || 0) === 1 ? "" : "s")]].filter(x => x[0]);
-  const desglose = partes.length > 1 ? `<div class="desglose">${partes.map(([n, t]) => `<span>${n} ${t}</span>`).join("")}</div>` : "";
-  let html = `<div class="total entra"><small>Servicios hechos</small>
-      <div class="num">${m.servicios}<span>servicio${m.servicios === 1 ? "" : "s"}</span></div>
-      ${delta}${prog ? `<div class="prog">${prog}</div>` : ""}${desglose}</div>
-    <div class="grilla">
-      ${S.d.corp ? "" : datoHTML("ti-route", m.km ? miles(m.km) : "—", m.km ? `km recorridos${m.km_completo ? "" : " (aprox.)"}` : "km recorridos")}
-      ${datoHTML("ti-calendar-check", m.dias, `día${m.dias === 1 ? "" : "s"} trabajado${m.dias === 1 ? "" : "s"}`)}
-      ${S.d.corp ? "" : datoHTML("ti-bolt", m.refuerzos, `refuerzo${m.refuerzos === 1 ? "" : "s"}`)}
-      ${datoHTML("ti-bus", m.coches, `coche${m.coches === 1 ? "" : "s"} distinto${m.coches === 1 ? "" : "s"}`)}
-    </div>`;
-  if (m.internacional) {
-    const x = m.internacional, celdas = [];
-    for (let i = 0; i < Math.max(x.tope, x.viajes); i++)
-      celdas.push(`<i class="${i >= x.tope ? "x" : i < x.hechos ? "h" : i < x.viajes ? "p" : ""}"></i>`);
-    const queda = x.tope - x.viajes;
-    html += `<div class="sec"><h2>Internacional</h2></div><div class="tarj entra">
-      <div class="tarj-t"><b>Viajes a Buenos Aires</b><span>${x.viajes} / ${x.tope}</span></div>
-      <div class="tope" style="grid-template-columns:repeat(${Math.max(x.tope, x.viajes)},1fr)">${celdas.join("")}</div>
-      <p>${x.hechos} hecho${x.hechos === 1 ? "" : "s"}${x.viajes > x.hechos ? ` · ${x.viajes - x.hechos} programado${x.viajes - x.hechos === 1 ? "" : "s"}` : ""} · ${queda > 0 ? `te queda${queda === 1 ? "" : "n"} ${queda}` : queda === 0 ? "llegaste al tope del mes" : `pasaste el tope por ${-queda}`}. Ida y vuelta cuentan como un viaje.</p></div>`;
-  }
-  if (!S.d.corp) html += `<div class="sec"><h2>Días trabajados</h2><span>${m.dias} de ${new Date(m.hasta + "T12:00").getDate()}</span></div>
-    <div class="tarj entra">${calendarioHTML(m)}
-    <div class="leyenda">menos <i style="background:var(--dot0)"></i><i style="background:var(--dot1)"></i><i style="background:var(--dot2)"></i><i style="background:var(--dot3)"></i> más</div></div>`;
-  if (m.tramos.length) {
-    const max = m.tramos[0].n;
-    html += `<div class="sec"><h2>Lo que más hiciste</h2></div><div class="tarj entra" style="padding:6px 18px">
-      ${m.tramos.map(t => `<div class="tr"><b>${esc(t.tramo)}</b><span>${t.n}</span><em style="--w:${Math.round(t.n / max * 100)}%"></em></div>`).join("")}</div>`;
-  }
-  if (m.turismo_lista.length) {
-    html += `<div class="sec"><h2>Turismo</h2><span>${m.turismo_lista.length} servicio${m.turismo_lista.length === 1 ? "" : "s"}</span></div>
-      <div class="lista entra">${m.turismo_lista.map(t => `<div class="fila ${t.hecho ? "" : "paso"}" style="${t.hecho ? "" : "opacity:.7"}">
-        <div class="h" style="font-size:16px">${esc(fechaCorta(t.fecha).split(" ")[1])}<small>${esc(fechaCorta(t.fecha).split(" ")[0].slice(0, 3))}</small></div>
-        <div class="q"><b>${esc(t.desde && t.hasta ? `${t.desde} → ${t.hasta}` : (t.hasta || t.desde || "Turismo"))}</b>
-        <span>${[t.cliente, t.coche ? "Coche " + t.coche : "", t.dias > 1 ? `${t.dias} días` : ""].filter(Boolean).map(esc).join(" · ")}</span></div>
-        <span class="lado tur">${t.hecho ? "Hecho" : "Viene"}</span></div>`).join("")}</div>`;
-  }
-  $("mes").innerHTML = html;
-}
-function datoHTML(ic, n, t) { return `<div class="dato entra"><i class="ti ${ic}"></i><b>${n}</b><span>${t}</span></div>`; }
-function calendarioHTML(m) {
-  const ini = new Date(m.desde + "T12:00"), fin = new Date(m.hasta + "T12:00");
-  const vacias = (ini.getDay() + 6) % 7;
-  let h = ["L", "M", "M", "J", "V", "S", "D"].map(x => `<div class="ds">${x}</div>`).join("");
-  for (let i = 0; i < vacias; i++) h += `<div class="d vac"></div>`;
-  for (let d = 1; d <= fin.getDate(); d++) {
-    const f = `${m.mes}-${String(d).padStart(2, "0")}`, n = m.por_dia[f] || 0;
-    const fut = f > m.hoy, hoy = f === m.hoy;
-    h += `<div class="d ${fut ? "fut" : n >= 3 ? "n3" : n === 2 ? "n2" : n === 1 ? "n1" : ""} ${hoy ? "hoy" : ""}" title="${n} servicio(s)">${d}</div>`;
-  }
-  return `<div class="cal">${h}</div>`;
-}
-
 // ── Pestañas y hoja ──────────────────────────────────────────────────────
-function verTab(t) {
-  S.tab = t;
-  $("v-serv").hidden = t !== "serv"; $("v-mes").hidden = t !== "mes";
-  $("t-serv").classList.toggle("on", t === "serv"); $("t-mes").classList.toggle("on", t === "mes");
-  window.scrollTo({ top: 0, behavior: "smooth" });
-}
 function abrirHoja() {
   if (!$("op-avisos")) location.reload();      // se había usado para la ayuda de avisos
   $("velo").classList.add("on"); $("hoja").classList.add("on"); estadoAvisos();
