@@ -262,7 +262,7 @@
     [hidden] { display: none !important; }
   </style>
 </head>
-<body{% if not es_corp %} class="sin-tabs"{% endif %}>
+<body>
 <div class="app">
   <header class="top">
     <div class="top-txt">
@@ -291,13 +291,13 @@
   </main>
 </div>
 
-{% if es_corp %}<nav class="tabs" aria-label="Secciones">
-  <div class="tres">
-    <button class="on" id="t-serv"><i class="ti ti-bus"></i> Servicios</button>
-    <button onclick="location.href='/corp'"><i class="ti ti-receipt"></i> Rendir</button>
-    <button onclick="location.href='/chofer'"><i class="ti ti-tool"></i> Falla</button>
+<nav class="tabs" aria-label="Secciones">
+  <div{% if es_corp %} class="tres"{% endif %}>
+    <button class="on" id="t-serv"><i class="ti ti-bus"></i> {{ 'Servicios' if es_corp else 'Mis servicios' }}</button>
+    {% if es_corp %}<button onclick="location.href='/corp'"><i class="ti ti-receipt"></i> Rendir</button>{% endif %}
+    <button onclick="location.href='/chofer'"><i class="ti ti-tool"></i> {{ 'Falla' if es_corp else 'Reportar falla' }}</button>
   </div>
-</nav>{% endif %}
+</nav>
 
 <div class="velo" id="velo" onclick="cerrarHoja()"></div>
 <div class="hoja" id="hoja" role="dialog" aria-modal="true" aria-labelledby="h-nom">
