@@ -1694,7 +1694,10 @@ def api_chofer_en_taller():
     """Los coches que el taller tiene en la mano: OT abierta (con lo que falta
     hacer), esperando repuestos, fuera de servicio o con avisos que el taller
     todavía está revisando. Sirve para que el chofer sepa qué coche está
-    parado y no vuelva a avisar algo que ya se sabe."""
+    parado y no vuelva a avisar algo que ya se sabe.
+    Los choferes ya NO lo ven (lo que se hace en el taller es interno)."""
+    if session.get("rol") in ("chofer", "tripulante", "chofer_corp"):
+        return jsonify([])
     from db_compat import get_connection as _gc
     hoy_txt = hoy()
     conn = _gc()
