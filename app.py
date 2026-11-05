@@ -476,12 +476,13 @@ def proteger_rutas():
                 return jsonify({"error": "Sin permiso"}), 403
             return redirect(url_for("pantalla_corp"))
 
-    # El chofer de línea y turismo: solo su app (servicio que le toca y su mes).
+    # El chofer de línea y turismo: solo su app (el servicio que le toca) y
+    # reportar fallas del coche (van a Pedidos de choferes).
     if session.get("rol") == "tripulante":
         permitido = (
-            p in ("/", "/mi", "/api/logout", "/api/me") or
+            p in ("/", "/mi", "/chofer", "/api/logout", "/api/me") or
             p.startswith("/api/mi/") or p.startswith("/api/push/") or
-            p.startswith("/static/")
+            p.startswith("/api/chofer/") or p.startswith("/static/")
         )
         if not permitido:
             if p.startswith("/api/"):
@@ -641,7 +642,8 @@ def pantalla_chofer():
     """Pantalla simplificada para que el chofer cargue su reporte/OT."""
     html = render_template("chofer.html",
                            usuario=session.get("nombre") or session.get("usuario"),
-                           es_corp=session.get("rol") == "chofer_corp")
+                           es_corp=session.get("rol") == "chofer_corp",
+                           volver={"chofer_corp": "/corp", "tripulante": "/mi"}.get(session.get("rol"), ""))
     resp = make_response(html)
     # Forzar que el navegador (sobre todo Safari/iPhone) no use caché viejo
     resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
