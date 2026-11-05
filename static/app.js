@@ -22010,6 +22010,7 @@ function caCliente(c) {
       <div class="ca-filas">
         ${vis.map(t => caFila(t)).join("")}
         ${c.variables.map(s => caVariable(c, s)).join("")}
+        ${puede ? Array.from({ length: c.variables_a_completar || 0 }, (_, i) => caVariableVacio(c, c.variables.length + i + 1)).join("") : ""}
       </div>
       ${nc.length ? `<details class="ca-quitados"${nc.length <= 3 ? " open" : ""}><summary><i class="ti ti-chevron-right"></i> Quitados de este día <span>${nc.length}</span></summary>
         <div class="ca-filas">${nc.map(t => caFilaNoCorre(t)).join("")}</div></details>` : ""}
@@ -22104,6 +22105,34 @@ function caFilaNoCorre(t) {
     </div>`;
 }
 
+// Un variable que el cliente suele tener (ADM, dos por día): se le pone el
+// horario y recién ahí se guarda; después se elige chofer y coche.
+function caVariableVacio(c, n) {
+  const tipos = c.tipos_variable || ["VARIABLE"];
+  const id = `ca-vv-${caEsc(c.cliente).replace(/[^A-Za-z0-9]/g, "")}-${n}`;
+  return `
+    <div class="ca-fila variable a-completar" data-busca="variable" data-estado="incompleto">
+      <div class="ca-hora"><input class="ca-var-hora" id="${id}" placeholder="--:--" inputmode="numeric" aria-label="Horario del variable ${n}"
+          onchange="this.value=trHora(this.value);caCrearVariable('${caEsc(c.cliente)}', this)" onkeydown="if(event.key==='Enter')this.blur()"></div>
+      <div class="ca-tramo">
+        <span class="ca-var-tag">VARIABLE ${n}</span>
+        <label for="${id}" class="ca-var-falta">Poné el horario</label>
+        ${tipos.length > 1 ? `<select class="ca-var-tipo" aria-label="Tipo de variable">${tipos.map(x => `<option ${x === "VARIABLE" ? "selected" : ""}>${caEsc(x)}</option>`).join("")}</select>` : ""}
+      </div>
+      <div class="ca-slots"><div class="ca-slot"><span class="ca-var-despues">Después elegís chofer y coche</span></div></div>
+      <div class="ca-acc"></div>
+    </div>`;
+}
+async function caCrearVariable(cliente, inp) {
+  if (!inp.value) return;
+  const fila = inp.closest(".ca-fila"), tipo = fila.querySelector(".ca-var-tipo")?.value;
+  inp.disabled = true;
+  const r = await caPost(`/api/corp/asig/dia/${ca.fecha}/variable`, { cliente, hora: inp.value, ...(tipo ? { tramo: tipo } : {}) });
+  if (await caAplicar(r, `Variable de las ${inp.value}: elegí chofer y coche`)) {
+    const b = document.querySelector(`[data-k="var|${r.nuevo}"][data-campo="chofer"]`);
+    if (b) { b.closest(".ca-fila").classList.add("recien"); b.focus(); }
+  } else inp.disabled = false;
+}
 function caVariable(c, s) {
   const puede = caPuede();
   const ctl = s.control ? CA_CONTROL[s.control.estado] : null;

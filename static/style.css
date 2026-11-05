@@ -8685,3 +8685,8 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 .ot-ped-d small .pd-prio-chip { margin: 0 0 0 2px; }
 .ot-ped-d em { display: block; margin-top: 4px; font-style: normal; font-size: 12px; font-weight: 600; color: var(--danger); }
 .ot-ped.par { box-shadow: inset 3px 0 0 var(--danger); }
+
+/* Asignación corporativa: variables del día listos para completar (ADM) */
+.ca-fila.variable.a-completar { background: repeating-linear-gradient(135deg, transparent 0 10px, rgba(30,90,150,.035) 10px 20px); border: 0; border-top: 1px dashed var(--border-strong); }
+.ca-var-falta { font-size: 12.5px; color: var(--info); font-weight: 600; cursor: text; }
+.ca-var-despues { font-size: 12px; color: var(--muted); }
