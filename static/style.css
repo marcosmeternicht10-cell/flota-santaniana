@@ -8690,3 +8690,16 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 .ca-fila.variable.a-completar { background: repeating-linear-gradient(135deg, transparent 0 10px, rgba(30,90,150,.035) 10px 20px); border: 0; border-top: 1px dashed var(--border-strong); }
 .ca-var-falta { font-size: 12.5px; color: var(--info); font-weight: 600; cursor: text; }
 .ca-var-despues { font-size: 12px; color: var(--muted); }
+
+/* Asignación corporativa: el chofer confirmó que recibió lo publicado */
+.ca-acuse { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; border-radius: 50%; font-size: 12px; flex: none; }
+.ca-acuse.ok { background: var(--success-bg); color: var(--success); }
+.ca-acuse.falta { background: var(--warning-bg); color: var(--warning); }
+.ca-acuses-res { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--warning-bd);
+  background: var(--warning-bg); color: #8A5A00; font: 600 12px Inter, sans-serif; cursor: pointer; }
+.ca-acuses-res.todos { border-color: var(--success-bd); background: var(--success-bg); color: var(--success); }
+.ca-acu-lista { display: flex; flex-direction: column; gap: 6px; }
+.ca-acu-fila { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 10px; background: var(--warning-bg); font-size: 13.5px; }
+.ca-acu-fila span { font-size: 12.5px; color: #8A5A00; white-space: nowrap; }
+.ca-acu-fila.ok { background: var(--success-bg); }
+.ca-acu-fila.ok span { color: var(--success); }

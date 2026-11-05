@@ -21846,6 +21846,38 @@ function caPintar(mantenerScroll) {
   }
 }
 
+// Cuántos choferes confirmaron que recibieron lo publicado
+function caAcusesResumen() {
+  const a = (ca.d && ca.d.acuses) || {}, us = Object.keys(a);
+  if (!us.length) return "";
+  const ok = us.filter(u => a[u].al_dia).length, faltan = us.length - ok;
+  return `<button class="ca-acuses-res ${faltan ? "" : "todos"}" onclick="caAcusesVer()" title="Ver quiénes confirmaron">
+    <i class="ti ti-${faltan ? "clock" : "checks"}"></i> ${ok} de ${us.length} confirmaron que la recibieron</button>`;
+}
+function caAcusesVer() {
+  const a = (ca.d && ca.d.acuses) || {};
+  const nombre = u => { for (const c of ca.d.clientes || []) for (const s of [...c.tramos.flatMap(t => t.slots || []), ...(c.variables || [])])
+    if (String(s.chofer_usuario || "").toLowerCase() === u) return caNombre(s.chofer_nombre); return u; };
+  const us = Object.keys(a).sort((x, y) => (a[x].al_dia - a[y].al_dia) || nombre(x).localeCompare(nombre(y), "es"));
+  const faltan = us.filter(u => !a[u].al_dia);
+  const o = rvModal({
+    titulo: "¿Quién recibió la asignación?", icono: "checks", ancho: 480,
+    sub: `${trLargo(ca.fecha)} · lo publicado. Cuando la asignación le cambia a alguien, tiene que confirmar de nuevo.`,
+    cuerpo: `<div class="ca-acu-lista">${us.map(u => `<div class="ca-acu-fila ${a[u].al_dia ? "ok" : ""}">
+        <b>${caEsc(nombre(u))}</b>
+        <span>${a[u].al_dia ? `<i class="ti ti-checks"></i> Confirmó · ${caEsc(trFechaHora(a[u].confirmado_el))}` : a[u].confirmado_el ? `<i class="ti ti-refresh-alert"></i> No vio el último cambio` : `<i class="ti ti-clock"></i> Todavía no`}</span></div>`).join("")}</div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+      ${faltan.length ? `<button class="btn btn-primary" id="ca-acu-copiar"><i class="ti ti-copy"></i> Copiar quiénes faltan</button>` : ""}`,
+  });
+  const b = o.querySelector("#ca-acu-copiar");
+  if (b) b.onclick = async () => {
+    const txt = `*Asignación del ${trLargo(ca.fecha)}* 📲\nFalta confirmar que la recibieron:\n\n` + faltan.map(u => `• ${nombre(u)}`).join("\n") +
+      `\n\nEntrá a la app y tocá «Recibí mi asignación».`;
+    try { await navigator.clipboard.writeText(txt); toast(`Copiado: ${faltan.length} chofer${faltan.length === 1 ? "" : "es"}`, "success"); }
+    catch (e) { toast("No se pudo copiar", "error"); }
+  };
+}
+
 // ─── El tablero: fecha, estado, acciones y la tira de días ───
 function caTablero() {
   const d = ca.d, f = ca.fecha, dia = d.dia || {};
@@ -21892,7 +21924,7 @@ function caTablero() {
         <input type="date" id="ca-fecha-in" class="ca-fecha-in" value="${f}" onchange="if(this.value)caCargar(this.value)" tabindex="-1" aria-hidden="true">
         <button class="tr-flecha" onclick="caIr(1)" aria-label="Día siguiente"><i class="ti ti-chevron-right"></i></button>
       </div>
-      <div class="tr-tab-estado">${chip}${sub ? `<small>${sub}</small>` : ""}</div>
+      <div class="tr-tab-estado">${chip}${sub ? `<small>${sub}</small>` : ""}${caAcusesResumen()}</div>
       <div class="tr-tab-acciones">
         ${dia.version ? `<button class="tr-tab-btn" onclick="caVersiones()" title="Versiones publicadas"><i class="ti ti-history"></i><span>Versiones</span></button>` : ""}
         ${hayAlgo ? `<button class="tr-tab-btn" onclick="caMenuArchivo(this, 'pdf')" title="${pendiente ? "Ver cómo va a salir (borrador)" : "Ver el PDF publicado"}: una hoja por empresa"><i class="ti ti-file-type-pdf"></i><span>Ver PDF</span></button>
@@ -22070,6 +22102,14 @@ function caFila(t) {
     </div>`;
 }
 
+// ¿El chofer confirmó que recibió lo publicado? (solo días publicados)
+function caAcuse(s) {
+  const u = String(s.chofer_usuario || "").toLowerCase(), a = (ca.d && ca.d.acuses || {})[u];
+  if (!u || !a) return "";
+  if (a.al_dia) return `<span class="ca-acuse ok" title="Confirmó que la recibió · ${caEsc(trFechaHora(a.confirmado_el))}"><i class="ti ti-checks"></i></span>`;
+  return `<span class="ca-acuse falta" title="${a.confirmado_el ? "Confirmó una versión anterior: todavía no vio el cambio" : "Todavía no confirmó que la recibió"}"><i class="ti ti-${a.confirmado_el ? "refresh-alert" : "clock"}"></i></span>`;
+}
+function trFechaHora(f) { return f ? `${String(f).slice(8, 10)}/${String(f).slice(5, 7)} ${String(f).slice(11, 16)}` : ""; }
 function caSlot(t, s) {
   const k = caClave(t.cliente, t.tramo, s.lado);
   const puede = caPuede();
@@ -22082,12 +22122,12 @@ function caSlot(t, s) {
       ${puede ? `
         <button class="ca-chofer ${s.chofer_usuario ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="chofer"
           onclick="caElegirChofer(this, '${s.lado}')">
-          <i class="ti ti-${s.chofer_usuario ? "user" : "user-plus"}"></i><span>${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Elegir chofer"}</span></button>
+          <i class="ti ti-${s.chofer_usuario ? "user" : "user-plus"}"></i><span>${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Elegir chofer"}</span>${caAcuse(s)}</button>
         <input class="ca-coche ${s.coche ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="coche" value="${caEsc(s.coche)}" placeholder="Coche"
           list="ca-coches" inputmode="numeric" autocomplete="off" aria-label="Coche"
           onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}"
           onchange="caGuardarCoche(this, '${s.lado}')">`
-      : `<span class="ca-chofer-ro ${s.chofer_usuario ? "" : "vacio"}">${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Sin chofer"}</span>
+      : `<span class="ca-chofer-ro ${s.chofer_usuario ? "" : "vacio"}">${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Sin chofer"}${caAcuse(s)}</span>
          <span class="ca-coche-ro ${s.coche ? "" : "vacio"}">${s.coche ? caEsc(s.coche) : "—"}</span>`}
       ${ctl ? `<span class="ca-ctl ${ctl.c}" title="${caEsc(s.control.txt)}"><i class="ti ti-${ctl.i}"></i><span>${caEsc(s.control.corto || s.control.txt)}</span></span>` : ""}
     </div>`;
@@ -22153,7 +22193,7 @@ function caVariable(c, s) {
       <div class="ca-slots"><div class="ca-slot">
         ${puede ? `
           <button class="ca-chofer ${s.chofer_usuario ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="chofer" onclick="caElegirChoferVar(this, ${s.id})">
-            <i class="ti ti-${s.chofer_usuario ? "user" : "user-plus"}"></i><span>${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Elegir chofer"}</span></button>
+            <i class="ti ti-${s.chofer_usuario ? "user" : "user-plus"}"></i><span>${s.chofer_usuario ? caEsc(caNombre(s.chofer_nombre)) : "Elegir chofer"}</span>${caAcuse(s)}</button>
           <input class="ca-coche ${s.coche ? "" : "vacio"}" data-k="${caEsc(k)}" data-campo="coche" value="${caEsc(s.coche)}" placeholder="Coche" list="ca-coches" inputmode="numeric"
             autocomplete="off" aria-label="Coche" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur()}"
             onchange="caGuardarVariable(${s.id}, {coche: this.value})">`
