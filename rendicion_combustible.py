@@ -783,6 +783,12 @@ def agregar_comprobante(sid, d, quien, forzar=False, vincular=None):
         cid = cur.lastrowid
         conn.commit()
         _recalcular(s["vehiculo_id"])
+        if not elegida and carga_id and c["litros"] > 0:
+            try:
+                from integraciones import avisar
+                avisar("combustible.cargado", carga_id=carga_id)
+            except Exception:
+                pass
         return cid, s, c, bool(elegida)
     except Exception:
         _rollback(conn)

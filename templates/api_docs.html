@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API · La Santaniana</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+  :root { --rojo:#DC2641; --azul:#1E5A96; --tinta:#14263D; --gris:#5A6575; --borde:#E4E1DA; --fondo:#F7F6F3; --blanco:#fff; --codigo:#0E1A2B; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--tinta); font:15px/1.6 Inter, system-ui, sans-serif; }
+  header { background:var(--tinta); color:#F7F6F3; padding:40px 24px 32px; }
+  header .in, main { max-width:980px; margin:0 auto; }
+  header p.pre { margin:0 0 6px; color:#F3A2AE; font-weight:700; letter-spacing:3px; text-transform:uppercase; font-size:12px; }
+  h1, h2, h3 { font-family:'Barlow Semi Condensed', Inter, sans-serif; line-height:1.15; }
+  h1 { font-size:40px; margin:0 0 8px; }
+  header .sub { color:#B9C6D6; margin:0; max-width:680px; }
+  header .base { margin-top:18px; display:inline-block; background:rgba(255,255,255,.08); border-radius:8px; padding:6px 12px; font-family:'JetBrains Mono', monospace; font-size:13px; }
+  main { padding:8px 24px 64px; }
+  h2 { font-size:28px; margin:44px 0 10px; padding-top:8px; border-top:1px solid var(--borde); }
+  h3 { font-size:20px; margin:28px 0 6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  p { margin:8px 0; }
+  .metodo { font:600 12px 'JetBrains Mono', monospace; padding:3px 8px; border-radius:6px; background:#EAF1F8; color:var(--azul); }
+  .metodo.post { background:#FCEBED; color:var(--rojo); }
+  .ruta { font:500 15px 'JetBrains Mono', monospace; }
+  .perm { font:500 12px Inter, sans-serif; color:var(--gris); background:#ECEAE4; border-radius:20px; padding:2px 10px; }
+  pre { background:var(--codigo); color:#E6EDF5; border-radius:12px; padding:16px 18px; overflow-x:auto; font:13px/1.55 'JetBrains Mono', monospace; margin:10px 0; }
+  code { font-family:'JetBrains Mono', monospace; font-size:.92em; background:#ECEAE4; border-radius:5px; padding:1px 5px; }
+  pre code { background:none; padding:0; font-size:inherit; }
+  table { width:100%; border-collapse:collapse; margin:10px 0; background:var(--blanco); border-radius:12px; overflow:hidden; font-size:14px; }
+  th, td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--borde); vertical-align:top; }
+  th { background:#FBFAF8; font-weight:600; color:var(--gris); font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
+  tr:last-child td { border-bottom:none; }
+  .caja { background:var(--blanco); border:1px solid var(--borde); border-radius:14px; padding:16px 20px; margin:14px 0; }
+  .caja.aviso { border-left:4px solid var(--rojo); }
+  nav.indice { display:flex; flex-wrap:wrap; gap:8px; margin:24px 0 0; }
+  nav.indice a { text-decoration:none; color:var(--azul); background:var(--blanco); border:1px solid var(--borde); border-radius:20px; padding:4px 12px; font-size:13px; font-weight:500; }
+  @media (max-width:600px) { h1 { font-size:32px; } th:nth-child(3), td:nth-child(3) { display:none; } }
+</style>
+</head>
+<body>
+<header><div class="in">
+  <p class="pre">Integraciones · API v{{ version }}</p>
+  <h1>Conectar otro sistema con La Santaniana</h1>
+  <p class="sub">Leer las OT, el combustible, las rendiciones y el tráfico desde otro programa, cargar datos desde afuera y recibir avisos cuando algo pasa. Todo en JSON, con una clave por sistema.</p>
+  <span class="base">{{ base }}/api/v1</span>
+</div></header>
+<main>
+<nav class="indice">
+  <a href="#clave">La clave</a><a href="#respuestas">Respuestas</a><a href="#leer">Leer datos</a>
+  <a href="#cargar">Cargar datos</a><a href="#planillas">Planillas</a><a href="#avisos">Avisos</a><a href="#errores">Errores</a>
+</nav>
+
+<h2 id="clave">1. La clave</h2>
+<p>La crea el administrador en <b>Sistema → Integraciones → Clave para programadores</b>, eligiendo qué puede ver o cargar. Se muestra una sola vez: guardala en un lugar seguro. Se manda en cada pedido:</p>
+<pre><code>Authorization: Bearer ls_xxxxxxxxxxxxxxxxxxxx</code></pre>
+<p>(También se acepta <code>X-API-Key: ls_…</code>.) Probala con:</p>
+<pre><code>curl -H "Authorization: Bearer $CLAVE" {{ base }}/api/v1/estado</code></pre>
+<table>
+  <tr><th>Permiso</th><th>Qué habilita</th><th>Código</th></tr>
+  {% for c, n, d in permisos %}<tr><td><b>{{ n }}</b></td><td>{{ d }}</td><td><code>{{ c }}</code></td></tr>{% endfor %}
+</table>
+<div class="caja">Límite: <b>{{ limite }} pedidos por minuto</b> por clave. Cada respuesta trae <code>X-RateLimit-Remaining</code>. Si se pasa, vuelve <code>429</code> con <code>Retry-After</code> (segundos).</div>
+
+<h2 id="respuestas">2. Cómo vienen las listas</h2>
+<p>Todas las listas vienen igual. Se piden de a <b>{{ por_defecto }}</b> (hasta <b>{{ max_filas }}</b> con <code>limit</code>). Para la página que sigue, usá el link <code>siguiente</code> tal cual viene; cuando es <code>null</code>, no hay más.</p>
+<pre><code>{
+  "datos": [ … ],
+  "total": 1342,
+  "limit": 100,
+  "offset": 0,
+  "siguiente": "{{ base }}/api/v1/ots?limit=100&offset=100"
+}</code></pre>
+<p>Agregá <code>formato=csv</code> a cualquier lista para recibirla como CSV. Las fechas van <code>AAAA-MM-DD</code>; <code>dias=30</code> en vez de <code>desde</code> trae los últimos 30 días. El <code>coche</code> se busca por número interno o por chapa.</p>
+
+<h2 id="leer">3. Leer datos</h2>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/vehiculos</span><span class="perm">flota</span></h3>
+<p>La flota con el km actual de cada coche. <code>activos=todos</code> incluye los dados de baja; <code>coche=210</code> trae uno.</p>
+<pre><code>curl -H "Authorization: Bearer $CLAVE" "{{ base }}/api/v1/vehiculos"</code></pre>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/ots</span><span class="perm">ots</span></h3>
+<p>Las órdenes de trabajo, cada una con sus <code>items</code> (trabajo, técnico, costo, estado) y el <code>costo_total</code>. Filtros: <code>desde</code>, <code>hasta</code>, <code>dias</code>, <code>estado</code> (abierta, en_proceso, cerrada), <code>coche</code>.</p>
+<pre><code>curl -H "Authorization: Bearer $CLAVE" \
+  "{{ base }}/api/v1/ots?estado=cerrada&amp;desde=2026-10-01&amp;hasta=2026-10-31"</code></pre>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/ots/&lt;número&gt;</span><span class="perm">ots</span></h3>
+<p>Una OT sola, con sus ítems.</p>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/combustible</span><span class="perm">combustible</span></h3>
+<p>Las cargas: litros, precio, total, odómetro, estación, chofer. Filtros: <code>desde</code>, <code>hasta</code>, <code>dias</code>, <code>coche</code>, <code>origen</code> (taller, corporativo, rendicion). Trae <code>litros_total</code> y <code>monto_total</code> de todo el filtro.</p>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/rendiciones</span><span class="perm">rendiciones</span></h3>
+<p>Los servicios rendidos por los choferes de corporativos, con el monto. Filtros: <code>desde</code>, <code>hasta</code>, <code>dias</code>, <code>cliente</code>, <code>chofer</code> (usuario), <code>liquidado</code> (0 o 1). Trae <code>monto_total</code>.</p>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/pagos</span><span class="perm">rendiciones</span></h3>
+<p>Los pagos de plus a los choferes, por semana. Filtros: <code>desde</code>, <code>hasta</code>, <code>chofer</code>.</p>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/trafico/&lt;fecha&gt;</span><span class="perm">trafico</span></h3>
+<p>El tráfico del día tal como se publicó (la última versión): cada salida con corredor, hora, destino, coche y tripulantes. La fecha puede ser <code>hoy</code> o <code>mañana</code>. <code>tipo=internacional</code> para el internacional.</p>
+<pre><code>curl -H "Authorization: Bearer $CLAVE" "{{ base }}/api/v1/trafico/hoy"</code></pre>
+
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/costos</span><span class="perm">costos</span></h3>
+<p>Costos cargados por coche y mes. Filtros: <code>desde</code> y <code>hasta</code> como mes (<code>2026-10</code>), <code>meses=6</code>, <code>tipo</code>, <code>coche</code>.</p>
+
+<h2 id="cargar">4. Cargar datos</h2>
+
+<h3><span class="metodo post">POST</span><span class="ruta">/api/v1/combustible</span><span class="perm">combustible:escribir</span></h3>
+<p>Registra una carga (por ejemplo, desde el sistema del surtidor). Obligatorios: <code>coche</code> y <code>litros</code>. Si la misma carga llega dos veces (mismo coche, fecha, litros y odómetro), responde <code>409</code> con el <code>id</code> que ya existe, así un reintento no la duplica.</p>
+<pre><code>curl -X POST -H "Authorization: Bearer $CLAVE" -H "Content-Type: application/json" \
+  -d '{"coche":"210","fecha":"2026-11-06","litros":180,"precio_litro":7350,
+       "odometro":412300,"estacion":"Petropar Mcal. López","chofer":"Juan Pérez"}' \
+  {{ base }}/api/v1/combustible</code></pre>
+<p>Opcionales: <code>costo_total</code> (si no viene, litros × precio), <code>tanque_lleno</code> (por defecto sí), <code>emblema</code>, <code>lugar_carga</code>, <code>origen</code> (taller o corporativo), <code>cliente</code>, <code>observaciones</code>.</p>
+
+<h3><span class="metodo post">POST</span><span class="ruta">/api/v1/kilometraje</span><span class="perm">km:escribir</span></h3>
+<p>Informa el km de un coche (por ejemplo, desde el GPS). No acepta un km menor al que ya tiene ni un salto de más de 5.000 km, salvo con <code>"forzar": true</code>.</p>
+<pre><code>curl -X POST -H "Authorization: Bearer $CLAVE" -H "Content-Type: application/json" \
+  -d '{"coche":"210","km":412450}' {{ base }}/api/v1/kilometraje</code></pre>
+
+<h2 id="planillas">5. Planillas que se actualizan solas</h2>
+<p>Para Excel, Google Sheets o Power BI no hace falta programar: en <b>Sistema → Integraciones → Planilla</b> se elige qué datos y se genera un link. Ese link devuelve un CSV siempre al día.</p>
+<table>
+  <tr><th>Dónde</th><th>Cómo</th><th></th></tr>
+  <tr><td><b>Excel</b></td><td>Datos → Obtener datos → Desde la Web → pegar el link. Después, <i>Actualizar todo</i> trae lo nuevo.</td><td></td></tr>
+  <tr><td><b>Google Sheets</b></td><td>En una celda: <code>=IMPORTDATA("link")</code>. Se actualiza solo cada hora.</td><td></td></tr>
+  <tr><td><b>Power BI</b></td><td>Obtener datos → Web → pegar el link.</td><td></td></tr>
+</table>
+<div class="caja aviso">El link es como una llave: quien lo tenga ve esos datos. Si se comparte de más, desactivalo en la pantalla y generá otro.</div>
+
+<h2 id="avisos">6. Avisos: el sistema te avisa a vos</h2>
+<p>En <b>Sistema → Integraciones → Avisar a otro sistema</b> se pega un link (de tu sistema, o de Make, Zapier, n8n) y se eligen los eventos. Cuando pasa algo, se manda un <code>POST</code> con JSON:</p>
+<pre><code>POST https://tu-sistema/recibir
+Content-Type: application/json
+X-Santaniana-Evento: ot.cerrada
+X-Santaniana-Firma: sha256=5d1c…
+
+{
+  "evento": "ot.cerrada",
+  "id": "9f2c…",              ← único por aviso, para no procesarlo dos veces
+  "momento": "2026-11-06T18:40:00",
+  "sistema": "La Santaniana",
+  "datos": { …la OT con sus ítems, igual que en GET /api/v1/ots/&lt;n&gt;… }
+}</code></pre>
+<table>
+  <tr><th>Evento</th><th>Cuándo</th><th>Qué trae</th></tr>
+  <tr><td><code>ot.abierta</code></td><td>Se abre una OT</td><td>La OT con sus ítems</td></tr>
+  <tr><td><code>ot.cerrada</code></td><td>Se cierra una OT</td><td>La OT completa, con técnicos y costo</td></tr>
+  <tr><td><code>falla.reportada</code></td><td>Un chofer reporta una falla</td><td>Coche, chofer, km y los problemas</td></tr>
+  <tr><td><code>combustible.cargado</code></td><td>Se registra una carga</td><td>Igual que una fila de /combustible</td></tr>
+  <tr><td><code>rendicion.cargada</code></td><td>Un chofer corporativo rinde</td><td>Igual que una fila de /rendiciones</td></tr>
+  <tr><td><code>trafico.publicado</code></td><td>Se publica el tráfico</td><td>Igual que /trafico/&lt;fecha&gt;</td></tr>
+</table>
+<p>Respondé con cualquier código <code>2xx</code>. Si no contesta o da error, se reintenta a los 10 s y al minuto; con 30 fallas seguidas el aviso se pausa solo. Para comprobar que el aviso viene de acá, calculá el HMAC-SHA256 del cuerpo con el secreto del aviso y compará:</p>
+<pre><code># Python
+import hmac, hashlib
+esperada = "sha256=" + hmac.new(SECRETO.encode(), cuerpo_crudo, hashlib.sha256).hexdigest()
+valido = hmac.compare_digest(esperada, request.headers["X-Santaniana-Firma"])</code></pre>
+
+<h2 id="errores">7. Errores</h2>
+<p>Siempre con el mismo formato, y el mensaje en castellano:</p>
+<pre><code>{ "error": { "codigo": "sin_permiso", "mensaje": "Esta clave no tiene el permiso «Combustible» (combustible)." } }</code></pre>
+<table>
+  <tr><th>Código HTTP</th><th>Qué pasó</th><th></th></tr>
+  <tr><td><code>400</code></td><td>Un dato o filtro mal escrito (el mensaje dice cuál)</td><td></td></tr>
+  <tr><td><code>401</code></td><td>Falta la clave, no existe o fue revocada</td><td></td></tr>
+  <tr><td><code>403</code></td><td>La clave no tiene ese permiso</td><td></td></tr>
+  <tr><td><code>404</code></td><td>No existe (la OT, el coche, el tráfico sin publicar)</td><td></td></tr>
+  <tr><td><code>409</code></td><td>Ya estaba cargado, o el km no cierra</td><td></td></tr>
+  <tr><td><code>429</code></td><td>Demasiados pedidos: esperá lo que dice <code>Retry-After</code></td><td></td></tr>
+</table>
+</main>
+</body>
+</html>

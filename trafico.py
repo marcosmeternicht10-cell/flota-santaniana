@@ -2068,6 +2068,11 @@ def publicar(fecha, usuario, tipo="nacional"):
         conn.execute("""UPDATE trafico_dias SET version=?, publicado_el=?, publicado_por=?, modificado=0
                         WHERE id=?""", (version, cuando, usuario, dia["id"]))
         conn.commit()
+        try:
+            from integraciones import avisar
+            avisar("trafico.publicado", fecha=fecha, tipo=tipo)
+        except Exception:
+            pass
         return {"version": version, "cambios": cambios, "publicado_el": cuando}, None
     finally:
         conn.close()

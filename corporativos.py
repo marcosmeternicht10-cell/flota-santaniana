@@ -985,6 +985,13 @@ def registrar_rendicion(datos, limitar_fecha=False):
         conn.close()
         return False, "Otro chofer acaba de reportar ese mismo tramo. Verificá antes de volver a cargar."
     conn.close()
+    try:
+        from integraciones import avisar
+        avisar("rendicion.cargada", chofer_usuario=datos.get("chofer_usuario", ""),
+               fecha_servicio=datos["fecha_servicio"].strip(), tramo=datos["tramo"].strip(),
+               cliente=datos["cliente"].strip())
+    except Exception:
+        pass
     # El chofer no ve montos: el cálculo se guarda para la liquidación, pero
     # la plata solo se muestra en el Resumen de admin.
     return True, "Rendición registrada." 

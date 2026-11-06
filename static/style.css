@@ -8703,3 +8703,101 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 .ca-acu-fila span { font-size: 12.5px; color: #8A5A00; white-space: nowrap; }
 .ca-acu-fila.ok { background: var(--success-bg); }
 .ca-acu-fila.ok span { color: var(--success); }
+
+/* ═══ Integraciones ═══════════════════════════════════════════════════ */
+.ig-caminos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 20px; }
+.ig-camino {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 22px; text-align: left;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); cursor: pointer;
+  font: inherit; color: var(--text); box-shadow: var(--shadow-sm); transition: border-color .2s, box-shadow .25s, transform .18s;
+}
+.ig-camino:hover { border-color: var(--border-strong); box-shadow: var(--shadow); transform: translateY(-2px); }
+.ig-camino:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 2px; }
+.ig-camino-ic { width: 46px; height: 46px; border-radius: 13px; display: grid; place-items: center; font-size: 24px; margin-bottom: 4px; }
+.ig-camino-ic.verde { background: var(--success-bg); color: var(--success); }
+.ig-camino-ic.rojo { background: var(--danger-bg); color: var(--danger); }
+.ig-camino-ic.azul { background: var(--info-bg); color: var(--info); }
+.ig-camino-tit { font: 700 19px/1.2 var(--display); color: var(--azul-oscuro); }
+.ig-camino-txt { font-size: 13.5px; line-height: 1.5; color: var(--muted); flex: 1; }
+.ig-camino-txt b { color: var(--text); font-weight: 600; }
+.ig-camino-ir { margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--brand-blue); display: inline-flex; align-items: center; gap: 5px; }
+.ig-camino:hover .ig-camino-ir .ti { transform: translateX(3px); }
+.ig-camino-ir .ti { transition: transform .2s; }
+
+.card-head .ig-cuenta { margin-left: 8px; font-size: 12px; font-weight: 600; color: var(--muted); background: var(--surface3); border-radius: 20px; padding: 2px 9px; }
+.card-head .ig-docs { margin-left: auto; text-decoration: none; }
+.ig-botones a.btn { text-decoration: none; }
+.card-head .ig-docs .ti { color: inherit; font-size: 15px; }
+.ig-lista { display: flex; flex-direction: column; }
+.ig-fila { display: grid; grid-template-columns: 40px minmax(0, 1fr) 200px auto; gap: 14px; align-items: center; padding: 14px 4px; border-bottom: 1px solid var(--border); }
+.ig-fila:last-child { border-bottom: 0; }
+.ig-fila.apagada { opacity: .55; }
+.ig-fila-ic { width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; font-size: 19px; }
+.ig-fila-ic.planilla { background: var(--success-bg); color: var(--success); }
+.ig-fila-ic.aviso { background: var(--danger-bg); color: var(--danger); }
+.ig-fila-ic.clave { background: var(--info-bg); color: var(--info); }
+.ig-fila-nom { font-weight: 600; font-size: 14.5px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ig-tipo { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.ig-estado { font-size: 11px; font-weight: 600; border-radius: 20px; padding: 1px 8px; background: var(--surface3); color: var(--muted); }
+.ig-estado.on { background: var(--success-bg); color: var(--success); }
+.ig-estado.mal { background: var(--danger-bg); color: var(--danger); }
+.ig-url { display: block; margin-top: 2px; font: 12px/1.4 ui-monospace, "SFMono-Regular", Menlo, monospace; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ig-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.ig-tags span { font-size: 11.5px; font-weight: 500; background: var(--surface3); color: var(--text); border-radius: 6px; padding: 2px 7px; }
+.ig-tags span.suave { background: none; border: 1px solid var(--border); color: var(--muted); }
+.ig-fila-uso { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.ig-mal { color: var(--danger); }
+.ig-fila-acc { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.ig-fila-acc .ig-cortar:hover { color: var(--danger); border-color: var(--danger-bd); background: var(--danger-bg); }
+
+.ig-m .ig-lbl { display: block; margin: 16px 0 7px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.ig-m .ig-lbl:first-child { margin-top: 4px; }
+.ig-m .ig-input, .ig-m select, .ig-copiar input {
+  width: 100%; height: 40px; padding: 0 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface); font: inherit; font-size: 14px; color: var(--text);
+}
+.ig-m .ig-input:focus, .ig-m select:focus, .ig-copiar input:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px var(--info-bg); }
+.ig-copiar { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+.ig-copiar input { flex: 1; min-width: 0; font: 12.5px ui-monospace, "SFMono-Regular", Menlo, monospace; background: var(--surface2); }
+.ig-copiar .btn { flex-shrink: 0; height: 40px; }
+.ig-opciones { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ig-opcion, .ig-check {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; background: var(--surface); transition: border-color .15s, background .15s;
+}
+.ig-opcion:hover, .ig-check:hover { border-color: var(--border-strong); }
+.ig-opcion:has(input:checked), .ig-check:has(input:checked) { border-color: var(--brand-blue); background: var(--info-bg); }
+.ig-opcion { position: relative; }
+.ig-opcion input { position: absolute; opacity: 0; pointer-events: none; }
+.ig-opcion-ic { flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--surface3); color: var(--brand-blue); font-size: 16px; }
+.ig-opcion b, .ig-check b { display: block; font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+.ig-opcion small, .ig-check small { display: block; font-size: 12px; line-height: 1.4; color: var(--muted); margin-top: 2px; }
+.ig-check input { margin-top: 3px; accent-color: var(--brand-blue); width: 16px; height: 16px; flex-shrink: 0; }
+.ig-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ig-dos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ig-seg { margin: 16px 0 4px; }
+.ig-pasos { margin: 8px 0 0; padding-left: 22px; font-size: 13.5px; line-height: 1.6; }
+.ig-pasos li { margin: 7px 0; padding-left: 2px; }
+.ig-pasos li::marker { font-weight: 700; color: var(--brand-blue); }
+.ig-nota { margin-top: 14px; display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.5; color: var(--muted); background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
+.ig-nota .ti { font-size: 16px; color: var(--brand-blue); margin-top: 1px; }
+.ig-txt { font-size: 13.5px; line-height: 1.55; margin: 6px 0; }
+.ig-txt code, .ig-tabla code { font-size: 12px; background: var(--surface3); border-radius: 4px; padding: 1px 5px; }
+.ig-pre { background: #0E1A2B; color: #E6EDF5; border-radius: var(--radius-sm); padding: 12px 14px; font: 12.5px/1.5 ui-monospace, "SFMono-Regular", Menlo, monospace; white-space: pre-wrap; word-break: break-all; margin: 8px 0; }
+.ig-botones { display: flex; flex-wrap: wrap; gap: 8px; }
+.ig-prueba { margin: 4px 0 0; display: flex; gap: 7px; align-items: flex-start; font-size: 13px; border-radius: var(--radius-sm); padding: 9px 12px; }
+.ig-prueba.ok { background: var(--success-bg); color: var(--success); }
+.ig-prueba.mal { background: var(--danger-bg); color: var(--danger); }
+.ig-gira { animation: igGira 1s linear infinite; display: inline-block; }
+@keyframes igGira { to { transform: rotate(360deg); } }
+.ig-tabla { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ig-tabla th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.ig-tabla td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ig-tabla small { color: var(--muted); }
+
+@media (max-width: 1100px) {
+  .ig-fila { grid-template-columns: 40px minmax(0, 1fr); }
+  .ig-fila-uso, .ig-fila-acc { grid-column: 2; justify-content: flex-start; }
+}
+@media (max-width: 860px) { .ig-caminos { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .ig-opciones, .ig-checks, .ig-dos { grid-template-columns: 1fr; } }

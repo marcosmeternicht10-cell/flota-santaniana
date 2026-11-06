@@ -123,6 +123,17 @@ from personal_taller import bp_personal, init_personal_taller
 init_personal_taller()
 app.register_blueprint(bp_personal)
 
+# ─── Integraciones con otros sistemas ───────────────────────────────────────
+# La API (/api/v1, con clave propia, y links de planilla para Excel / Google
+# Sheets / Power BI) y los avisos a otros sistemas cuando pasa algo (OT
+# cerrada, carga de combustible…). Se manejan en Sistema → Integraciones.
+from api_externa import bp_api_externa, init_api_externa
+init_api_externa()
+app.register_blueprint(bp_api_externa)
+from integraciones import bp_integraciones, init_integraciones
+init_integraciones()
+app.register_blueprint(bp_integraciones)
+
 # ─── Módulo de Servicios Corporativos ────────────────────────────────────────
 # Choferes de corporativos cargan rendiciones desde el celular; admin las
 # resume. init crea la tabla; el seed de choferes se corre desde /api/corp/seed.
@@ -405,6 +416,9 @@ def proteger_rutas():
         return None
     # Lo que leen Android y la Play Store sin sesión (manifiesto, service worker, privacidad)
     if es_ruta_movil(p):
+        return None
+    # La API para otros sistemas tiene su propia clave (api_externa.py)
+    if p.startswith("/api/v1/") or p == "/api/v1":
         return None
     if "usuario_id" not in session:
         if p.startswith("/api/"):
@@ -1830,6 +1844,12 @@ def api_chofer_reportar():
         import ot_pedidos
         fotos = [f for f in (d.get("fotos") or [])[:3] if f and len(f) < 800000]
         rid = ot_pedidos.crear_reporte(vehiculo_id, items, chofer, km=km, fotos=fotos)
+        try:
+            from integraciones import avisar
+            avisar("falla.reportada", pedido=rid, vehiculo_id=vehiculo_id, chofer=chofer, km=km,
+                   problemas=[{"descripcion": i["descripcion"], "tipo": i["tipo"]} for i in items])
+        except Exception:
+            pass
         auditar(f"Chofer mandó un pedido de OT (#{rid})", "Reportes de chofer",
                 f"{len(items)} problema(s), km {int(km):,}".replace(",", ".") + (f", {len(fotos)} foto(s)" if fotos else ""))
         return jsonify({"ok": True, "pedido": rid, "items": len(items), "fotos": len(fotos),

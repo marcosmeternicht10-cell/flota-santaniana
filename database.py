@@ -2062,6 +2062,11 @@ def crear_ot(vehiculo_id, fecha_apertura, km=0, conductor="", procedencia="",
         except Exception:
             pass
     conn.close()
+    try:
+        from integraciones import avisar
+        avisar("ot.abierta", ot_id=ot_id)
+    except Exception:
+        pass
     return ot_id
 
 
@@ -2304,6 +2309,13 @@ def actualizar_ot(ot_id, **kwargs):
                 plan_preventivo.al_reabrir_ot(i)
     except Exception:
         pass
+    if kwargs.get("estado") == "cerrada":
+        try:
+            from integraciones import avisar
+            for i in ids:
+                avisar("ot.cerrada", ot_id=i)
+        except Exception:
+            pass
 
 
 def nombres_de_choferes():
@@ -2370,6 +2382,12 @@ def cerrar_ot(ot_id, fecha_cierre=None):
         import plan_preventivo
         for i in ids:
             plan_preventivo.al_cerrar_ot(i)
+    except Exception:
+        pass
+    try:
+        from integraciones import avisar
+        for i in ids:
+            avisar("ot.cerrada", ot_id=i)
     except Exception:
         pass
 
@@ -3933,6 +3951,11 @@ def registrar_carga_combustible(datos):
     conn.close()
     # Actualizar el consumo del vehículo con el rendimiento promedio (para turismo)
     _actualizar_consumo_desde_combustible(int(datos["vehiculo_id"]))
+    try:
+        from integraciones import avisar
+        avisar("combustible.cargado", carga_id=cid)
+    except Exception:
+        pass
     return cid
 
 

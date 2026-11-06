@@ -218,6 +218,7 @@ function irA(sec) {
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
+    integraciones: renderIntegraciones,
     historial_carga: renderHistorialCarga,
     trafico: renderTrafico,
     personal: renderPersonal,
@@ -25379,4 +25380,389 @@ function ttSoltarH(a, x, y) {
     { txt: `Pasársela a las ${hi} (se la saco a ${nombre(a.pid)})`, ic: "arrow-right", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "pasar", hora_ini: hi, hora_fin: hf }) },
     { txt: `Que la hagan los dos (${nombre(dest.pid)} a las ${hi})`, ic: "users", fn: () => ttPost("mover", { de: a.pid, a: dest.pid, clave: a.clave, modo: "sumar", hora_ini: hi, hora_fin: hf }) },
   ]);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+//  INTEGRACIONES — conectar el sistema con otros, a botones
+// ════════════════════════════════════════════════════════════════════════
+// Tres caminos: una planilla que se actualiza sola (un link para Excel,
+// Google Sheets o Power BI), avisarle a otro sistema cuando pasa algo (se
+// pega su link) y una clave para programadores (la API /api/v1).
+// Abajo, todo lo que está conectado, con su uso y el botón para cortarlo.
+
+const igEsc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const ig = { claves: [], avisos: [], permisos: [], eventos: [], datos: [], docs: "/api/v1/docs" };
+
+function igCuando(t) {
+  if (!t) return "nunca";
+  const d = new Date(t.replace(" ", "T"));
+  if (isNaN(d)) return t;
+  const min = Math.round((Date.now() - d) / 60000);
+  if (min < 1) return "recién";
+  if (min < 60) return `hace ${min} min`;
+  if (min < 1440) return `hace ${Math.round(min / 60)} h`;
+  if (min < 2880) return "ayer";
+  return d.toLocaleDateString("es-PY", { day: "numeric", month: "short" });
+}
+function igCopiar(texto, que = "Copiado") {
+  navigator.clipboard.writeText(texto).then(() => toast(que, "success"), () => toast("No se pudo copiar: seleccioná y copiá a mano", "error"));
+}
+function igCampoCopiar(valor, id) {
+  return `<div class="ig-copiar"><input id="${id}" readonly value="${igEsc(valor)}" onclick="this.select()">
+    <button type="button" class="btn btn-primary btn-sm" onclick="igCopiar(document.getElementById('${id}').value)"><i class="ti ti-copy"></i> Copiar</button></div>`;
+}
+
+async function renderIntegraciones() {
+  status("Integraciones con otros sistemas");
+  const [c, a] = await Promise.all([api("/api/api_claves"), api("/api/integ/avisos")]);
+  if (!c || !c.claves) { content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-lock"></i>Solo administración maneja las integraciones.</div></div>`; return; }
+  Object.assign(ig, { claves: c.claves, permisos: c.permisos, datos: c.datos, docs: c.docs,
+                      avisos: (a && a.avisos) || [], eventos: (a && a.eventos) || [] });
+  const activas = ig.claves.filter(k => k.activa).length + ig.avisos.filter(v => v.activo).length;
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-plug-connected"></i> Integraciones</h1>
+      <p>Conectá el sistema con Excel, con la contabilidad o con cualquier otro programa, sin programar</p>
+    </div>
+    <div class="section">
+      <div class="ig-caminos">
+        <button class="ig-camino" onclick="igNuevaPlanilla()">
+          <span class="ig-camino-ic verde"><i class="ti ti-table-share"></i></span>
+          <span class="ig-camino-tit">Planilla que se actualiza sola</span>
+          <span class="ig-camino-txt">Elegís los datos y te da un link para pegar en <b>Excel</b>, <b>Google Sheets</b> o <b>Power BI</b>.</span>
+          <span class="ig-camino-ir">Generar link <i class="ti ti-arrow-right"></i></span>
+        </button>
+        <button class="ig-camino" onclick="igNuevoAviso()">
+          <span class="ig-camino-ic rojo"><i class="ti ti-bell-ringing"></i></span>
+          <span class="ig-camino-tit">Avisar a otro sistema</span>
+          <span class="ig-camino-txt">Pegás el link del otro sistema (o de <b>Make</b>, <b>Zapier</b>, <b>n8n</b>) y elegís cuándo avisarle.</span>
+          <span class="ig-camino-ir">Pegar un link <i class="ti ti-arrow-right"></i></span>
+        </button>
+        <button class="ig-camino" onclick="igNuevaClave()">
+          <span class="ig-camino-ic azul"><i class="ti ti-key"></i></span>
+          <span class="ig-camino-tit">Clave para programadores</span>
+          <span class="ig-camino-txt">Para que otro sistema lea las OT, el combustible o el tráfico, o cargue datos.</span>
+          <span class="ig-camino-ir">Crear clave <i class="ti ti-arrow-right"></i></span>
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><i class="ti ti-plug"></i> Lo que está conectado
+          <span class="ig-cuenta">${activas} activa${activas === 1 ? "" : "s"}</span>
+          <a class="btn btn-ghost btn-sm ig-docs" href="${igEsc(ig.docs)}" target="_blank" rel="noopener"><i class="ti ti-book"></i> Documentación</a>
+        </div>
+        <div class="card-body">${igLista()}</div>
+      </div>
+    </div>`;
+}
+
+function igLista() {
+  const filas = [
+    ...ig.avisos.map(v => ({ k: "aviso", activo: v.activo, x: v })),
+    ...ig.claves.map(k => ({ k: k.tipo === "planilla" ? "planilla" : "clave", activo: k.activa, x: k })),
+  ].sort((a, b) => (b.activo - a.activo));
+  if (!filas.length) return `<div class="empty"><i class="ti ti-plug-off"></i>Todavía no hay nada conectado. Elegí uno de los tres caminos de arriba.</div>`;
+  const nomEv = c => (ig.eventos.find(e => e.codigo === c) || {}).nombre || c;
+  const nomPer = c => (ig.permisos.find(p => p.codigo === c) || {}).nombre || c;
+  return `<div class="ig-lista">${filas.map(({ k, activo, x }) => {
+    let ic, tipo, det, uso, acc;
+    if (k === "aviso") {
+      ic = "bell-ringing"; tipo = "Aviso";
+      det = `<span class="ig-url">${igEsc(x.url)}</span><span class="ig-tags">${x.eventos.map(e => `<span>${igEsc(nomEv(e))}</span>`).join("")}</span>`;
+      const mal = x.ultimo_error && x.fallidos;
+      uso = `${x.enviados} enviado${x.enviados === 1 ? "" : "s"}${x.fallidos ? ` · <span class="ig-mal">${x.fallidos} con error</span>` : ""}<br>último ${igCuando(x.ultimo_envio)}${mal ? `<br><span class="ig-mal" title="${igEsc(x.ultimo_error)}"><i class="ti ti-alert-triangle"></i> ${igEsc(x.ultimo_error.slice(0, 60))}</span>` : ""}`;
+      acc = `<button class="btn btn-ghost btn-sm" onclick="igProbar(${x.id})"><i class="ti ti-send"></i> Probar</button>
+             <button class="btn btn-ghost btn-sm" onclick="igEnvios(${x.id})"><i class="ti ti-history"></i></button>
+             <button class="btn btn-ghost btn-sm" onclick="igPausar(${x.id}, ${!x.activo})">${x.activo ? '<i class="ti ti-player-pause"></i> Pausar' : '<i class="ti ti-player-play"></i> Reactivar'}</button>
+             <button class="btn btn-ghost btn-sm ig-cortar" onclick="igBorrarAviso(${x.id})" title="Borrar"><i class="ti ti-trash"></i></button>`;
+    } else {
+      ic = k === "planilla" ? "table-share" : "key"; tipo = k === "planilla" ? "Planilla" : "Clave";
+      det = k === "planilla"
+        ? `<span class="ig-tags"><span>${igEsc(x.dato_nombre || x.dato)}</span>${igFiltrosTxt(x.filtros)}</span>`
+        : `<span class="ig-url">${igEsc(x.prefijo)}…</span><span class="ig-tags">${x.permisos.map(p => `<span>${igEsc(nomPer(p))}</span>`).join("")}</span>`;
+      uso = `${x.usos_7_dias} pedido${x.usos_7_dias === 1 ? "" : "s"} esta semana<br>último ${igCuando(x.ultimo_uso)}${x.ultima_ip ? ` · ${igEsc(x.ultima_ip)}` : ""}`;
+      acc = (k === "planilla" && x.url ? `<button class="btn btn-ghost btn-sm" onclick="igVerPlanilla(${x.id})"><i class="ti ti-link"></i> Ver link</button>` : "")
+          + `<button class="btn btn-ghost btn-sm" onclick="igRegistro(${x.id})"><i class="ti ti-history"></i></button>`
+          + (x.activa ? `<button class="btn btn-ghost btn-sm ig-cortar" onclick="igRevocar(${x.id}, '${k}')"><i class="ti ti-plug-off"></i> Cortar</button>` : "");
+    }
+    const estado = activo ? `<span class="ig-estado on">Activa</span>`
+      : `<span class="ig-estado">${k === "aviso" ? "Pausada" : `Cortada ${igCuando(x.revocada_el)}`}</span>`;
+    return `<div class="ig-fila ${activo ? "" : "apagada"}">
+      <span class="ig-fila-ic ${k}"><i class="ti ti-${ic}"></i></span>
+      <div class="ig-fila-info"><div class="ig-fila-nom">${igEsc(x.nombre)} <span class="ig-tipo">${tipo}</span> ${estado}</div>${det}</div>
+      <div class="ig-fila-uso">${uso}</div>
+      <div class="ig-fila-acc">${acc}</div>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+const IG_FILTRO_TXT = { dias: v => `últimos ${v} días`, meses: v => `últimos ${v} meses`, estado: v => `solo ${v.replace("_", " ")}s`,
+  origen: v => `origen ${v}`, coche: v => `coche ${v}`, tipo: v => v, proximos: v => `${v} días`, liquidado: v => v === "1" ? "liquidadas" : "sin liquidar" };
+function igFiltrosTxt(f) {
+  return Object.entries(f || {}).map(([k, v]) => `<span class="suave">${igEsc((IG_FILTRO_TXT[k] || (x => `${k} ${x}`))(String(v)))}</span>`).join("");
+}
+
+// ── 1. Planilla ──────────────────────────────────────────────────────────
+const IG_DATOS_EXTRA = {
+  vehiculos: { ic: "bus", txt: "Cada coche con su chapa, modelo y km actual" },
+  ots: { ic: "clipboard-list", txt: "Cada trabajo en una fila: coche, técnico, costo, estado", periodo: "dias" },
+  ots_resumen: { ic: "clipboard-check", txt: "Cada OT en una fila, con su costo total", periodo: "dias" },
+  combustible: { ic: "gas-station", txt: "Cada carga: coche, litros, precio, odómetro", periodo: "dias" },
+  rendiciones: { ic: "receipt", txt: "Servicios de corporativos con cliente, chofer y monto", periodo: "dias" },
+  pagos: { ic: "cash", txt: "Lo que se pagó de plus a cada chofer", periodo: "dias" },
+  costos: { ic: "report-money", txt: "Los costos cargados por coche y mes", periodo: "meses" },
+  trafico: { ic: "route", txt: "Las salidas publicadas de hoy y mañana, con coche y tripulantes" },
+};
+function igNuevaPlanilla() {
+  const o = rvModal({
+    titulo: "Planilla que se actualiza sola", icono: "table-share", ancho: 680,
+    sub: "Elegí qué datos querés ver. Te damos un link: lo pegás una vez y cada vez que actualizás trae lo nuevo.",
+    cuerpo: `
+      <label class="ig-lbl">¿Qué datos?</label>
+      <div class="ig-opciones">${ig.datos.map((d, i) => {
+        const x = IG_DATOS_EXTRA[d.codigo] || { ic: "table", txt: "" };
+        return `<label class="ig-opcion"><input type="radio" name="ig-dato" value="${d.codigo}" ${i === 1 ? "checked" : ""} onchange="igPlanillaPeriodo()">
+          <span class="ig-opcion-ic"><i class="ti ti-${x.ic}"></i></span><span><b>${igEsc(d.nombre)}</b><small>${igEsc(x.txt)}</small></span></label>`;
+      }).join("")}</div>
+      <div class="ig-dos">
+        <div><label class="ig-lbl" for="ig-periodo">Período</label><select id="ig-periodo"></select></div>
+        <div id="ig-extra-wrap"></div>
+      </div>
+      <label class="ig-lbl" for="ig-nombre">Nombre, para reconocerla en la lista</label>
+      <input id="ig-nombre" class="ig-input" placeholder="Ej.: Power BI de gerencia, Excel de contabilidad" maxlength="80">`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="ig-generar" onclick="igGenerarPlanilla(this)"><i class="ti ti-link"></i> Generar link</button>`,
+  });
+  o.classList.add("ig-m");
+  igPlanillaPeriodo();
+}
+function igPlanillaPeriodo() {
+  const dato = document.querySelector("input[name=ig-dato]:checked")?.value;
+  const x = IG_DATOS_EXTRA[dato] || {};
+  const sel = document.getElementById("ig-periodo");
+  if (!sel) return;
+  const ops = x.periodo === "dias" ? [["30", "Últimos 30 días"], ["90", "Últimos 3 meses"], ["365", "Último año"], ["", "Todo"]]
+    : x.periodo === "meses" ? [["6", "Últimos 6 meses"], ["12", "Último año"], ["", "Todo"]]
+    : dato === "trafico" ? [["2", "Hoy y mañana"], ["1", "Solo hoy"], ["7", "Los próximos 7 días"]]
+    : [["", "Toda la flota activa"], ["todos", "Incluir los dados de baja"]];
+  sel.innerHTML = ops.map(([v, t], i) => `<option value="${v}" ${i === (x.periodo === "dias" ? 1 : 0) ? "selected" : ""}>${t}</option>`).join("");
+  const extra = document.getElementById("ig-extra-wrap");
+  extra.innerHTML = dato === "ots" || dato === "ots_resumen"
+    ? `<label class="ig-lbl" for="ig-extra">Qué OT</label><select id="ig-extra" data-k="estado"><option value="">Todas</option><option value="cerrada">Solo las cerradas</option><option value="abierta">Solo las abiertas</option></select>`
+    : dato === "trafico" ? `<label class="ig-lbl" for="ig-extra">Tráfico</label><select id="ig-extra" data-k="tipo"><option value="nacional">Nacional</option><option value="internacional">Internacional</option></select>`
+    : dato === "combustible" ? `<label class="ig-lbl" for="ig-extra">Cargas</label><select id="ig-extra" data-k="origen"><option value="">Todas</option><option value="taller">Del taller</option><option value="corporativo">De corporativos</option><option value="rendicion">De las rendiciones de sobres</option></select>`
+    : dato === "rendiciones" ? `<label class="ig-lbl" for="ig-extra">Rendiciones</label><select id="ig-extra" data-k="liquidado"><option value="">Todas</option><option value="0">Sin liquidar</option><option value="1">Liquidadas</option></select>`
+    : "";
+}
+async function igGenerarPlanilla(btn) {
+  const dato = document.querySelector("input[name=ig-dato]:checked")?.value;
+  const x = IG_DATOS_EXTRA[dato] || {};
+  const nombre = document.getElementById("ig-nombre").value.trim()
+    || (ig.datos.find(d => d.codigo === dato) || {}).nombre;
+  const per = document.getElementById("ig-periodo").value;
+  const filtros = {};
+  if (per) filtros[x.periodo === "dias" ? "dias" : x.periodo === "meses" ? "meses" : dato === "trafico" ? "proximos" : "activos"] = per;
+  const ex = document.getElementById("ig-extra");
+  if (ex && ex.value) filtros[ex.dataset.k] = ex.value;
+  btn.disabled = true;
+  const r = await api("/api/api_claves", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tipo: "planilla", nombre, dato, filtros }) });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && (r.error || r.msg)) || "No se pudo generar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  igMostrarPlanilla(nombre, r.url);
+  renderIntegraciones();
+}
+function igVerPlanilla(id) {
+  const k = ig.claves.find(c => c.id === id);
+  if (k) igMostrarPlanilla(k.nombre, k.url);
+}
+function igMostrarPlanilla(nombre, url) {
+  const formula = `=IMPORTDATA("${url}")`;
+  const o = rvModal({
+    titulo: "Listo: tu link", icono: "circle-check", ancho: 680,
+    sub: `<b>${igEsc(nombre)}</b> · Pegalo donde lo vayas a usar. Trae siempre lo último.`,
+    cuerpo: `
+      ${igCampoCopiar(url, "ig-url-planilla")}
+      <div class="rv-seg ig-seg" role="tablist">
+        <button class="on" onclick="igTab(this,'excel')"><i class="ti ti-file-spreadsheet"></i> Excel</button>
+        <button onclick="igTab(this,'sheets')"><i class="ti ti-brand-google-drive"></i> Google Sheets</button>
+        <button onclick="igTab(this,'pbi')"><i class="ti ti-chart-bar"></i> Power BI</button>
+      </div>
+      <ol class="ig-pasos" data-tab="excel">
+        <li>Abrí Excel y andá a <b>Datos → Obtener datos → Desde la Web</b> (en algunos Excel: <b>Datos → Desde la Web</b>).</li>
+        <li>Pegá el link y dale <b>Aceptar</b>. Si pregunta cómo entrar, elegí <b>Anónimo</b>.</li>
+        <li>Tocá <b>Cargar</b>. Para traer lo nuevo: <b>Datos → Actualizar todo</b> (o que se actualice solo al abrir: clic derecho en la tabla → Actualizar → Propiedades).</li>
+      </ol>
+      <ol class="ig-pasos" data-tab="sheets" hidden>
+        <li>Abrí una planilla de Google Sheets y pará en la celda <b>A1</b>.</li>
+        <li>Pegá esta fórmula y dale Enter:${igCampoCopiar(formula, "ig-formula")}</li>
+        <li>Google la actualiza sola más o menos cada hora.</li>
+      </ol>
+      <ol class="ig-pasos" data-tab="pbi" hidden>
+        <li>En Power BI Desktop: <b>Obtener datos → Web</b>.</li>
+        <li>Pegá el link, <b>Aceptar</b>, y si pregunta, <b>Anónimo → Conectar</b>.</li>
+        <li><b>Cargar</b>. Con <b>Actualizar</b> trae lo nuevo; publicado en el servicio, se le puede programar la actualización.</li>
+      </ol>
+      <p class="ig-nota"><i class="ti ti-shield-lock"></i> El link es como una llave: quien lo tenga ve estos datos. Si se comparte de más, cortalo en la lista y generá otro.</p>`,
+    pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`,
+  });
+  o.classList.add("ig-m");
+}
+function igTab(b, t) {
+  const m = b.closest(".rv-modal");
+  m.querySelectorAll(".ig-seg button").forEach(x => x.classList.toggle("on", x === b));
+  m.querySelectorAll(".ig-pasos").forEach(x => x.hidden = x.dataset.tab !== t);
+}
+
+// ── 2. Avisos ────────────────────────────────────────────────────────────
+function igNuevoAviso() {
+  const o = rvModal({
+    titulo: "Avisar a otro sistema", icono: "bell-ringing", ancho: 640,
+    sub: "Cuando pasa algo acá, el sistema le manda los datos al link que pegues. Sirve con tu sistema o con Make, Zapier o n8n (para llevarlo a WhatsApp, Gmail, una planilla…).",
+    cuerpo: `
+      <label class="ig-lbl" for="ig-av-url">1 · Pegá el link del otro sistema</label>
+      <div class="ig-copiar"><input id="ig-av-url" class="ig-input" placeholder="https://hook.make.com/… o https://tu-sistema.com/recibir" autofocus>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="igProbarLink(this)"><i class="ti ti-send"></i> Probar</button></div>
+      <div id="ig-av-prueba"></div>
+      <label class="ig-lbl">2 · ¿Cuándo avisarle?</label>
+      <div class="ig-checks">${ig.eventos.map(e => `<label class="ig-check"><input type="checkbox" value="${e.codigo}" ${e.codigo === "ot.cerrada" ? "checked" : ""}>
+        <span><b>${igEsc(e.nombre)}</b><small>${igEsc(e.detalle)}</small></span></label>`).join("")}</div>
+      <label class="ig-lbl" for="ig-av-nombre">3 · Nombre</label>
+      <input id="ig-av-nombre" class="ig-input" placeholder="Ej.: Contabilidad, WhatsApp al jefe de taller" maxlength="80">`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="igGuardarAviso(this)"><i class="ti ti-plug-connected"></i> Conectar</button>`,
+  });
+  o.classList.add("ig-m");
+}
+function igResultadoPrueba(r) {
+  if (!r) return "";
+  return r.ok
+    ? `<div class="ig-prueba ok"><i class="ti ti-circle-check"></i> Llegó bien (respondió ${r.estado}).</div>`
+    : `<div class="ig-prueba mal"><i class="ti ti-alert-triangle"></i> No llegó${r.estado ? ` (respondió ${r.estado})` : ""}: ${igEsc(r.error || r.respuesta || "sin respuesta")}</div>`;
+}
+async function igProbarLink(btn) {
+  const url = document.getElementById("ig-av-url").value.trim();
+  if (!url) { toast("Pegá primero el link", "error"); return; }
+  const ev = document.querySelector(".ig-checks input:checked")?.value;
+  btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2 ig-gira"></i> Probando';
+  const r = await fetch("/api/integ/probar", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url, evento: ev }) }).then(x => x.json()).catch(() => null);
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-send"></i> Probar';
+  document.getElementById("ig-av-prueba").innerHTML = igResultadoPrueba(r || { ok: false, error: "No se pudo probar" });
+}
+async function igGuardarAviso(btn) {
+  const eventos = [...document.querySelectorAll(".ig-checks input:checked")].map(x => x.value);
+  const body = { url: document.getElementById("ig-av-url").value.trim(), eventos,
+    nombre: document.getElementById("ig-av-nombre").value.trim() };
+  if (!body.nombre) { try { body.nombre = new URL(body.url).hostname; } catch (e) { /* lo avisa el servidor */ } }
+  btn.disabled = true;
+  const r = await fetch("/api/integ/avisos", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body) }).then(x => x.json()).catch(() => null);
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && r.error) || "No se pudo conectar", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  const o = rvModal({
+    titulo: "Conectado", icono: "circle-check", ancho: 600,
+    sub: `<b>${igEsc(body.nombre)}</b> · Desde ahora le llega cada vez que pase lo que marcaste.`,
+    cuerpo: `<p class="ig-txt">Si el otro sistema quiere comprobar que el aviso viene de acá, este es el <b>secreto</b> para validar la firma (encabezado <code>X-Santaniana-Firma</code>). Si usás Make o Zapier no hace falta.</p>
+      ${igCampoCopiar(r.secreto, "ig-secreto")}
+      <p class="ig-nota"><i class="ti ti-book"></i> Qué datos manda cada aviso: <a href="${igEsc(ig.docs)}#avisos" target="_blank" rel="noopener">documentación</a>.</p>`,
+    pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`,
+  });
+  o.classList.add("ig-m");
+  renderIntegraciones();
+}
+async function igProbar(id) {
+  toast("Mandando un aviso de prueba…");
+  const r = await api("/api/integ/probar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+  if (r && r.ok) toast(`Llegó bien (respondió ${r.estado})`, "success");
+  else toast(`No llegó${r && r.estado ? ` (respondió ${r.estado})` : ""}: ${(r && (r.error || r.respuesta)) || "sin respuesta"}`, "error");
+  renderIntegraciones();
+}
+async function igPausar(id, activo) {
+  const r = await api(`/api/integ/avisos/${id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo }) });
+  if (r && r.ok) { toast(activo ? "Reactivado" : "Pausado", "success"); renderIntegraciones(); }
+}
+async function igBorrarAviso(id) {
+  const v = ig.avisos.find(x => x.id === id);
+  if (!confirm(`¿Borrar «${v ? v.nombre : ""}»? Ese sistema deja de recibir avisos.`)) return;
+  const r = await api(`/api/integ/avisos/${id}/borrar`, { method: "POST" });
+  if (r && r.ok) { toast("Borrado", "success"); renderIntegraciones(); }
+}
+async function igEnvios(id) {
+  const v = ig.avisos.find(x => x.id === id) || {};
+  const r = await api(`/api/integ/avisos/${id}/envios`);
+  const filas = (r && r.envios) || [];
+  rvModal({
+    titulo: "Últimos avisos mandados", icono: "history", ancho: 720, sub: igEsc(v.nombre || ""),
+    cuerpo: filas.length ? `<table class="ig-tabla"><thead><tr><th>Cuándo</th><th>Qué</th><th></th><th>Respuesta</th></tr></thead><tbody>
+      ${filas.map(e => `<tr><td>${igEsc(e.momento.replace("T", " ").slice(0, 16))}</td><td><b>${igEsc(e.evento)}</b><br><small>${igEsc(e.resumen)}</small></td>
+        <td>${e.ok ? '<span class="ig-estado on">Llegó</span>' : '<span class="ig-estado mal">Falló</span>'}${e.intentos > 1 ? `<br><small>${e.intentos} intentos</small>` : ""}</td>
+        <td><small>${e.estado || "—"} ${igEsc((e.respuesta || "").slice(0, 80))}</small></td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty"><i class="ti ti-inbox"></i>Todavía no se mandó ningún aviso.</div>`,
+    pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
+}
+
+// ── 3. Clave para programadores ──────────────────────────────────────────
+function igNuevaClave() {
+  const lee = ig.permisos.filter(p => !p.codigo.includes(":")), carga = ig.permisos.filter(p => p.codigo.includes(":"));
+  const chk = p => `<label class="ig-check"><input type="checkbox" value="${p.codigo}"><span><b>${igEsc(p.nombre)}</b><small>${igEsc(p.detalle)}</small></span></label>`;
+  const o = rvModal({
+    titulo: "Clave para programadores", icono: "key", ancho: 640,
+    sub: "Para el que arma el otro sistema. Elegí solo lo que necesita: cada clave ve únicamente lo que marques.",
+    cuerpo: `
+      <label class="ig-lbl" for="ig-cl-nombre">¿Para qué sistema es?</label>
+      <input id="ig-cl-nombre" class="ig-input" placeholder="Ej.: Sistema contable, GPS de la flota" maxlength="80" autofocus>
+      <label class="ig-lbl">Puede ver</label><div class="ig-checks">${lee.map(chk).join("")}</div>
+      <label class="ig-lbl">Puede cargar</label><div class="ig-checks">${carga.map(chk).join("")}</div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" onclick="igCrearClave(this)"><i class="ti ti-key"></i> Crear clave</button>`,
+  });
+  o.classList.add("ig-m");
+}
+async function igCrearClave(btn) {
+  const nombre = document.getElementById("ig-cl-nombre").value.trim();
+  const permisos = [...btn.closest(".rv-modal").querySelectorAll(".ig-checks input:checked")].map(x => x.value);
+  btn.disabled = true;
+  const r = await api("/api/api_claves", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nombre, permisos }) });
+  btn.disabled = false;
+  if (!r || !r.ok) { toast((r && (r.error || r.msg)) || "No se pudo crear", "error"); return; }
+  btn.closest(".modal-overlay").remove();
+  const base = location.origin;
+  const ejemplo = `curl -H "Authorization: Bearer ${r.clave}" ${base}/api/v1/estado`;
+  const o = rvModal({
+    titulo: "Clave creada", icono: "circle-check", ancho: 680,
+    sub: `<b>${igEsc(nombre)}</b> · Copiala ahora: <b>no se vuelve a mostrar</b>. Si se pierde, se corta y se crea otra.`,
+    cuerpo: `${igCampoCopiar(r.clave, "ig-clave")}
+      <p class="ig-txt">Pasale al programador la clave y la documentación. Para probar que anda:</p>
+      <pre class="ig-pre">${igEsc(ejemplo)}</pre>
+      <div class="ig-botones"><button class="btn btn-ghost btn-sm" onclick="igCopiar(${igEsc(JSON.stringify(ejemplo))}, 'Ejemplo copiado')"><i class="ti ti-copy"></i> Copiar ejemplo</button>
+        <a class="btn btn-ghost btn-sm" href="${igEsc(ig.docs)}" target="_blank" rel="noopener"><i class="ti ti-book"></i> Abrir documentación</a>
+        <button class="btn btn-ghost btn-sm" onclick="igCopiar('${igEsc(ig.docs)}', 'Link de la documentación copiado')"><i class="ti ti-link"></i> Copiar link de la documentación</button></div>`,
+    pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Ya la copié</button>`,
+  });
+  o.classList.add("ig-m");
+  renderIntegraciones();
+}
+async function igRevocar(id, k) {
+  const c = ig.claves.find(x => x.id === id);
+  if (!confirm(`¿Cortar «${c ? c.nombre : ""}»? ${k === "planilla" ? "El link deja de traer datos" : "El sistema que la usa deja de entrar"} al toque. No se puede deshacer.`)) return;
+  const r = await api(`/api/api_claves/${id}/revocar`, { method: "POST" });
+  if (r && r.ok) { toast("Cortada", "success"); renderIntegraciones(); }
+}
+async function igRegistro(id) {
+  const c = ig.claves.find(x => x.id === id) || {};
+  const r = await api(`/api/api_claves/${id}/registro`);
+  const filas = (r && r.registro) || [];
+  rvModal({
+    titulo: "Últimos pedidos", icono: "history", ancho: 720, sub: igEsc(c.nombre || ""),
+    cuerpo: filas.length ? `<table class="ig-tabla"><thead><tr><th>Cuándo</th><th>Qué pidió</th><th>Resultado</th><th>Desde</th></tr></thead><tbody>
+      ${filas.map(e => `<tr><td>${igEsc(e.momento.replace("T", " ").slice(0, 16))}</td><td><code>${igEsc(e.metodo)} ${igEsc(e.ruta.replace(/\/planilla\/[^/]+$/, "/planilla/…"))}</code>${e.consulta ? `<br><small>${igEsc(e.consulta.slice(0, 80))}</small>` : ""}</td>
+        <td>${e.estado < 300 ? `<span class="ig-estado on">${e.estado}</span> <small>${e.filas} filas · ${e.ms} ms</small>` : `<span class="ig-estado mal">${e.estado}</span>`}</td><td><small>${igEsc(e.ip)}</small></td></tr>`).join("")}</tbody></table>`
+      : `<div class="empty"><i class="ti ti-inbox"></i>Todavía no la usó nadie.</div>`,
+    pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
 }
