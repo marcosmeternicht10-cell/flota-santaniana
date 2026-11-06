@@ -8821,3 +8821,57 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 @media (max-width: 1280px) { .ig-caminos { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 860px) { .ig-caminos { grid-template-columns: 1fr; } }
 .ig-suave { font-weight: 400; color: var(--muted); }
+
+/* Integraciones: tarjetas con dos acciones y tutoriales */
+.ig-camino { cursor: default; }
+.ig-camino:hover { transform: none; }
+.ig-camino-pie { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ig-guia-link { display: inline-flex; align-items: center; gap: 7px; margin: -6px 0 18px; padding: 6px 2px; border: 0; background: none; cursor: pointer; font: inherit; font-size: 13.5px; color: var(--muted); }
+.ig-guia-link b { color: var(--brand-blue); font-weight: 600; }
+.ig-guia-link:hover b { text-decoration: underline; }
+.ig-guia-link .ti { font-size: 17px; color: var(--brand-blue); }
+
+.ig-m-tuto .rv-modal-cuerpo { padding: 0; }
+.ig-tuto { display: grid; grid-template-columns: 190px minmax(0, 1fr); min-height: 60vh; }
+.ig-tuto-nav { display: flex; flex-direction: column; gap: 2px; padding: 14px 10px; background: var(--surface2); border-right: 1px solid var(--border); }
+.ig-tuto-nav button { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 0; border-radius: 9px; background: none; text-align: left; cursor: pointer; font: 500 13.5px "Inter", sans-serif; color: var(--muted); }
+.ig-tuto-nav button:hover { background: var(--surface3); color: var(--text); }
+.ig-tuto-nav button.on { background: var(--surface); color: var(--azul-oscuro); font-weight: 600; box-shadow: var(--shadow); }
+.ig-tuto-nav .ti { font-size: 17px; }
+.ig-tuto-txt { padding: 18px 24px 26px; font-size: 14px; line-height: 1.6; color: var(--text); }
+.ig-tuto-txt h3 { font: 700 17px/1.2 var(--display); color: var(--azul-oscuro); margin: 22px 0 10px; }
+.ig-tuto-txt code { font-size: 12.5px; background: var(--surface3); border-radius: 4px; padding: 1px 5px; }
+.ig-tuto-intro { font-size: 14.5px; color: var(--text); margin: 0; }
+.ig-tuto-pasos { list-style: none; counter-reset: paso; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.ig-tuto-pasos li { counter-increment: paso; position: relative; padding-left: 40px; }
+.ig-tuto-pasos li::before { content: counter(paso); position: absolute; left: 0; top: 0; width: 27px; height: 27px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-blue); color: #fff; font: 700 13px "Inter", sans-serif; }
+.ig-tuto-pasos b { display: block; font-weight: 600; margin-bottom: 2px; }
+.ig-tuto-pasos span { color: var(--muted); }
+.ig-tuto-pasos span b, .ig-tuto-pasos span code { display: inline; color: var(--text); margin: 0; }
+.ig-tuto-extra, .ig-tuto-problemas details { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); margin-top: 10px; }
+.ig-tuto-extra summary, .ig-tuto-problemas summary { cursor: pointer; padding: 11px 14px; font-weight: 600; font-size: 13.5px; }
+.ig-tuto-extra[open] summary, .ig-tuto-problemas details[open] summary { border-bottom: 1px solid var(--border); }
+.ig-tuto-extra ol { margin: 10px 14px 12px 32px; padding: 0; display: flex; flex-direction: column; gap: 6px; color: var(--muted); }
+.ig-tuto-extra ol b { color: var(--text); }
+.ig-tuto-problemas details p { margin: 10px 14px 12px; color: var(--muted); }
+.ig-tuto-problemas details p b { color: var(--text); }
+.ig-tuto-caja { margin-top: 20px; border-radius: var(--radius-sm); padding: 12px 16px; border: 1px solid; }
+.ig-tuto-caja.ok { background: var(--info-bg); border-color: var(--info-bd); }
+.ig-tuto-caja.ojo { background: var(--warning-bg); border-color: var(--warning-bd); }
+.ig-tuto-caja > b { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
+.ig-tuto-caja ul { margin: 6px 0 0 18px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.ig-tuto-caja p { margin: 4px 0 0; }
+.ig-tuto-elegir { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.ig-tuto-elegir button { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); cursor: pointer; text-align: left; font: inherit; font-size: 13.5px; color: var(--text); transition: border-color .15s, background .15s; }
+.ig-tuto-elegir button:hover { border-color: var(--brand-blue); background: var(--info-bg); }
+.ig-tuto-elegir b { flex-shrink: 0; color: var(--brand-blue); font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.ig-tuto-tabla { margin-top: 16px; }
+.ig-tuto-tabla td:first-child { width: 150px; }
+.ig-tuto-msj { width: 100%; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; font: 13px/1.5 "Inter", sans-serif; color: var(--text); background: var(--surface2); resize: vertical; margin-bottom: 8px; }
+@media (max-width: 760px) {
+  .ig-tuto { grid-template-columns: 1fr; }
+  .ig-tuto-nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+  .ig-tuto-nav button { flex-shrink: 0; }
+  .ig-tuto-elegir button { flex-direction: column; align-items: flex-start; gap: 6px; }
+}
+.ig-tuto > * { min-width: 0; }

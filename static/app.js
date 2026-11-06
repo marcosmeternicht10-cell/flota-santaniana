@@ -25426,32 +25426,18 @@ async function renderIntegraciones() {
       <p>Conectá el sistema con Excel, con la contabilidad o con cualquier otro programa, sin programar</p>
     </div>
     <div class="section">
-      <div class="ig-caminos">
-        <button class="ig-camino" onclick="igNuevaPlanilla()">
-          <span class="ig-camino-ic verde"><i class="ti ti-table-share"></i></span>
-          <span class="ig-camino-tit">Planilla que se actualiza sola</span>
-          <span class="ig-camino-txt">Elegís los datos y te da un link para pegar en <b>Excel</b>, <b>Google Sheets</b> o <b>Power BI</b>.</span>
-          <span class="ig-camino-ir">Generar link <i class="ti ti-arrow-right"></i></span>
-        </button>
-        <button class="ig-camino" onclick="igNuevoAviso()">
-          <span class="ig-camino-ic rojo"><i class="ti ti-bell-ringing"></i></span>
-          <span class="ig-camino-tit">Avisar a otro sistema</span>
-          <span class="ig-camino-txt">Pegás el link del otro sistema (o de <b>Make</b>, <b>Zapier</b>, <b>n8n</b>) y elegís cuándo avisarle.</span>
-          <span class="ig-camino-ir">Pegar un link <i class="ti ti-arrow-right"></i></span>
-        </button>
-        <button class="ig-camino" onclick="igNuevaClave()">
-          <span class="ig-camino-ic azul"><i class="ti ti-arrows-exchange"></i></span>
-          <span class="ig-camino-tit">Conectar un sistema</span>
-          <span class="ig-camino-txt">Ida y vuelta (como <b>Delta</b>): una clave para que lea lo de acá y nos mande lo suyo.</span>
-          <span class="ig-camino-ir">Crear conexión <i class="ti ti-arrow-right"></i></span>
-        </button>
-        <button class="ig-camino" onclick="igSubirArchivo()">
-          <span class="ig-camino-ic ambar"><i class="ti ti-file-upload"></i></span>
-          <span class="ig-camino-tit">Subir un archivo</span>
-          <span class="ig-camino-txt">Si el otro sistema solo exporta <b>Excel</b> o <b>CSV</b>: lo subís y entra a la bandeja.</span>
-          <span class="ig-camino-ir">Elegir archivo <i class="ti ti-arrow-right"></i></span>
-        </button>
+      <div class="ig-caminos">${IG_CAMINOS.map(c => `
+        <div class="ig-camino">
+          <span class="ig-camino-ic ${c.color}"><i class="ti ti-${c.ic}"></i></span>
+          <span class="ig-camino-tit">${c.tit}</span>
+          <span class="ig-camino-txt">${c.txt}</span>
+          <span class="ig-camino-pie">
+            <button class="btn btn-primary btn-sm" onclick="${c.fn}()">${c.ir} <i class="ti ti-arrow-right"></i></button>
+            <button class="btn btn-ghost btn-sm" onclick="igTutorial('${c.tuto}')"><i class="ti ti-school"></i> Cómo se usa</button>
+          </span>
+        </div>`).join("")}
       </div>
+      <button class="ig-guia-link" onclick="igTutorial('empezar')"><i class="ti ti-map-2"></i> ¿No sabés cuál usar? <b>Empezá por acá</b></button>
 
       <div class="card">
         <div class="card-head"><i class="ti ti-plug"></i> Lo que está conectado
@@ -25608,6 +25594,210 @@ const IG_FILTRO_TXT = { dias: v => `últimos ${v} días`, meses: v => `últimos 
   origen: v => `origen ${v}`, coche: v => `coche ${v}`, tipo: v => v, proximos: v => `${v} días`, liquidado: v => v === "1" ? "liquidadas" : "sin liquidar" };
 function igFiltrosTxt(f) {
   return Object.entries(f || {}).map(([k, v]) => `<span class="suave">${igEsc((IG_FILTRO_TXT[k] || (x => `${k} ${x}`))(String(v)))}</span>`).join("");
+}
+
+const IG_CAMINOS = [
+  { ic: "table-share", color: "verde", tit: "Planilla que se actualiza sola", fn: "igNuevaPlanilla", ir: "Generar link", tuto: "planilla",
+    txt: "Elegís los datos y te da un link para pegar en <b>Excel</b>, <b>Google Sheets</b> o <b>Power BI</b>." },
+  { ic: "bell-ringing", color: "rojo", tit: "Avisar a otro sistema", fn: "igNuevoAviso", ir: "Pegar un link", tuto: "avisos",
+    txt: "Pegás el link del otro sistema (o de <b>Make</b>, <b>Zapier</b>, <b>n8n</b>) y elegís cuándo avisarle." },
+  { ic: "arrows-exchange", color: "azul", tit: "Conectar un sistema", fn: "igNuevaClave", ir: "Crear conexión", tuto: "conectar",
+    txt: "Ida y vuelta (como <b>Delta</b>): una clave para que lea lo de acá y nos mande lo suyo." },
+  { ic: "file-upload", color: "ambar", tit: "Subir un archivo", fn: "igSubirArchivo", ir: "Elegir archivo", tuto: "archivo",
+    txt: "Si el otro sistema solo exporta <b>Excel</b> o <b>CSV</b>: lo subís y entra a la bandeja." },
+];
+
+// ── Tutoriales ───────────────────────────────────────────────────────────
+// Uno por cada forma, más «por dónde empezar» y cómo cuidar lo conectado.
+// Cada uno: para qué sirve, el paso a paso, consejos y qué hacer si falla.
+const IG_TUTOS = [
+  { id: "empezar", ic: "map-2", tit: "Por dónde empezar", corto: "Cuál usar",
+    intro: "Las cuatro formas resuelven cosas distintas. Elegí según lo que querés lograr:",
+    tabla: [
+      ["Quiero ver los datos en Excel, Google Sheets o Power BI", "Planilla que se actualiza sola", "planilla"],
+      ["Quiero que cuando pase algo (se cierra una OT, se publica el tráfico) le llegue a otro sistema, a un WhatsApp o a un correo", "Avisar a otro sistema", "avisos"],
+      ["Otro sistema (Delta) tiene que leer lo nuestro y mandarnos lo suyo, solo, sin que nadie toque nada", "Conectar un sistema", "conectar"],
+      ["El otro sistema solo sabe exportar un Excel o un CSV", "Subir un archivo", "archivo"],
+      ["Llegaron datos y quiero ver qué entró, qué se aplicó y qué tiene error", "Lo que llegó", "bandeja"],
+      ["Quiero saber quién usa cada conexión, pausarla o cortarla", "Cuidar lo conectado", "cuidar"],
+    ],
+    tips: ["Se pueden usar varias a la vez. Con Delta, por ejemplo: <b>Conectar un sistema</b> (ida y vuelta) + <b>Avisar a otro sistema</b> (para que le llegue la asignación apenas se publica) + <b>Subir un archivo</b> mientras ADS no tenga la conexión lista."] },
+
+  { id: "planilla", ic: "table-share", tit: "Planilla que se actualiza sola", corto: "Planilla", fn: "igNuevaPlanilla",
+    intro: "Un link que devuelve los datos siempre al día. Se pega una sola vez en Excel, Google Sheets o Power BI; cada vez que actualizás, trae lo último. Sirve para armar tus propios cuadros o para pasarle a contabilidad o gerencia algo que se mantiene solo.",
+    pasos: [
+      ["Generá el link", "En esta pantalla tocá <b>Generar link</b> (Planilla que se actualiza sola). Elegí <b>qué datos</b> (OT, combustible, rendiciones…), el <b>período</b> (por ejemplo, los últimos 3 meses: siempre cuenta desde hoy, así la planilla se mueve sola) y ponele un <b>nombre</b> para reconocerlo después («Excel de contabilidad»). Tocá <b>Generar link</b>."],
+      ["Copialo", "Te muestra el link y tres pestañas: Excel, Google Sheets y Power BI. Tocá <b>Copiar</b>. Si después lo necesitás de nuevo, está en <b>Lo que está conectado → Ver link</b>."],
+      ["En Excel", "<b>Datos → Obtener datos → De otras fuentes → Desde la Web</b> (en algunos Excel está directo como <b>Datos → Desde la Web</b>). Pegá el link y <b>Aceptar</b>. Si pregunta cómo entrar, elegí <b>Anónimo → Conectar</b>. Tocá <b>Cargar</b>: aparece una tabla nueva con los datos."],
+      ["Que se actualice sola en Excel", "<b>Datos → Actualizar todo</b> trae lo nuevo cuando quieras. Para que lo haga solo: <b>Datos → Consultas y conexiones</b>, clic derecho en la consulta → <b>Propiedades</b> → marcá <b>Actualizar al abrir el archivo</b> y, si querés, <b>Actualizar cada 60 minutos</b>."],
+      ["En Google Sheets", "En una hoja vacía, pará en la celda <b>A1</b> y pegá la fórmula que te da la pestaña Google Sheets: <code>=IMPORTDATA(\"link\")</code>. Enter. Google la actualiza sola, más o menos cada hora."],
+      ["En Power BI", "<b>Obtener datos → Web</b>, pegá el link, <b>Aceptar</b> → <b>Anónimo → Conectar</b> → <b>Cargar</b>. Con <b>Actualizar</b> trae lo nuevo; si lo publicás en el servicio de Power BI, ahí le programás la actualización diaria."],
+    ],
+    tips: [
+      "<b>Una planilla por tema.</b> Si querés OTs y combustible, generá dos links (en Excel quedan como dos tablas y las podés cruzar por el coche).",
+      "<b>OT «un ítem por fila»</b> sirve para ver quién hizo qué y cuánto costó cada trabajo. <b>«Una OT por fila»</b> sirve para contar OTs y sumar costos totales.",
+      "Lo que armes al costado de la tabla (fórmulas, gráficos, tablas dinámicas) se mantiene cuando se actualiza.",
+    ],
+    problemas: [
+      ["Los números salen raros (7350.5 aparece como 73505 o como texto)", "Es por la coma decimal de Paraguay: el link usa punto. En Excel: <b>Datos → Obtener datos → Iniciar el Editor de Power Query</b>, clic derecho en la columna → <b>Cambiar tipo → Usar configuración regional</b> → Número decimal, <b>Inglés (Estados Unidos)</b>. En Google Sheets usá <code>=IMPORTDATA(\"link\"; \",\"; \"en_US\")</code>."],
+      ["Excel pide usuario y contraseña", "Elegí <b>Anónimo</b>. La «llave» ya va dentro del link."],
+      ["Dice «Este link fue desactivado»", "Alguien lo cortó en <b>Lo que está conectado</b>. Generá uno nuevo y reemplazalo (en Excel: Consultas y conexiones → clic derecho → Editar → Origen)."],
+      ["Google Sheets dice «No se pudo obtener la URL»", "Esperá un minuto y volvé a escribir la fórmula; si el período es «Todo» y hay muchísimos datos, achicalo a los últimos 3 meses o al último año."],
+    ],
+    ojo: "El link es como una llave: quien lo tenga ve esos datos. No lo publiques en un grupo de WhatsApp. Si se compartió de más, cortalo y generá otro." },
+
+  { id: "avisos", ic: "bell-ringing", tit: "Avisar a otro sistema", corto: "Avisos", fn: "igNuevoAviso",
+    intro: "Cuando pasa algo acá (se cierra una OT, se publica el tráfico o la asignación, un chofer reporta una falla…), el sistema le manda los datos al link que pegues, en ese mismo momento. El link puede ser de otro sistema (como Delta) o de una herramienta como <b>Make</b>, <b>Zapier</b> o <b>n8n</b>, que después lo llevan a WhatsApp, Gmail, una planilla de Google o lo que quieras.",
+    pasos: [
+      ["Conseguí el link del otro lado", "Si es un sistema (Delta, la contabilidad), pedíselo al que lo maneja: «necesito la URL donde reciben avisos por POST con JSON». Si usás Make, Zapier o n8n, mirá los pasos de abajo para sacarlo."],
+      ["Pegalo y probalo", "Tocá <b>Pegar un link</b>. En el paso 1 pegá el link y tocá <b>Probar</b>: manda un aviso de ejemplo con datos reales (la última OT, la última carga…). Si dice <b>Llegó bien</b>, seguí."],
+      ["Elegí cuándo avisar", "Marcá los eventos: <b>Se cierra una OT</b>, <b>Se publica la asignación de corporativos</b>, <b>Se publica el tráfico</b>, etc. Solo le llega lo que marques."],
+      ["Ponele nombre y conectá", "Un nombre que diga a dónde va («Delta – asignaciones», «WhatsApp jefe de taller») y <b>Conectar</b>. Te muestra un <b>secreto</b>: solo hace falta si el otro sistema quiere comprobar que el aviso viene de acá (se lo pasás a su programador). Con Make o Zapier no hace falta."],
+      ["Comprobá que anda", "En <b>Lo que está conectado</b> vas a ver cuántos avisos se mandaron y cuándo fue el último. El botón del reloj muestra los últimos 50: qué se mandó, si llegó y qué contestó el otro lado."],
+    ],
+    extra: [
+      ["Con Make (para mandarlo a WhatsApp, Gmail, Google Sheets…)", [
+        "En make.com: <b>Create a new scenario</b> → tocá el <b>+</b> → buscá <b>Webhooks</b> → <b>Custom webhook</b>.",
+        "<b>Create a webhook</b> → ponele un nombre → <b>Save</b> → <b>Copy address to clipboard</b>. Ese es el link.",
+        "Pegalo acá en <b>Avisar a otro sistema</b> y conectalo. En Make tocá <b>Run once</b> y acá tocá <b>Probar</b>: Make aprende cómo vienen los datos.",
+        "En Make agregá el siguiente paso (por ejemplo <b>Gmail → Send an email</b> o <b>WhatsApp Business → Send a message</b>) y armá el mensaje con los datos: <code>datos.coche</code>, <code>datos.items</code>, <code>datos.cambios</code>…",
+        "Prendé el escenario (el interruptor de abajo a la izquierda). Listo: cada vez que pase, llega.",
+      ]],
+      ["Con Zapier", [
+        "En zapier.com: <b>Create Zap</b> → disparador <b>Webhooks by Zapier</b> → <b>Catch Hook</b> (Webhooks es de los planes pagos de Zapier).",
+        "Copiá el <b>webhook URL</b> que te da y pegalo acá.",
+        "Acá tocá <b>Probar</b> y en Zapier <b>Test trigger</b>. Después agregá la acción (Gmail, WhatsApp, Sheets…).",
+      ]],
+      ["Con n8n", [
+        "Agregá un nodo <b>Webhook</b>, método <b>POST</b>, y copiá la <b>Production URL</b>.",
+        "Pegala acá, probala, y activá el workflow en n8n.",
+      ]],
+    ],
+    tips: [
+      "Ejemplo útil: «Se cierra una OT» → Make → correo a contabilidad con el coche, los trabajos y el costo total.",
+      "Ejemplo para Delta: «Se publica la asignación de corporativos» y «Se publica el tráfico» → a cada salida le llega el coche y los choferes, y la lista de qué cambió.",
+      "Podés tener varios avisos: uno por destino. Cada uno con sus eventos.",
+    ],
+    problemas: [
+      ["«No llegó: el otro sistema no está atendiendo»", "El link está mal o el otro sistema está apagado. Copialo de nuevo desde el otro lado; en Make, fijate que el escenario esté prendido."],
+      ["«No llegó (respondió 404)»", "El link no existe del otro lado (se borró el webhook o tiene una letra de menos)."],
+      ["Aparece <b>Pausada</b> sola", "Falló 30 veces seguidas y se pausó para no insistir. Arreglá el link del otro lado, tocá <b>Probar</b> y después <b>Reactivar</b>."],
+      ["Llega pero en Make no aparecen los campos", "En Make tocá <b>Run once</b> y acá <b>Probar</b> otra vez, así toma la estructura."],
+    ] },
+
+  { id: "conectar", ic: "arrows-exchange", tit: "Conectar un sistema (ida y vuelta)", corto: "Conectar", fn: "igNuevaClave",
+    intro: "Una clave para otro sistema: con ella lee lo de acá (OTs, combustible, tráfico, asignación, agencias…) y nos manda lo suyo (ventas, agencias, fallas, lo que sea). Es la forma de conectar Delta. La parte de ellos la hace su programador (ADS); vos creás la clave y se la pasás.",
+    pasos: [
+      ["Creá la conexión", "Tocá <b>Crear conexión</b>. Escribí el nombre del sistema (<b>Delta</b>). Viene todo marcado: lo que puede <b>ver</b> de acá y lo que nos puede <b>mandar</b>. Desmarcá lo que no quieras compartir (por ejemplo, si no querés que vean las rendiciones con montos)."],
+      ["Copiá la clave YA", "Tocá <b>Crear conexión</b>. Aparece la clave (empieza con <code>ls_</code>). <b>Se muestra una sola vez</b>: copiala y guardala. Si se pierde, no se recupera: se corta y se crea otra."],
+      ["Pasale todo a ADS", "Mandale al programador: <b>la clave</b>, el <b>link de la documentación</b> (botón «Copiar link de la documentación») y qué querés que haga. Más abajo tenés un mensaje listo para copiar."],
+      ["Si además querés que les llegue al instante", "La clave sirve para que ellos <i>pregunten</i>. Para que les llegue apenas publicás el tráfico o la asignación, pediles su link de avisos y cargalo en <b>Avisar a otro sistema</b>."],
+      ["Comprobá que la usan", "En <b>Lo que está conectado</b>, la fila «Delta» dice cuántos pedidos hizo esta semana y cuándo fue el último. El botón del reloj muestra cada pedido: qué pidió, si salió bien y desde dónde."],
+      ["Mirá lo que mandan", "Lo que Delta nos mande aparece en <b>Lo que llegó de otros sistemas</b> (ver el tutorial «Lo que llegó»)."],
+    ],
+    copiar: ["Mensaje para ADS", "Hola, les paso el acceso para integrar Delta con el sistema de flota de La Santaniana.\n\nClave: (pegar la clave)\nDocumentación con ejemplos: (pegar el link de la documentación)\n\nLo que necesitamos:\n1. Que Delta lea de nuestro sistema el tráfico y la asignación publicados (coche y choferes de cada salida) y los cargue en Unidad y Conductores de cada servicio.\n2. Que Delta nos mande sus servicios (con ocupación y pasajeros), las ventas y las agencias a /api/v1/entrada/<tipo>.\n3. Si Delta puede recibir avisos, que nos pasen la URL para mandarles el tráfico y la asignación apenas se publican.\n\nSi Delta no tiene API, ¿nos pueden decir dónde está su base de datos (en la oficina o en un servidor de ustedes) y si nos pueden dar acceso de lectura a los servicios y de escritura a unidad y conductores?\n\nGracias."],
+    tips: [
+      "Una clave por sistema. Si mañana se conecta la contabilidad, se le crea la suya: así se puede cortar una sin afectar a la otra.",
+      "Si un sistema solo tiene que leer, desmarcá todo lo de «Lo que nos puede mandar».",
+    ],
+    problemas: [
+      ["El programador dice «401 clave inválida»", "Copió mal la clave (tiene que ir completa, con el <code>ls_</code>) o no la manda como <code>Authorization: Bearer ls_…</code>. Si no la tenés, cortala y creá otra."],
+      ["Dice «403 sin permiso»", "A la clave le falta ese permiso. Creá una nueva con lo que necesita y cortá la vieja."],
+      ["Dice «429 demasiados pedidos»", "Pasó los 120 pedidos por minuto. Que espere lo que indica la respuesta y que pida de a más registros por vez."],
+    ] },
+
+  { id: "archivo", ic: "file-upload", tit: "Subir un archivo", corto: "Archivo", fn: "igSubirArchivo",
+    intro: "Para cuando el otro sistema solo sabe exportar un Excel o un CSV. Lo subís y cada fila entra a la bandeja: lo que el sistema entiende se aplica solo y lo demás queda guardado. El export <b>Servicios ADS</b> de Delta se reconoce solo.",
+    pasos: [
+      ["Exportá desde el otro sistema", "Sacá el listado como Excel (.xlsx) o CSV, como hiciste con «Servicios ADS». Si te da a elegir, mejor CSV. Si es un Excel viejo (.xls), abrilo y guardalo como .xlsx."],
+      ["Subilo", "Tocá <b>Elegir archivo</b> y seleccionalo (hasta 5 MB; si es más grande, partilo)."],
+      ["Decí qué tiene", "Tocá una de las opciones (Agencias, Combustible, Ventas…) o escribí otra (por ejemplo «liquidaciones»). Si es el export de Servicios de Delta no hace falta: lo reconoce solo."],
+      ["De qué sistema viene", "Dejá «Delta» o cambialo. Sirve para saber de dónde salió cada cosa."],
+      ["Tocá Subir y leé el resultado", "Te dice cuántas filas entraron: <b>aplicadas</b> (ya están en el sistema), <b>guardadas</b> (a la vista, todavía no se usan), <b>ya estaban</b> (no se duplican), <b>con error</b> (te dice en qué fila y por qué)."],
+    ],
+    tabla2: [
+      ["Combustible", "coche, litros (y si tiene: fecha, precio_litro, odometro, estacion)"],
+      ["Kilometraje", "coche, km"],
+      ["Agencias", "codigo, nombre (y si tiene: ciudad, telefono, email, representante)"],
+      ["Fallas", "coche, descripcion (y si tiene: chofer, km)"],
+      ["Costos", "coche, mes (2026-10) o fecha, monto (y si tiene: tipo, concepto)"],
+    ],
+    tips: [
+      "La <b>primera fila</b> tiene que ser la de los títulos. No importan mayúsculas ni tildes: «Nº Interno», «Interno», «Unidad» o «Bus» se entienden como el coche.",
+      "Podés subir el mismo archivo dos veces sin miedo: lo que ya estaba no se duplica, y lo que cambió se actualiza.",
+      "Mientras ADS no tenga lista la conexión automática, subí el export de Servicios una vez por día: así queda la ocupación de cada salida.",
+    ],
+    problemas: [
+      ["«El archivo no tiene filas con datos»", "La hoja con los datos no es la primera del Excel, o los títulos están muy abajo. Dejá la hoja de datos primera, con los títulos arriba."],
+      ["Filas «con error: no hay ningún coche…»", "Ese número de coche no existe en el sistema (o Delta usa otra numeración). Dalo de alta o avisame para armar la tabla de equivalencias; después en la bandeja tocá <b>Volver a aplicar</b>."],
+      ["«Ese es un Excel viejo (.xls)»", "Abrilo en Excel → Guardar como → Libro de Excel (.xlsx) o CSV."],
+    ] },
+
+  { id: "bandeja", ic: "inbox", tit: "Lo que llegó de otros sistemas", corto: "Lo que llegó",
+    intro: "Todo lo que entra (por la conexión o por un archivo) queda acá, agrupado por tipo. Nada se pierde: lo que el sistema entiende se aplica, y lo demás queda guardado para usarlo después.",
+    pasos: [
+      ["Mirá el resumen", "Cada tipo (Agencias, Servicios de Delta, Ventas…) muestra cuántos registros llegaron, de qué sistema y cuándo fue el último."],
+      ["Abrí uno con «Ver»", "Muestra los últimos 300 con sus datos. Arriba podés filtrar: Aplicados, Guardados, Para revisar, Con error."],
+      ["Arreglá los errores", "Leé el motivo (por ejemplo, «no hay ningún coche 999»). Arreglalo en el sistema (dar de alta el coche, corregir el dato) y tocá <b>Volver a aplicar</b> (la flechita). Si no sirve, <b>Descartar</b> (la cruz)."],
+      ["Revisá los «para revisar»", "Son registros que ya se habían cargado (una falla, un costo) y llegaron de nuevo con cambios. El sistema no los pisa para no duplicar: mirá qué cambió y corregilo a mano si hace falta; después descartalo de la bandeja."],
+    ],
+    tabla2: [
+      ["Aplicado", "Ya está en el sistema (la carga, la agencia, el pedido de OT…). No hay que hacer nada."],
+      ["Guardado", "Llegó y está a la vista, pero el sistema todavía no usa ese tipo de dato (por ejemplo, ventas)."],
+      ["Para revisar", "Llegó cambiado algo que ya se había cargado. Mirarlo."],
+      ["Error", "No se pudo aplicar; el motivo está al lado. Arreglar y volver a aplicar."],
+    ],
+    tips: ["Descartar un registro de la bandeja <b>no borra</b> lo que ya se cargó en el sistema: solo lo saca de la lista."] },
+
+  { id: "cuidar", ic: "shield-lock", tit: "Cuidar lo conectado", corto: "Cuidar",
+    intro: "En <b>Lo que está conectado</b> está todo: avisos, claves y links de planilla. Desde ahí ves quién usa qué y lo cortás al toque si hace falta.",
+    pasos: [
+      ["Mirá el uso", "Cada fila dice cuántos pedidos o avisos hubo esta semana, cuándo fue el último y desde qué dirección. Si algo que debería usarse dice «último: nunca», no lo están usando."],
+      ["Mirá el detalle", "El botón del reloj abre los últimos movimientos: cada pedido con su resultado (200 = bien; 401, 403, 429 = problema, ver el tutorial de cada forma)."],
+      ["Pausá un aviso", "<b>Pausar</b> deja de mandar sin borrarlo; <b>Reactivar</b> lo vuelve a prender. Útil si el otro sistema está en mantenimiento."],
+      ["Cortá una clave o un link", "<b>Cortar</b> la desactiva en el momento: el próximo pedido ya no entra. No se puede deshacer; si hacía falta, se crea otra."],
+    ],
+    tips: [
+      "Cortá y volvé a crear si: se fue el programador que tenía la clave, se compartió un link de planilla de más, o ves pedidos desde una dirección que no conocés.",
+      "Todo lo que se crea, se corta o se cambia queda en el <b>Historial</b> del sistema, con quién lo hizo.",
+    ] },
+];
+
+function igTutorial(id) {
+  const t = IG_TUTOS.find(x => x.id === id) || IG_TUTOS[0];
+  const lista = arr => arr.map(x => `<li>${x}</li>`).join("");
+  const cuerpo = `
+    <div class="ig-tuto">
+      <nav class="ig-tuto-nav">${IG_TUTOS.map(x => `<button class="${x.id === t.id ? "on" : ""}" onclick="igTutorial('${x.id}')"><i class="ti ti-${x.ic}"></i> ${x.corto}</button>`).join("")}</nav>
+      <div class="ig-tuto-txt">
+        <p class="ig-tuto-intro">${t.intro}</p>
+        ${t.tabla ? `<div class="ig-tuto-elegir">${t.tabla.map(([q, r, d]) => `<button onclick="igTutorial('${d}')"><span>${q}</span><b>${r} <i class="ti ti-arrow-right"></i></b></button>`).join("")}</div>` : ""}
+        ${t.pasos ? `<h3>Paso a paso</h3><ol class="ig-tuto-pasos">${t.pasos.map(([h, d]) => `<li><b>${h}</b><span>${d}</span></li>`).join("")}</ol>` : ""}
+        ${t.extra ? t.extra.map(([h, ps]) => `<details class="ig-tuto-extra"><summary>${h}</summary><ol>${lista(ps)}</ol></details>`).join("") : ""}
+        ${t.tabla2 ? `<table class="ig-tabla ig-tuto-tabla"><tbody>${t.tabla2.map(([a, b]) => `<tr><td><b>${a}</b></td><td>${b}</td></tr>`).join("")}</tbody></table>` : ""}
+        ${t.copiar ? `<h3>${t.copiar[0]}</h3><textarea class="ig-tuto-msj" rows="12" readonly>${igEsc(t.copiar[1])}</textarea>
+          <button class="btn btn-ghost btn-sm" onclick="igCopiar(this.previousElementSibling.value, 'Mensaje copiado')"><i class="ti ti-copy"></i> Copiar mensaje</button>` : ""}
+        ${t.tips ? `<div class="ig-tuto-caja ok"><b><i class="ti ti-bulb"></i> Consejos</b><ul>${lista(t.tips)}</ul></div>` : ""}
+        ${t.problemas ? `<h3>Si algo falla</h3><div class="ig-tuto-problemas">${t.problemas.map(([p, sol]) => `<details><summary>${p}</summary><p>${sol}</p></details>`).join("")}</div>` : ""}
+        ${t.ojo ? `<div class="ig-tuto-caja ojo"><b><i class="ti ti-shield-lock"></i> Ojo</b><p>${t.ojo}</p></div>` : ""}
+      </div>
+    </div>`;
+  const viejo = document.querySelector(".ig-m-tuto");
+  if (viejo) {   // cambiar de tutorial sin cerrar y abrir
+    viejo.querySelector(".rv-modal-tit h2").textContent = t.tit;
+    viejo.querySelector(".rv-modal-ic").innerHTML = `<i class="ti ti-${t.ic}"></i>`;
+    viejo.querySelector(".rv-modal-cuerpo").innerHTML = cuerpo;
+    viejo.querySelector(".rv-modal-cuerpo").scrollTop = 0;
+    viejo.querySelector(".rv-modal-pie").innerHTML = igTutoPie(t);
+    return;
+  }
+  const o = rvModal({ titulo: t.tit, icono: t.ic, ancho: 960, clase: "ig-m-tuto", cuerpo, pie: igTutoPie(t),
+    sub: "Tutorial de integraciones" });
+  o.classList.add("ig-m");
+}
+function igTutoPie(t) {
+  return `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+    ${t.fn ? `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove(); ${t.fn}()"><i class="ti ti-player-play"></i> Hacerlo ahora</button>` : ""}`;
 }
 
 // ── 1. Planilla ──────────────────────────────────────────────────────────
