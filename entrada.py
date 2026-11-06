@@ -59,6 +59,10 @@ CONOCIDOS = {
     "fallas":      "Entra como pedido de OT en Pedidos de choferes",
     "costos":      "Se suma al costo del coche en ese mes",
 }
+# Los que el sistema reconoce aunque todavía no los aplique
+RECONOCIDOS = {
+    "servicios_delta": "Servicios de Delta: coche, conductores y ocupación de cada salida",
+}
 
 
 def init_entrada():
@@ -172,6 +176,58 @@ def leer_excel(datos):
 
 
 # ════════════════════════════════════════════════════════════════════════
+#  El formato de Delta (lo que exporta el sistema de pasajes de ADS)
+# ════════════════════════════════════════════════════════════════════════
+# «Servicios ADS»: un servicio por fila, separado por punto y coma, con
+# Codigo;Fecha;Hora;Dia;…;Unidad;Conduct1;Conduct2;Auxiliar;…;Origen;Destino.
+# La fecha viene como «07/03/2023 07:10:00 a.m.» (día/mes/año).
+
+def es_servicios_delta(regs):
+    if not regs:
+        return False
+    k = {_clave_campo(x) for x in regs[0].keys()}
+    return {"codigo", "unidad", "conduct1"} <= k and ("ocup" in k or "pax" in k)
+
+
+def _fecha_delta(txt):
+    m = re.match(r"^\s*(\d{1,2})/(\d{1,2})/(\d{4})", str(txt or ""))
+    return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}" if m else str(txt or "")[:10]
+
+
+def _entero_o_nada(v):
+    try:
+        return int(float(str(v).replace(",", ".")))
+    except (TypeError, ValueError):
+        return None
+
+
+def servicio_delta(crudo):
+    """Una fila de «Servicios ADS» con nombres claros."""
+    r = {_clave_campo(k): (v.strip() if isinstance(v, str) else v) for k, v in crudo.items() if _clave_campo(k)}
+    fecha = _fecha_delta(r.get("fecha"))
+    salida = {
+        "id": f"{r.get('codigo', '')}|{fecha}",
+        "codigo": r.get("codigo", ""), "fecha": fecha, "hora": r.get("hora", ""), "dia": r.get("dia", ""),
+        "origen": r.get("origen", ""), "destino": r.get("destino", ""),
+        "coche": str(r.get("unidad") or ""),
+        "conductor1": r.get("conduct1", ""), "conductor2": r.get("conduct2", ""), "conductor3": r.get("conduct3", ""),
+        "auxiliar": r.get("auxiliar", ""),
+        "butacas": _entero_o_nada(r.get("but")), "ocupados": _entero_o_nada(r.get("ocup")),
+        "libres": _entero_o_nada(r.get("libr")), "pasajeros": _entero_o_nada(r.get("pax")),
+        "plano": r.get("plano", ""), "piso_sup": r.get("sup", ""), "piso_inf": r.get("inf", ""),
+        "estado": r.get("estado", ""), "camino": r.get("camino", ""), "llegada": r.get("hdrh", ""),
+        "pais_origen": r.get("orig", ""), "pais_destino": r.get("dest", ""),
+        "actualizado_en_delta": r.get("fechaultact", ""), "usuario_delta": r.get("usuario", ""),
+    }
+    # Lo que no se reconoce viaja igual, con su nombre de Delta
+    usados = {"codigo", "fecha", "hora", "dia", "origen", "orig", "destino", "dest", "unidad", "conduct1", "conduct2",
+              "conduct3", "auxiliar", "but", "ocup", "libr", "pax", "plano", "sup", "inf", "estado", "camino", "hdrh",
+              "fechaultact", "usuario"}
+    salida["otros"] = {k: v for k, v in r.items() if k not in usados and v not in (None, "")}
+    return salida
+
+
+# ════════════════════════════════════════════════════════════════════════
 #  Aplicar lo que el sistema entiende
 # ════════════════════════════════════════════════════════════════════════
 
@@ -268,6 +324,10 @@ def recibir(tipo, registros, origen, clave_id=None, tope=MAX_REGISTROS):
         raise ErrorApi(413, "demasiados", f"Hasta {tope} registros por envío; mandalos en partes.")
     res = {"recibidos": len(registros), "aplicados": 0, "guardados": 0, "repetidos": 0, "revisar": 0, "errores": 0,
            "detalle": []}
+    if es_servicios_delta(registros):
+        tipo = "servicios_delta"
+        registros = [servicio_delta(r) for r in registros]
+    res["tipo"] = tipo
     normales = []
     for i, crudo in enumerate(registros):
         try:
@@ -413,7 +473,8 @@ def api_bandeja():
     for f in filas:
         t = tipos.setdefault(f["tipo"], {"tipo": f["tipo"], "total": 0, "ultimo": "", "origenes": [],
                                          "aplicado": 0, "guardado": 0, "revisar": 0, "error": 0,
-                                         "se_aplica": CONOCIDOS.get(f["tipo"], "")})
+                                         "se_aplica": CONOCIDOS.get(f["tipo"], ""),
+                                         "reconocido": RECONOCIDOS.get(f["tipo"], "")})
         t[f["estado"]] = t.get(f["estado"], 0) + f["n"]
         t["total"] += f["n"]
         t["ultimo"] = max(t["ultimo"], f["ultimo"] or "")
@@ -496,8 +557,6 @@ def api_subir():
     tipo = _clave_campo(request.form.get("tipo") or "")
     if not arch:
         return jsonify({"ok": False, "error": "Elegí el archivo."}), 400
-    if not RE_TIPO.match(tipo or ""):
-        return jsonify({"ok": False, "error": "Decí qué tiene el archivo (ventas, agencias, combustible…)."}), 400
     datos = arch.read(MAX_ARCHIVO + 1)
     if len(datos) > MAX_ARCHIVO:
         return jsonify({"ok": False, "error": "El archivo pasa de 5 MB: partilo en dos."}), 400
@@ -520,6 +579,10 @@ def api_subir():
         return jsonify({"ok": False, "error": f"No se pudo leer el archivo: {type(e).__name__}"}), 400
     if not regs:
         return jsonify({"ok": False, "error": "El archivo no tiene filas con datos."}), 400
+    if es_servicios_delta(regs):
+        tipo = "servicios_delta"
+    elif not RE_TIPO.match(tipo or ""):
+        return jsonify({"ok": False, "error": "Decí qué tiene el archivo (ventas, agencias, combustible…)."}), 400
     origen = (request.form.get("origen") or "Archivo").strip()[:40] + f" · {arch.filename}"[:40]
     try:
         res = recibir(tipo, regs, origen, tope=MAX_REGISTROS * 5)
@@ -528,7 +591,7 @@ def api_subir():
     try:
         from database import registrar_auditoria
         registrar_auditoria(usuario=session.get("nombre") or "?", rol="admin", categoria="Sistema",
-                            accion=f"Subió un archivo a la bandeja de entrada ({tipo})",
+                            accion=f"Subió un archivo a la bandeja de entrada ({res['tipo']})",
                             detalle=f"{arch.filename}: {res['recibidos']} filas, {res['aplicados']} aplicadas")
     except Exception:
         pass

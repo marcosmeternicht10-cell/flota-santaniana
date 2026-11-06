@@ -25468,7 +25468,8 @@ async function renderIntegraciones() {
     </div>`;
 }
 
-const IG_TIPO_TXT = { combustible: "Combustible", kilometraje: "Kilometraje", agencias: "Agencias", fallas: "Fallas", costos: "Costos" };
+const IG_TIPO_TXT = { combustible: "Combustible", kilometraje: "Kilometraje", agencias: "Agencias", fallas: "Fallas", costos: "Costos",
+  servicios_delta: "Servicios de Delta" };
 const igTipoNombre = t => IG_TIPO_TXT[t] || (t.charAt(0).toUpperCase() + t.slice(1).replace(/_/g, " "));
 function igBandeja() {
   if (!ig.entrada.length) return `<div class="empty"><i class="ti ti-inbox"></i>Todavía no llegó nada. Cuando otro sistema mande datos (o subas un archivo), aparecen acá.
@@ -25483,7 +25484,7 @@ function igBandeja() {
           ${t.guardado ? `<span>${t.guardado} guardado${t.guardado === 1 ? "" : "s"}</span>` : ""}
           ${t.revisar ? `<span class="ojo">${t.revisar} para revisar</span>` : ""}
           ${t.error ? `<span class="mal">${t.error} con error</span>` : ""}</span>
-        <span class="ig-url ig-sans">${t.se_aplica ? igEsc(t.se_aplica) : "Se guarda tal cual: el sistema todavía no lo usa"} · de ${igEsc(t.origenes.join(", "))}</span></div>
+        <span class="ig-url ig-sans">${t.se_aplica ? igEsc(t.se_aplica) : t.reconocido ? igEsc(t.reconocido) : "Se guarda tal cual: el sistema todavía no lo usa"} · de ${igEsc(t.origenes.join(", "))}</span></div>
       <div class="ig-fila-uso">último ${igCuando(t.ultimo)}</div>
       <div class="ig-fila-acc"><button class="btn btn-ghost btn-sm" onclick="igVerEntrada('${igEsc(t.tipo)}')"><i class="ti ti-eye"></i> Ver</button></div>
     </div>`).join("")}</div>`;
@@ -25532,7 +25533,7 @@ function igSubirArchivo() {
     cuerpo: `
       <label class="ig-lbl" for="ig-arch">1 · El archivo (.xlsx o .csv, hasta 5 MB)</label>
       <input type="file" id="ig-arch" class="ig-input ig-file" accept=".xlsx,.xlsm,.csv,.txt">
-      <label class="ig-lbl" for="ig-arch-tipo">2 · ¿Qué tiene?</label>
+      <label class="ig-lbl" for="ig-arch-tipo">2 · ¿Qué tiene? <small class="ig-suave">(el export de Servicios de Delta se reconoce solo)</small></label>
       <input id="ig-arch-tipo" class="ig-input" list="ig-tipos" placeholder="Ej.: ventas, agencias, liquidaciones">
       <datalist id="ig-tipos">${sug.map(t => `<option value="${t}">`).join("")}</datalist>
       <div class="ig-chips">${sug.map(t => `<button type="button" class="chip" onclick="document.getElementById('ig-arch-tipo').value='${t}'">${igTipoNombre(t)}</button>`).join("")}</div>
@@ -25549,7 +25550,6 @@ async function igMandarArchivo(btn) {
   const f = document.getElementById("ig-arch").files[0];
   const tipo = document.getElementById("ig-arch-tipo").value.trim();
   if (!f) { toast("Elegí el archivo", "error"); return; }
-  if (!tipo) { toast("Decí qué tiene el archivo", "error"); return; }
   const fd = new FormData();
   fd.append("archivo", f); fd.append("tipo", tipo); fd.append("origen", document.getElementById("ig-arch-origen").value.trim());
   btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2 ig-gira"></i> Subiendo';
@@ -25560,7 +25560,7 @@ async function igMandarArchivo(btn) {
   const partes = [[r.aplicados, "aplicadas"], [r.guardados, "guardadas"], [r.repetidos, "ya estaban"], [r.revisar, "para revisar"], [r.errores, "con error"]]
     .filter(([n]) => n).map(([n, t]) => `<b>${n}</b> ${t}`).join(" · ");
   box.innerHTML = `<div class="ig-prueba ${r.errores ? "mal" : "ok"}"><i class="ti ti-${r.errores ? "alert-triangle" : "circle-check"}"></i>
-    <span>${r.recibidos} filas: ${partes}${r.detalle.length ? `<br>${r.detalle.slice(0, 5).map(d => `Fila ${d.n + 2}: ${igEsc(d.mensaje)}`).join("<br>")}` : ""}</span></div>`;
+    <span>${r.tipo === "servicios_delta" ? "<b>Reconocido: export de Servicios de Delta.</b><br>" : ""}${r.recibidos} filas: ${partes}${r.detalle.length ? `<br>${r.detalle.slice(0, 5).map(d => `Fila ${d.n + 2}: ${igEsc(d.mensaje)}`).join("<br>")}` : ""}</span></div>`;
   renderIntegraciones();
 }
 

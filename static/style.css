@@ -8820,3 +8820,4 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 .ig-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 @media (max-width: 1280px) { .ig-caminos { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 860px) { .ig-caminos { grid-template-columns: 1fr; } }
+.ig-suave { font-weight: 400; color: var(--muted); }
