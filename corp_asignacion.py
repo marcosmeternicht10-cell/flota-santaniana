@@ -1236,6 +1236,11 @@ def publicar(fecha, quien=""):
         conn.execute("UPDATE corp_asig_dias SET version=?, publicado_el=?, publicado_por=?, modificado=0 WHERE id=?",
                      (version, cuando, quien[:80], dia["id"]))
         conn.commit()
+        try:
+            from integraciones import avisar
+            avisar("asignacion.publicada", fecha=fecha)
+        except Exception:
+            pass
         return {"version": version, "cambios": cambios, "publicado_el": cuando}, None
     finally:
         conn.close()

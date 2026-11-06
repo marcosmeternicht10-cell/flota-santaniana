@@ -101,6 +101,9 @@
 <p>El tráfico del día tal como se publicó (la última versión): cada salida con corredor, hora, destino, coche y tripulantes. La fecha puede ser <code>hoy</code> o <code>mañana</code>. <code>tipo=internacional</code> para el internacional.</p>
 <pre><code>curl -H "Authorization: Bearer $CLAVE" "{{ base }}/api/v1/trafico/hoy"</code></pre>
 
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/asignacion/&lt;fecha&gt;</span><span class="perm">trafico</span></h3>
+<p>La asignación de corporativos del día tal como se publicó: cada servicio con cliente, tramo, chofer y coche, y la lista de <code>cambios</code> respecto de la versión anterior.</p>
+
 <h3><span class="metodo">GET</span><span class="ruta">/api/v1/costos</span><span class="perm">costos</span></h3>
 <p>Costos cargados por coche y mes. Filtros: <code>desde</code> y <code>hasta</code> como mes (<code>2026-10</code>), <code>meses=6</code>, <code>tipo</code>, <code>coche</code>.</p>
 
@@ -177,7 +180,8 @@ X-Santaniana-Firma: sha256=5d1c…
   <tr><td><code>falla.reportada</code></td><td>Un chofer reporta una falla</td><td>Coche, chofer, km y los problemas</td></tr>
   <tr><td><code>combustible.cargado</code></td><td>Se registra una carga</td><td>Igual que una fila de /combustible</td></tr>
   <tr><td><code>rendicion.cargada</code></td><td>Un chofer corporativo rinde</td><td>Igual que una fila de /rendiciones</td></tr>
-  <tr><td><code>trafico.publicado</code></td><td>Se publica el tráfico</td><td>Igual que /trafico/&lt;fecha&gt;</td></tr>
+  <tr><td><code>trafico.publicado</code></td><td>Se publica el tráfico (y cada vez que se vuelve a publicar con cambios)</td><td>Igual que /trafico/&lt;fecha&gt;, con <code>cambios</code></td></tr>
+  <tr><td><code>asignacion.publicada</code></td><td>Se publica la asignación de corporativos</td><td>Igual que /asignacion/&lt;fecha&gt;, con <code>cambios</code></td></tr>
 </table>
 <p>Respondé con cualquier código <code>2xx</code>. Si no contesta o da error, se reintenta a los 10 s y al minuto; con 30 fallas seguidas el aviso se pausa solo. Para comprobar que el aviso viene de acá, calculá el HMAC-SHA256 del cuerpo con el secreto del aviso y compará:</p>
 <pre><code># Python

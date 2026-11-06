@@ -73,7 +73,7 @@ PERMISOS = [
     ("ots",                  "Órdenes de trabajo",     "Las OT con sus ítems, técnicos, costos y estado"),
     ("combustible",          "Combustible",            "Las cargas: litros, precio, odómetro, estación"),
     ("rendiciones",          "Rendiciones y pagos",    "Rendiciones de corporativos y pagos de plus"),
-    ("trafico",              "Tráfico",                "El tráfico del día tal como se publicó"),
+    ("trafico",              "Tráfico y asignación",   "El tráfico y la asignación de corporativos, tal como se publicaron"),
     ("costos",               "Costos",                 "Costos cargados por coche y mes"),
     ("agencias",             "Agencias",               "Las agencias de venta: código, datos de contacto y estado"),
     ("combustible:escribir", "Cargar combustible",     "Puede registrar cargas (por ejemplo, desde el surtidor)"),
@@ -715,9 +715,44 @@ def trafico_publicado(fecha, tipo="nacional"):
                                 "destino": s.get("destino", ""), "coche": s.get("coche", ""),
                                 "tripulante1": s.get("trip1", ""), "tripulante2": s.get("trip2", ""),
                                 "nota": s.get("nota", "")})
+    try:
+        cambios = [c.get("txt", "") for c in json.loads(v["cambios"] or "[]")]
+    except (ValueError, TypeError, AttributeError):
+        cambios = []
     return {"fecha": fecha, "tipo": tipo, "titulo": foto.get("titulo", ""),
             "version": v["version"], "publicado_el": v["publicado_el"], "publicado_por": v["publicado_por"],
-            "hay_cambios_sin_publicar": bool(dia["modificado"]), "salidas": salidas}
+            "hay_cambios_sin_publicar": bool(dia["modificado"]), "cambios": cambios, "salidas": salidas}
+
+
+def asignacion_publicada(fecha):
+    """La asignación de corporativos de un día tal como se publicó (la última versión), o None."""
+    conn = get_connection()
+    try:
+        dia = conn.execute("SELECT id, version, publicado_el, publicado_por, modificado FROM corp_asig_dias WHERE fecha=?",
+                           (fecha,)).fetchone()
+        v = None
+        if dia and dia["version"]:
+            v = conn.execute("SELECT * FROM corp_asig_versiones WHERE dia_id=? AND version=?",
+                             (dia["id"], dia["version"])).fetchone()
+    finally:
+        conn.close()
+    if not v:
+        return None
+    foto = json.loads(v["datos"] or "{}")
+    filas = foto.get("filas", foto) if isinstance(foto, dict) else foto
+    servicios = []
+    for f in (filas if isinstance(filas, list) else []):
+        servicios.append({"fecha": fecha, "cliente": f.get("cliente", ""), "tramo": f.get("tramo", ""),
+                          "lado": f.get("lado", ""), "hora": f.get("hora", ""), "chofer": f.get("chofer_nombre", ""),
+                          "chofer_usuario": f.get("chofer_usuario", ""), "coche": f.get("coche", ""),
+                          "corre": f.get("lado") != "no_corre", "nota": f.get("nota", "") or f.get("detalle", "")})
+    try:
+        cambios = [c.get("txt", "") for c in json.loads(v["cambios"] or "[]")]
+    except (ValueError, TypeError, AttributeError):
+        cambios = []
+    return {"fecha": fecha, "version": v["version"], "publicado_el": v["publicado_el"],
+            "publicado_por": v["publicado_por"], "hay_cambios_sin_publicar": bool(dia["modificado"]),
+            "cambios": cambios, "servicios": servicios}
 
 
 def _fecha_trafico(txt):
@@ -915,6 +950,17 @@ def v1_pagos():
 @con_clave("costos")
 def v1_costos():
     return _responder("costos", ds_costos(request.args))
+
+
+@bp_api_externa.route("/api/v1/asignacion/<fecha>")
+@con_clave("trafico")
+def v1_asignacion(fecha):
+    fecha = _fecha_trafico(fecha)
+    a = asignacion_publicada(fecha)
+    if not a:
+        raise ErrorApi(404, "sin_publicar", f"La asignación de corporativos del {fecha} todavía no se publicó.")
+    g.api_filas = len(a["servicios"])
+    return jsonify(a)
 
 
 @bp_api_externa.route("/api/v1/agencias")

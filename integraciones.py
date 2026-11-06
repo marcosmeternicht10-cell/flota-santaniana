@@ -56,7 +56,8 @@ EVENTOS = [
     ("falla.reportada",     "Un chofer reporta una falla",     "El coche, lo que escribió el chofer y el km"),
     ("combustible.cargado", "Se registra una carga de combustible", "Coche, litros, precio, odómetro y estación"),
     ("rendicion.cargada",   "Un chofer corporativo rinde un servicio", "Cliente, tramo, chofer, horario, km y monto"),
-    ("trafico.publicado",   "Se publica el tráfico del día",   "Todas las salidas con coche y tripulantes"),
+    ("trafico.publicado",   "Se publica el tráfico del día",   "Todas las salidas con coche y tripulantes, y qué cambió"),
+    ("asignacion.publicada", "Se publica la asignación de corporativos", "Cada servicio con chofer y coche, y qué cambió"),
 ]
 CODIGOS = {e[0] for e in EVENTOS}
 REINTENTOS = (0, 10, 60)          # segundos de espera antes de cada intento
@@ -124,8 +125,9 @@ def _datos_del_evento(evento, ref):
             conn.close()
         return A.una_rendicion(f["id"]) if f else None
     if evento == "trafico.publicado":
-        t = A.trafico_publicado(ref["fecha"], ref.get("tipo") or "nacional")
-        return t
+        return A.trafico_publicado(ref["fecha"], ref.get("tipo") or "nacional")
+    if evento == "asignacion.publicada":
+        return A.asignacion_publicada(ref["fecha"])
     if evento == "falla.reportada":
         conn = get_connection()
         try:
@@ -152,6 +154,8 @@ def _resumen(evento, datos):
         return f"{d.get('cliente')} · {d.get('tramo')} · {d.get('chofer_nombre')}"
     if evento == "trafico.publicado":
         return f"{d.get('fecha')} {d.get('tipo')} · versión {d.get('version')} · {len(d.get('salidas') or [])} salidas"
+    if evento == "asignacion.publicada":
+        return f"Corporativos {d.get('fecha')} · versión {d.get('version')} · {len(d.get('servicios') or [])} servicios"
     if evento == "falla.reportada":
         return f"Coche {d.get('coche')} · {d.get('chofer')}"
     return evento
@@ -517,6 +521,10 @@ def _ejemplo(evento):
                 f = conn.execute("""SELECT fecha, tipo FROM trafico_dias WHERE COALESCE(version,0)>0
                                     ORDER BY fecha DESC LIMIT 1""").fetchone()
                 ref = {"fecha": f["fecha"], "tipo": f["tipo"]} if f else None
+            elif evento == "asignacion.publicada":
+                f = conn.execute("""SELECT fecha FROM corp_asig_dias WHERE COALESCE(version,0)>0
+                                    ORDER BY fecha DESC LIMIT 1""").fetchone()
+                ref = {"fecha": f["fecha"]} if f else None
             elif evento == "falla.reportada":
                 f = conn.execute("SELECT id FROM vehiculos WHERE activo=1 ORDER BY id LIMIT 1").fetchone()
                 ref = {"vehiculo_id": f["id"], "pedido": 0, "chofer": "Chofer de prueba", "km": 0,
