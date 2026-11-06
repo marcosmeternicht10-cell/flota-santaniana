@@ -25414,10 +25414,11 @@ function igCampoCopiar(valor, id) {
 
 async function renderIntegraciones() {
   status("Integraciones con otros sistemas");
-  const [c, a] = await Promise.all([api("/api/api_claves"), api("/api/integ/avisos")]);
+  const [c, a, e] = await Promise.all([api("/api/api_claves"), api("/api/integ/avisos"), api("/api/integ/entrada")]);
   if (!c || !c.claves) { content.innerHTML = `<div class="section"><div class="empty"><i class="ti ti-lock"></i>Solo administración maneja las integraciones.</div></div>`; return; }
   Object.assign(ig, { claves: c.claves, permisos: c.permisos, datos: c.datos, docs: c.docs,
-                      avisos: (a && a.avisos) || [], eventos: (a && a.eventos) || [] });
+                      avisos: (a && a.avisos) || [], eventos: (a && a.eventos) || [],
+                      entrada: (e && e.tipos) || [], conocidos: (e && e.conocidos) || [] });
   const activas = ig.claves.filter(k => k.activa).length + ig.avisos.filter(v => v.activo).length;
   content.innerHTML = `
     <div class="page-header">
@@ -25439,10 +25440,16 @@ async function renderIntegraciones() {
           <span class="ig-camino-ir">Pegar un link <i class="ti ti-arrow-right"></i></span>
         </button>
         <button class="ig-camino" onclick="igNuevaClave()">
-          <span class="ig-camino-ic azul"><i class="ti ti-key"></i></span>
-          <span class="ig-camino-tit">Clave para programadores</span>
-          <span class="ig-camino-txt">Para que otro sistema lea las OT, el combustible o el tráfico, o cargue datos.</span>
-          <span class="ig-camino-ir">Crear clave <i class="ti ti-arrow-right"></i></span>
+          <span class="ig-camino-ic azul"><i class="ti ti-arrows-exchange"></i></span>
+          <span class="ig-camino-tit">Conectar un sistema</span>
+          <span class="ig-camino-txt">Ida y vuelta (como <b>Delta</b>): una clave para que lea lo de acá y nos mande lo suyo.</span>
+          <span class="ig-camino-ir">Crear conexión <i class="ti ti-arrow-right"></i></span>
+        </button>
+        <button class="ig-camino" onclick="igSubirArchivo()">
+          <span class="ig-camino-ic ambar"><i class="ti ti-file-upload"></i></span>
+          <span class="ig-camino-tit">Subir un archivo</span>
+          <span class="ig-camino-txt">Si el otro sistema solo exporta <b>Excel</b> o <b>CSV</b>: lo subís y entra a la bandeja.</span>
+          <span class="ig-camino-ir">Elegir archivo <i class="ti ti-arrow-right"></i></span>
         </button>
       </div>
 
@@ -25453,7 +25460,108 @@ async function renderIntegraciones() {
         </div>
         <div class="card-body">${igLista()}</div>
       </div>
+
+      <div class="card">
+        <div class="card-head"><i class="ti ti-inbox"></i> Lo que llegó de otros sistemas</div>
+        <div class="card-body">${igBandeja()}</div>
+      </div>
     </div>`;
+}
+
+const IG_TIPO_TXT = { combustible: "Combustible", kilometraje: "Kilometraje", agencias: "Agencias", fallas: "Fallas", costos: "Costos" };
+const igTipoNombre = t => IG_TIPO_TXT[t] || (t.charAt(0).toUpperCase() + t.slice(1).replace(/_/g, " "));
+function igBandeja() {
+  if (!ig.entrada.length) return `<div class="empty"><i class="ti ti-inbox"></i>Todavía no llegó nada. Cuando otro sistema mande datos (o subas un archivo), aparecen acá.
+    <div class="ig-conocidos">${ig.conocidos.map(c => `<span><b>${igEsc(igTipoNombre(c.tipo))}</b> ${igEsc(c.hace.toLowerCase())}</span>`).join("")}
+    <span><b>Cualquier otro</b> (ventas, pasajeros, liquidaciones…) se guarda y queda a la vista</span></div></div>`;
+  return `<div class="ig-lista">${ig.entrada.map(t => `
+    <div class="ig-fila ig-fila-in">
+      <span class="ig-fila-ic entra"><i class="ti ti-download"></i></span>
+      <div class="ig-fila-info"><div class="ig-fila-nom">${igEsc(igTipoNombre(t.tipo))}
+          <span class="ig-tipo">${t.total} registro${t.total === 1 ? "" : "s"}</span></div>
+        <span class="ig-tags">${t.aplicado ? `<span class="ok">${t.aplicado} aplicado${t.aplicado === 1 ? "" : "s"}</span>` : ""}
+          ${t.guardado ? `<span>${t.guardado} guardado${t.guardado === 1 ? "" : "s"}</span>` : ""}
+          ${t.revisar ? `<span class="ojo">${t.revisar} para revisar</span>` : ""}
+          ${t.error ? `<span class="mal">${t.error} con error</span>` : ""}</span>
+        <span class="ig-url ig-sans">${t.se_aplica ? igEsc(t.se_aplica) : "Se guarda tal cual: el sistema todavía no lo usa"} · de ${igEsc(t.origenes.join(", "))}</span></div>
+      <div class="ig-fila-uso">último ${igCuando(t.ultimo)}</div>
+      <div class="ig-fila-acc"><button class="btn btn-ghost btn-sm" onclick="igVerEntrada('${igEsc(t.tipo)}')"><i class="ti ti-eye"></i> Ver</button></div>
+    </div>`).join("")}</div>`;
+}
+async function igVerEntrada(tipo, estado = "") {
+  const r = await api(`/api/integ/entrada/${encodeURIComponent(tipo)}${estado ? `?estado=${estado}` : ""}`);
+  const regs = (r && r.registros) || [];
+  const cols = [];
+  regs.slice(0, 50).forEach(x => Object.keys(x.datos).forEach(k => { if (!cols.includes(k) && cols.length < 8) cols.push(k); }));
+  const est = { aplicado: '<span class="ig-estado on">Aplicado</span>', guardado: '<span class="ig-estado">Guardado</span>',
+                revisar: '<span class="ig-estado ojo">Revisar</span>', error: '<span class="ig-estado mal">Error</span>' };
+  const old = document.querySelector(".ig-m-entrada"); if (old) old.remove();
+  const o = rvModal({
+    titulo: igEsc(igTipoNombre(tipo)), icono: "inbox", ancho: 980, clase: "ig-m-entrada",
+    sub: `Lo último que llegó (hasta 300). ${regs.length} registro${regs.length === 1 ? "" : "s"}.`,
+    cuerpo: `<div class="rv-seg ig-seg">${[["", "Todos"], ["aplicado", "Aplicados"], ["guardado", "Guardados"], ["revisar", "Para revisar"], ["error", "Con error"]]
+        .map(([k, t]) => `<button class="${k === estado ? "on" : ""}" onclick="igVerEntrada('${igEsc(tipo)}','${k}')">${t}</button>`).join("")}</div>
+      ${regs.length ? `<div class="ig-scroll"><table class="ig-tabla"><thead><tr><th>Llegó</th><th>Estado</th>${cols.map(c => `<th>${igEsc(c)}</th>`).join("")}<th></th></tr></thead><tbody>
+      ${regs.map(x => `<tr><td><small>${igEsc((x.actualizado_el || "").replace("T", " ").slice(0, 16))}${x.veces > 1 ? `<br>${x.veces} veces` : ""}</small></td>
+        <td>${est[x.estado] || x.estado}${x.estado !== "guardado" ? `<br><small>${igEsc(x.detalle)}</small>` : ""}</td>
+        ${cols.map(c => `<td>${igEsc(typeof x.datos[c] === "object" ? JSON.stringify(x.datos[c]) : x.datos[c] ?? "")}</td>`).join("")}
+        <td class="ig-td-acc">${x.estado === "error" ? `<button class="btn btn-ghost btn-sm" onclick="igReintentar(${x.id}, '${igEsc(tipo)}')" title="Volver a aplicar"><i class="ti ti-refresh"></i></button>` : ""}
+          ${x.estado === "error" || x.estado === "revisar" ? `<button class="btn btn-ghost btn-sm" onclick="igDescartar(${x.id}, '${igEsc(tipo)}')" title="Descartar"><i class="ti ti-x"></i></button>` : ""}</td></tr>`).join("")}
+      </tbody></table></div>` : `<div class="empty"><i class="ti ti-inbox"></i>No hay registros${estado ? " en este estado" : ""}.</div>`}`,
+    pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
+  o.classList.add("ig-m");
+}
+async function igReintentar(id, tipo) {
+  const r = await api(`/api/integ/entrada/${id}/reintentar`, { method: "POST" });
+  toast(r && r.ok ? "Aplicado" : `Sigue sin poder aplicarse: ${(r && (r.detalle || r.error)) || ""}`, r && r.ok ? "success" : "error");
+  igVerEntrada(tipo); renderIntegraciones();
+}
+async function igDescartar(id, tipo) {
+  if (!confirm("¿Descartar este registro de la bandeja? Lo que ya se cargó en el sistema no se toca.")) return;
+  const r = await api(`/api/integ/entrada/${id}/descartar`, { method: "POST" });
+  if (r && r.ok) { igVerEntrada(tipo); renderIntegraciones(); }
+}
+
+// ── 4. Subir un archivo ──────────────────────────────────────────────────
+function igSubirArchivo() {
+  const sug = ["agencias", "combustible", "kilometraje", "fallas", "costos", "ventas", "pasajeros", "liquidaciones"];
+  const o = rvModal({
+    titulo: "Subir un archivo", icono: "file-upload", ancho: 620,
+    sub: "El Excel o CSV que exporta el otro sistema. Cada fila entra a la bandeja; lo que el sistema entiende se aplica solo.",
+    cuerpo: `
+      <label class="ig-lbl" for="ig-arch">1 · El archivo (.xlsx o .csv, hasta 5 MB)</label>
+      <input type="file" id="ig-arch" class="ig-input ig-file" accept=".xlsx,.xlsm,.csv,.txt">
+      <label class="ig-lbl" for="ig-arch-tipo">2 · ¿Qué tiene?</label>
+      <input id="ig-arch-tipo" class="ig-input" list="ig-tipos" placeholder="Ej.: ventas, agencias, liquidaciones">
+      <datalist id="ig-tipos">${sug.map(t => `<option value="${t}">`).join("")}</datalist>
+      <div class="ig-chips">${sug.map(t => `<button type="button" class="chip" onclick="document.getElementById('ig-arch-tipo').value='${t}'">${igTipoNombre(t)}</button>`).join("")}</div>
+      <label class="ig-lbl" for="ig-arch-origen">3 · ¿De qué sistema viene?</label>
+      <input id="ig-arch-origen" class="ig-input" value="Delta" maxlength="40">
+      <p class="ig-nota"><i class="ti ti-info-circle"></i> <span>La primera fila tiene que ser la de los títulos. Para que se aplique solo: combustible necesita <b>coche</b> y <b>litros</b>; kilometraje <b>coche</b> y <b>km</b>; agencias <b>codigo</b> y <b>nombre</b>; fallas <b>coche</b> y <b>descripcion</b>; costos <b>coche</b>, <b>mes</b> y <b>monto</b>.</span></p>
+      <div id="ig-arch-res"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+          <button class="btn btn-primary" onclick="igMandarArchivo(this)"><i class="ti ti-upload"></i> Subir</button>`,
+  });
+  o.classList.add("ig-m");
+}
+async function igMandarArchivo(btn) {
+  const f = document.getElementById("ig-arch").files[0];
+  const tipo = document.getElementById("ig-arch-tipo").value.trim();
+  if (!f) { toast("Elegí el archivo", "error"); return; }
+  if (!tipo) { toast("Decí qué tiene el archivo", "error"); return; }
+  const fd = new FormData();
+  fd.append("archivo", f); fd.append("tipo", tipo); fd.append("origen", document.getElementById("ig-arch-origen").value.trim());
+  btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader-2 ig-gira"></i> Subiendo';
+  const r = await fetch("/api/integ/entrada/subir", { method: "POST", body: fd }).then(x => x.json()).catch(() => null);
+  btn.disabled = false; btn.innerHTML = '<i class="ti ti-upload"></i> Subir';
+  const box = document.getElementById("ig-arch-res");
+  if (!r || !r.ok) { box.innerHTML = `<div class="ig-prueba mal"><i class="ti ti-alert-triangle"></i> ${igEsc((r && r.error) || "No se pudo subir")}</div>`; return; }
+  const partes = [[r.aplicados, "aplicadas"], [r.guardados, "guardadas"], [r.repetidos, "ya estaban"], [r.revisar, "para revisar"], [r.errores, "con error"]]
+    .filter(([n]) => n).map(([n, t]) => `<b>${n}</b> ${t}`).join(" · ");
+  box.innerHTML = `<div class="ig-prueba ${r.errores ? "mal" : "ok"}"><i class="ti ti-${r.errores ? "alert-triangle" : "circle-check"}"></i>
+    <span>${r.recibidos} filas: ${partes}${r.detalle.length ? `<br>${r.detalle.slice(0, 5).map(d => `Fila ${d.n + 2}: ${igEsc(d.mensaje)}`).join("<br>")}` : ""}</span></div>`;
+  renderIntegraciones();
 }
 
 function igLista() {
@@ -25512,6 +25620,7 @@ const IG_DATOS_EXTRA = {
   pagos: { ic: "cash", txt: "Lo que se pagó de plus a cada chofer", periodo: "dias" },
   costos: { ic: "report-money", txt: "Los costos cargados por coche y mes", periodo: "meses" },
   trafico: { ic: "route", txt: "Las salidas publicadas de hoy y mañana, con coche y tripulantes" },
+  agencias: { ic: "building-store", txt: "Cada agencia con su código, contacto y estado" },
 };
 function igNuevaPlanilla() {
   const o = rvModal({
@@ -25544,6 +25653,7 @@ function igPlanillaPeriodo() {
   const ops = x.periodo === "dias" ? [["30", "Últimos 30 días"], ["90", "Últimos 3 meses"], ["365", "Último año"], ["", "Todo"]]
     : x.periodo === "meses" ? [["6", "Últimos 6 meses"], ["12", "Último año"], ["", "Todo"]]
     : dato === "trafico" ? [["2", "Hoy y mañana"], ["1", "Solo hoy"], ["7", "Los próximos 7 días"]]
+    : dato === "agencias" ? [["", "Todas las agencias"]]
     : [["", "Toda la flota activa"], ["todos", "Incluir los dados de baja"]];
   sel.innerHTML = ops.map(([v, t], i) => `<option value="${v}" ${i === (x.periodo === "dias" ? 1 : 0) ? "selected" : ""}>${t}</option>`).join("");
   const extra = document.getElementById("ig-extra-wrap");
@@ -25561,7 +25671,7 @@ async function igGenerarPlanilla(btn) {
     || (ig.datos.find(d => d.codigo === dato) || {}).nombre;
   const per = document.getElementById("ig-periodo").value;
   const filtros = {};
-  if (per) filtros[x.periodo === "dias" ? "dias" : x.periodo === "meses" ? "meses" : dato === "trafico" ? "proximos" : "activos"] = per;
+  if (per && dato !== "agencias") filtros[x.periodo === "dias" ? "dias" : x.periodo === "meses" ? "meses" : dato === "trafico" ? "proximos" : "activos"] = per;
   const ex = document.getElementById("ig-extra");
   if (ex && ex.value) filtros[ex.dataset.k] = ex.value;
   btn.disabled = true;
@@ -25604,7 +25714,7 @@ function igMostrarPlanilla(nombre, url) {
         <li>Pegá el link, <b>Aceptar</b>, y si pregunta, <b>Anónimo → Conectar</b>.</li>
         <li><b>Cargar</b>. Con <b>Actualizar</b> trae lo nuevo; publicado en el servicio, se le puede programar la actualización.</li>
       </ol>
-      <p class="ig-nota"><i class="ti ti-shield-lock"></i> El link es como una llave: quien lo tenga ve estos datos. Si se comparte de más, cortalo en la lista y generá otro.</p>`,
+      <p class="ig-nota"><i class="ti ti-shield-lock"></i> <span>El link es como una llave: quien lo tenga ve estos datos. Si se comparte de más, cortalo en la lista y generá otro.</span></p>`,
     pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`,
   });
   o.classList.add("ig-m");
@@ -25667,7 +25777,7 @@ async function igGuardarAviso(btn) {
     sub: `<b>${igEsc(body.nombre)}</b> · Desde ahora le llega cada vez que pase lo que marcaste.`,
     cuerpo: `<p class="ig-txt">Si el otro sistema quiere comprobar que el aviso viene de acá, este es el <b>secreto</b> para validar la firma (encabezado <code>X-Santaniana-Firma</code>). Si usás Make o Zapier no hace falta.</p>
       ${igCampoCopiar(r.secreto, "ig-secreto")}
-      <p class="ig-nota"><i class="ti ti-book"></i> Qué datos manda cada aviso: <a href="${igEsc(ig.docs)}#avisos" target="_blank" rel="noopener">documentación</a>.</p>`,
+      <p class="ig-nota"><i class="ti ti-book"></i> <span>Qué datos manda cada aviso: <a href="${igEsc(ig.docs)}#avisos" target="_blank" rel="noopener">documentación</a>.</span></p>`,
     pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`,
   });
   o.classList.add("ig-m");
@@ -25707,18 +25817,19 @@ async function igEnvios(id) {
 
 // ── 3. Clave para programadores ──────────────────────────────────────────
 function igNuevaClave() {
-  const lee = ig.permisos.filter(p => !p.codigo.includes(":")), carga = ig.permisos.filter(p => p.codigo.includes(":"));
-  const chk = p => `<label class="ig-check"><input type="checkbox" value="${p.codigo}"><span><b>${igEsc(p.nombre)}</b><small>${igEsc(p.detalle)}</small></span></label>`;
+  const manda = p => p.codigo.includes(":") || p.codigo === "recibir";
+  const lee = ig.permisos.filter(p => !manda(p)), carga = ig.permisos.filter(manda);
+  const chk = p => `<label class="ig-check"><input type="checkbox" value="${p.codigo}" checked><span><b>${igEsc(p.nombre)}</b><small>${igEsc(p.detalle)}</small></span></label>`;
   const o = rvModal({
-    titulo: "Clave para programadores", icono: "key", ancho: 640,
-    sub: "Para el que arma el otro sistema. Elegí solo lo que necesita: cada clave ve únicamente lo que marques.",
+    titulo: "Conectar un sistema", icono: "arrows-exchange", ancho: 680,
+    sub: "Una clave para el otro sistema: con ella lee lo de acá y nos manda lo suyo. Viene todo marcado (ida y vuelta completa); sacale lo que no quieras compartir.",
     cuerpo: `
-      <label class="ig-lbl" for="ig-cl-nombre">¿Para qué sistema es?</label>
-      <input id="ig-cl-nombre" class="ig-input" placeholder="Ej.: Sistema contable, GPS de la flota" maxlength="80" autofocus>
-      <label class="ig-lbl">Puede ver</label><div class="ig-checks">${lee.map(chk).join("")}</div>
-      <label class="ig-lbl">Puede cargar</label><div class="ig-checks">${carga.map(chk).join("")}</div>`,
+      <label class="ig-lbl" for="ig-cl-nombre">¿Qué sistema es?</label>
+      <input id="ig-cl-nombre" class="ig-input" placeholder="Ej.: Delta, Sistema contable, GPS de la flota" maxlength="80" autofocus>
+      <label class="ig-lbl"><i class="ti ti-arrow-up-right"></i> Lo que puede ver de acá</label><div class="ig-checks">${lee.map(chk).join("")}</div>
+      <label class="ig-lbl"><i class="ti ti-arrow-down-left"></i> Lo que nos puede mandar</label><div class="ig-checks">${carga.map(chk).join("")}</div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
-          <button class="btn btn-primary" onclick="igCrearClave(this)"><i class="ti ti-key"></i> Crear clave</button>`,
+          <button class="btn btn-primary" onclick="igCrearClave(this)"><i class="ti ti-arrows-exchange"></i> Crear conexión</button>`,
   });
   o.classList.add("ig-m");
 }
@@ -25733,12 +25844,16 @@ async function igCrearClave(btn) {
   btn.closest(".modal-overlay").remove();
   const base = location.origin;
   const ejemplo = `curl -H "Authorization: Bearer ${r.clave}" ${base}/api/v1/estado`;
+  const recibe = permisos.includes("recibir");
+  const ejEntrada = `curl -X POST -H "Authorization: Bearer ${r.clave}" -H "Content-Type: application/json" \\\n  -d '{"registros":[{"id":"V-1001","coche":"210","fecha":"2026-11-06","pasajeros":38}]}' \\\n  ${base}/api/v1/entrada/ventas`;
   const o = rvModal({
-    titulo: "Clave creada", icono: "circle-check", ancho: 680,
+    titulo: "Conexión creada", icono: "circle-check", ancho: 720,
     sub: `<b>${igEsc(nombre)}</b> · Copiala ahora: <b>no se vuelve a mostrar</b>. Si se pierde, se corta y se crea otra.`,
     cuerpo: `${igCampoCopiar(r.clave, "ig-clave")}
       <p class="ig-txt">Pasale al programador la clave y la documentación. Para probar que anda:</p>
       <pre class="ig-pre">${igEsc(ejemplo)}</pre>
+      ${recibe ? `<p class="ig-txt"><b>Para mandarnos datos</b>, cualquier tipo va a <code>${igEsc(base)}/api/v1/entrada/&lt;tipo&gt;</code> (ventas, agencias, liquidaciones…):</p>
+      <pre class="ig-pre">${igEsc(ejEntrada)}</pre>` : ""}
       <div class="ig-botones"><button class="btn btn-ghost btn-sm" onclick="igCopiar(${igEsc(JSON.stringify(ejemplo))}, 'Ejemplo copiado')"><i class="ti ti-copy"></i> Copiar ejemplo</button>
         <a class="btn btn-ghost btn-sm" href="${igEsc(ig.docs)}" target="_blank" rel="noopener"><i class="ti ti-book"></i> Abrir documentación</a>
         <button class="btn btn-ghost btn-sm" onclick="igCopiar('${igEsc(ig.docs)}', 'Link de la documentación copiado')"><i class="ti ti-link"></i> Copiar link de la documentación</button></div>`,

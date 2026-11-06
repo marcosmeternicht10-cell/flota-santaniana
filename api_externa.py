@@ -75,8 +75,10 @@ PERMISOS = [
     ("rendiciones",          "Rendiciones y pagos",    "Rendiciones de corporativos y pagos de plus"),
     ("trafico",              "Tráfico",                "El tráfico del día tal como se publicó"),
     ("costos",               "Costos",                 "Costos cargados por coche y mes"),
+    ("agencias",             "Agencias",               "Las agencias de venta: código, datos de contacto y estado"),
     ("combustible:escribir", "Cargar combustible",     "Puede registrar cargas (por ejemplo, desde el surtidor)"),
     ("km:escribir",          "Informar kilometraje",   "Puede actualizar el km de un coche (por ejemplo, desde el GPS)"),
+    ("recibir",              "Mandar cualquier dato",  "Bandeja de entrada: ventas, agencias, fallas, costos… lo que el sistema entiende se aplica solo"),
 ]
 CODIGOS = {p[0] for p in PERMISOS}
 
@@ -748,6 +750,30 @@ def ds_trafico(a):
     return {"datos": datos, "total": len(datos), "limit": len(datos), "offset": 0}
 
 
+CAMPOS_AGENCIA = ["id", "codigo", "nombre", "razon_social", "ruc", "representante", "telefono", "whatsapp", "email",
+                  "direccion", "ciudad", "estado", "estado_motivo", "actualizado_el"]
+
+
+def ds_agencias(a):
+    limit, offset = _paginado(a)
+    conn = get_connection()
+    try:
+        where, params = [], []
+        if a.get("estado"):
+            where.append("estado=?")
+            params.append(str(a["estado"]).strip())
+        if a.get("codigo"):
+            where.append("UPPER(COALESCE(codigo,''))=?")
+            params.append(str(a["codigo"]).strip().upper())
+        total = conn.execute(f"SELECT COUNT(*) AS n FROM agencias {_w(where)}", params).fetchone()["n"]
+        cols = _cols(conn, "agencias", CAMPOS_AGENCIA)
+        filas = conn.execute(f"SELECT {', '.join(cols)} FROM agencias {_w(where)} ORDER BY nombre LIMIT ? OFFSET ?",
+                             params + [limit, offset]).fetchall()
+    finally:
+        conn.close()
+    return {"datos": [_limpiar(_solo(f, cols)) for f in filas], "total": total, "limit": limit, "offset": offset}
+
+
 # Lo que se puede pedir como planilla: código → (nombre, permiso, función, filtros que se ofrecen)
 DATOS = {
     "vehiculos":   ("Flota (coches y km)",                "flota",       ds_vehiculos),
@@ -758,6 +784,7 @@ DATOS = {
     "pagos":       ("Pagos de plus a choferes",           "rendiciones", ds_pagos),
     "costos":      ("Costos por coche y mes",             "costos",      ds_costos),
     "trafico":     ("Tráfico publicado (hoy y mañana)",   "trafico",     ds_trafico),
+    "agencias":    ("Agencias de venta",                  "agencias",    ds_agencias),
 }
 
 
@@ -890,6 +917,12 @@ def v1_costos():
     return _responder("costos", ds_costos(request.args))
 
 
+@bp_api_externa.route("/api/v1/agencias")
+@con_clave("agencias")
+def v1_agencias():
+    return _responder("agencias", ds_agencias(request.args))
+
+
 @bp_api_externa.route("/api/v1/trafico/<fecha>")
 @con_clave("trafico")
 def v1_trafico(fecha):
@@ -982,11 +1015,10 @@ def _numero(d, nombre, obligatorio=False, minimo=None):
     return n
 
 
-@bp_api_externa.route("/api/v1/combustible", methods=["POST"])
-@con_clave("combustible:escribir")
-def v1_cargar_combustible():
+def cargar_combustible(d, quien):
+    """Registra una carga que llega de otro sistema. Devuelve lo cargado o
+    tira ErrorApi (409 si ya estaba: un reintento no la duplica)."""
     from database import registrar_carga_combustible
-    d = _cuerpo()
     fecha = str(d.get("fecha") or _hoy_txt()).strip()[:10]
     if not _RE_FECHA.match(fecha):
         raise ErrorApi(400, "fecha_invalida", "«fecha» tiene que ser AAAA-MM-DD.")
@@ -1004,7 +1036,6 @@ def v1_cargar_combustible():
     conn = get_connection()
     try:
         v = _vehiculo(conn, d.get("coche"), d.get("vehiculo_id"))
-        # La misma carga mandada dos veces (un reintento) no se duplica
         repetida = conn.execute("""SELECT id FROM combustible WHERE vehiculo_id=? AND fecha=?
                                    AND ABS(litros-?)<0.01 AND ABS(COALESCE(odometro,0)-?)<0.5""",
                                 (v["id"], fecha, litros, odometro)).fetchone()
@@ -1020,18 +1051,15 @@ def v1_cargar_combustible():
         "lugar_carga": str(d.get("lugar_carga") or "")[:120], "chofer": str(d.get("chofer") or "")[:120],
         "tanque_lleno": d.get("tanque_lleno", True) not in (False, 0, "0", "no", "false"),
         "observaciones": str(d.get("observaciones") or "")[:500],
-        "registrado_por": f"API · {g.api_clave['nombre']}"[:120],
+        "registrado_por": f"API · {quien}"[:120],
         "origen": origen, "cliente": str(d.get("cliente") or "")[:120],
     })
-    g.api_filas = 1
-    return jsonify({"ok": True, "id": cid, "coche": v["n_interno"], "fecha": fecha, "litros": _num(litros)}), 201
+    return {"ok": True, "id": cid, "coche": v["n_interno"], "fecha": fecha, "litros": _num(litros)}
 
 
-@bp_api_externa.route("/api/v1/kilometraje", methods=["POST"])
-@con_clave("km:escribir")
-def v1_kilometraje():
+def informar_km(d, quien):
+    """Actualiza el km de un coche. No baja el km ni acepta saltos raros sin «forzar»."""
     from database import guardar_km_manual, km_actual_vehiculo
-    d = _cuerpo()
     km = _numero(d, "km", obligatorio=True, minimo=0)
     conn = get_connection()
     try:
@@ -1039,24 +1067,40 @@ def v1_kilometraje():
     finally:
         conn.close()
     antes = float(km_actual_vehiculo(v["id"]) or 0)
+    forzar = d.get("forzar") in (True, 1, "1", "true", "si", "sí")
     # El odómetro no va para atrás: un número menor casi siempre es un error de carga
-    if km < antes and not d.get("forzar"):
+    if km < antes and not forzar:
         raise ErrorApi(409, "km_menor", f"El coche ya tiene {int(antes):,} km; no se baja el km sin «forzar»: true."
                        .replace(",", "."), km_actual=_num(round(antes)))
-    if km > antes + 5000 and not d.get("forzar"):
+    if km > antes + 5000 and not forzar:
         raise ErrorApi(409, "km_salto", f"Son {int(km - antes):,} km más que el último registro; si es correcto mandá «forzar»: true."
                        .replace(",", "."), km_actual=_num(round(antes)))
     guardar_km_manual(v["id"], km)
     try:
         from database import registrar_auditoria
-        registrar_auditoria(usuario=f"API · {g.api_clave['nombre']}", rol="api",
+        registrar_auditoria(usuario=f"API · {quien}", rol="api",
                             accion=f"Informó el km del coche {v['n_interno']}", categoria="Vehículos",
                             detalle=f"{int(antes):,} → {int(km):,} km".replace(",", "."))
     except Exception:
         pass
+    return {"ok": True, "coche": v["n_interno"], "km_anterior": _num(round(antes)),
+            "km_actual": _num(round(float(km_actual_vehiculo(v["id"]) or 0)))}
+
+
+@bp_api_externa.route("/api/v1/combustible", methods=["POST"])
+@con_clave("combustible:escribir")
+def v1_cargar_combustible():
+    r = cargar_combustible(_cuerpo(), g.api_clave["nombre"])
     g.api_filas = 1
-    return jsonify({"ok": True, "coche": v["n_interno"], "km_anterior": _num(round(antes)),
-                    "km_actual": _num(round(float(km_actual_vehiculo(v["id"]) or 0)))})
+    return jsonify(r), 201
+
+
+@bp_api_externa.route("/api/v1/kilometraje", methods=["POST"])
+@con_clave("km:escribir")
+def v1_kilometraje():
+    r = informar_km(_cuerpo(), g.api_clave["nombre"])
+    g.api_filas = 1
+    return jsonify(r)
 
 
 @bp_api_externa.route("/api/v1/<path:resto>", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])

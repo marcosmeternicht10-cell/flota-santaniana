@@ -8801,3 +8801,22 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 }
 @media (max-width: 860px) { .ig-caminos { grid-template-columns: 1fr; } }
 @media (max-width: 600px) { .ig-opciones, .ig-checks, .ig-dos { grid-template-columns: 1fr; } }
+.ig-caminos { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ig-camino-ic.ambar { background: var(--warning-bg); color: var(--warning); }
+.ig-fila-ic.entra { background: var(--warning-bg); color: var(--warning); }
+.ig-tags span.ok { background: var(--success-bg); color: var(--success); }
+.ig-tags span.ojo { background: var(--warning-bg); color: var(--warning); }
+.ig-tags span.mal { background: var(--danger-bg); color: var(--danger); }
+.ig-estado.ojo { background: var(--warning-bg); color: var(--warning); }
+.ig-url.ig-sans { font-family: inherit; font-size: 12.5px; white-space: normal; margin-top: 6px; }
+.ig-m .ig-lbl .ti { font-size: 14px; color: var(--brand-blue); vertical-align: -2px; }
+.ig-conocidos { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; font-size: 12.5px; text-align: left; max-width: 520px; margin-inline: auto; }
+.ig-conocidos b { color: var(--text); }
+.ig-scroll { overflow-x: auto; max-height: 60vh; }
+.ig-scroll .ig-tabla td, .ig-scroll .ig-tabla th { white-space: nowrap; }
+.ig-scroll .ig-tabla td:nth-child(2) { white-space: normal; min-width: 160px; }
+.ig-td-acc { display: flex; gap: 4px; }
+.ig-file { padding: 7px 10px; height: auto; }
+.ig-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+@media (max-width: 1280px) { .ig-caminos { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 860px) { .ig-caminos { grid-template-columns: 1fr; } }

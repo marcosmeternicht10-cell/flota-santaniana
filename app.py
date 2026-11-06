@@ -133,6 +133,9 @@ app.register_blueprint(bp_api_externa)
 from integraciones import bp_integraciones, init_integraciones
 init_integraciones()
 app.register_blueprint(bp_integraciones)
+from entrada import bp_entrada, init_entrada      # lo que otro sistema (Delta) le manda al sistema
+init_entrada()
+app.register_blueprint(bp_entrada)
 
 # ─── Módulo de Servicios Corporativos ────────────────────────────────────────
 # Choferes de corporativos cargan rendiciones desde el celular; admin las

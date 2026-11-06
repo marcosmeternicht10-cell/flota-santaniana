@@ -49,11 +49,11 @@
 <main>
 <nav class="indice">
   <a href="#clave">La clave</a><a href="#respuestas">Respuestas</a><a href="#leer">Leer datos</a>
-  <a href="#cargar">Cargar datos</a><a href="#planillas">Planillas</a><a href="#avisos">Avisos</a><a href="#errores">Errores</a>
+  <a href="#cargar">Cargar datos</a><a href="#entrada">Mandar cualquier dato</a><a href="#planillas">Planillas</a><a href="#avisos">Avisos</a><a href="#errores">Errores</a>
 </nav>
 
 <h2 id="clave">1. La clave</h2>
-<p>La crea el administrador en <b>Sistema → Integraciones → Clave para programadores</b>, eligiendo qué puede ver o cargar. Se muestra una sola vez: guardala en un lugar seguro. Se manda en cada pedido:</p>
+<p>La crea el administrador en <b>Sistema → Integraciones → Conectar un sistema</b>, eligiendo qué puede ver o cargar. Se muestra una sola vez: guardala en un lugar seguro. Se manda en cada pedido:</p>
 <pre><code>Authorization: Bearer ls_xxxxxxxxxxxxxxxxxxxx</code></pre>
 <p>(También se acepta <code>X-API-Key: ls_…</code>.) Probala con:</p>
 <pre><code>curl -H "Authorization: Bearer $CLAVE" {{ base }}/api/v1/estado</code></pre>
@@ -104,6 +104,9 @@
 <h3><span class="metodo">GET</span><span class="ruta">/api/v1/costos</span><span class="perm">costos</span></h3>
 <p>Costos cargados por coche y mes. Filtros: <code>desde</code> y <code>hasta</code> como mes (<code>2026-10</code>), <code>meses=6</code>, <code>tipo</code>, <code>coche</code>.</p>
 
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/agencias</span><span class="perm">agencias</span></h3>
+<p>Las agencias de venta con su código, contacto y estado. Filtros: <code>codigo</code>, <code>estado</code>.</p>
+
 <h2 id="cargar">4. Cargar datos</h2>
 
 <h3><span class="metodo post">POST</span><span class="ruta">/api/v1/combustible</span><span class="perm">combustible:escribir</span></h3>
@@ -119,7 +122,31 @@
 <pre><code>curl -X POST -H "Authorization: Bearer $CLAVE" -H "Content-Type: application/json" \
   -d '{"coche":"210","km":412450}' {{ base }}/api/v1/kilometraje</code></pre>
 
-<h2 id="planillas">5. Planillas que se actualizan solas</h2>
+<h2 id="entrada">5. Mandar cualquier dato (bandeja de entrada)</h2>
+<p>Para que la integración sea de ida y vuelta: el otro sistema manda <b>lo que sea</b> a un solo link, con el permiso <code>recibir</code>. El tipo va en la ruta, en minúsculas: <code>ventas</code>, <code>pasajeros</code>, <code>liquidaciones</code>, <code>agencias</code>…</p>
+<h3><span class="metodo post">POST</span><span class="ruta">/api/v1/entrada/&lt;tipo&gt;</span><span class="perm">recibir</span></h3>
+<pre><code>curl -X POST -H "Authorization: Bearer $CLAVE" -H "Content-Type: application/json" \
+  -d '{"registros":[
+        {"id":"V-1001","coche":"210","fecha":"2026-11-06","pasajeros":38,"monto":4560000},
+        {"id":"V-1002","coche":"305","fecha":"2026-11-06","pasajeros":12,"monto":1440000}]}' \
+  {{ base }}/api/v1/entrada/ventas</code></pre>
+<p>El cuerpo puede ser un registro solo, una lista, <code>{"registros": [...]}</code> o un CSV (<code>Content-Type: text/csv</code>, con títulos en la primera fila). Hasta 1.000 registros por envío. Los nombres de los campos se normalizan (<code>"Nº Interno"</code> → <code>nro_interno</code>) y el coche se reconoce como <code>coche</code>, <code>interno</code>, <code>bus</code> o <code>unidad</code>.</p>
+<table>
+  <tr><th>Tipo</th><th>Qué pasa al llegar</th><th>Campos</th></tr>
+  <tr><td><code>combustible</code></td><td>Se registra la carga en el coche</td><td>coche, litros, fecha, precio_litro, odometro</td></tr>
+  <tr><td><code>kilometraje</code></td><td>Se actualiza el km del coche</td><td>coche, km</td></tr>
+  <tr><td><code>agencias</code></td><td>Se crea o actualiza la agencia</td><td>codigo, nombre, ciudad, telefono, email…</td></tr>
+  <tr><td><code>fallas</code></td><td>Entra como pedido de OT</td><td>coche, descripcion, chofer, km</td></tr>
+  <tr><td><code>costos</code></td><td>Se suma al costo del coche</td><td>coche, mes (AAAA-MM), tipo, concepto, monto</td></tr>
+  <tr><td><b>cualquier otro</b></td><td>Se guarda tal cual y queda a la vista en el sistema</td><td>los que tenga</td></tr>
+</table>
+<p><b>Sin duplicados:</b> mandá en cada registro su identificador de tu sistema (<code>id</code>, <code>id_externo</code> o <code>codigo</code>). Si llega igual, se ignora (<code>repetido</code>); si llega cambiado, se actualiza. La respuesta dice qué pasó con cada uno, y es <code>207</code> si alguno tuvo problema (los demás entran igual):</p>
+<pre><code>{ "recibidos": 2, "aplicados": 0, "guardados": 2, "repetidos": 0, "revisar": 0, "errores": 0,
+  "detalle": [ {"n": 0, "id_externo": "V-1001", "estado": "guardado"}, … ] }</code></pre>
+<h3><span class="metodo">GET</span><span class="ruta">/api/v1/entrada/&lt;tipo&gt;</span><span class="perm">recibir</span></h3>
+<p>Lo que ya llegó de ese tipo, con su estado, para confirmar desde tu lado qué entró. Filtros: <code>desde</code>, <code>estado</code>.</p>
+
+<h2 id="planillas">6. Planillas que se actualizan solas</h2>
 <p>Para Excel, Google Sheets o Power BI no hace falta programar: en <b>Sistema → Integraciones → Planilla</b> se elige qué datos y se genera un link. Ese link devuelve un CSV siempre al día.</p>
 <table>
   <tr><th>Dónde</th><th>Cómo</th><th></th></tr>
@@ -129,7 +156,7 @@
 </table>
 <div class="caja aviso">El link es como una llave: quien lo tenga ve esos datos. Si se comparte de más, desactivalo en la pantalla y generá otro.</div>
 
-<h2 id="avisos">6. Avisos: el sistema te avisa a vos</h2>
+<h2 id="avisos">7. Avisos: el sistema te avisa a vos</h2>
 <p>En <b>Sistema → Integraciones → Avisar a otro sistema</b> se pega un link (de tu sistema, o de Make, Zapier, n8n) y se eligen los eventos. Cuando pasa algo, se manda un <code>POST</code> con JSON:</p>
 <pre><code>POST https://tu-sistema/recibir
 Content-Type: application/json
@@ -158,7 +185,7 @@ import hmac, hashlib
 esperada = "sha256=" + hmac.new(SECRETO.encode(), cuerpo_crudo, hashlib.sha256).hexdigest()
 valido = hmac.compare_digest(esperada, request.headers["X-Santaniana-Firma"])</code></pre>
 
-<h2 id="errores">7. Errores</h2>
+<h2 id="errores">8. Errores</h2>
 <p>Siempre con el mismo formato, y el mensaje en castellano:</p>
 <pre><code>{ "error": { "codigo": "sin_permiso", "mensaje": "Esta clave no tiene el permiso «Combustible» (combustible)." } }</code></pre>
 <table>
