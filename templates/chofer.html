@@ -281,7 +281,7 @@
         <select id="vehiculo">
           <option value="">Cargando vehículos...</option>
         </select>
-        <div id="aviso-coche"></div>
+
       </div>
 
       <div class="campo">
@@ -324,14 +324,8 @@
     <div class="card exito" id="exito-card" style="display:none">
       <div class="check"><i class="ti ti-check"></i></div>
       <h3>¡Reporte enviado!</h3>
-      <p>El taller lo va a revisar y decidir qué se hace primero. Abajo ves en qué quedó cada cosa.</p>
+      <p>Gracias. El taller lo va a revisar.</p>
       <button class="btn-otro" onclick="nuevoReporte()"><i class="ti ti-plus"></i> Cargar otro</button>
-    </div>
-
-    <!-- COCHES EN EL TALLER -->
-    <div class="card" id="taller-card">
-      <h2><i class="ti ti-tool"></i> Coches en el taller</h2>
-      <div id="en-taller"><div class="vacio"><i class="ti ti-loader"></i> Cargando...</div></div>
     </div>
 
     <!-- MIS REPORTES -->
@@ -463,7 +457,6 @@
           document.getElementById("exito-card").style.display = "block";
           fotosComprimidas = [];
           cargarMisReportes();
-          cargarEnTaller();
         } else {
           toast(data.msg || "Error al enviar", "error");
         }
@@ -480,7 +473,6 @@
       document.getElementById("descripcion").value = "";
       document.getElementById("km").value = "";
       document.getElementById("vehiculo").value = "";
-      avisoCoche();
       document.getElementById("exito-card").style.display = "none";
       document.getElementById("form-card").style.display = "block";
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -532,102 +524,9 @@
       window.location.href = "/login";
     }
 
-    // ── Coches en el taller ─────────────────────────────────────────
-    const TL_TXT = { fuera: "No sale", trabajando: "En el taller", repuestos: "Esperando repuestos",
-                     pendiente: "Con pendientes", aviso: "Avisado" };
-    const TL_REP = { en_espera: "pidiendo repuestos", presupuestado: "repuestos presupuestados", en_camino: "repuestos en camino" };
-    let tlCoches = [], tlFiltro = "", tlTodos = false;
-    const tlEsc = t => String(t || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-    const tlFecha = f => f ? f.slice(8, 10) + "/" + f.slice(5, 7) : "";
-    function tlDias(f) {
-      if (!f) return "";
-      const d = Math.round((new Date(tlHoy + "T12:00") - new Date(f.slice(0, 10) + "T12:00")) / 864e5);
-      return d <= 0 ? "desde hoy" : d === 1 ? "desde ayer" : `hace ${d} días (${tlFecha(f)})`;
-    }
-    let tlHoy = "";
-
-    async function cargarEnTaller() {
-      try {
-        const r = await fetch("/api/chofer/en_taller");
-        const d = await r.json();
-        tlCoches = d.coches || []; tlHoy = d.hoy || "";
-        pintarEnTaller();
-        avisoCoche();
-      } catch (e) {
-        document.getElementById("en-taller").innerHTML = '<div class="vacio">No se pudo cargar.</div>';
-      }
-    }
-
-    function tlFila(c) {
-      const mio = document.getElementById("vehiculo").value == c.vehiculo_id;
-      const det = [];
-      if (c.fuera) det.push(`Fuera de servicio ${c.fuera.desde ? "desde el " + tlFecha(c.fuera.desde) : ""}${c.fuera.hasta ? ", vuelve el " + tlFecha(c.fuera.hasta) : ""}${c.fuera.motivo ? " · " + tlEsc(c.fuera.motivo) : ""}`);
-      if (c.ots.length) det.push(`OT ${[...new Set(c.ots)].join(", ")} · ${tlDias(c.desde)}`);
-      if (c.repuestos) det.push(TL_REP[c.repuestos] || "esperando repuestos");
-      if (c.hechos) det.push(`${c.hechos} hecho${c.hechos > 1 ? "s" : ""}, falta${c.trabajos.length > 1 ? "n" : ""} ${c.trabajos.length}`);
-      const trab = c.trabajos.slice(0, 4).map(t => `<li class="${t.estado}"><span>${tlEsc(t.txt)}${t.estado === "en_proceso" ? " · lo están haciendo" : ""}</span></li>`);
-      if (c.trabajos.length > 4) trab.push(`<li class="mas">y ${c.trabajos.length - 4} más</li>`);
-      const av = c.avisos.slice(0, 3).map(a => `<li class="av"><span>${tlEsc(a)} <i style="color:var(--muted);font-style:normal">· avisado, en revisión</i></span></li>`);
-      return `<div class="tl-coche ${c.estado}${mio ? " mio" : ""}">
-        <div class="tl-cab">
-          <div class="tl-num">${tlEsc(c.n_interno || "—")}<small>${tlEsc(c.patente)}</small></div>
-          <span class="badge ${c.estado}">${TL_TXT[c.estado]}</span>
-        </div>
-        ${det.length ? `<div class="tl-det">${det.join(" · ")}</div>` : ""}
-        ${trab.length || av.length ? `<ul class="tl-trab">${trab.join("")}${av.join("")}</ul>` : ""}
-      </div>`;
-    }
-
-    function pintarEnTaller() {
-      const cont = document.getElementById("en-taller");
-      if (!tlCoches.length) {
-        cont.innerHTML = '<div class="vacio"><i class="ti ti-circle-check"></i> No hay coches en el taller ahora.</div>';
-        return;
-      }
-      const cuenta = {};
-      tlCoches.forEach(c => cuenta[c.estado] = (cuenta[c.estado] || 0) + 1);
-      const chips = [`<button class="tl-chip${tlFiltro === "" ? " activo" : ""}" onclick="tlElegir('')"><b>${tlCoches.length}</b> todos</button>`]
-        .concat(Object.keys(TL_TXT).filter(k => cuenta[k]).map(k =>
-          `<button class="tl-chip${tlFiltro === k ? " activo" : ""}" onclick="tlElegir('${k}')"><span class="pt ${k}"></span><b>${cuenta[k]}</b> ${TL_TXT[k].toLowerCase()}</button>`));
-      const q = (document.getElementById("tl-q")?.value || "").trim().toLowerCase();
-      let lista = tlCoches.filter(c => !tlFiltro || c.estado === tlFiltro);
-      if (q) lista = lista.filter(c => String(c.n_interno).toLowerCase().includes(q) || c.patente.toLowerCase().includes(q));
-      const corte = tlTodos || q || tlFiltro ? lista.length : 6;
-      cont.innerHTML = `<div class="tl-resumen">${chips.join("")}</div>
-        ${tlCoches.length > 6 ? `<input class="tl-buscar" id="tl-q" inputmode="search" placeholder="Buscá un coche (número o patente)" value="${tlEsc(q)}" oninput="tlBuscar()">` : ""}
-        <div id="tl-lista">${lista.length ? lista.slice(0, corte).map(tlFila).join("") : '<div class="vacio">Ese coche no está en el taller.</div>'}</div>
-        ${lista.length > corte ? `<button class="tl-ver" onclick="tlTodos=true;pintarEnTaller()">Ver los ${lista.length} coches</button>` : ""}`;
-    }
-    function tlElegir(k) { tlFiltro = tlFiltro === k ? "" : k; pintarEnTaller(); }
-    function tlBuscar() {
-      const el = document.getElementById("tl-q"), pos = el.selectionStart;
-      pintarEnTaller();
-      const n = document.getElementById("tl-q"); n.focus(); n.setSelectionRange(pos, pos);
-    }
-
-    // Al elegir el coche en el formulario: avisar si el taller ya lo tiene
-    function avisoCoche() {
-      const vid = document.getElementById("vehiculo").value;
-      const box = document.getElementById("aviso-coche");
-      const c = tlCoches.find(x => String(x.vehiculo_id) === vid);
-      if (!c) { box.innerHTML = ""; return; }
-      const cosas = c.trabajos.map(t => tlEsc(t.txt) + (t.estado === "en_proceso" ? " <i>(lo están haciendo)</i>" : ""))
-        .concat(c.avisos.map(a => tlEsc(a) + " <i>(ya avisado)</i>"));
-      const titulo = c.fuera ? "Este coche está fuera de servicio" : c.estado === "trabajando" ? "Este coche está en el taller"
-        : c.estado === "repuestos" ? "Este coche está esperando repuestos" : "El taller ya tiene cosas anotadas de este coche";
-      box.innerHTML = `<div class="aviso-coche ${c.fuera ? "fuera" : ""}">
-        <b class="t"><i class="ti ti-${c.fuera ? "alert-triangle" : "tool"}"></i> ${titulo}</b>
-        ${c.fuera && c.fuera.motivo ? tlEsc(c.fuera.motivo) : ""}
-        ${cosas.length ? `<ul>${cosas.slice(0, 8).map(t => `<li>${t}</li>`).join("")}</ul>${cosas.length > 8 ? `<p>y ${cosas.length - 8} más</p>` : ""}` : ""}
-        <p>Si lo que vas a reportar ya está en la lista, no hace falta mandarlo de nuevo.</p>
-      </div>`;
-    }
-    document.getElementById("vehiculo").addEventListener("change", () => { avisoCoche(); if (tlCoches.length) pintarEnTaller(); });
-
     // Inicio
     cargarVehiculos();
     cargarMisReportes();
-    cargarEnTaller();
   </script>
 </body>
 </html>
