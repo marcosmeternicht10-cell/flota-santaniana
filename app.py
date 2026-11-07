@@ -2425,27 +2425,32 @@ def api_oee_flota():
     hasta = request.args.get("hasta")
     if not desde or not hasta:
         return jsonify({"ok": False, "msg": "Elegí las fechas desde y hasta"}), 400
-    vehiculos = obtener_vehiculos(solo_activos=True)
-    from database import cargar_datos_oee
-    datos = cargar_datos_oee(desde, hasta)     # toda la flota en cinco consultas
-    resultados = []
-    for v in vehiculos:
-        r = calcular_oee_vehiculo(v["id"], desde, hasta, datos.get(v["id"], {}))
-        if r:
-            resultados.append(r)
+    if desde > hasta:
+        return jsonify({"ok": False, "msg": "La fecha «desde» es posterior a «hasta»"}), 400
+    from database import oee_de_la_flota
+    todos, referencias = oee_de_la_flota(desde, hasta)
+    resultados = [r for r in todos if r["activo"]]
     if not resultados:
-        return jsonify({"ok": True, "vehiculos": [], "promedio": {}})
-    # Promedios de la flota
-    n = len(resultados)
+        return jsonify({"ok": True, "vehiculos": [], "promedio": {}, "referencias": referencias})
+    # Promedio de la flota: los coches de servicio (una camioneta de taller sin
+    # servicios no baja el número)
+    cuentan = [r for r in resultados if r["cuenta"]] or resultados
+    n = len(cuentan)
     prom = {
-        "disponibilidad": round(sum(r["disponibilidad"] for r in resultados) / n, 1),
-        "rendimiento": round(sum(r["rendimiento"] for r in resultados) / n, 1),
-        "calidad": round(sum(r["calidad"] for r in resultados) / n, 1),
-        "oee": round(sum(r["oee"] for r in resultados) / n, 1),
+        "disponibilidad": round(sum(r["disponibilidad"] for r in cuentan) / n, 1),
+        "rendimiento": round(sum(r["rendimiento"] for r in cuentan) / n, 1),
+        "calidad": round(sum(r["calidad"] for r in cuentan) / n, 1),
+        "oee": round(sum(r["oee"] for r in cuentan) / n, 1),
+        "coches": n,
+        "km": sum(r["km_recorridos"] for r in cuentan),
+        "servicios": sum(r["servicios"] for r in cuentan),
+        "sin_distancia": sum(r["sin_distancia"] for r in cuentan),
     }
     # Ordenar peor a mejor (para ver los problemáticos primero)
-    resultados.sort(key=lambda x: x["oee"])
-    return jsonify({"ok": True, "vehiculos": resultados, "promedio": prom, "desde": desde, "hasta": hasta})
+    resultados.sort(key=lambda x: (not x["cuenta"], x["oee"]))
+    return jsonify({"ok": True, "vehiculos": resultados, "promedio": prom, "referencias": referencias,
+                    "desde": desde, "hasta": hasta})
+
 
 
 @app.route("/api/vehiculos/<int:vid>/consumo", methods=["POST"])

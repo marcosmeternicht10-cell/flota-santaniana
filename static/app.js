@@ -1530,12 +1530,12 @@ async function renderOEE() {
       <p>Disponibilidad × Rendimiento × Calidad — qué tan bien se aprovecha cada bus</p>
     </div>
     <div class="section">
-      <div style="background:#eaf2fb;border-radius:11px;padding:13px 16px;margin-bottom:18px;font-size:13px;color:var(--text)">
-        <b><i class="ti ti-info-circle"></i> Cómo se calcula:</b>
-        <b>Disponibilidad</b> = días operativo ÷ días del período ·
-        <b>Rendimiento</b> = km recorridos ÷ meta de km ·
-        <b>Calidad</b> = días sin fallas ÷ días operativo.
-        El OEE es el producto de los tres.
+      <div class="oee-explica">
+        <b><i class="ti ti-info-circle"></i> Cómo se calcula</b>
+        <div><b>Disponibilidad</b> = días que el coche pudo trabajar ÷ días del período (resta los días fuera de servicio o en el taller, salvo que ese día haya hecho un servicio).</div>
+        <div><b>Rendimiento</b> = km de los <b>servicios</b> que hizo (tráfico, corporativos y turismo) ÷ los km que podría haber hecho en sus días disponibles. Se compara con los coches que mejor rinden en el mismo tipo de servicio, o con su meta si tiene una cargada.</div>
+        <div><b>Calidad</b> = días sin fallas ÷ días disponibles (fallas: OT con trabajos correctivos y reportes de choferes).</div>
+        <div>El <b>OEE</b> es el producto de los tres.</div>
       </div>
       <div class="toolbar">
         <div class="field"><label style="font-size:12px">Desde</label>
@@ -1560,8 +1560,23 @@ async function calcularOEEFlota() {
     return;
   }
   const p = data.promedio;
+  const refs = Object.values(data.referencias || {});
+  const fmt = n => Number(n || 0).toLocaleString("es-PY").replace(/,/g, ".");
+  const tipoTxt = { nacional: "Línea nac.", internacional: "Línea int.", corporativo: "Corporativo", turismo: "Turismo" };
+  const fila = v => `<tr class="${v.cuenta ? "" : "oee-no-cuenta"}">
+      <td><b>${v.n_interno || v.patente}</b> <span style="color:var(--muted);font-size:12px">${v.patente || ""}</span>
+        ${v.grupo ? `<div class="oee-grupo">${tipoTxt[v.grupo] || ""}</div>` : ""}</td>
+      <td class="center">${v.servicios || "—"}</td>
+      <td class="num">${v.km_recorridos ? fmt(v.km_recorridos) : "—"}</td>
+      <td class="num" title="${v.fuente_ref ? "Referencia: " + v.fuente_ref : ""}">${v.km_dia ? fmt(v.km_dia) : "—"}${v.km_dia_ref ? `<span class="oee-ref"> / ${fmt(v.km_dia_ref)}</span>` : ""}</td>
+      <td class="center" style="color:${_colorOEE(v.disponibilidad)}" title="${v.dias_operativo} de ${v.dias_periodo} días">${v.disponibilidad}%</td>
+      <td class="center" style="color:${_colorOEE(v.rendimiento)}">${v.rendimiento}%</td>
+      <td class="center" style="color:${_colorOEE(v.calidad)}" title="${v.dias_con_falla} día(s) con falla">${v.calidad}%</td>
+      <td class="center"><b style="color:${_colorOEE(v.oee)}">${v.oee}%</b></td>
+      <td style="font-size:12px;color:var(--muted)">${!v.cuenta ? "No cuenta para el promedio (no es de servicio)" : v.faltantes && v.faltantes.length ? "⚠ " + v.faltantes.join(" · ") : "—"}</td>
+    </tr>`;
   cont.innerHTML = `
-    <div class="metrics" style="margin-bottom:20px">
+    <div class="metrics" style="margin-bottom:12px">
       <div class="metric"><div class="metric-content">
         <div class="metric-label">Disponibilidad</div>
         <div class="metric-value" style="color:${_colorOEE(p.disponibilidad)}">${p.disponibilidad}%</div></div></div>
@@ -1575,22 +1590,19 @@ async function calcularOEEFlota() {
         <div class="metric-label">OEE de Flota</div>
         <div class="metric-value" style="color:${_colorOEE(p.oee)}">${p.oee}%</div></div></div>
     </div>
+    <div class="oee-resumen">
+      <span><b>${p.coches}</b> coches · <b>${fmt(p.servicios)}</b> servicios · <b>${fmt(p.km)}</b> km</span>
+      ${refs.length ? `<span>Referencia de km por día: ${refs.map(r => `<b>${r.nombre}</b> ${fmt(r.km_dia)} km`).join(" · ")}</span>` : ""}
+      ${p.sin_distancia ? `<span class="oee-aviso"><i class="ti ti-alert-triangle"></i> ${fmt(p.sin_distancia)} salidas del tráfico sin distancia cargada: no suman km. Cargalas en <b>Servicios</b>.</span>` : ""}
+    </div>
     <div class="section-title"><i class="ti ti-list"></i> Detalle por vehículo (peores primero)</div>
     <div class="table-wrap"><table>
       <thead><tr>
-        <th>Vehículo</th><th class="center">Disponib.</th><th class="center">Rendim.</th>
+        <th>Vehículo</th><th class="center">Servicios</th><th class="num">Km</th><th class="num" title="Km por día disponible / referencia">Km/día</th>
+        <th class="center">Disponib.</th><th class="center">Rendim.</th>
         <th class="center">Calidad</th><th class="center">OEE</th><th>Observación</th>
       </tr></thead>
-      <tbody>
-        ${data.vehiculos.map(v => `<tr>
-          <td><b>${v.patente}</b>${v.n_interno ? ` <span class="badge cat">${v.n_interno}</span>` : ""}</td>
-          <td class="center" style="color:${_colorOEE(v.disponibilidad)}">${v.disponibilidad}%</td>
-          <td class="center" style="color:${_colorOEE(v.rendimiento)}">${v.rendimiento}%</td>
-          <td class="center" style="color:${_colorOEE(v.calidad)}">${v.calidad}%</td>
-          <td class="center"><b style="color:${_colorOEE(v.oee)}">${v.oee}%</b></td>
-          <td style="font-size:12px;color:var(--muted)">${v.faltantes && v.faltantes.length ? "⚠ Falta: " + v.faltantes.join(", ") : "—"}</td>
-        </tr>`).join("")}
-      </tbody>
+      <tbody>${data.vehiculos.map(fila).join("")}</tbody>
     </table></div>`;
 }
 

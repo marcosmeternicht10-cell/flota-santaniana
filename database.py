@@ -3107,178 +3107,260 @@ def _dias_fuera_servicio(vehiculo_id, desde, hasta, conn, regs=None, ots=None):
     return len(dias_fuera)
 
 
-def cargar_datos_oee(desde, hasta):
-    """Todo lo que necesita el OEE, de toda la flota, en cinco consultas.
+# ════════════════════════════════════════════════════════════════════════════
+#  OEE — qué tan bien se aprovecha cada coche
+#    Disponibilidad = días que pudo trabajar ÷ días del período
+#    Rendimiento    = km de servicios hechos ÷ km que podría haber hecho
+#    Calidad        = días sin fallas ÷ días que pudo trabajar
+#  Los km salen de los SERVICIOS: el tráfico publicado (cada salida con la
+#  distancia de su tramo), las rendiciones de corporativos y las de turismo
+#  (km final − km inicial). Ya no hace falta cargar una meta de km a mano: el
+#  «km que podría haber hecho» se compara con los mejores coches que hacen el
+#  mismo tipo de servicio (si el coche tiene una meta propia cargada, manda esa).
+# ════════════════════════════════════════════════════════════════════════════
 
-    El OEE de la flota antes calculaba coche por coche con cinco consultas
-    cada uno: 445 para 89 coches. Con la base en otra región eso era casi un
-    minuto de espera. Ahora se trae todo junto y se reparte por coche.
-    """
+GRUPOS_OEE = {"nacional": "Línea nacional", "internacional": "Línea internacional",
+              "corporativo": "Corporativos", "turismo": "Turismo"}
+TIPOS_SERVICIO = ("OMNIBUS", "MINIBUS", "BUS", "MICRO")
+
+
+def _dias_iso(desde, hasta):
+    from datetime import date, timedelta
+    try:
+        d1, d2 = date.fromisoformat(str(desde)[:10]), date.fromisoformat(str(hasta)[:10])
+    except (ValueError, TypeError):
+        return []
+    return [(d1 + timedelta(days=i)).isoformat() for i in range((d2 - d1).days + 1)]
+
+
+def cargar_datos_oee(desde, hasta):
+    """Todo lo que necesita el OEE, de toda la flota, en pocas consultas (no
+    coche por coche: con la base lejos eso era casi un minuto de espera)."""
     conn = get_connection()
     datos = {}
+
     def de(vid):
-        return datos.setdefault(vid, {"regs": [], "ots": [], "kms": None, "corr": []})
+        return datos.setdefault(vid, {"regs": [], "ots": [], "fallas": set(), "dias_servicio": set(),
+                                      "km": {g: 0.0 for g in GRUPOS_OEE}, "servicios": {g: 0 for g in GRUPOS_OEE},
+                                      "sin_distancia": 0})
+    por_interno = {}
     for r in conn.execute("SELECT * FROM vehiculos").fetchall():
         de(r["id"])["veh"] = dict(r)
+        n = str(r["n_interno"] or "").strip()
+        if n and (n not in por_interno or r["activo"]):
+            por_interno[n] = r["id"]
     for r in conn.execute("SELECT vehiculo_id, fecha_desde, fecha_hasta FROM fuera_servicio").fetchall():
         de(r["vehiculo_id"])["regs"].append(r)
-    for r in conn.execute("SELECT vehiculo_id, fecha_apertura, fecha_cierre, estado FROM ordenes_trabajo").fetchall():
+    for r in conn.execute("SELECT vehiculo_id, fecha_apertura, fecha_cierre, estado FROM ordenes_trabajo "
+                          "WHERE fecha_apertura <= ? AND (fecha_cierre IS NULL OR fecha_cierre = '' "
+                          "OR fecha_cierre >= ? OR estado <> 'cerrada')", (hasta + "T99", desde)).fetchall():
         de(r["vehiculo_id"])["ots"].append(r)
-    for r in conn.execute("""
-        SELECT vehiculo_id, MIN(km) mn, MAX(km) mx FROM (
-            SELECT vehiculo_id, km FROM mantenimientos_realizados WHERE fecha BETWEEN ? AND ?
-            UNION ALL
-            SELECT vehiculo_id, km FROM correctivos WHERE fecha BETWEEN ? AND ?
-            UNION ALL
-            SELECT vehiculo_id, km FROM ordenes_trabajo WHERE fecha_apertura BETWEEN ? AND ?
-        ) t WHERE km > 0 GROUP BY vehiculo_id
-    """, (desde, hasta, desde, hasta, desde, hasta)).fetchall():
-        de(r["vehiculo_id"])["kms"] = {"mn": r["mn"], "mx": r["mx"]}
-    for r in conn.execute("SELECT vehiculo_id, fecha FROM correctivos WHERE fecha BETWEEN ? AND ?",
-                          (desde, hasta)).fetchall():
-        de(r["vehiculo_id"])["corr"].append(r)
+
+    # ── Los servicios y sus km ──
+    # 1) Tráfico (línea nacional e internacional): cada salida, con la distancia de su tramo
+    try:
+        from servicios import leer_servicios
+        for sv in leer_servicios(conn, desde, hasta):
+            vid = por_interno.get(sv["coche"])
+            if not vid:
+                continue
+            g = "internacional" if sv.get("trafico") == "internacional" else "nacional"
+            d = de(vid)
+            d["servicios"][g] += 1
+            d["dias_servicio"].add(sv["fecha"])
+            if sv.get("km"):
+                d["km"][g] += float(sv["km"])
+            else:
+                d["sin_distancia"] += 1
+    except Exception:
+        pass
+    # 2) Corporativos: lo rendido por el chofer (km final − km inicial)
+    try:
+        for r in conn.execute("""SELECT bus_interno, fecha_servicio, km_inicial, km_final FROM rendiciones_corp
+                                 WHERE fecha_servicio BETWEEN ? AND ? AND COALESCE(estado,'') <> 'suspendido'""",
+                              (desde, hasta)).fetchall():
+            vid = por_interno.get(str(r["bus_interno"] or "").strip())
+            if not vid:
+                continue
+            d = de(vid)
+            d["servicios"]["corporativo"] += 1
+            d["dias_servicio"].add(str(r["fecha_servicio"])[:10])
+            km = float(r["km_final"] or 0) - float(r["km_inicial"] or 0)
+            if 0 < km < 1500:
+                d["km"]["corporativo"] += km
+    except Exception:
+        pass
+    # 3) Turismo: lo rendido del viaje (km final − km inicial), todos los días del viaje
+    try:
+        for r in conn.execute("""SELECT coche, fecha_salida, fecha_regreso, km_inicial, km_final
+                                 FROM turismo_rendiciones WHERE fecha_salida BETWEEN ? AND ?""",
+                              (desde, hasta)).fetchall():
+            coche = str(r["coche"] or "").strip()
+            vid = por_interno.get(coche) or por_interno.get("".join(ch for ch in coche if ch.isdigit()))
+            if not vid:
+                continue
+            d = de(vid)
+            d["servicios"]["turismo"] += 1
+            for dia in _dias_iso(r["fecha_salida"], r["fecha_regreso"] or r["fecha_salida"]):
+                if desde <= dia <= hasta:
+                    d["dias_servicio"].add(dia)
+            km = float(r["km_final"] or 0) - float(r["km_inicial"] or 0)
+            if 0 < km < 20000:
+                d["km"]["turismo"] += km
+    except Exception:
+        pass
+
+    # ── Los días con falla: lo cargado como correctivo, las OT con trabajos
+    #    correctivos y lo que reportaron los choferes ──
+    for sql in ("SELECT vehiculo_id, fecha AS f FROM correctivos WHERE fecha BETWEEN ? AND ?",
+                """SELECT o.vehiculo_id, SUBSTR(o.fecha_apertura,1,10) AS f FROM ordenes_trabajo o
+                   WHERE SUBSTR(o.fecha_apertura,1,10) BETWEEN ? AND ?
+                   AND EXISTS (SELECT 1 FROM ot_items i WHERE i.ot_id = o.id AND i.tipo = 'correctivo')""",
+                "SELECT vehiculo_id, SUBSTR(fecha,1,10) AS f FROM ot_pedido_reportes WHERE SUBSTR(fecha,1,10) BETWEEN ? AND ?"):
+        try:
+            for r in conn.execute(sql, (desde, hasta)).fetchall():
+                if r["f"]:
+                    de(r["vehiculo_id"])["fallas"].add(str(r["f"])[:10])
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
     conn.close()
     return datos
 
 
-def calcular_oee_vehiculo(vehiculo_id, desde, hasta, datos=None):
-    """
-    Calcula el OEE de un vehículo en un período.
-    OEE = Disponibilidad × Rendimiento × Calidad
-    Devuelve los 3 factores y el resultado, más los datos que faltan (si los hay).
-
-    Si se le pasan los datos ya traídos (cargar_datos_oee), no consulta la
-    base: es lo que usa el OEE de toda la flota.
-    """
-    if datos is not None:
-        return _oee_con_datos(vehiculo_id, desde, hasta, datos)
-    conn = get_connection()
-    veh = conn.execute("SELECT * FROM vehiculos WHERE id=?", (vehiculo_id,)).fetchone()
-    if not veh:
-        conn.close()
-        return None
-    veh = dict(veh)
-
-    dias_periodo = _dias_entre(desde, hasta)
-    if dias_periodo == 0:
-        conn.close()
-        return None
-
-    # ── DISPONIBILIDAD = días operativo / días del período ──
-    dias_fuera = _dias_fuera_servicio(vehiculo_id, desde, hasta, conn)
-    dias_operativo = max(0, dias_periodo - dias_fuera)
-    disponibilidad = dias_operativo / dias_periodo if dias_periodo else 0
-
-    # ── RENDIMIENTO = km recorridos / meta de km del período ──
-    # Meta mensual prorrateada a los días del período
-    meta_mensual = veh.get("meta_km_mensual") or 0
-    meta_periodo = meta_mensual * (dias_periodo / 30.0) if meta_mensual else 0
-    # KM recorridos en el período: diferencia de odómetro por servicios/mantenimientos en el rango
-    kms = conn.execute("""
-        SELECT MIN(km) mn, MAX(km) mx FROM (
-            SELECT km, fecha FROM mantenimientos_realizados WHERE vehiculo_id=? AND fecha BETWEEN ? AND ?
-            UNION ALL
-            SELECT km, fecha FROM correctivos WHERE vehiculo_id=? AND fecha BETWEEN ? AND ?
-            UNION ALL
-            SELECT km, fecha_apertura as fecha FROM ordenes_trabajo WHERE vehiculo_id=? AND fecha_apertura BETWEEN ? AND ?
-        ) t WHERE km > 0
-    """, (vehiculo_id, desde, hasta, vehiculo_id, desde, hasta, vehiculo_id, desde, hasta)).fetchone()
-    km_recorridos = 0
-    if kms and kms["mx"] and kms["mn"]:
-        km_recorridos = max(0, kms["mx"] - kms["mn"])
-
-    rendimiento = (km_recorridos / meta_periodo) if meta_periodo else 0
-    rendimiento = min(rendimiento, 1.5)  # tope para que un dato raro no rompa el cálculo
-
-    # ── CALIDAD = días sin falla / días operativo ──
-    # Días afectados por correctivos en el período
-    corr = conn.execute(
-        "SELECT fecha FROM correctivos WHERE vehiculo_id=? AND fecha BETWEEN ? AND ?",
-        (vehiculo_id, desde, hasta)).fetchall()
-    dias_con_falla = len(set(c["fecha"] for c in corr))
-    dias_sin_falla = max(0, dias_operativo - dias_con_falla)
-    calidad = dias_sin_falla / dias_operativo if dias_operativo else 0
-
-    conn.close()
-
-    # ── OEE ──
-    oee = disponibilidad * rendimiento * calidad
-
-    # Detectar datos faltantes para avisar (no inventar)
-    faltantes = []
-    if not meta_mensual:
-        faltantes.append("meta de km mensual")
-    if km_recorridos == 0:
-        faltantes.append("registros de km en el período")
-
-    return {
-        "vehiculo_id": vehiculo_id,
-        "patente": veh.get("patente"),
-        "n_interno": veh.get("n_interno"),
-        "desde": desde, "hasta": hasta,
-        "dias_periodo": dias_periodo,
-        "dias_operativo": dias_operativo,
-        "dias_fuera": dias_fuera,
-        "km_recorridos": km_recorridos,
-        "meta_periodo": round(meta_periodo),
-        "dias_con_falla": dias_con_falla,
-        "disponibilidad": round(disponibilidad * 100, 1),
-        "rendimiento": round(rendimiento * 100, 1),
-        "calidad": round(calidad * 100, 1),
-        "oee": round(oee * 100, 1),
-        "faltantes": faltantes,
-    }
+def _percentil(valores, p):
+    v = sorted(valores)
+    if not v:
+        return 0
+    k = (len(v) - 1) * p
+    i = int(k)
+    return v[i] + (v[min(i + 1, len(v) - 1)] - v[i]) * (k - i)
 
 
-def _oee_con_datos(vehiculo_id, desde, hasta, d):
-    """El mismo cálculo de calcular_oee_vehiculo, sin consultar la base."""
+def _oee_base(vehiculo_id, desde, hasta, d):
+    """Disponibilidad, km y calidad de un coche (sin el rendimiento, que
+    necesita la referencia de toda la flota)."""
     veh = d.get("veh")
     if not veh:
         return None
     dias_periodo = _dias_entre(desde, hasta)
     if dias_periodo == 0:
         return None
-    dias_fuera = _dias_fuera_servicio(vehiculo_id, desde, hasta, None,
-                                      regs=d.get("regs", []), ots=d.get("ots", []))
+    # Días fuera: fuera de servicio o en el taller... salvo que ese día haya
+    # hecho un servicio (una OT abierta por algo chico no deja el coche parado)
+    from datetime import date, timedelta
+    fuera = set()
+    d_ini, d_fin = date.fromisoformat(desde), date.fromisoformat(hasta)
+
+    def marcar(ini, fin):
+        ini, fin = max(ini, d_ini), min(fin, d_fin)
+        while ini <= fin:
+            fuera.add(ini.isoformat())
+            ini += timedelta(days=1)
+    for r in d.get("regs", []):
+        try:
+            marcar(date.fromisoformat(str(r["fecha_desde"])[:10]),
+                   date.fromisoformat(str(r["fecha_hasta"])[:10]) if r["fecha_hasta"] else d_fin)
+        except (ValueError, TypeError):
+            continue
+    for o in d.get("ots", []):
+        try:
+            ini = date.fromisoformat(str(o["fecha_apertura"])[:10])
+        except (ValueError, TypeError):
+            continue
+        try:
+            fin = date.fromisoformat(str(o["fecha_cierre"])[:10]) if (o["estado"] == "cerrada" and o["fecha_cierre"]) else d_fin
+        except (ValueError, TypeError):
+            fin = ini
+        marcar(ini, fin)
+    trabajo = d.get("dias_servicio", set())
+    dias_fuera = len(fuera - trabajo)
     dias_operativo = max(0, dias_periodo - dias_fuera)
-    disponibilidad = dias_operativo / dias_periodo if dias_periodo else 0
-
-    meta_mensual = veh.get("meta_km_mensual") or 0
-    meta_periodo = meta_mensual * (dias_periodo / 30.0) if meta_mensual else 0
-    kms = d.get("kms")
-    km_recorridos = 0
-    if kms and kms["mx"] and kms["mn"]:
-        km_recorridos = max(0, kms["mx"] - kms["mn"])
-    rendimiento = (km_recorridos / meta_periodo) if meta_periodo else 0
-    rendimiento = min(rendimiento, 1.5)
-
-    dias_con_falla = len(set(c["fecha"] for c in d.get("corr", [])))
-    dias_sin_falla = max(0, dias_operativo - dias_con_falla)
-    calidad = dias_sin_falla / dias_operativo if dias_operativo else 0
-    oee = disponibilidad * rendimiento * calidad
-
-    faltantes = []
-    if not meta_mensual:
-        faltantes.append("meta de km mensual")
-    if km_recorridos == 0:
-        faltantes.append("registros de km en el período")
+    km = d.get("km") or {}
+    servicios = d.get("servicios") or {}
+    km_total = sum(km.values())
+    n_serv = sum(servicios.values())
+    grupo = max(GRUPOS_OEE, key=lambda g: (km.get(g, 0), servicios.get(g, 0))) if n_serv else ""
+    dias_con_falla = len({f for f in d.get("fallas", set()) if desde <= f <= hasta})
+    calidad = max(0, dias_operativo - dias_con_falla) / dias_operativo if dias_operativo else 0
     return {
-        "vehiculo_id": vehiculo_id,
-        "patente": veh.get("patente"),
-        "n_interno": veh.get("n_interno"),
-        "desde": desde, "hasta": hasta,
-        "dias_periodo": dias_periodo,
-        "dias_operativo": dias_operativo,
-        "dias_fuera": dias_fuera,
-        "km_recorridos": km_recorridos,
-        "meta_periodo": round(meta_periodo),
+        "vehiculo_id": vehiculo_id, "patente": veh.get("patente"), "n_interno": veh.get("n_interno"),
+        "tipo": veh.get("tipo") or "", "activo": bool(veh.get("activo", 1)),
+        "desde": desde, "hasta": hasta, "dias_periodo": dias_periodo,
+        "dias_operativo": dias_operativo, "dias_fuera": dias_fuera,
+        "dias_con_servicio": len({x for x in trabajo if desde <= x <= hasta}),
+        "servicios": n_serv, "km_recorridos": round(km_total),
+        "km_por_tipo": {g: round(v) for g, v in km.items() if v},
+        "servicios_por_tipo": {g: v for g, v in servicios.items() if v},
+        "sin_distancia": d.get("sin_distancia", 0),
+        "grupo": grupo, "grupo_nombre": GRUPOS_OEE.get(grupo, ""),
+        "km_dia": round(km_total / dias_operativo) if dias_operativo else 0,
         "dias_con_falla": dias_con_falla,
-        "disponibilidad": round(disponibilidad * 100, 1),
-        "rendimiento": round(rendimiento * 100, 1),
-        "calidad": round(calidad * 100, 1),
-        "oee": round(oee * 100, 1),
-        "faltantes": faltantes,
+        "disponibilidad": dias_operativo / dias_periodo, "calidad": calidad,
+        "meta_mensual": float(veh.get("meta_km_mensual") or 0),
     }
+
+
+def oee_de_la_flota(desde, hasta, datos=None):
+    """El OEE de cada coche y la referencia de km por día de cada tipo de
+    servicio. Devuelve (resultados, referencias)."""
+    datos = datos if datos is not None else cargar_datos_oee(desde, hasta)
+    bases = [b for b in (_oee_base(vid, desde, hasta, d) for vid, d in datos.items()) if b]
+    # Referencia por tipo de servicio: el km por día operativo de los que más
+    # rinden (percentil 90), entre los coches con al menos 3 días de servicio.
+    # Así un bus de corporativos (tramos cortos) se compara con los de
+    # corporativos y no con los que van a Ciudad del Este.
+    referencias = {}
+    for g in GRUPOS_OEE:
+        vals = [b["km_recorridos"] / b["dias_operativo"] for b in bases
+                if b["grupo"] == g and b["dias_con_servicio"] >= 3 and b["dias_operativo"] and b["km_recorridos"]]
+        if vals:
+            referencias[g] = {"km_dia": round(_percentil(vals, 0.9)), "coches": len(vals), "nombre": GRUPOS_OEE[g]}
+    resultados = []
+    for b in bases:
+        if b["meta_mensual"]:
+            ref, fuente = b["meta_mensual"] / 30.0, "meta del coche"
+        elif b["grupo"] in referencias:
+            ref, fuente = referencias[b["grupo"]]["km_dia"], f"mejores de {GRUPOS_OEE[b['grupo']].lower()}"
+        else:
+            ref, fuente = 0, ""
+        posible = ref * b["dias_operativo"]
+        rendimiento = min(1.0, b["km_recorridos"] / posible) if posible else 0
+        oee = b["disponibilidad"] * rendimiento * b["calidad"]
+        faltantes = []
+        if not b["servicios"]:
+            faltantes.append("no tiene servicios en el período")
+        elif not b["km_recorridos"]:
+            faltantes.append("sus servicios no tienen km (falta la distancia de los tramos)")
+        if b["sin_distancia"]:
+            faltantes.append(f"{b['sin_distancia']} salida{'s' if b['sin_distancia'] != 1 else ''} sin distancia cargada")
+        r = dict(b)
+        r.update({
+            "km_dia_ref": round(ref), "fuente_ref": fuente, "km_posibles": round(posible),
+            "meta_periodo": round(posible),
+            "disponibilidad": round(b["disponibilidad"] * 100, 1),
+            "rendimiento": round(rendimiento * 100, 1),
+            "calidad": round(b["calidad"] * 100, 1),
+            "oee": round(oee * 100, 1),
+            "faltantes": faltantes,
+            # Los coches de servicio (buses) y los que hicieron servicios cuentan
+            # para el promedio; una camioneta de taller sin servicios, no.
+            "cuenta": bool(b["servicios"]) or any(t in str(b["tipo"]).upper() for t in TIPOS_SERVICIO),
+        })
+        resultados.append(r)
+    return resultados, referencias
+
+
+def calcular_oee_vehiculo(vehiculo_id, desde, hasta, datos=None):
+    """El OEE de un coche en un período (ver oee_de_la_flota). Se calcula con la
+    flota completa porque el rendimiento se compara con los coches que hacen el
+    mismo tipo de servicio."""
+    if _dias_entre(desde, hasta) == 0:
+        return None
+    resultados, _ = oee_de_la_flota(desde, hasta)
+    return next((r for r in resultados if r["vehiculo_id"] == vehiculo_id), None)
 
 
 # ════════════════════════════════════════════════════════════════════════════

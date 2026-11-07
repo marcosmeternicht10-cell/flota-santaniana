@@ -8875,3 +8875,13 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
   .ig-tuto-elegir button { flex-direction: column; align-items: flex-start; gap: 6px; }
 }
 .ig-tuto > * { min-width: 0; }
+
+/* OEE */
+.oee-explica { background: #eaf2fb; border-radius: 11px; padding: 13px 16px; margin-bottom: 18px; font-size: 13px; color: var(--text); display: flex; flex-direction: column; gap: 4px; line-height: 1.5; }
+.oee-resumen { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); margin: 0 0 18px; }
+.oee-resumen b { color: var(--text); }
+.oee-aviso { color: var(--warning); }
+.oee-aviso b { color: inherit; }
+.oee-grupo { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.oee-ref { color: var(--muted); font-size: 12px; }
+tr.oee-no-cuenta td { opacity: .55; }
