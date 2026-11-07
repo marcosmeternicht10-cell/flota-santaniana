@@ -352,7 +352,8 @@ def _orden_hora(h):
 def _flota(conn):
     """Los coches de la flota por número interno."""
     out = {}
-    for r in conn.execute("""SELECT id, n_interno, patente, marca, modelo, COALESCE(activo,1) AS activo
+    for r in conn.execute("""SELECT id, n_interno, patente, marca, modelo, COALESCE(activo,1) AS activo,
+                                    COALESCE(asientos,0) AS asientos, COALESCE(ejes,0) AS ejes
                              FROM vehiculos""").fetchall():
         n = str(r["n_interno"] or "").strip()
         if n:

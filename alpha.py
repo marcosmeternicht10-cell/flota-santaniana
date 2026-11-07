@@ -225,7 +225,7 @@ def dia_para_alpha(fecha):
             for lado in tr.LADOS:
                 for x in c[lado]:
                     coche = x["coche"] or x["habitual"]
-                    x["plano"] = plano_de(coche, x["modelo"] if x["coche"] else x["habitual_modelo"], planos, cp)
+                    x["plano"] = plano_de(coche, x["modelo"] if x["coche"] else x["habitual_modelo"], planos, cp, flota.get(coche))
                     # Un servicio agregado sin coche usa el plano que se le eligió
                     if not coche and (x.get("adicional") or {}).get("plano") in planos:
                         x["plano"] = x["adicional"]["plano"]
@@ -235,23 +235,35 @@ def dia_para_alpha(fecha):
         conn.close()
 
 
-def plano_de(coche, modelo, planos, coche_plano):
-    """El plano del coche: el que se le eligió; si no, se deduce del modelo
-    (Volare o Senior → micro, Paradiso 1800 DD → AO01, los 8x2 → AO03, el
-    resto → Paradiso un piso)."""
+def plano_de(coche, modelo, planos, coche_plano, veh=None):
+    """El plano del coche: el que se le eligió en Alpha → Planos; si no, se
+    deduce del coche. Lo mismo hace alPlanoAuto en alpha.js."""
     fijo = coche and coche_plano.get(coche)
     if fijo and fijo in planos:
         return fijo
+    return plano_auto(modelo, planos, veh)
+
+
+def plano_auto(modelo, planos, veh=None):
+    """Volare o Senior → micro; G8 o 46 asientos con 3 ejes o más → cama G8;
+    Paradiso 1800 DD → mix; los 8x2 → semi cama; otro de 55 asientos o más →
+    mix; el resto → nacional."""
     m = str(modelo or "").lower()
+    veh = veh or {}
+    asientos, ejes = int(veh.get("asientos") or 0), int(veh.get("ejes") or 0)
     def ok(c):
         return c if c in planos else (next(iter(planos)) if planos else c)
-    if re.search(r"volare|senior", m):
+    if re.search(r"volare|senior", m) or 0 < asientos <= 33:
         return ok("VOLARE")
+    if re.search(r"\bg8\b", m) or (asientos == 46 and ejes >= 3):
+        return ok("G8")
     if re.search(r"1800\s*dd|b6x2", m):
         return ok("AO01")
     if "8x2" in m:
         return ok("AO03")
-    return ok("ACXC" if m else "AO01")
+    if asientos >= 55:
+        return ok("AO01")
+    return ok("ACXC" if m or asientos else "AO01")
 
 
 # Lo que una agencia no ve del tráfico: quién maneja, qué coche va, notas
@@ -535,21 +547,33 @@ def _filas(desde, n, huecos=None):
     return out
 
 
-# Los planos de Delta. La empresa usa solo carrocerías Marcopolo: los doble
-# piso son Paradiso 1800 DD, los de un piso Paradiso, y los micros Volare o
-# Senior. Los códigos quedan como en Delta.
+def _cama(desde, n):
+    """Filas de cama: dos asientos a la izquierda y uno a la derecha."""
+    return [[desde + 3 * i, desde + 3 * i + 1, None, None, desde + 3 * i + 2] for i in range(n)]
+
+
+# Los planos de la flota. Todos los coches son Marcopolo y los pasajeros
+# parados son siempre 10:
+#   mix         doble piso, semi cama arriba y cama abajo: 64 lugares
+#   semi cama   doble piso, todo semi cama: 64 lugares
+#   cama G8     los más nuevos, todo cama: 46 lugares
+#   nacional    un piso, G7 o New G7: 40 lugares
+# Los códigos AO01, AO03 y ACXC son los de Delta.
 PLANOS_INICIALES = {
-    "AO01": {"nombre": "Paradiso 1800 DD · cama abajo", "tipo": "Doble piso", "parados": 10, "pisos": [
-        {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 13, {2: "izq", 3: "izq"})},
-        {"nombre": "Piso bajo", "clase": "CA", "filas": [[49, 50, None, None, 51], [52, 53, None, None, 54],
-                                                         [55, 56, None, None, 57], [58, 59, None, None, 60]]},
+    "AO01": {"nombre": "Mix · semi cama arriba, cama abajo (64)", "tipo": "Doble piso", "parados": 10, "pisos": [
+        {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 14, {2: "izq", 3: "izq"})},
+        {"nombre": "Piso bajo", "clase": "CA", "filas": _cama(53, 4)},
     ]},
-    "AO03": {"nombre": "Paradiso 1800 DD · todo diferencial", "tipo": "Doble piso", "parados": 10, "pisos": [
+    "AO03": {"nombre": "Semi cama · doble piso (64)", "tipo": "Doble piso", "parados": 10, "pisos": [
         {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 14, {3: "izq", 4: "izq"})},
-        {"nombre": "Piso bajo", "clase": "CO", "filas": _filas(53, 4)},
+        {"nombre": "Piso bajo", "clase": "CO", "filas": _filas(53, 3)},
     ]},
-    "ACXC": {"nombre": "Paradiso un piso", "tipo": "Un piso", "parados": 0, "pisos": [
-        {"nombre": "Planta única", "clase": "CO", "filas": _filas(1, 12, {11: "izq"})},
+    "G8": {"nombre": "Coche cama G8 (46)", "tipo": "Doble piso", "parados": 10, "pisos": [
+        {"nombre": "Piso alto", "clase": "CA", "filas": _cama(1, 10) + [[31, 32, None, 34, 33]]},
+        {"nombre": "Piso bajo", "clase": "CA", "filas": _cama(35, 4)},
+    ]},
+    "ACXC": {"nombre": "Nacional · G7 / New G7 (40)", "tipo": "Un piso", "parados": 10, "pisos": [
+        {"nombre": "Planta única", "clase": "CO", "filas": _filas(1, 10)},
     ]},
     # De arranque: 2 + 2 en 7 filas. Se ajusta en Alpha → Planos si no es así.
     "VOLARE": {"nombre": "Volare / Senior (micro)", "tipo": "Un piso", "parados": 0, "pisos": [
@@ -557,6 +581,18 @@ PLANOS_INICIALES = {
     ]},
 }
 NOMBRES_VIEJOS = {"AO01": "Doble piso con cama abajo", "AO03": "Doble piso, todo diferencial", "ACXC": "Un piso"}
+# Cómo venían antes los planos (con la cantidad de asientos de Delta). Si un
+# plano guardado sigue exactamente así, nadie lo tocó: se cambia por el real.
+PLANOS_ANTERIORES = {
+    "AO01": {"parados": 10, "pisos": [
+        {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 13, {2: "izq", 3: "izq"})},
+        {"nombre": "Piso bajo", "clase": "CA", "filas": _cama(49, 4)}]},
+    "AO03": {"parados": 10, "pisos": [
+        {"nombre": "Piso alto", "clase": "CO", "filas": _filas(1, 14, {3: "izq", 4: "izq"})},
+        {"nombre": "Piso bajo", "clase": "CO", "filas": _filas(53, 4)}]},
+    "ACXC": {"parados": 0, "pisos": [
+        {"nombre": "Planta única", "clase": "CO", "filas": _filas(1, 12, {11: "izq"})}]},
+}
 # El recorrido de Concepción que ya se veía en la maqueta. Los demás se cargan
 # en Tarifas → Recorridos.
 RECORRIDOS_INICIALES = {
@@ -630,6 +666,13 @@ def init_alpha():
                     pls[cod]["nombre"] = PLANOS_INICIALES[cod]["nombre"]; cambio = True
             if "VOLARE" not in pls and not any(re.search(r"volare|senior", str(p.get("nombre") or ""), re.I) for p in pls.values()):
                 pls["VOLARE"] = PLANOS_INICIALES["VOLARE"]; cambio = True
+            # Los asientos reales de la flota (solo los planos que nadie editó)
+            for cod, ant in PLANOS_ANTERIORES.items():
+                p = pls.get(cod)
+                if p and int(p.get("parados") or 0) == ant["parados"] and json.loads(json.dumps(p.get("pisos"))) == json.loads(json.dumps(ant["pisos"])):
+                    pls[cod] = PLANOS_INICIALES[cod]; cambio = True
+            if "G8" not in pls and not any(re.search(r"\bg8\b", str(p.get("nombre") or ""), re.I) for p in pls.values()):
+                pls["G8"] = PLANOS_INICIALES["G8"]; cambio = True
             if cambio:
                 conn.execute("UPDATE alpha_config SET valor=? WHERE clave='planos'", (json.dumps(pls, ensure_ascii=False),))
                 conn.commit()
@@ -656,7 +699,7 @@ def leer_config():
         out["meta"] = meta
         # Los coches de la flota (para elegir el plano de cada uno)
         out["coches"] = [{"coche": n, "marca": v.get("marca") or "", "modelo": v.get("modelo") or "",
-                          "patente": v.get("patente") or ""}
+                          "patente": v.get("patente") or "", "asientos": int(v.get("asientos") or 0), "ejes": int(v.get("ejes") or 0)}
                          for n, v in sorted(tr._flota(conn).items(), key=lambda kv: (len(kv[0]), kv[0]))
                          if int(v.get("activo") or 0) == 1]
         # Los corredores que aparecen en el tráfico de los últimos dos meses

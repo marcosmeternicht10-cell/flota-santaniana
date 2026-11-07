@@ -153,18 +153,29 @@ async function alCfgGuardar(clave, valor) {
 }
 function alPlanos() { return (al.cfg && al.cfg.planos) || {}; }
 function alDescuentos() { const d = (al.cfg && al.cfg.descuentos) || []; return d.length ? d : [{ id: "general", nombre: "General", factor: 1 }]; }
-function alPlanoAuto(modelo) {
-  const m = String(modelo || "").toLowerCase(), pls = alPlanos();
+// El plano que le toca a un coche sin plano elegido (lo mismo que plano_auto en
+// alpha.py): Volare o Senior → micro; G8 o 46 asientos con 3 ejes o más → cama
+// G8; Paradiso 1800 DD → mix; 8x2 → semi cama; 55 asientos o más → mix; el resto → nacional
+let _alVehMemo = { cfg: null, m: new Map() };
+function alVehDe(coche) {
+  const cs = (al.cfg && al.cfg.coches) || [];
+  if (_alVehMemo.cfg !== cs) _alVehMemo = { cfg: cs, m: new Map(cs.map(c => [String(c.coche), c])) };
+  return _alVehMemo.m.get(String(coche || "")) || {};
+}
+function alPlanoAuto(modelo, coche) {
+  const m = String(modelo || "").toLowerCase(), pls = alPlanos(), v = alVehDe(coche);
+  const asientos = +v.asientos || 0, ejes = +v.ejes || 0;
   const ok = c => pls[c] ? c : Object.keys(pls)[0];
-  if (/volare|senior/.test(m)) return ok("VOLARE");
+  if (/volare|senior/.test(m) || (asientos > 0 && asientos <= 33)) return ok("VOLARE");
+  if (/\bg8\b/.test(m) || (asientos === 46 && ejes >= 3)) return ok("G8");
   if (/1800\s*dd|b6x2/.test(m)) return ok("AO01");
   if (/8x2/.test(m)) return ok("AO03");
-  if (m) return ok("ACXC");
-  return ok("AO01");
+  if (asientos >= 55) return ok("AO01");
+  return ok(m || asientos ? "ACXC" : "AO01");
 }
 function alPlanoDe(coche, modelo) {
   const fijo = coche && ((al.cfg && al.cfg.coche_plano) || {})[coche];
-  return fijo && alPlanos()[fijo] ? fijo : alPlanoAuto(modelo);
+  return fijo && alPlanos()[fijo] ? fijo : alPlanoAuto(modelo, coche);
 }
 async function alCambiarPlano(pl) {
   const sv = alServ(), coche = sv && (sv.coche || sv.habitual);
@@ -567,7 +578,7 @@ function alPintar(animar) {
     }));
     if (ultimo) celdas += `<div class="al-cel lleno" style="grid-column:${nf + 1};grid-row:1/3"><i class="ti ti-steering-wheel"></i>Chofer</div>
       <div class="al-cel" style="grid-column:${nf + 1};grid-row:4/6">Puerta</div>`;
-    const ancho = cama ? 64 : nf >= 12 ? 40 : 48, alto = cama ? 50 : 42;
+    const ancho = cama ? (nf >= 8 ? 50 : 64) : nf >= 12 ? 40 : 48, alto = cama ? 50 : 42;   // un piso entero de cama (G8) es largo
     const libres = p.filas.flat().filter(n => n != null && !ocup.has(n)).length;
     const pt = alPrecioTramo(sv, p.clase, s, b);
     return `<div class="al-piso">
