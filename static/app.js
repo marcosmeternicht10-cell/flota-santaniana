@@ -8585,7 +8585,7 @@ function otItemEstadoCambio(itemId, estado) {
 const PD_PRIO = { urgente: ["Urgente", "flame"], alta: ["Alta", "arrow-up"], normal: ["Normal", "minus"], baja: ["Baja", "arrow-down"] };
 const PD_TABS = [["nuevo", "Nuevos", "inbox"], ["espera", "En espera", "clock-pause"], ["agendado", "Agendados", "calendar-check"], ["aceptado", "Pasados a OT", "clipboard-check"], ["descartado", "Descartados", "circle-x"]];
 const PD_TIPO = { correctivo: "Correctivo", preventivo: "Preventivo", neumaticos: "Neumáticos", control: "Control", otro: "Otro" };
-const pd = { estado: "nuevo", q: "", d: null, sel: new Set() };
+const pd = { estado: "nuevo", q: "", d: null, sel: new Set(), coche: null };
 
 async function pdActualizarBadge(datos) {
   const b = document.getElementById("nav-pedidos-n");
@@ -8660,10 +8660,47 @@ function pdPintar() {
       <span><b>${total}</b> problema${total === 1 ? "" : "s"} en <b>${d.coches.length}</b> coche${d.coches.length === 1 ? "" : "s"}</span>
       ${urg ? `<span class="urg"><i class="ti ti-flame"></i><b>${urg}</b> urgente${urg === 1 ? "" : "s"}</span>` : ""}
       ${salen ? `<span class="sale"><i class="ti ti-route"></i><b>${salen}</b> coche${salen === 1 ? "" : "s"} sale${salen === 1 ? "" : "n"} hoy o mañana</span>` : ""}
-      <span class="pd-res-ayuda">Primero los urgentes y los que salen pronto. La prioridad marcada es la que sugiere el sistema por lo que dice el chofer: cambiala si hace falta.</span>
+      <span class="pd-res-ayuda">Elegí un coche para ver sus problemas. Primero los urgentes y los que salen pronto.</span>
     </div>` : ""}
-    ${d.coches.map(pdCoche).join("")}`;
+    <div class="pd-md">
+      <nav class="pd-coches" role="tablist" aria-label="Coches con pedidos">${d.coches.map(pdCocheTab).join("")}</nav>
+      <div class="pd-detalle" id="pd-detalle" role="tabpanel"></div>
+    </div>`;
+  // El coche elegido sigue elegido al volver a cargar (si todavía tiene pedidos)
+  if (!d.coches.some(c => c.vehiculo_id === pd.coche)) pd.coche = d.coches[0].vehiculo_id;
+  pdVerCoche(pd.coche, false);
   pdLote();
+}
+// Una pestaña por coche: el número, cuántos problemas y lo que apura
+function pdCocheTab(c) {
+  const abiertos = pd.estado === "nuevo" || pd.estado === "espera";
+  const urg = c.pedidos.filter(p => p.prioridad_final === "urgente").length;
+  const n = c.pedidos.length;
+  return `<button class="pd-ctab ${c.peor === 0 && abiertos ? "urg" : ""}" role="tab" data-vid="${c.vehiculo_id}" onclick="pdVerCoche(${c.vehiculo_id}, true)">
+      <span class="pd-ctab-n">${trEsc(c.n_interno || c.patente)}</span>
+      <span class="pd-ctab-info">
+        <b>${n} problema${n === 1 ? "" : "s"}</b>
+        <small>${trEsc(c.patente || "")}${c.modelo ? " · " + trEsc(c.modelo) : ""}</small>
+      </span>
+      <span class="pd-ctab-marcas">
+        ${urg ? `<span class="pd-ctab-urg" title="${urg} urgente${urg === 1 ? "" : "s"}"><i class="ti ti-flame"></i>${urg}</span>` : ""}
+        ${abiertos && c.sale_pronto ? `<span class="pd-ctab-sale" title="Sale ${trEsc(pdSalidasTxt(c))}"><i class="ti ti-route"></i></span>` : ""}
+      </span>
+    </button>`;
+}
+function pdVerCoche(vid, mover) {
+  const c = (pd.d && pd.d.coches || []).find(x => x.vehiculo_id === vid);
+  const det = $("#pd-detalle");
+  if (!c || !det) return;
+  pd.coche = vid;
+  document.querySelectorAll(".pd-ctab").forEach(b => {
+    const on = Number(b.dataset.vid) === vid;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on);
+  });
+  det.innerHTML = pdCoche(c);
+  // En el celular la lista de coches queda arriba: bajar hasta los problemas
+  if (mover && window.innerWidth < 900) det.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 function pdCuando(p) {
   if (!p.dias) return "hoy";
@@ -8869,6 +8906,15 @@ function pdElegirCoche(vid, on) {
   pdPintar();
 }
 function pdLote() {
+  // En las pestañas, qué coches tienen pedidos elegidos
+  (pd.d && pd.d.coches || []).forEach(c => {
+    const t = document.querySelector(`.pd-ctab[data-vid="${c.vehiculo_id}"] .pd-ctab-marcas`);
+    if (!t) return;
+    const tiene = c.pedidos.some(p => pd.sel.has(p.id));
+    const m = t.querySelector(".pd-ctab-sel");
+    if (tiene && !m) t.insertAdjacentHTML("beforeend", `<span class="pd-ctab-sel" title="Tiene pedidos elegidos"><i class="ti ti-checks"></i></span>`);
+    if (!tiene && m) m.remove();
+  });
   const b = $("#pd-lote");
   if (!b) return;
   const n = pd.sel.size;

@@ -8885,3 +8885,34 @@ body.tt-arrastrando .th-b.tt-levantada { pointer-events: none; }
 .oee-grupo { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .oee-ref { color: var(--muted); font-size: 12px; }
 tr.oee-no-cuenta td { opacity: .55; }
+
+/* Pedidos de choferes: una pestaña por coche y, al lado, sus problemas */
+.pd-md { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 16px; align-items: start; }
+.pd-coches { display: flex; flex-direction: column; gap: 6px; position: sticky; top: 12px; max-height: calc(100vh - 140px); overflow-y: auto; padding: 2px 4px 8px 2px; }
+.pd-ctab { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); cursor: pointer; text-align: left; font: inherit; color: var(--text); transition: border-color .15s, background .15s, box-shadow .15s; }
+.pd-ctab:hover { border-color: var(--border-strong); }
+.pd-ctab.on { border-color: var(--brand-blue); background: var(--info-bg); box-shadow: 0 0 0 2px var(--info-bd); }
+.pd-ctab.urg { border-left: 4px solid var(--danger); }
+.pd-ctab-n { font: 800 15px/1 "Inter", sans-serif; color: #fff; background: var(--azul-oscuro); border-radius: 7px; padding: 6px 8px; letter-spacing: .3px; }
+.pd-ctab-info { display: flex; flex-direction: column; min-width: 0; }
+.pd-ctab-info b { font-size: 13px; font-weight: 600; }
+.pd-ctab-info small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pd-ctab-marcas { display: flex; align-items: center; gap: 4px; }
+.pd-ctab-marcas > span { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 6px; }
+.pd-ctab-urg { background: var(--danger-bg); color: var(--danger); }
+.pd-ctab-sale { background: var(--warning-bg); color: #7A5200; }
+.pd-ctab-sel { background: var(--info-bg); color: var(--brand-blue); }
+.pd-ctab-marcas .ti { font-size: 13px; }
+.pd-detalle .pd-coche { margin-bottom: 0; }
+@media (max-width: 900px) {
+  .pd-md { grid-template-columns: 1fr; }
+  .pd-coches { flex-direction: row; position: static; max-height: none; overflow-x: auto; overflow-y: hidden; padding-bottom: 6px; }
+  .pd-ctab { width: auto; flex: 0 0 auto; min-width: 190px; }
+}
+/* En el panel del coche (más angosto que la pantalla), las acciones van debajo
+   del problema y el texto usa todo el ancho */
+.pd-detalle { container-type: inline-size; }
+@container (max-width: 1000px) {
+  .pd-fila { grid-template-columns: auto minmax(0, 1fr); }
+  .pd-acc { grid-column: 2; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-start; }
+}
