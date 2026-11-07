@@ -1,0 +1,6 @@
+# Lo que no va al repositorio
+__pycache__/
+*.pyc
+*.db
+uploads/
+.env

@@ -2216,24 +2216,30 @@ def rendiciones_sospechosas(desde=None, hasta=None):
             return False
         return True if not hasta else fecha <= hasta
 
+    # Agrupados por coche: cada rendición mira solo las paradas y OT de SU
+    # coche (antes recorría todas las OT de la flota por cada rendición).
+    paradas_bus, ots_bus = {}, {}
+    for p in paradas:
+        paradas_bus.setdefault(str(p["n_interno"]), []).append(p)
+    for o in ots:
+        # Solo cuenta si la OT abarcó más de un día: una OT abierta y
+        # cerrada el mismo día no necesariamente dejó el bus parado.
+        if o.get("fecha_cierre") and o["fecha_cierre"] > o["fecha_apertura"]:
+            ots_bus.setdefault(str(o["n_interno"]), []).append(o)
+
     for r in rows:
         bus = str(r.get("bus_interno") or "").strip()
         if not bus:
             continue
-        for p in paradas:
-            if str(p["n_interno"]) == bus and _entre(r["fecha_servicio"],
-                                                     p["fecha_desde"], p["fecha_hasta"]):
+        for p in paradas_bus.get(bus, ()):
+            if _entre(r["fecha_servicio"], p["fecha_desde"], p["fecha_hasta"]):
                 r["motivo_parado"] = (f"el coche estaba fuera de servicio"
                                       f"{' (' + p['motivo'] + ')' if p.get('motivo') else ''}")
                 bus_parado.append(r)
                 break
         else:
-            for o in ots:
-                # Solo cuenta si la OT abarcó más de un día: una OT abierta y
-                # cerrada el mismo día no necesariamente dejó el bus parado.
-                if (str(o["n_interno"]) == bus and o.get("fecha_cierre")
-                        and o["fecha_cierre"] > o["fecha_apertura"]
-                        and _entre(r["fecha_servicio"], o["fecha_apertura"], o["fecha_cierre"])):
+            for o in ots_bus.get(bus, ()):
+                if _entre(r["fecha_servicio"], o["fecha_apertura"], o["fecha_cierre"]):
                     r["motivo_parado"] = "el coche estaba en el taller con una orden abierta"
                     bus_parado.append(r)
                     break
@@ -2815,7 +2821,15 @@ def api_corp_mis_cargas():
         return jsonify({"error": "Sin permiso"}), 403
     from database import obtener_cargas_combustible
     nombre = session.get("nombre") or session.get("usuario", "")
-    cargas = obtener_cargas_combustible(origen="corporativo", chofer=nombre, limite=40)
+    # Solo los coches en los que cargó este chofer (no la historia de toda la flota)
+    conn = get_connection()
+    try:
+        vehs = [r["vehiculo_id"] for r in conn.execute(
+            "SELECT DISTINCT vehiculo_id FROM combustible WHERE chofer=? AND origen='corporativo'",
+            (nombre,)).fetchall()]
+    finally:
+        conn.close()
+    cargas = obtener_cargas_combustible(origen="corporativo", chofer=nombre, limite=40, vehiculos=vehs)
     cargas.sort(key=lambda x: (x.get("fecha") or ""), reverse=True)
     total_litros = sum(float(c.get("litros") or 0) for c in cargas)
     return jsonify({"cargas": cargas[:20],

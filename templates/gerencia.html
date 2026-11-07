@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/gerencia.css?v={{ v }}">
+  <link rel="stylesheet" href="{{ estatico('gerencia.css') }}">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
   <link rel="apple-touch-icon" href="/static/app/apple-touch-icon.png">
@@ -73,6 +73,6 @@
 
   <div class="g-tip" id="gTip" role="tooltip"></div>
   <script>window.G_ROL = "{{ rol }}";</script>
-  <script src="/static/gerencia.js?v={{ v }}"></script>
+  <script src="{{ estatico('gerencia.js') }}"></script>
 </body>
 </html>

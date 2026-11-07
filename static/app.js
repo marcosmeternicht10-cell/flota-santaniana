@@ -538,10 +538,9 @@ async function cargarVehiculos() {
     body.innerHTML = `<tr><td colspan="11" class="empty"><i class="ti ti-bus"></i>Sin vehículos. Agregá el primero arriba.</td></tr>`;
     return;
   }
-  const filas = await Promise.all(vs.map(async v => {
-    const info = await api(`/api/vehiculos/${v.id}/plan`);
-    return { v, plan: info.plan, km: info.km_actual };
-  }));
+  // Plan y km de toda la flota en un solo pedido (antes, uno por coche)
+  const info = await api("/api/vehiculos/planes_km");
+  const filas = vs.map(v => ({ v, plan: (info[v.id] || {}).plan || null, km: (info[v.id] || {}).km_actual || 0 }));
   body.innerHTML = filas.map(({v, plan, km}) => `
     <tr class="clickable ${cocheActual && cocheActual.id === v.id ? 'selected' : ''}" data-id="${v.id}" onclick="seleccionarCoche(${v.id})">
       <td><b>${v.patente}</b></td>
@@ -1356,6 +1355,7 @@ let turismoTimer = null;
 function calcularTurismoVivo() {
   clearTimeout(turismoTimer);
   turismoTimer = setTimeout(async () => {
+    if (!document.getElementById("tu-km")) return;   // ya se salió de la pantalla
     const datos = datosTurismo();
     if (!datos.km_total || parseFloat(datos.km_total) <= 0) {
       document.getElementById("tu-resultado").innerHTML = `<div class="empty" style="padding:40px"><i class="ti ti-calculator"></i>Ingresá los km del viaje para ver el cálculo.</div>`;
@@ -1763,8 +1763,9 @@ function setCorrectivosTab(t) { correctivosTab = t; renderCorrectivos(); }
 
 // Vista NUEVA: correctivos agrupados por su orden de trabajo
 async function renderCorrectivosPorOT() {
-  const cont = document.getElementById("correctivos-contenido");
   const grupos = await api("/api/correctivos_por_ot");
+  const cont = document.getElementById("correctivos-contenido");
+  if (!cont) return;          // se fue a otra pantalla mientras cargaba
   if (!grupos.length) {
     cont.innerHTML = `<div class="empty"><i class="ti ti-mood-smile"></i>No hay correctivos en ninguna orden de trabajo.<br>¡Buena señal!</div>`;
     return;
@@ -1775,7 +1776,9 @@ async function renderCorrectivosPorOT() {
     <div style="margin-bottom:16px;color:var(--muted);font-size:14px">
       <b>${totalItems}</b> trabajos correctivos en <b>${grupos.length}</b> órdenes de trabajo
     </div>
-    ${grupos.map(g => {
+    <div id="corr-lista"></div>`;
+  // De a 40 OT: con años de historia eran miles de tarjetas y la pantalla se trababa
+  mostrarEnTandas(document.getElementById("corr-lista"), grupos, g => {
       const coche = g.n_interno ? `Coche ${g.n_interno}` : g.patente;
       const completados = g.items.filter(i => i.estado === "completado").length;
       const colorEstado = g.estado === "cerrada" ? "success" : g.estado === "en_proceso" ? "warning" : "danger";
@@ -1811,7 +1814,30 @@ async function renderCorrectivosPorOT() {
             </div>
           </div>
         </div>`;
-    }).join("")}`;
+  }, 40, "órdenes de trabajo");
+}
+
+// Muestra una lista larga de a tandas, con un botón «Mostrar más» al final.
+// Para listas que crecen con los años (miles de filas o tarjetas).
+function mostrarEnTandas(cont, items, htmlDe, tam = 50, nombre = "más") {
+  if (!cont) return;
+  let n = 0;
+  const boton = () => {
+    const quedan = items.length - n;
+    return quedan > 0 ? `<div class="ot-mas tandas-mas"><button class="btn btn-ghost" type="button"><i class="ti ti-chevrons-down"></i> Mostrar ${Math.min(tam, quedan)} más</button>
+      <span>quedan ${quedan} ${nombre}</span></div>` : "";
+  };
+  const siguiente = () => {
+    const viejo = cont.querySelector(":scope > .tandas-mas");
+    if (viejo) viejo.remove();
+    cont.insertAdjacentHTML("beforeend", items.slice(n, n + tam).map(htmlDe).join(""));
+    n = Math.min(items.length, n + tam);
+    cont.insertAdjacentHTML("beforeend", boton());
+    const b = cont.querySelector(":scope > .tandas-mas button");
+    if (b) b.onclick = siguiente;
+  };
+  cont.innerHTML = "";
+  siguiente();
 }
 
 // Vista vieja: registro manual de correctivos (se mantiene por si se necesita)
@@ -7212,9 +7238,12 @@ async function renderOts() {
   status("Órdenes de Trabajo");
   await refrescarPermisoOTs();
   const filtro = otFiltroEstado ? `?estado=${otFiltroEstado}` : "";
-  const ots = await api("/api/ots" + filtro);
+  // Las cantidades por estado: sin filtro salen de la misma lista; con filtro,
+  // de un conteo liviano (antes se bajaba la lista entera dos veces).
+  const [ots, conteo] = await Promise.all([api("/api/ots" + filtro), filtro ? api("/api/ots/conteo") : null]);
   const counts = { abierta: 0, en_proceso: 0, cerrada: 0 };
-  (await api("/api/ots")).forEach(o => counts[o.estado] = (counts[o.estado] || 0) + 1);
+  if (conteo && !conteo.error) Object.assign(counts, conteo);
+  else ots.forEach(o => counts[o.estado] = (counts[o.estado] || 0) + 1);
 
   // Separadas por fecha: las activas arriba, cada día con lo que entró ese día
   // (una OT abierta que sumó un trabajo hoy sube a hoy); las cerradas debajo,
@@ -7234,6 +7263,12 @@ async function renderOts() {
     }
     return (b.id || 0) - (a.id || 0);
   });
+
+  const primeraCerr = ots.findIndex(o => o.estado === "cerrada");
+  const corte = primeraCerr < 0 ? ots.length : primeraCerr + otCerradasVer;
+  const visibles = ots.slice(0, corte);
+  otRestantes = ots.slice(corte);
+  otListaActual = ots;
 
   content.innerHTML = `
     <div class="page-header">
@@ -7292,49 +7327,94 @@ async function renderOts() {
               <th class="center">Estado</th><th class="td-action"></th>
             </tr></thead>
             <tbody>
-              ${ots.map((o, i) => {
-                const sep = otSeparadorLista(ots, i);
-                const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
-                const cs = o.coches && o.coches.length > 1 ? o.coches : [o];
-                const datos = cs.map(c => [c.n_interno, c.patente, c.marca, c.modelo].map(x => String(x || "").toLowerCase()).join(" ")).join(" ");
-                const motK = (o.atrasados_motivos || []).map(m => m.clave).concat(o.atrasados_sin_motivo ? ["__sin"] : []);
-                return `${sep}<tr class="clickable ot-fila${o.atrasados ? " atr" : ""}" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
-                            data-atr="${o.atrasados || 0}" data-mot="${trEsc(motK.join("|"))}"
-                            data-p="${trEsc(cs.map(c => String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "")).join(" "))}" data-t="${trEsc(datos)}">
-                  <td><b>#${o.numero || o.id}</b></td>
-                  <td class="center">${badgeSalida(o.horario_salida)}</td>
-                  <td>${o.fecha_apertura}${o.ultima_fecha && o.ultima_fecha > o.fecha_apertura ? `<span class="ot-fila-ult" title="Fecha del último trabajo que se sumó">último ${o.ultima_fecha.slice(8, 10)}/${o.ultima_fecha.slice(5, 7)}</span>` : ""}</td>
-                  <td>${cs.length > 1
-                    ? `<b>${cs.map(c => trEsc(String(c.n_interno || c.patente || ""))).join(" · ")}</b> <span class="ot-ncoches chico">${cs.length} coches</span>`
-                    : `<b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}`}${otAtrasadosLinea(o)}</td>
-                  <td>${o.conductor || "—"}</td>
-                  <td>${o.procedencia || "—"}</td>
-                  <td class="num">${o.km ? fmtNum(o.km) : "—"}</td>
-                  <td class="center">
-                    <div style="font-size:11px;color:var(--muted)">${o.items_completados}/${o.total_items}</div>
-                    <div class="grad-bar-wrap" style="width:60px;margin:3px auto 0">
-                      <div class="grad-bar" style="width:${progreso}%;background:${progreso === 100 ? 'var(--success)' : progreso > 50 ? 'var(--warning)' : 'var(--info)'}"></div>
-                    </div>
-                  </td>
-                  <td class="num">${gs(o.costo_total || 0)}</td>
-                  <td class="center">
-                    <span class="badge ${o.estado === 'cerrada' ? 'success' : o.estado === 'en_proceso' ? 'warning' : 'danger'}">
-                      <span class="dot"></span> ${LABEL_ESTADO_OT[o.estado]}
-                    </span>
-                  </td>
-                  <td class="td-action">
-                    ${puedeBorrarOTs() ? `<button class="icon-btn ot-borrar" title="Eliminar la OT" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>` : ""}
-                  </td>
-                </tr>`;
-              }).join("")}
+              ${visibles.map((o, i) => otFilaHtml(ots, o, i)).join("")}
             </tbody>
           </table>
         </div>
+        ${otMasCerradasHtml()}
         <div class="empty" id="ot-q-vacio" hidden><i class="ti ti-search-off"></i><span></span></div>
       `}
     </div>`;
   otFiltrarLista();
   pdAvisoEnOTs();
+}
+
+// Una fila de la lista de OTs (con el separador de día si corresponde)
+function otFilaHtml(ots, o, i) {
+  const sep = otSeparadorLista(ots, i);
+  const progreso = o.total_items ? Math.round((o.items_completados / o.total_items) * 100) : 0;
+  const cs = o.coches && o.coches.length > 1 ? o.coches : [o];
+  const datos = cs.map(c => [c.n_interno, c.patente, c.marca, c.modelo].map(x => String(x || "").toLowerCase()).join(" ")).join(" ");
+  const motK = (o.atrasados_motivos || []).map(m => m.clave).concat(o.atrasados_sin_motivo ? ["__sin"] : []);
+  return `${sep}<tr class="clickable ot-fila${o.atrasados ? " atr" : ""}" onclick="abrirOT(${o.id})" data-id="${o.numero || o.id}" data-n="${trEsc(cs.map(c => String(c.n_interno || "").toLowerCase()).join(" "))}"
+              data-atr="${o.atrasados || 0}" data-mot="${trEsc(motK.join("|"))}"
+              data-p="${trEsc(cs.map(c => String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "")).join(" "))}" data-t="${trEsc(datos)}">
+    <td><b>#${o.numero || o.id}</b></td>
+    <td class="center">${badgeSalida(o.horario_salida)}</td>
+    <td>${o.fecha_apertura}${o.ultima_fecha && o.ultima_fecha > o.fecha_apertura ? `<span class="ot-fila-ult" title="Fecha del último trabajo que se sumó">último ${o.ultima_fecha.slice(8, 10)}/${o.ultima_fecha.slice(5, 7)}</span>` : ""}</td>
+    <td>${cs.length > 1
+      ? `<b>${cs.map(c => trEsc(String(c.n_interno || c.patente || ""))).join(" · ")}</b> <span class="ot-ncoches chico">${cs.length} coches</span>`
+      : `<b>${o.patente}</b>${o.n_interno ? ` <span style="color:var(--muted)">(${o.n_interno})</span>` : ""}`}${otAtrasadosLinea(o)}</td>
+    <td>${o.conductor || "—"}</td>
+    <td>${o.procedencia || "—"}</td>
+    <td class="num">${o.km ? fmtNum(o.km) : "—"}</td>
+    <td class="center">
+      <div style="font-size:11px;color:var(--muted)">${o.items_completados}/${o.total_items}</div>
+      <div class="grad-bar-wrap" style="width:60px;margin:3px auto 0">
+        <div class="grad-bar" style="width:${progreso}%;background:${progreso === 100 ? 'var(--success)' : progreso > 50 ? 'var(--warning)' : 'var(--info)'}"></div>
+      </div>
+    </td>
+    <td class="num">${gs(o.costo_total || 0)}</td>
+    <td class="center">
+      <span class="badge ${o.estado === 'cerrada' ? 'success' : o.estado === 'en_proceso' ? 'warning' : 'danger'}">
+        <span class="dot"></span> ${LABEL_ESTADO_OT[o.estado]}
+      </span>
+    </td>
+    <td class="td-action">
+      ${puedeBorrarOTs() ? `<button class="icon-btn ot-borrar" title="Eliminar la OT" onclick="event.stopPropagation();borrarOT(${o.id})"><i class="ti ti-trash"></i></button>` : ""}
+    </td>
+  </tr>`;
+}
+
+// La lista de OTs muestra todas las activas y las cerradas de a tandas: con
+// años de historia eran miles de filas y la pantalla tardaba segundos en armarse.
+const OT_CERR_TANDA = 150;
+let otCerradasVer = OT_CERR_TANDA;
+let otRestantes = [], otListaActual = [];
+function otMasCerradasHtml() {
+  if (!otRestantes.length) return "";
+  const n = Math.min(OT_CERR_TANDA, otRestantes.length);
+  return `<div class="ot-mas" id="ot-mas"><button class="btn btn-ghost" onclick="otVerMasCerradas()"><i class="ti ti-chevrons-down"></i> Mostrar ${n} cerradas más</button>
+    <span>quedan ${otRestantes.length} cerradas más viejas · el buscador también las encuentra</span></div>`;
+}
+function otVerMasCerradas() {
+  const tanda = otRestantes.splice(0, OT_CERR_TANDA);
+  otCerradasVer += tanda.length;
+  const tbody = document.querySelector("tr.ot-fila")?.parentElement;
+  if (!tbody) return;
+  tbody.insertAdjacentHTML("beforeend", tanda.map(o => otFilaHtml(otListaActual, o, otListaActual.indexOf(o))).join(""));
+  const mas = document.getElementById("ot-mas");
+  if (mas) mas.outerHTML = otMasCerradasHtml() || "<span id='ot-mas'></span>";
+  otFiltrarLista();
+}
+// Al buscar, también entre las cerradas que todavía no se mostraron
+function otTraerCoincidencias(q) {
+  if (!q || !otRestantes.length) return;
+  const id = /^(#|ot\s*#?)\s*\d+$/.test(q) ? q.replace(/\D/g, "") : "";
+  const qp = q.replace(/[^a-z0-9]/g, "");
+  const coinciden = otRestantes.filter(o => {
+    if (id) return String(o.numero || o.id) === id;
+    const cs = o.coches && o.coches.length > 1 ? o.coches : [o];
+    return cs.some(c => String(c.n_interno || "").toLowerCase().includes(q)
+      || (qp && String(c.patente || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes(qp))
+      || [c.marca, c.modelo].some(x => String(x || "").toLowerCase().includes(q)));
+  });
+  if (!coinciden.length) return;
+  otRestantes = otRestantes.filter(o => !coinciden.includes(o));
+  const tbody = document.querySelector("tr.ot-fila")?.parentElement;
+  if (tbody) tbody.insertAdjacentHTML("beforeend", coinciden.map(o => otFilaHtml(otListaActual, o, otListaActual.indexOf(o))).join(""));
+  const mas = document.getElementById("ot-mas");
+  if (mas) mas.outerHTML = otMasCerradasHtml() || "<span id='ot-mas'></span>";
 }
 
 // Lo que una OT arrastra de días anteriores, en su fila de la lista
@@ -7422,8 +7502,9 @@ function otSeparadorLista(ots, i) {
 // busca por parte del número, la patente, la marca o el modelo. "#45" busca
 // la OT 45.
 function otFiltrarLista() {
-  const filas = [...document.querySelectorAll("tr.ot-fila")];
   const q = (otBusqueda || "").trim().toLowerCase();
+  otTraerCoincidencias(q);
+  const filas = [...document.querySelectorAll("tr.ot-fila")];
   const x = $("#ot-q-x"), res = $("#ot-q-res"), vacio = $("#ot-q-vacio");
   if (x) x.hidden = !q;
   if (!filas.length) { if (res) res.hidden = true; return; }
@@ -8554,6 +8635,7 @@ async function pdCargar() {
 }
 function pdPintar() {
   const d = pd.d;
+  if (!$("#pd-tabs")) return;   // se fue a otra pantalla mientras cargaba
   $("#pd-tabs").innerHTML = PD_TABS.map(([k, t, ic]) => `
     <button class="pd-tab ${pd.estado === k ? "on" : ""}" role="tab" aria-selected="${pd.estado === k}" onclick="pd.estado='${k}';pd.sel.clear();pdCargar()">
       <i class="ti ti-${ic}"></i><span>${t}</span>${d.conteos[k] ? `<small class="${k === "nuevo" && d.urgentes ? "urg" : ""}">${d.conteos[k]}</small>` : ""}</button>`).join("");
@@ -9617,6 +9699,7 @@ async function cargarReporteGerencial() {
   if (!desde || !hasta) { toast("Elegí ambas fechas", "error"); return; }
   const r = await api(`/api/reporte_gerencial?desde=${desde}&hasta=${hasta}`);
   const res = $("#rg-resultado");
+  if (!res) return;          // se fue a otra pantalla mientras cargaba
 
   // Si el backend falló, mostrarlo claro en pantalla en vez de morir en silencio
   if (!r || !Array.isArray(r.ots)) {
@@ -13903,6 +13986,7 @@ async function cargarControlEmpresa(cliente) {
 }
 
 function pintarControlEmpresa() {
+  if (!$("#emp-hasta")) return;   // se fue a otra pantalla mientras cargaba
   const d = empDatos || {};
   const agrup = $("#emp-agrup") ? $("#emp-agrup").value : "total";
   const cob = d.cobertura || [];
@@ -14663,6 +14747,7 @@ async function cargarCombCorp() {
   const cont = $("#cbc-resultado");
   cont.innerHTML = `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
   const d = await api(`/api/corp/combustible?${paramsCombCorp().toString()}`);
+  if (!$("#cbc-agrup")) return;   // se fue a otra pantalla mientras cargaba
 
   const selCh = $("#cbc-chofer");
   if (selCh && selCh.options.length <= 1 && d.choferes) {
@@ -16964,7 +17049,7 @@ function mtBuscar(v) {
 async function mtCargarLista() {
   const p = new URLSearchParams({ q: mtEstado.q, pagina: mtEstado.pagina });
   const d = await api(`/api/mant/coches?${p.toString()}`);
-  if (!d || d.error) return;
+  if (!d || d.error || !$("#mt-total")) return;   // o ya se salió de la pantalla
   mtEstado.pagina = d.pagina;
   $("#mt-total").textContent = `${d.total} coche${d.total === 1 ? "" : "s"}`;
   const estadoDias = x => x.dias_desde === null ? ["nunca", "Sin registros", "var(--light)"]

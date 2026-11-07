@@ -216,8 +216,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <script>if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));</script>
-  <script src="/static/confirmar_app.js?v=1" defer></script>
-  <script src="/static/acuse_asig.js?v=1" defer></script>
+  <script src="{{ estatico('confirmar_app.js') }}" defer></script>
+  <script src="{{ estatico('acuse_asig.js') }}" defer></script>
   <script>addEventListener("app-confirmada", () => location.reload());</script>
 </head>
 <body>

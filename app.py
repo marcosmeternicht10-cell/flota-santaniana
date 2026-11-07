@@ -283,10 +283,83 @@ app.register_blueprint(bp_informe_coche)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 
+# ─── Archivos estáticos: comprimidos una vez y guardados en el navegador ──────
+# app.js pesa 1,5 MB y style.css 600 KB. Antes viajaban sin comprimir y el
+# navegador preguntaba por cada uno en cada carga. Ahora:
+#   · Se comprimen una sola vez (quedan en memoria) y viajan ~6 veces más livianos.
+#   · Las páginas los piden con su «huella» (/static/app.js?h=3fa9c1…): mientras
+#     el archivo no cambie, el navegador lo usa de su memoria sin preguntar nada.
+#     Cuando se sube una versión nueva cambia la huella, y el navegador baja la
+#     nueva sola (nadie tiene que borrar el caché).
+import hashlib as _hashlib
+import gzip as _gzip
+import mimetypes
+_ESTATICO_TEXTO = (".js", ".css", ".svg", ".json", ".txt", ".webmanifest", ".map")
+_estatico_cache = {}   # ruta → (mtime, tamaño, huella, crudo, comprimido)
+
+
+def _estatico_leer(rel):
+    ruta = os.path.normpath(os.path.join(app.static_folder, rel))
+    if not ruta.startswith(os.path.normpath(app.static_folder) + os.sep) or not os.path.isfile(ruta):
+        return None
+    st = os.stat(ruta)
+    c = _estatico_cache.get(ruta)
+    if c and c[0] == st.st_mtime and c[1] == st.st_size:
+        return c
+    with open(ruta, "rb") as f:
+        crudo = f.read()
+    huella = _hashlib.md5(crudo).hexdigest()[:12]
+    comprimido = None
+    if rel.endswith(_ESTATICO_TEXTO) and len(crudo) > 1024:
+        comprimido = _gzip.compress(crudo, compresslevel=9)
+    c = (st.st_mtime, st.st_size, huella, crudo, comprimido)
+    _estatico_cache[ruta] = c
+    return c
+
+
+@app.template_global()
+def estatico(rel):
+    """La dirección de un archivo estático con su huella: /static/app.js?h=…"""
+    try:
+        c = _estatico_leer(rel)
+        return f"/static/{rel}?h={c[2]}" if c else f"/static/{rel}"
+    except Exception:
+        return f"/static/{rel}"
+
+
+@app.before_request
+def _servir_estatico():
+    p = request.path
+    if not p.startswith("/static/") or not p.endswith(_ESTATICO_TEXTO):
+        return None
+    try:
+        c = _estatico_leer(p[len("/static/"):])
+    except Exception:
+        return None
+    if not c:
+        return None                      # que Flask conteste el 404 de siempre
+    _, _, huella, crudo, comprimido = c
+    etag = f'"{huella}"'
+    if request.headers.get("If-None-Match") == etag:
+        r = app.response_class(status=304)
+    else:
+        usar_gz = comprimido is not None and "gzip" in request.headers.get("Accept-Encoding", "").lower()
+        r = app.response_class(comprimido if usar_gz else crudo,
+                               mimetype=mimetypes.guess_type(p)[0] or "application/octet-stream")
+        if usar_gz:
+            r.headers["Content-Encoding"] = "gzip"
+        r.headers["Vary"] = "Accept-Encoding"
+    r.headers["ETag"] = etag
+    r.headers["X-Estatico"] = "1"
+    # Con la huella correcta, un año sin preguntar; sin huella, preguntar cada vez
+    r.headers["Cache-Control"] = ("public, max-age=31536000, immutable" if request.args.get("h") == huella
+                                  else "no-cache")
+    return r
+
+
 # ─── Compresión gzip de respuestas ──────────────────────────────────────────
 # Comprime las respuestas JSON/HTML antes de enviarlas. Como los datos viajan
 # de EEUU a Paraguay, comprimirlos hace que lleguen más rápido (menos bytes).
-import gzip as _gzip
 import io as _io
 
 @app.after_request
@@ -298,11 +371,13 @@ def _comprimir_respuesta(response):
     # cambia solo, esto hace que los usuarios SIEMPRE tengan la versión actual
     # sin tener que limpiar el caché manualmente.
     try:
-        if request.path.startswith("/static/"):
+        if request.path.startswith("/static/") and not response.headers.get("X-Estatico"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
     except Exception:
         pass
     try:
+        if response.headers.get("Content-Encoding"):   # ya viene comprimida
+            return response
         acepta = request.headers.get("Accept-Encoding", "")
         if "gzip" not in acepta.lower():
             return response
@@ -1116,6 +1191,24 @@ def api_eliminar_tarea(tid):
     return jsonify({"ok": True})
 
 
+@app.route("/api/vehiculos/planes_km", methods=["GET"])
+def api_planes_km_flota():
+    """El plan y el km actual de todos los coches en un solo pedido (la lista
+    de vehículos antes hacía un pedido por coche: 89 viajes al servidor)."""
+    from database import km_actual_flota
+    from db_compat import get_connection as _gc
+    conn = _gc()
+    try:
+        planes = {r["vehiculo_id"]: dict(r) for r in conn.execute("""
+            SELECT vp.*, p.nombre AS plan_nombre, p.descripcion AS plan_descripcion
+            FROM vehiculo_plan vp JOIN planes_mantenimiento p ON p.id = vp.plan_id""").fetchall()}
+        kms = km_actual_flota(conn)
+    finally:
+        conn.close()
+    ids = set(planes) | set(kms)
+    return jsonify({str(v): {"plan": planes.get(v), "km_actual": kms.get(v, 0)} for v in ids})
+
+
 @app.route("/api/vehiculos/<int:vid>/plan", methods=["GET"])
 def api_plan_vehiculo(vid):
     plan = obtener_plan_vehiculo(vid)
@@ -1474,6 +1567,33 @@ def api_ots():
     except Exception:
         pass
     return jsonify(ots)
+
+
+@app.route("/api/ots/conteo", methods=["GET"])
+def api_ots_conteo():
+    """Cuántas OT hay en cada estado, contadas como en la lista (los coches
+    agregados a una OT cuentan dentro de la principal). Liviano: la pantalla de
+    OTs ya no baja la lista entera dos veces solo para estos números."""
+    from db_compat import get_connection as _gc
+    conn = _gc()
+    try:
+        filas = conn.execute("SELECT id, ot_grupo, estado FROM ordenes_trabajo").fetchall()
+    finally:
+        conn.close()
+    grupos = {}
+    for f in filas:
+        grupos.setdefault(f["ot_grupo"] or f["id"], []).append((f["id"], f["estado"]))
+    cuenta = {"abierta": 0, "en_proceso": 0, "cerrada": 0}
+    for k, ms in grupos.items():
+        es = {e for _, e in ms}
+        if len(ms) > 1 and es == {"cerrada"}:
+            estado = "cerrada"
+        elif len(ms) > 1 and "en_proceso" in es:
+            estado = "en_proceso"
+        else:   # como en la lista: el estado de la principal (o de la de menor número)
+            estado = next((e for i, e in ms if i == k), None) or min(ms)[1]
+        cuenta[estado] = cuenta.get(estado, 0) + 1
+    return jsonify(cuenta)
 
 
 @app.route("/api/ots/<int:ot_id>", methods=["GET"])
@@ -2782,6 +2902,12 @@ try:
     reasignar_mercedes_lo915()
 except Exception:
     pass
+
+
+# ─── Índices de la base ─────────────────────────────────────────────────────
+# Al final, cuando ya existen todas las tablas: crea los que falten (ver indices.py).
+from indices import crear_indices
+crear_indices()
 
 
 if __name__ == "__main__":

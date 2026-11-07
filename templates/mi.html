@@ -312,7 +312,7 @@
   </div>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-{% if not admin %}<script src="/static/confirmar_app.js?v=1" defer></script><script src="/static/acuse_asig.js?v=1" defer></script>{% endif %}
+{% if not admin %}<script src="{{ estatico('confirmar_app.js') }}" defer></script><script src="{{ estatico('acuse_asig.js') }}" defer></script>{% endif %}
 
 <script>
 const ES_ADMIN = {{ 'true' if admin else 'false' }};

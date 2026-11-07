@@ -3600,14 +3600,20 @@ def obtener_correctivos_por_ot(desde=None, hasta=None):
     sql += " ORDER BY o.fecha_apertura DESC, o.id DESC"
     ots = conn.execute(sql, params).fetchall()
 
-    resultado = []
-    for o in ots:
-        d = dict(o)
-        items = conn.execute(
-            "SELECT * FROM ot_items WHERE ot_id=? AND tipo='correctivo' ORDER BY id",
-            (d["ot_id"],)).fetchall()
-        d["items"] = [dict(i) for i in items]
-        resultado.append(d)
+    # Los ítems de todas esas OT en una sola consulta (antes era una por OT:
+    # con miles de OT, miles de viajes a la base).
+    resultado = [dict(o) for o in ots]
+    por_ot = {d["ot_id"]: [] for d in resultado}
+    ids = list(por_ot)
+    for i in range(0, len(ids), 500):
+        tanda = ids[i:i + 500]
+        marcas = ",".join("?" * len(tanda))
+        for it in conn.execute(
+                f"SELECT * FROM ot_items WHERE tipo='correctivo' AND ot_id IN ({marcas}) ORDER BY id",
+                tanda).fetchall():
+            por_ot[it["ot_id"]].append(dict(it))
+    for d in resultado:
+        d["items"] = por_ot[d["ot_id"]]
     conn.close()
     return resultado
 
@@ -3973,7 +3979,7 @@ PARCIAL_SIGUIENTE_MAS_DE = 1.45
 
 
 def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
-                               limite=500, origen=None, chofer=None):
+                               limite=500, origen=None, chofer=None, vehiculos=None):
     """Lista las cargas con el consumo de cada tramo.
 
     El consumo se mide de tanque a tanque: los kilómetros recorridos desde la
@@ -3984,6 +3990,41 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
     De cada tramo se informan las dos medidas que se usan habitualmente:
     kilómetros por litro y litros cada 100 km.
     """
+    # En un mismo pedido se pide varias veces lo mismo (la lista y el resumen):
+    # el cálculo, que recorre toda la historia, se hace una sola vez.
+    # «vehiculos»: calcular solo esos coches (para lo de un chofer no hace
+    # falta recorrer la historia de toda la flota).
+    vehs = tuple(sorted({int(v) for v in vehiculos})) if vehiculos is not None else None
+    if vehs is not None and not vehs:
+        return []
+    clave = ("_cargas_comb", vehiculo_id, desde, hasta, vehs)
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            memo = g.setdefault("_memo_comb", {})
+            if clave not in memo:
+                memo[clave] = _calcular_cargas_combustible(vehiculo_id, desde, hasta, vehs)
+            filas = memo[clave]
+        else:
+            filas = _calcular_cargas_combustible(vehiculo_id, desde, hasta, vehs)
+    except RuntimeError:
+        filas = _calcular_cargas_combustible(vehiculo_id, desde, hasta, vehs)
+
+    # Recién ahora se filtra: cada carga ya tiene su consumo calculado contra
+    # la secuencia real del vehículo.
+    if origen:
+        if isinstance(origen, (list, tuple, set)):
+            filas = [f for f in filas if (f.get("origen") or "taller") in origen]
+        else:
+            filas = [f for f in filas if (f.get("origen") or "taller") == origen]
+    if chofer:
+        filas = [f for f in filas if f.get("chofer") == chofer]
+    return filas[:limite] if limite else list(filas)
+
+
+def _calcular_cargas_combustible(vehiculo_id=None, desde=None, hasta=None, vehiculos=None):
+    """Las cargas con el consumo de cada tramo ya calculado, de la más nueva a
+    la más vieja (ver obtener_cargas_combustible)."""
     conn = get_connection()
     sql = """
         SELECT c.*, v.patente, v.marca, v.modelo, v.n_interno
@@ -3995,6 +4036,9 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
     if vehiculo_id:
         sql += " AND c.vehiculo_id = ?"
         params.append(vehiculo_id)
+    if vehiculos:
+        sql += f" AND c.vehiculo_id IN ({','.join('?' * len(vehiculos))})"
+        params.extend(vehiculos)
     if desde:
         sql += " AND c.fecha >= ?"
         params.append(desde)
@@ -4146,18 +4190,8 @@ def obtener_cargas_combustible(vehiculo_id=None, desde=None, hasta=None,
             if e["odo_ref"] is None:
                 e["odo_ref"] = odo
 
-    # Recién ahora se filtra: cada carga ya tiene su consumo calculado contra
-    # la secuencia real del vehículo.
-    if origen:
-        if isinstance(origen, (list, tuple, set)):
-            filas = [f for f in filas if (f.get("origen") or "taller") in origen]
-        else:
-            filas = [f for f in filas if (f.get("origen") or "taller") == origen]
-    if chofer:
-        filas = [f for f in filas if f.get("chofer") == chofer]
-
     filas.sort(key=lambda x: (x.get("fecha") or "", x.get("id") or 0), reverse=True)
-    return filas[:limite]
+    return filas
 
 
 def consumo_promedio(cargas):

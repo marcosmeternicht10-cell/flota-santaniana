@@ -7,8 +7,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.5.0/dist/tabler-icons.min.css">
-  <link rel="stylesheet" href="/static/style.css?v={{ v }}">
-  <link rel="stylesheet" href="/static/alpha.css?v={{ v }}">
+  <link rel="stylesheet" href="{{ estatico('style.css') }}">
+  <link rel="stylesheet" href="{{ estatico('alpha.css') }}">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#1D344E">
   <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
@@ -54,7 +54,7 @@
       return r.json();
     }
   </script>
-  <script src="/static/alpha.js?v={{ v }}"></script>
+  <script src="{{ estatico('alpha.js') }}"></script>
   <script>renderAlpha();</script>
 </body>
 </html>
