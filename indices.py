@@ -15,7 +15,7 @@ Enganche en app.py (después de crear todas las tablas):
     crear_indices()
 """
 
-from db_compat import get_connection
+from db_compat import get_connection, USE_POSTGRES
 
 # (nombre, tabla, columnas). Los de una sola tabla que más se consultan.
 INDICES = [
@@ -68,8 +68,22 @@ def crear_indices():
     except Exception:
         return
     creados = 0
+    # Los que ya están se saltean sin preguntar uno por uno (la base está
+    # lejos: cada pregunta es un viaje)
+    existentes = set()
+    try:
+        if USE_POSTGRES:
+            existentes = {r["indexname"] for r in conn.execute(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()").fetchall()}
+        else:
+            existentes = {r["name"] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'").fetchall()}
+    except Exception:
+        existentes = set()
     try:
         for nombre, tabla, columnas in INDICES:
+            if nombre in existentes:
+                continue
             try:
                 conn.execute(f"CREATE INDEX IF NOT EXISTS {nombre} ON {tabla} ({columnas})")
                 conn.commit()

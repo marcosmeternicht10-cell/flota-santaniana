@@ -110,6 +110,36 @@ def _traducir_sql(sql):
     return sql
 
 
+# ─── Transacción solo cuando hace falta (PostgreSQL) ────────────────────────
+# La base está lejos (Supabase en Brasil, el servidor en EEUU): cada ida y
+# vuelta cuesta ~150 ms. psycopg2 abre una transacción (BEGIN, un viaje) antes
+# de la primera consulta y al devolver la conexión hay que deshacerla
+# (ROLLBACK, otro viaje): una simple lectura costaba tres viajes.
+# Ahora la conexión anda en «autocommit» mientras solo se lee (un viaje por
+# consulta) y recién la primera escritura abre la transacción, que se confirma
+# con commit() o se descarta como siempre. Para lo que escribe no cambia nada:
+# todo lo escrito hasta el commit() va junto o no va. Lo leído antes de la
+# primera escritura ya veía, de todas formas, lo último confirmado (es el modo
+# normal de PostgreSQL, «read committed»).
+def _necesita_transaccion(sql_upper):
+    """True si la sentencia escribe (o bloquea filas) y tiene que ir en una transacción."""
+    s = sql_upper.lstrip(" (\n\t")
+    if s.startswith("SELECT") or s.startswith("SHOW") or s.startswith("EXPLAIN"):
+        return " FOR UPDATE" in s or " FOR SHARE" in s or " FOR NO KEY UPDATE" in s
+    if s.startswith("WITH"):
+        return any(k in s for k in ("INSERT ", "UPDATE ", "DELETE ", " FOR UPDATE"))
+    return True
+
+
+def _abrir_transaccion(conn):
+    """Si la conexión está en modo lectura (autocommit), pasarla a transacción."""
+    try:
+        if conn.autocommit:
+            conn.autocommit = False
+    except Exception:
+        pass
+
+
 class _CursorWrapper:
     """Envuelve un cursor para traducir SQL y emular lastrowid."""
     def __init__(self, cursor):
@@ -124,6 +154,8 @@ class _CursorWrapper:
         if USE_POSTGRES and params is None:
             params = ()
         upper = sql_t.strip().upper()
+        if USE_POSTGRES and _necesita_transaccion(upper):
+            _abrir_transaccion(self._cur.connection)
         # Para INSERT en PostgreSQL, capturar el id con RETURNING (cuando aplica)
         if USE_POSTGRES and upper.startswith("INSERT"):
             ya_tiene_returning = "RETURNING" in upper
@@ -159,6 +191,8 @@ class _CursorWrapper:
             return self
 
     def executemany(self, sql, seq):
+        if USE_POSTGRES:
+            _abrir_transaccion(self._cur.connection)
         self._cur.executemany(_traducir_sql(sql), seq)
         return self
 
@@ -204,6 +238,7 @@ class _ConnectionWrapper:
                             self._conn = _get_pool().getconn()
                         except Exception:
                             self._conn = psycopg2.connect(DATABASE_URL)
+                        _modo_lectura(self._conn)
                         cur = self.cursor()
                         cur.execute(sql, params)
                         return cur
@@ -238,14 +273,24 @@ class _ConnectionWrapper:
 
     def commit(self):
         self._conn.commit()
+        if USE_POSTGRES:
+            _modo_lectura(self._conn)
+
+    def rollback(self):
+        self._conn.rollback()
+        if USE_POSTGRES:
+            _modo_lectura(self._conn)
 
     def close(self):
         if USE_POSTGRES:
             # Devolver la conexión al pool para reutilizarla (no cerrarla).
-            # Antes hacemos rollback de cualquier transacción pendiente para
-            # que la conexión vuelva limpia al pool.
+            # Si quedó una transacción abierta (se escribió sin commit), se
+            # descarta, para que la conexión vuelva limpia al pool. Si solo se
+            # leyó, no hay nada que deshacer y no se gasta un viaje a la base.
             try:
-                self._conn.rollback()
+                if not self._conn.autocommit:
+                    self._conn.rollback()
+                _modo_lectura(self._conn)
             except Exception:
                 pass
             try:
@@ -263,17 +308,26 @@ class _ConnectionWrapper:
         return getattr(self._conn, name)
 
 
+def _modo_lectura(conn):
+    """La conexión vuelve a «autocommit» (lecturas de un solo viaje)."""
+    try:
+        if not conn.autocommit and conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+            conn.autocommit = True
+    except Exception:
+        pass
+
+
 def get_connection():
     """Devuelve una conexión lista para usar, con acceso por nombre de columna.
     En PostgreSQL la saca del pool (reutiliza conexiones = mucho más rápido)."""
     if USE_POSTGRES:
         try:
             conn = _get_pool().getconn()
-            return _ConnectionWrapper(conn)
         except Exception:
             # Si el pool falla, crear conexión directa como respaldo
             conn = psycopg2.connect(DATABASE_URL)
-            return _ConnectionWrapper(conn)
+        _modo_lectura(conn)
+        return _ConnectionWrapper(conn)
     else:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row

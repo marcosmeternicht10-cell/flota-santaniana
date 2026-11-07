@@ -1029,7 +1029,28 @@ def _km_comb_de(lecturas, verif_ot, verif_fecha, km_verificado, km_otros=0):
 def km_actual_flota(conn=None, vids=None, solo_activos=False):
     """El km actual de muchos coches de una vez, con la misma regla que
     km_actual_vehiculo (pocas consultas grandes: en la nube cada consulta
-    cuesta). Devuelve {vehiculo_id: km}."""
+    cuesta). Devuelve {vehiculo_id: km}.
+
+    En una consulta de pantalla (GET) se calcula una sola vez para toda la
+    flota y se reusa: el tablero, por ejemplo, lo pedía dos veces."""
+    try:
+        from flask import g, has_request_context, request
+        if has_request_context() and request.method == "GET":
+            memo = g.get("_km_flota")
+            if memo is None and vids and len(list(vids)) <= 3:
+                # Un coche solo: no vale la pena traer los datos de toda la flota
+                return {vid: km for vid, (km, activo) in _km_flota_calculo(conn, vids, solo_activos).items()}
+            if memo is None:
+                memo = g._km_flota = _km_flota_calculo(conn)
+            return {vid: km for vid, (km, activo) in memo.items()
+                    if (not solo_activos or activo) and (not vids or vid in set(vids))}
+    except Exception:
+        pass
+    return {vid: km for vid, (km, activo) in _km_flota_calculo(conn, vids, solo_activos).items()}
+
+
+def _km_flota_calculo(conn=None, vids=None, solo_activos=False):
+    """{vehiculo_id: (km, activo)} (ver km_actual_flota)."""
     propia = conn is None
     if propia:
         conn = get_connection()
@@ -1042,7 +1063,7 @@ def km_actual_flota(conn=None, vids=None, solo_activos=False):
         params += vids
     where = ("WHERE " + " AND ".join(filtro)) if filtro else ""
     filas = conn.execute(f"""
-        SELECT v.id,
+        SELECT v.id, COALESCE(v.activo, 1) AS activo,
             COALESCE((SELECT km_inicial FROM vehiculo_plan WHERE vehiculo_id=v.id), 0)
               + COALESCE((SELECT SUM(km) FROM servicios WHERE vehiculo_id=v.id), 0) AS km_servicios,
             COALESCE((SELECT MAX(km) FROM ordenes_trabajo WHERE vehiculo_id=v.id), 0) AS km_ots,
@@ -1058,8 +1079,9 @@ def km_actual_flota(conn=None, vids=None, solo_activos=False):
     for r in filas:
         otros = max(float(r["km_servicios"] or 0), float(r["km_ots"] or 0), float(r["km_manual"] or 0))
         comb = _km_comb_de(lect.get(r["id"]), r["verif_ot"], r["verif_fecha"], r["km_manual"], otros)
-        salida[r["id"]] = _km_resuelto(r["km_servicios"], r["km_ots"], r["km_manual"],
-                                       r["verif_ot"], r["km_ots_despues"], comb)
+        salida[r["id"]] = (_km_resuelto(r["km_servicios"], r["km_ots"], r["km_manual"],
+                                        r["verif_ot"], r["km_ots_despues"], comb),
+                           bool(int(r["activo"] or 0)))
     if propia:
         conn.close()
     return salida
@@ -3604,13 +3626,13 @@ def obtener_correctivos_por_ot(desde=None, hasta=None):
     # con miles de OT, miles de viajes a la base).
     resultado = [dict(o) for o in ots]
     por_ot = {d["ot_id"]: [] for d in resultado}
-    ids = list(por_ot)
-    for i in range(0, len(ids), 500):
-        tanda = ids[i:i + 500]
-        marcas = ",".join("?" * len(tanda))
-        for it in conn.execute(
-                f"SELECT * FROM ot_items WHERE tipo='correctivo' AND ot_id IN ({marcas}) ORDER BY id",
-                tanda).fetchall():
+    sql_items = "SELECT i.* FROM ot_items i JOIN ordenes_trabajo o ON o.id = i.ot_id WHERE i.tipo='correctivo'"
+    if desde:
+        sql_items += " AND o.fecha_apertura >= ?"
+    if hasta:
+        sql_items += " AND o.fecha_apertura <= ?"
+    for it in conn.execute(sql_items + " ORDER BY i.id", params).fetchall():
+        if it["ot_id"] in por_ot:
             por_ot[it["ot_id"]].append(dict(it))
     for d in resultado:
         d["items"] = por_ot[d["ot_id"]]
