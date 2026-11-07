@@ -2697,10 +2697,25 @@ def api_corp_cargar_combustible():
     if lugar == "tercerizado" and len(emblema) < 2:
         return jsonify({"ok": False, "msg": "Elegí el emblema de la estación."}), 400
 
-    # Al chofer solo se le piden kilometraje y litros: el precio se toma del
-    # último registrado, así el costo se sigue calculando sin cargarle un dato
-    # más a alguien que está en el surtidor con el celular en la mano.
-    precio = num(d.get("precio_litro")) or ultimo_precio_litro()
+    # El importe pagado: el chofer lo pone en una estación (obligatorio) y en el
+    # taller si el surtidor lo marca. Con el importe, el precio por litro es el
+    # real de esa carga; sin él, se toma el último precio registrado.
+    importe = a_numero(d.get("costo_total"), decimales=False)
+    if lugar == "tercerizado" and importe <= 0:
+        return jsonify({"ok": False, "msg": "Poné el importe que pagaste." if rol == "chofer_corp"
+                        else "Poné el importe del ticket."}), 400
+    if importe > 0:
+        precio = importe / litros
+        referencia = precio_litro_normal()
+        # Un cero de más o de menos: se le pregunta antes de guardar
+        if referencia and not d.get("confirmar_importe") and not (referencia * 0.6 <= precio <= referencia * 1.6):
+            gs = lambda x: f"{x:,.0f}".replace(",", ".")
+            lt = f"{litros:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            return jsonify({"ok": False, "revisar_importe": True,
+                            "msg": (f"Con Gs. {gs(importe)} por {lt} litros sale Gs. {gs(precio)} el litro, "
+                                    f"y el precio normal anda por Gs. {gs(referencia)}. Revisá el importe y los litros.")})
+    else:
+        precio = num(d.get("precio_litro")) or ultimo_precio_litro()
 
     chofer = a_nombre_de if desde_oficina else quien
     obs = (d.get("observaciones") or "").strip()
@@ -2711,7 +2726,7 @@ def api_corp_cargar_combustible():
         "fecha": fecha,
         "odometro": odo, "litros": litros,
         "precio_litro": precio,
-        "costo_total": num(d.get("costo_total")),
+        "costo_total": importe,
         "estacion": (d.get("estacion") or "").strip(),
         "chofer": chofer,
         "tanque_lleno": True,
@@ -2769,26 +2784,52 @@ def api_corp_cargas():
     })
 
 
+def _precios_recientes(n=15):
+    """Los precios por litro de las últimas cargas con precio, de la más nueva a la más vieja."""
+    conn = get_connection()
+    try:
+        filas = conn.execute("""
+            SELECT precio_litro FROM combustible
+            WHERE precio_litro > 0
+            ORDER BY fecha DESC, id DESC LIMIT ?
+        """, (n,)).fetchall()
+        return [float(r["precio_litro"]) for r in filas]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def precio_litro_normal():
+    """El precio por litro «de siempre»: la mediana de las últimas cargas. Una
+    carga mal tipeada (un cero de más) no la mueve."""
+    v = sorted(_precios_recientes())
+    if not v:
+        return 0
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
 def ultimo_precio_litro():
     """El precio por litro de la última carga con precio cargado.
 
-    Sirve para calcular el costo de las cargas que hacen los choferes, que solo
-    anotan kilometraje y litros. Si el precio del combustible cambia, se
-    corrige desde la pantalla de Combustible del taller y las cargas nuevas
-    toman el valor actualizado.
+    Sirve para calcular el costo de las cargas que no traen importe (en el
+    taller, si el surtidor no marca plata). Si el precio del combustible
+    cambia, se corrige desde la pantalla de Combustible del taller y las
+    cargas nuevas toman el valor actualizado. Se saltean los precios que no
+    tienen nada que ver con los de siempre (un importe mal tipeado que el
+    chofer confirmó igual), para que no arrastre a las cargas siguientes.
     """
-    conn = get_connection()
-    try:
-        row = conn.execute("""
-            SELECT precio_litro FROM combustible
-            WHERE precio_litro > 0
-            ORDER BY fecha DESC, id DESC LIMIT 1
-        """).fetchone()
-        p = float(row["precio_litro"]) if row else 0
-    except Exception:
-        p = 0
-    conn.close()
-    return p
+    precios = _precios_recientes()
+    if not precios:
+        return 0
+    v = sorted(precios)
+    n = len(v)
+    normal = v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+    for p in precios:
+        if normal * 0.6 <= p <= normal * 1.6:
+            return p
+    return precios[0]
 
 
 @bp_corp.route("/api/corp/mi_dia", methods=["GET"])

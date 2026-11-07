@@ -368,6 +368,13 @@
           </div>
         </div>
 
+        <div class="campo" id="importe-wrap" style="display:none">
+          <label id="importe-lbl">Importe pagado (Gs.)</label>
+          <input type="text" id="cb-importe" inputmode="numeric" placeholder="ej: 1.505.000" oninput="formatearImporte(this)">
+          <span class="ayuda" id="importe-ayuda">El total que marca el surtidor o el ticket</span>
+          <div id="aviso-importe" class="ayuda" style="font-weight:600;color:#2F7C46"></div>
+        </div>
+
         <button class="btn-guardar" id="cb-btn" onclick="guardarCarga()">
           <i class="ti ti-device-floppy"></i> Guardar carga
         </button>
@@ -729,6 +736,11 @@
       LUGAR = l;
       document.querySelectorAll(".lugar-op").forEach(b => b.classList.toggle("sel", b.dataset.lugar === l));
       $("emblema-wrap").style.display = l === "tercerizado" ? "" : "none";
+      // El importe: obligatorio en una estación; en el taller, si el surtidor lo marca
+      $("importe-wrap").style.display = "";
+      $("importe-lbl").textContent = l === "tercerizado" ? "Importe pagado (Gs.)" : "Importe (Gs.) — si el surtidor lo marca";
+      $("importe-ayuda").textContent = l === "tercerizado" ? "El total que marca el surtidor o el ticket"
+        : "Si el surtidor del taller no marca plata, dejalo vacío";
       if(l !== "tercerizado"){ EMBLEMA = ""; $("emblema-otro").value = ""; }
       dibujarEmblemas();
     }
@@ -739,7 +751,16 @@
       dibujarEmblemas();
     }
 
-    async function guardarCarga(){
+    // El importe se escribe con los puntos de miles a medida que se tipea
+    function formatearImporte(el){
+      const n = (el.value || "").replace(/\D/g, "");
+      el.value = n ? Number(n).toLocaleString("es-PY").replace(/,/g, ".") : "";
+      const litros = parseFloat(($("cb-litros").value || "").replace(",", "."));
+      $("aviso-importe").textContent = n && litros > 0
+        ? `Sale Gs. ${Math.round(Number(n) / litros).toLocaleString("es-PY").replace(/,/g, ".")} por litro` : "";
+    }
+
+    async function guardarCarga(confirmado){
       const bus = $("cb-bus-id").value;
       const odo = ($("cb-odo").value||"").replace(/\./g,"");
       const litros = ($("cb-litros").value||"").replace(",",".");
@@ -757,6 +778,10 @@
         if(EMBLEMA === "OTRO") $("emblema-otro").focus();
         return;
       }
+      const importe = ($("cb-importe").value || "").replace(/\D/g, "");
+      if(LUGAR === "tercerizado" && !(parseInt(importe) > 0)){
+        toast("Poné el importe que pagaste", "err"); $("cb-importe").focus(); return;
+      }
 
       const btn = $("cb-btn"); btn.disabled = true;
       const r = await fetch("/api/corp/combustible", {
@@ -764,15 +789,22 @@
         body: JSON.stringify({
           vehiculo_id: bus, fecha: $("cb-fecha").value,
           odometro: odo, litros: litros,
-          lugar_carga: LUGAR, emblema: emblema
+          lugar_carga: LUGAR, emblema: emblema,
+          costo_total: importe, confirmar_importe: !!confirmado
         })
       });
       const d = await r.json();
       btn.disabled = false;
+      // Un importe que no cierra con los litros (un cero de más o de menos): confirmar
+      if(d.revisar_importe){
+        if(confirm(d.msg + "\n\n¿Está bien así?")) return guardarCarga(true);
+        $("cb-importe").focus(); return;
+      }
       if(d.ok){
         toast("✓ Carga registrada", "ok");
         $("cb-bus").value=""; $("cb-bus-id").value="";
-        $("cb-odo").value=""; $("cb-litros").value="";
+        $("cb-odo").value=""; $("cb-litros").value=""; $("cb-importe").value=""; $("aviso-importe").textContent="";
+        $("importe-wrap").style.display = "none";
         LUGAR = ""; EMBLEMA = ""; $("emblema-otro").value = ""; $("emblema-otro").style.display = "none";
         document.querySelectorAll(".lugar-op").forEach(b => b.classList.remove("sel"));
         $("emblema-wrap").style.display = "none";

@@ -14607,6 +14607,11 @@ async function abrirCargaOficina() {
             <label>Kilometraje <span class="co-opc">(si figura)</span></label>
             <input id="co-odo" inputmode="numeric" placeholder="ej: 470500">
           </div>
+          <div class="co-campo">
+            <label>Importe (Gs.) <span class="co-opc" id="co-imp-opc">(el total del ticket)</span></label>
+            <input id="co-importe" inputmode="numeric" placeholder="ej: 1.505.000"
+                   oninput="const n=this.value.replace(/\D/g,'');this.value=n?Number(n).toLocaleString('es-PY').replace(/,/g,'.'):''">
+          </div>
           <div class="co-campo co-ancho">
             <label>¿Dónde cargó?</label>
             <div class="co-lugares">
@@ -14669,6 +14674,8 @@ async function coGuardar(otra) {
   if (!litros) return toast("Poné los litros del ticket", "error");
   if (!coLugar) return toast("Marcá si cargó en el taller o en una estación", "error");
   if (coLugar === "tercerizado" && emblema.length < 2) return toast("Elegí el emblema de la estación", "error");
+  const importe = ($("#co-importe").value || "").replace(/\D/g, "");
+  if (coLugar === "tercerizado" && !(parseInt(importe) > 0)) return toast("Poné el importe del ticket", "error");
 
   const btn = $("#co-guardar"); btn.disabled = true;
   const r = await api("/api/corp/combustible", {
@@ -14678,10 +14685,17 @@ async function coGuardar(otra) {
       fecha: $("#co-fecha").value, litros,
       odometro: ($("#co-odo").value || "").replace(/\./g, ""),
       lugar_carga: coLugar, emblema,
+      costo_total: importe, confirmar_importe: !!coGuardar._confirmado,
       observaciones: $("#co-obs").value.trim(),
     }),
   });
   btn.disabled = false;
+  coGuardar._confirmado = false;
+  // Un importe que no cierra con los litros (un cero de más o de menos): confirmar
+  if (r.revisar_importe) {
+    if (confirm(r.msg + "\n\n¿Está bien así?")) { coGuardar._confirmado = true; return coGuardar(otra); }
+    return $("#co-importe").focus();
+  }
   if (!r.ok) return toast(r.msg || "No se pudo guardar", "error");
 
   toast(`Carga registrada a nombre de ${chofer}`, "success");
@@ -14689,7 +14703,7 @@ async function coGuardar(otra) {
   if (otra) {
     // Se deja el chofer, la fecha y el lugar: suele cargar varios tickets seguidos
     bcocheLimpiar("co-veh");
-    $("#co-litros").value = ""; $("#co-odo").value = ""; $("#co-obs").value = "";
+    $("#co-litros").value = ""; $("#co-odo").value = ""; $("#co-obs").value = ""; $("#co-importe").value = "";
   } else {
     document.querySelector(".co-modal")?.closest(".modal-overlay")?.remove();
   }
