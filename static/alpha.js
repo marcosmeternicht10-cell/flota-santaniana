@@ -589,6 +589,7 @@ function alPintar(animar) {
   content.innerHTML = alShell(`
     ${alBannerCambio()}
     ${alBannerVuelta()}
+    ${alBannerCombinado()}
     ${alBuscador()}
     <div class="al-filtros">
       ${alChipsCorredores()}
@@ -1005,6 +1006,8 @@ async function alCobrar() {
   const v = r.venta;
   alTrasVender(v);
   toast(cambio ? `Boleto ${alNro(v.nro)} cambiado` : `Boleto ${alNro(v.nro)} vendido: ${v.asiento === "P" ? "parado" : "asiento " + v.asiento}`, "success");
+  // Viaje con transbordo: pasa solo al tramo siguiente, con el pasajero cargado
+  if (!cambio && al.combinado && await alCombSiguiente(v)) return;
   alLimpiarVenta();
   await alTraerOcup(null, true);
   alPintar(false);
@@ -1053,12 +1056,14 @@ function alCambioCancelar() { alLimpiarVenta(); alPintar(false); }
 // ─── Buscador de horarios: todas las salidas del día, de todos los corredores ───
 function alBuscador() {
   if (!alCorredores().length) return "";
-  return `<div class="al-busca" id="al-busca">
+  return `<div class="al-busca-fila"><div class="al-busca" id="al-busca">
     <i class="ti ti-search" aria-hidden="true"></i>
     <input id="al-busca-q" type="search" autocomplete="off" placeholder="${alEsAgencia() ? "Buscá un horario: destino u hora" : "Buscá un horario: destino, hora, coche o tripulante"}"
       aria-label="Buscar un horario" aria-controls="al-busca-res" oninput="alBuscar()" onfocus="alBuscar()" onkeydown="alBuscaTecla(event)">
     <div class="al-busca-res" id="al-busca-res" role="listbox" hidden></div>
-  </div>`;
+  </div>
+  <button type="button" class="al-plan-btn" onclick="alViajeCombinado()" title="Cuando no hay un coche directo: arma la combinación con cambio de coche">
+    <i class="ti ti-transfer"></i> Viaje con transbordo</button></div>`;
 }
 function alTodasSalidas() {
   const out = [];
@@ -2584,4 +2589,230 @@ function alApNom(v) {
   const g = v && v.mig;
   if (g && String(g.apellidos || "").trim()) return (String(g.apellidos).trim() + ", " + String(g.nombres || "").trim()).toUpperCase();
   return alApellidoPrimero(v && v.nombre);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// VIAJE CON TRANSBORDO (como las aerolíneas): el pasajero dice de dónde a
+// dónde y el sistema arma las opciones — directas y con un cambio de coche en
+// una parada que comparten dos salidas (Asunción, casi siempre). Mira el día
+// elegido y el siguiente (un nocturno que llega a la mañana conecta con una
+// salida del otro día). Cada tramo se vende con su boleto, uno después del
+// otro, con los datos del pasajero ya cargados.
+// ════════════════════════════════════════════════════════════════════════════
+const AL_CONEXION_MIN = 40;          // lo mínimo para bajar de un coche y subir al otro
+const AL_CONEXION_MAX = 18 * 60;     // más de esto no es una conexión, son dos viajes
+// Lo que el pasajero dice y cómo figura la parada en el sistema
+const AL_LUGAR_ALIAS = { "buenos aires": ["retiro", "liniers", "dock sud", "capital federal", "caba"], "asuncion": ["terminal de asuncion"] };
+function alLugarEs(parada, buscado) {
+  if (alIgual(parada, buscado)) return true;
+  const b = alNorm(buscado), p = alNorm(parada);
+  return (AL_LUGAR_ALIAS[b] || []).some(a => p === a || p.startsWith(a + " "));
+}
+
+async function alTraerDia(fecha) {
+  if (al.datos[fecha]) return al.datos[fecha];
+  let d = null;
+  try { d = await api(`/api/alpha/dia/${fecha}`); } catch (e) { d = null; }
+  if (d && d.corredores) al.datos[fecha] = d;
+  return al.datos[fecha] || null;
+}
+// Todos los lugares donde se sube o se baja (para sugerir mientras se escribe)
+function alLugares() {
+  const set = new Map();
+  const poner = n => { const k = alNorm(n); if (k && !set.has(k)) set.set(k, n); };
+  Object.values((al.cfg && al.cfg.recorridos) || {}).forEach(lista => (lista || []).forEach(r => (r.paradas || []).forEach(p => poner(p.nombre))));
+  Object.values(al.datos || {}).forEach(d => (d.corredores || []).forEach(c => ["ida", "regreso"].forEach(l => (c[l] || []).forEach(x => { poner(x.origen_nombre); poner(x.llega_nombre); }))));
+  if ([...set.keys()].some(k => AL_LUGAR_ALIAS["buenos aires"].some(a => k === a || k.startsWith(a + " ")))) poner("Buenos Aires");
+  return [...set.values()].sort((a, b) => a.localeCompare(b));
+}
+// Las salidas de un día con su recorrido, en minutos desde el día elegido
+function alSalidasPlan(fecha, offsetDias) {
+  const d = al.datos[fecha];
+  if (!d) return [];
+  const out = [];
+  (d.corredores || []).forEach(c => ["ida", "regreso"].forEach(l => {
+    alServiciosDe(c, l).forEach((sv, k) => {
+      if (sv.desactivado || alEstadoServ(fecha, sv.clave) !== "abierto") return;
+      out.push({ sv, k, cor: c.clave, lado: l, fecha, off: offsetDias * 1440, cam: alCamino(sv) });
+    });
+  }));
+  return out;
+}
+function alLibresTramo(fecha, sv, cam, s, b) {
+  const pl = alPlano(sv), tot = alAsientos(pl).length;
+  const ocup = new Set();
+  alOcupDe(fecha).filter(v => v.servicio === sv.clave && alOcupa(v)).forEach(v => {
+    const vs = v.subeIdx ?? alIdxDe(cam, v.sube, 0), vb = Math.min(v.bajaIdx ?? alIdxDe(cam, v.baja, cam.length - 1), cam.length - 1);
+    if (vs < b && s < vb && v.asiento !== "P") ocup.add(v.asiento);
+  });
+  return Math.max(0, tot - ocup.size);
+}
+function alTramoPlan(x, s, b) {
+  const h = alHorasTramo(x.sv, x.cam, s, b);
+  const pt = alPrecioTramo(x.sv, "CO", s, b);
+  return { x, s, b, sale: x.off + h.sale, llega: h.llega == null ? null : x.off + h.llega,
+           desde: x.cam[s].nombre, hasta: x.cam[b].nombre, precio: pt ? pt.precio : null,
+           libres: alLibresTramo(x.fecha, x.sv, x.cam, s, b) };
+}
+function alArmarOpciones(origen, destino) {
+  const hoy = alISO(alFechaDe(al.dia)), man = alISO(alFechaDe(al.dia + 1));
+  const ahora = new Date(), minAhora = al.dia === 0 ? ahora.getHours() * 60 + ahora.getMinutes() : -1;
+  const del1 = alSalidasPlan(hoy, 0), todas = del1.concat(alSalidasPlan(man, 1));
+  const idx = (cam, n) => cam.findIndex(p => alLugarEs(p.nombre, n));
+  const opciones = [];
+  // Directos (del día elegido)
+  del1.forEach(x => {
+    const i = idx(x.cam, origen), j = idx(x.cam, destino);
+    if (i < 0 || j <= i) return;
+    const t = alTramoPlan(x, i, j);
+    if (t.sale <= minAhora) return;
+    opciones.push({ tramos: [t], sale: t.sale, llega: t.llega });
+  });
+  // Con un transbordo: el primer coche sale el día elegido; el segundo, ese día o el siguiente
+  del1.forEach(a => {
+    const i = idx(a.cam, origen);
+    if (i < 0) return;
+    for (let j = i + 1; j < a.cam.length; j++) {
+      const X = a.cam[j].nombre;
+      if (alLugarEs(X, destino)) break;          // ya es directo
+      const t1 = alTramoPlan(a, i, j);
+      if (t1.sale <= minAhora) return;
+      todas.forEach(b => {
+        if (b.sv.clave === a.sv.clave && b.fecha === a.fecha) return;
+        const p = idx(b.cam, X), q = idx(b.cam, destino);
+        if (p < 0 || q <= p) return;
+        const t2 = alTramoPlan(b, p, q);
+        const base = t1.llega != null ? t1.llega : t1.sale + 60;     // sin hora de llegada cargada: al menos una hora
+        const espera = t2.sale - base;
+        if (espera < AL_CONEXION_MIN || espera > AL_CONEXION_MAX) return;
+        opciones.push({ tramos: [t1, t2], sale: t1.sale, llega: t2.llega, cambio: X, espera, sinLlegada: t1.llega == null });
+      });
+    }
+  });
+  // Lo más útil arriba: directos, después los que llegan antes; sin repetidos
+  const vistos = new Set();
+  return opciones
+    .filter(o => { const k = o.tramos.map(t => `${t.x.fecha}|${t.x.sv.clave}|${t.s}|${t.b}`).join(">"); if (vistos.has(k)) return false; vistos.add(k); return true; })
+    .sort((a, b) => (a.tramos.length - b.tramos.length) || ((a.llega ?? 1e9) - (b.llega ?? 1e9)) || (a.sale - b.sale))
+    .slice(0, 12);
+}
+function alPlanHora(m) {
+  if (m == null) return "—";
+  const d = Math.floor(m / 1440);
+  return alHH(m) + (d > 0 ? `<small class="al-plan-dia"> +${d} ${d > 1 ? "días" : "día"}</small>` : "");
+}
+function alViajeCombinado() {
+  const lugares = alLugares();
+  al.plan = al.plan || { origen: "", destino: "", res: null };
+  alModal({
+    titulo: "Buscar un viaje (con transbordo)", ancho: 760,
+    cuerpo: `
+      <p class="al-plan-ayuda">Para cuando no hay un coche directo: el sistema arma la combinación con cambio de coche, como las aerolíneas. Mira el ${alDiaTxt(alFechaDe(al.dia)).toLowerCase()} y el día siguiente.</p>
+      <div class="al-plan-form">
+        <label class="al-campo"><span>Desde</span><input id="al-plan-o" list="al-plan-lug" value="${trEsc(al.plan.origen)}" placeholder="ej: Concepción" autofocus autocomplete="off"></label>
+        <button type="button" class="al-plan-inv" onclick="alPlanInvertir()" aria-label="Invertir"><i class="ti ti-arrows-exchange"></i></button>
+        <label class="al-campo"><span>Hasta</span><input id="al-plan-d" list="al-plan-lug" value="${trEsc(al.plan.destino)}" placeholder="ej: Buenos Aires" autocomplete="off"
+          onkeydown="if(event.key==='Enter')alPlanBuscar()"></label>
+        <button type="button" class="al-btn-r al-plan-ir" onclick="alPlanBuscar()"><i class="ti ti-route"></i> Buscar</button>
+      </div>
+      <datalist id="al-plan-lug">${lugares.map(l => `<option value="${trEsc(l)}">`).join("")}</datalist>
+      <div id="al-plan-res">${al.plan.res ? alPlanResHTML() : ""}</div>`,
+    pie: `<button type="button" class="al-sec" onclick="alModalCerrar()">Cerrar</button>`,
+  });
+}
+function alPlanInvertir() {
+  const o = document.getElementById("al-plan-o"), d = document.getElementById("al-plan-d");
+  [o.value, d.value] = [d.value, o.value];
+}
+async function alPlanBuscar() {
+  const o = document.getElementById("al-plan-o").value.trim(), d = document.getElementById("al-plan-d").value.trim();
+  if (!o || !d) return toast("Poné de dónde sale y a dónde va", "error");
+  if (alLugarEs(o, d) || alLugarEs(d, o)) return toast("El origen y el destino son el mismo lugar", "error");
+  al.plan.origen = o; al.plan.destino = d;
+  const box = document.getElementById("al-plan-res");
+  box.innerHTML = `<div class="al-plan-nada"><i class="ti ti-loader-2"></i> Armando las combinaciones…</div>`;
+  const hoy = alISO(alFechaDe(al.dia)), man = alISO(alFechaDe(al.dia + 1));
+  await Promise.all([alTraerDia(hoy), alTraerDia(man), alTraerOcup(hoy), alTraerOcup(man)]);
+  al.plan.res = alArmarOpciones(o, d);
+  if (document.getElementById("al-plan-res")) document.getElementById("al-plan-res").innerHTML = alPlanResHTML();
+}
+function alPlanResHTML() {
+  const ops = al.plan.res || [];
+  if (!ops.length) return `<div class="al-plan-nada"><i class="ti ti-route-off"></i> No hay forma de llegar de <b>${trEsc(al.plan.origen)}</b> a <b>${trEsc(al.plan.destino)}</b> hoy ni mañana, ni directo ni con un cambio de coche.
+    <small>Revisá que los nombres estén como en los recorridos (Controles → Tarifas) y que el tráfico de esos días esté armado.</small></div>`;
+  return ops.map((o, i) => {
+    const total = o.tramos.every(t => t.precio) ? o.tramos.reduce((s, t) => s + t.precio, 0) : null;
+    const libres = Math.min(...o.tramos.map(t => t.libres));
+    const dur = o.llega != null ? o.llega - o.sale : null;
+    return `<div class="al-plan-op ${o.tramos.length === 1 ? "directo" : ""}">
+      <div class="al-plan-cab">
+        <span class="al-plan-tipo">${o.tramos.length === 1 ? `<i class="ti ti-arrow-right"></i> Directo` : `<i class="ti ti-transfer"></i> 1 cambio en ${trEsc(o.cambio)}`}</span>
+        <span class="al-plan-horas"><b class="al-d">${alPlanHora(o.sale)}</b> → <b class="al-d">${alPlanHora(o.llega)}</b>${dur != null ? ` <small>· ${alDur(dur)}</small>` : ""}</span>
+        <span class="al-plan-total">${total != null ? alGs(total) : "<small>precio a confirmar</small>"}</span>
+      </div>
+      <ol class="al-plan-tramos">${o.tramos.map((t, k) => `
+        ${k === 1 ? `<li class="al-plan-espera"><i class="ti ti-clock-pause"></i> Espera ${alDur(o.espera)} en ${trEsc(o.cambio)}${o.sinLlegada ? " <small>(la hora de llegada del primer coche no está cargada: confirmá la conexión)</small>" : ""}</li>` : ""}
+        <li class="al-plan-tramo">
+          <b class="al-d">${alPlanHora(t.sale)}</b>
+          <span><b>${trEsc(t.desde)} → ${trEsc(t.hasta)}</b><small>${trEsc(t.x.sv.cod)}${t.x.sv.intl ? " · internacional" : ""} · llega ${alPlanHora(t.llega)}${t.x.fecha !== alISO(alFechaDe(al.dia)) ? " · sale al día siguiente" : ""}</small></span>
+          <span class="al-plan-lib ${t.libres ? "" : "lleno"}">${t.libres ? `${t.libres} libres` : "completo"}</span>
+        </li>`).join("")}
+      </ol>
+      <div class="al-plan-acc">
+        ${libres ? `<button type="button" class="al-btn-r" onclick="alPlanVender(${i})"><i class="ti ti-ticket"></i> Vender ${o.tramos.length === 1 ? "este viaje" : "los 2 tramos"}</button>`
+                 : `<span class="al-plan-lib lleno">No hay lugar en ${o.tramos.length === 1 ? "esta salida" : "uno de los tramos"}</span>`}
+      </div>
+    </div>`;
+  }).join("");
+}
+// Vender: va al primer tramo; al cobrarlo pasa solo al segundo, con el pasajero ya cargado
+async function alPlanVender(i) {
+  const o = al.plan.res[i];
+  if (!o) return;
+  alModalCerrar();
+  alLimpiarVenta();
+  al.combinado = { tramos: o.tramos.map(t => ({ dia: al.dia + Math.round(t.x.off / 1440), cor: t.x.cor, lado: t.x.lado, k: t.x.k, clave: t.x.sv.clave,
+                                                 s: t.s, b: t.b, desde: t.desde, hasta: t.hasta, sale: alHH(t.sale), intl: !!t.x.sv.intl })),
+                   i: 0, boletos: [], cambio: o.cambio || "" };
+  await alCombIrA(0);
+}
+async function alCombIrA(n) {
+  const c = al.combinado; if (!c) return;
+  const t = c.tramos[n]; c.i = n;
+  const f = alISO(alFechaDe(t.dia));
+  if (t.dia !== al.dia) { al.dia = t.dia; al.cargando = true; alRender(false); }
+  try { await Promise.all([alTraer(), alTraerOcup(f, n > 0)]); } finally { al.cargando = false; }
+  al.cor = t.cor; al.lado = t.lado;
+  const k = alServicios().lista.findIndex(x => x.clave === t.clave);
+  al.dep = k >= 0 ? k : t.k; al.sube = t.s; al.baja = t.b; al.sel = null;
+  alRender(true);
+  const mig = n > 0 && alServ() && alServ().intl && !c.tramos[n - 1].intl;
+  toast(c.tramos.length > 1 ? `Tramo ${n + 1} de ${c.tramos.length}: elegí el asiento${mig ? ", completá los datos de migración" : ""} y cobrá` : "Elegí el asiento y cobrá", "info");
+}
+function alBannerCombinado() {
+  const c = al.combinado;
+  if (!c || c.tramos.length < 2) return "";
+  const t = c.tramos[c.i];
+  return `<div class="al-banner al-banner-ag"><i class="ti ti-transfer"></i><span><b>Viaje con transbordo · tramo ${c.i + 1} de ${c.tramos.length}:</b>
+      ${trEsc(t.desde)} → ${trEsc(t.hasta)}, sale ${t.sale}.
+      ${c.i === 0 ? `Después sigue ${trEsc(c.tramos[1].desde)} → ${trEsc(c.tramos[1].hasta)} (${c.tramos[1].sale}); los datos del pasajero pasan solos.` : `Boleto del primer tramo: ${c.boletos.map(alNro).join(", ")}.`}</span>
+    <button type="button" class="al-link" onclick="alCombCancelar()">${c.i === 0 ? "Cancelar" : "No vender el 2º tramo"}</button></div>`;
+}
+function alCombCancelar() { al.combinado = null; alLimpiarVenta(); alPintar(false); }
+// Después de cobrar un tramo (lo llama alCobrar)
+async function alCombSiguiente(v) {
+  const c = al.combinado; if (!c) return false;
+  c.boletos.push(v.nro);
+  if (c.i + 1 >= c.tramos.length) {
+    if (c.tramos.length > 1) toast(`Viaje completo: boletos ${c.boletos.map(alNro).join(" y ")}`, "success");
+    al.combinado = null;
+    return false;
+  }
+  // El pasajero del primer tramo, para no volver a escribirlo
+  const p = Object.assign(AL_PVACIO(), v.mig || {}, { doc: v.doc, nombre: v.mig ? "" : v.nombre, tipoDoc: v.tipoDocId || "CI" });
+  const x = alExtrasDe(v), tarifa = v.tarifa || al.tarifa, pago = al.pago;
+  alLimpiarVenta();
+  al.p = p; al.x = x; al.tarifa = tarifa; al.pago = pago;
+  await alCombIrA(c.i + 1);
+  return true;
 }

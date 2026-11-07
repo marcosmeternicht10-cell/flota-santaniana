@@ -705,3 +705,47 @@ body.boleteria #content { overflow: visible; }
   .al-cons-ruta b, .al-cons-ruta > div span { font-size: 18px; }
   .al-cons-acc > * { flex: 1 1 auto; }
 }
+
+/* Viaje con transbordo */
+.al-busca-fila { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px; margin-top: 14px; }
+.al-busca-fila > .al-busca { margin-top: 0; flex: 1 1 420px; }
+.al-plan-btn { display: inline-flex; align-items: center; gap: 8px; height: 48px; padding: 0 18px; border-radius: 12px; border: 1.5px solid var(--al-borde);
+  background: transparent; color: var(--al-txt); font-weight: 700; font-size: 14px; white-space: nowrap; }
+.al-plan-btn:hover { border-color: var(--al-txt); }
+.al-plan-btn .ti { font-size: 19px; }
+.al-plan-ayuda { margin: 0 0 14px; color: var(--al-txt2); font-size: 14px; line-height: 1.45; }
+.al-plan-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.al-modal-cuerpo .al-plan-form .al-campo { flex: 1 1 200px; }
+.al-plan-inv { width: 46px; height: 46px; flex: none; border-radius: 50%; border: 1.5px solid var(--al-borde); background: transparent; color: var(--al-txt); font-size: 20px; display: grid; place-items: center; padding: 0; }
+.al-plan-inv:hover { border-color: var(--al-txt); }
+.al-plan-ir { height: 46px; flex: none; }
+#al-plan-res { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; max-height: 58vh; overflow-y: auto; }
+.al-plan-nada { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 16px; border-radius: 12px; border: 1.5px dashed var(--al-borde); color: var(--al-txt2); font-size: 14px; line-height: 1.45; }
+.al-plan-nada b { color: var(--al-txt); }
+.al-plan-op { padding: 12px 14px; border-radius: 12px; background: var(--al-coche); border: 1.5px solid #3A4048; }
+.al-plan-op.directo { border-color: #4E7A5C; }
+.al-plan-cab { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+.al-plan-tipo { display: inline-flex; align-items: center; gap: 6px; font-weight: 800; font-size: 14px; }
+.al-plan-op.directo .al-plan-tipo { color: #9BD8AE; }
+.al-plan-horas { font-size: 15px; }
+.al-plan-horas .al-d { font-size: 22px; font-variant-numeric: tabular-nums; }
+.al-plan-horas small, .al-plan-total small { color: var(--al-txt2); font-weight: 600; }
+.al-plan-dia { font-family: 'Atkinson Hyperlegible Next', Verdana, sans-serif; font-size: 11px; font-weight: 700; color: #F5C26B; }
+.al-plan-total { margin-left: auto; font-weight: 800; font-size: 17px; }
+.al-plan-tramos { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.al-plan-tramo { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; background: var(--al-fondo); }
+.al-plan-tramo > .al-d { font-size: 20px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.al-plan-tramo > span:nth-child(2) { display: flex; flex-direction: column; gap: 2px; font-size: 14px; min-width: 0; }
+.al-plan-tramo small { color: var(--al-txt2); font-size: 12px; font-weight: 600; }
+.al-plan-espera { display: flex; align-items: center; gap: 8px; padding: 2px 10px; font-size: 13px; font-weight: 700; color: #F5C26B; }
+.al-plan-espera small { color: var(--al-txt2); font-weight: 600; }
+.al-plan-lib { font-size: 12px; font-weight: 800; color: #9BD8AE; white-space: nowrap; }
+.al-plan-lib.lleno { color: #FF8790; }
+.al-plan-acc { display: flex; justify-content: flex-end; margin-top: 10px; }
+.al-plan-acc .al-btn-r { height: 40px; font-size: 14px; }
+@media (max-width: 560px) {
+  .al-plan-btn { width: 100%; justify-content: center; }
+  .al-plan-tramo { grid-template-columns: 1fr; gap: 4px; }
+  .al-plan-tramo > .al-plan-lib { grid-column: auto; }
+  .al-plan-total { margin-left: 0; }
+}
