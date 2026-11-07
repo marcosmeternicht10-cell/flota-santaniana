@@ -5,6 +5,7 @@ Moneda: Guaraní (₲)
 """
 
 import os
+import time as _time_mod
 import re
 import threading
 import datetime
@@ -70,6 +71,15 @@ from pdf_export import (generar_pdf, generar_reporte_gerencial_pdf,
 app = Flask(__name__)
 # Clave secreta para las sesiones (en producción se toma de variable de entorno)
 app.secret_key = os.environ.get("SECRET_KEY", "la-santaniana-flota-2026-cambiar-esto")
+if not os.environ.get("SECRET_KEY") and os.environ.get("RENDER"):
+    print("ATENCIÓN: falta la variable SECRET_KEY en Render; las sesiones usan una clave conocida.", flush=True)
+# La cookie de sesión: no se manda desde otros sitios, y en la nube solo por https
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+if os.environ.get("RENDER"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+# Lo más grande que se puede subir de una vez (fotos, Excel, PDF)
+app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024
 
 # ─── Módulo de Contabilidad y Tesorería ─────────────────────────────────────
 from contabilidad import bp_contabilidad, init_contabilidad
@@ -398,6 +408,35 @@ def _comprimir_respuesta(response):
     except Exception:
         pass
     return response
+
+
+# ─── Errores: que se vean claros y queden registrados ─────────────────────────
+# Si algo revienta en el servidor, la pantalla recibe un mensaje en castellano
+# (no una página de error que la deja colgada) y el detalle completo queda en
+# los registros de Render (Logs) para poder arreglarlo.
+import logging as _logging
+import traceback as _traceback
+_log_errores = _logging.getLogger("santaniana")
+if not _log_errores.handlers:
+    _h = _logging.StreamHandler()
+    _h.setFormatter(_logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _log_errores.addHandler(_h)
+    _log_errores.setLevel(_logging.INFO)
+
+
+@app.errorhandler(500)
+def _error_500(e):
+    original = getattr(e, "original_exception", None) or e
+    try:
+        quien = session.get("usuario") or "-"
+    except Exception:
+        quien = "-"
+    _log_errores.error("Error en %s %s (usuario %s): %s\n%s", request.method, request.path, quien,
+                       original, "".join(_traceback.format_exception(type(original), original, original.__traceback__)))
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": "error_interno",
+                        "msg": "Algo falló en el servidor. Probá de nuevo; si sigue pasando, avisá al administrador."}), 500
+    return ("<h2>Algo falló en el servidor</h2><p>Volvé atrás y probá de nuevo. Si sigue pasando, avisá al administrador.</p>", 500)
 
 
 # ─── Autenticación ──────────────────────────────────────────────────────────
@@ -789,8 +828,9 @@ def api_tablero():
     """Datos para la pantalla de monitoreo: OTs activas (no cerradas) con sus estados.
     Ordenadas por urgencia de horario de salida (el que sale antes, primero)."""
     from database import _orden_urgencia_horario
-    todas = obtener_ots()
-    activas = [o for o in todas if o.get("estado") != "cerrada"]
+    # Solo las que no están cerradas, desde la base (antes traía toda la
+    # historia cada 15 segundos para quedarse con unas pocas)
+    activas = [o for o in obtener_ots(solo_activas=True) if o.get("estado") != "cerrada"]
     # Ordenar por horario de salida: el más urgente (sale antes) primero
     activas.sort(key=_orden_urgencia_horario)
     return jsonify({"ots": activas, "actualizado": ahora().strftime("%H:%M:%S")})
@@ -803,13 +843,41 @@ def login_page():
     return render_template("login.html")
 
 
+# Contra quien prueba contraseñas al azar: después de 8 intentos fallidos con
+# el mismo usuario en 10 minutos, se espera un rato. Por dirección el límite es
+# más alto (40): en la oficina todos salen a internet por la misma.
+_INTENTOS_LOGIN = {}
+_VENTANA_LOGIN = 600
+
+
+def _login_bloqueado(claves):
+    ahora_s = _time_mod.time()
+    for k in claves:
+        v = [t for t in _INTENTOS_LOGIN.get(k, []) if ahora_s - t < _VENTANA_LOGIN]
+        if v:
+            _INTENTOS_LOGIN[k] = v
+        else:
+            _INTENTOS_LOGIN.pop(k, None)
+        if len(v) >= (8 if k.startswith("u:") else 40):
+            return int(_VENTANA_LOGIN - (ahora_s - v[0])) + 1
+    return 0
+
+
 @app.route("/api/login", methods=["POST"])
 def api_login():
     d = request.json or {}
     usuario = d.get("usuario", "")
     password = d.get("password", "")
+    ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.remote_addr or "")
+    claves = ("u:" + str(usuario).lower().strip(), "ip:" + ip)
+    espera = _login_bloqueado(claves)
+    if espera:
+        minutos = max(1, round(espera / 60))
+        return jsonify({"ok": False, "msg": f"Demasiados intentos fallidos. Esperá {minutos} minuto{'s' if minutos > 1 else ''} y probá de nuevo."}), 429
     u = autenticar_usuario(usuario, password)
     if u:
+        for k in claves:
+            _INTENTOS_LOGIN.pop(k, None)
         session["usuario_id"] = u["id"]
         session["usuario"] = u["usuario"]
         session["nombre"] = u["nombre"]
@@ -833,6 +901,8 @@ def api_login():
         auditar("Inició sesión", "Acceso")
         return jsonify({"ok": True, "usuario": u})
     # Registrar intento fallido (sin sesión, lo hacemos directo)
+    for k in claves:
+        _INTENTOS_LOGIN.setdefault(k, []).append(_time_mod.time())
     registrar_auditoria(usuario=usuario or "?", rol="", accion="Intento de acceso fallido",
                         categoria="Acceso", detalle="Usuario o contraseña incorrectos")
     return jsonify({"ok": False, "msg": "Usuario o contraseña incorrectos"}), 401

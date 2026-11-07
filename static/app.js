@@ -23,7 +23,6 @@ function gsSmall(v) {
   if (Math.abs(v) >= 1e3) return "Gs. " + (v / 1e3).toFixed(0) + "k";
   return "Gs. " + Math.round(v).toLocaleString("es-PY").replace(/,/g, ".");
 }
-function fmtKm(v) { return (v || 0).toLocaleString("es-PY").replace(/,/g, ".") + " km"; }
 function fmtNum(v) { return (v || 0).toLocaleString("es-PY").replace(/,/g, "."); }
 
 const MESES_ES = ["", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -56,6 +55,11 @@ async function api(url, opts) {
   _uiCarga(+1);
   let r;
   try { r = await fetch(url, opts); }
+  catch (e) {
+    // Sin internet o el servidor no contesta: avisar en vez de quedar colgado
+    toast("No hay conexión con el servidor. Revisá internet y probá de nuevo.", "error");
+    throw e;
+  }
   finally { _uiCarga(-1); }
   // Sesión expirada → redirigir al login
   if (r.status === 401) {
@@ -68,7 +72,18 @@ async function api(url, opts) {
     toast(data.error || "No tenés permiso para esta acción", "error");
     return { ok: false, msg: data.error };
   }
-  return r.json();
+  // Una respuesta que no es JSON (por ejemplo, un error del servidor o una
+  // caída): mensaje claro en vez de que la pantalla quede a medio cargar
+  const tipo = r.headers.get("Content-Type") || "";
+  if (!tipo.includes("json")) {
+    const msg = r.status >= 500 ? "Algo falló en el servidor. Probá de nuevo en un momento."
+      : `El servidor contestó algo inesperado (${r.status}).`;
+    toast(msg, "error");
+    return { ok: false, msg, error: `http_${r.status}` };
+  }
+  const datos = await r.json();
+  if (r.status >= 500 && datos && datos.error === "error_interno") toast(datos.msg, "error");
+  return datos;
 }
 function status(msg) {
   $("#statusbar").innerHTML = `<i class="ti ti-info-circle" style="vertical-align:-2px"></i> ${msg}`;
@@ -6982,19 +6997,6 @@ async function guardarPresupuesto(otId, btn) {
   } else toast(r.msg || "Error", "error");
 }
 
-async function guardarProveedorCompra(otId, btn) {
-  const card = btn.closest(".card");
-  const input = card?.querySelector(".cmp-proveedor-in");
-  const proveedor = (input?.value || "").trim();
-  const r = await api(`/api/compras/${otId}/proveedor`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ proveedor })
-  });
-  if (r.ok) {
-    toast(proveedor ? "Proveedor guardado" : "Proveedor quitado", "success");
-    renderCompras();
-  } else toast(r.msg || "No se pudo guardar el proveedor", "error");
-}
 
 // Modal para registrar la entrega con foto obligatoria
 // Comprime una foto antes de subirla (de ~3MB a ~150KB)
@@ -7201,15 +7203,6 @@ async function verEvidencia(otId) {
   verFotoGrande(fotos[0].datos);
 }
 
-// Compras marca que fue a buscar los repuestos
-async function marcarEnCamino(otId) {
-  if (!confirm("¿Marcar que ya fueron a buscar los repuestos?")) return;
-  const r = await api(`/api/compras/${otId}/en_camino`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}"
-  });
-  if (r.ok) { toast("Marcado en camino", "success"); renderCompras(); }
-  else toast(r.msg || "Error", "error");
-}
 
 // Convierte 'HH:MM' a minutos del día. Sin horario → muy alto (va al final).
 function minutosHorario(h) {
@@ -9326,14 +9319,6 @@ function acNombres(input, getLista, { max = 40 } = {}) {
 async function otChoferesLista() {
   if (!window._choferesOT) window._choferesOT = (await api("/api/ots/conductores")) || [];
   return window._choferesOT;
-}
-// La lista de nombres ya usados, para elegir al escribir (no cargar el mismo
-// chofer con otra letra)
-async function otChoferesDatalist(id) {
-  const dl = document.getElementById(id);
-  if (!dl) return;
-  const lista = await otChoferesLista();
-  dl.innerHTML = lista.map(n => `<option value="${trEsc(n)}">`).join("");
 }
 function otChoferEditar() {
   const ot = window._otChofer; if (!ot) return;
@@ -19349,10 +19334,6 @@ function pvNombreGrupo(pr) {
   if (n >= 3) return `Service de ${pvKm(pr.intervalo_km)} km`;
   return pr.tareas.join(" y ");
 }
-function pvGrupoSub(pr) {
-  if (!pr) return "";
-  return pr.tareas.length >= 3 ? `${pr.tareas.length} tareas: ${pr.tareas.slice(0, 3).join(", ")}${pr.tareas.length > 3 ? "…" : ""}` : "";
-}
 function pvVence(pr, km_dia) {
   if (!pr) return "";
   if (pr.km_restantes < 0) {
@@ -21874,12 +21855,6 @@ function caNombre(n) {
 }
 function caNorm(s) { return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase(); }
 function caClave(cliente, tramo, lado) { return `${cliente}|${tramo}|${lado}`; }
-function caPisan(a, b) {
-  if (!a || !b) return false;
-  for (const d of [0, 24, -24]) if (a[0] < b[1] + d && b[0] + d < a[1]) return true;
-  return false;
-}
-function caH(h) { if (h == null) return ""; h = ((h % 24) + 24) % 24; const hh = Math.floor(h), mm = Math.round((h - hh) * 60); return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`; }
 
 async function renderCorpAsignacion() {
   status("Corporativos: quién cubre cada tramo y con qué coche");

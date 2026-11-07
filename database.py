@@ -892,12 +892,7 @@ def _ordinal(fecha):
         return None
 
 
-def _mediana(valores):
-    v = sorted(valores)
-    n = len(v)
-    if not n:
-        return None
-    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2.0
+# _mediana está más abajo (una sola definición: había dos y valía la segunda)
 
 
 def _tendencia(puntos):
@@ -2156,8 +2151,9 @@ def _orden_urgencia_horario(ot):
     return (1, 0)  # 1 = sin horario, va al final
 
 
-def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None):
-    """Lista OTs con filtros opcionales y conteo de items."""
+def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None, solo_activas=False):
+    """Lista OTs con filtros opcionales y conteo de items.
+    solo_activas: las que no están cerradas (el tablero no necesita la historia)."""
     conn = get_connection()
     q = """
         SELECT o.*, v.patente, v.marca, v.modelo, v.n_interno, v.horario_salida,
@@ -2175,6 +2171,8 @@ def obtener_ots(estado=None, vehiculo_id=None, desde=None, hasta=None):
     params = []
     if estado:
         q += " AND o.estado=?"; params.append(estado)
+    if solo_activas:
+        q += " AND COALESCE(o.estado,'') <> 'cerrada'"
     if vehiculo_id:
         q += " AND o.vehiculo_id=?"; params.append(vehiculo_id)
     if desde:
