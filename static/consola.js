@@ -129,6 +129,7 @@ const VC_DIVISIONES = [
   },
   {
     id: "turismo", nombre: "Turismo", icono: "ti-beach", tono: "#E9568C",
+    foto: "/static/consola/turismo.jpg", fotoPos: "60% 40%", fotoPosCel: "40% 60%", fotoLuz: 0.8,
     lema: "Viajes contratados, de la agenda a la rendición.",
     cifras: r => [
       r.turismo_hoy && { n: r.turismo_hoy.total, txt: "salen hoy" },
@@ -509,7 +510,7 @@ function vcFondo(d, inmediato) {
   nueva.style.setProperty("--vc-tono", d.tono);
   // Con foto propia (la flota real) va la foto; si no, el ícono grande de la división
   nueva.innerHTML = d.foto
-    ? `<div class="vc-foto" style="background-image:url('${d.foto}');--vc-foto-pos:${d.fotoPos || "center"};--vc-foto-pos-cel:${d.fotoPosCel || d.fotoPos || "center"}"></div><div class="vc-foto-tinte"></div>`
+    ? `<div class="vc-foto" style="background-image:url('${d.foto}');--vc-foto-pos:${d.fotoPos || "center"};--vc-foto-pos-cel:${d.fotoPosCel || d.fotoPos || "center"};--vc-foto-luz:${d.fotoLuz || 0.62}"></div><div class="vc-foto-tinte"></div>`
     : `<i class="ti ${d.icono} vc-arte"></i>`;
   nueva.classList.toggle("con-foto", !!d.foto);
   if (inmediato) { nueva.style.transition = "none"; requestAnimationFrame(() => { nueva.style.transition = ""; }); }

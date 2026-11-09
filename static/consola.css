@@ -445,7 +445,7 @@ body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: c
 /* ═══ Fotos propias de fondo (la flota real, como el arte de cada juego) ═══ */
 .vc-foto {
   position: absolute; inset: -3%; background-size: cover; background-position: var(--vc-foto-pos, center);
-  filter: saturate(.9) contrast(1.05) brightness(.62);
+  filter: saturate(.9) contrast(1.05) brightness(var(--vc-foto-luz, .62));   /* cada foto puede pedir más luz */
   animation: vcFotoMov 26s ease-in-out infinite alternate;
 }
 @keyframes vcFotoMov { from { transform: scale(1.08) translate3d(-1%, 0, 0); } to { transform: scale(1) translate3d(1%, -1%, 0); } }
