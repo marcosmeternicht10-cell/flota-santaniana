@@ -150,6 +150,7 @@ body {
   padding: 10px 20px 14px;
   font-size: 11px; color: var(--sb-text-muted);
 }
+.version .firma { color: #D9B45A; font-weight: 600; letter-spacing: .06em; }
 
 /* ────────────────────────────────────────────────────────────────────────
    MAIN

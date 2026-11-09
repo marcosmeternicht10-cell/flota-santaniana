@@ -467,3 +467,7 @@ body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: c
   }
 }
 @media (prefers-reduced-motion: reduce) { .vc-foto { animation: none !important; } }
+
+/* La firma del estudio, abajo a la derecha */
+.vc-firma { margin-left: auto; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--vc-txt3); }
+.vc-firma b { color: #D9B45A; font-weight: 700; letter-spacing: .18em; }

@@ -336,6 +336,7 @@ function vcInicio() {
         <span><kbd>←</kbd><kbd>→</kbd> moverse</span><span><kbd>↑</kbd> avisos</span><span><kbd>↓</kbd> subdivisiones</span>
         <span><kbd>Enter</kbd> entrar</span><span><kbd>Esc</kbd> volver</span>
         <span class="vc-pad" id="vc-pad" hidden><i class="ti ti-device-gamepad-2"></i> Joystick conectado</span>
+        <span class="vc-firma">Desarrollado por <b>Aureum</b></span>
       </footer>`;
     document.body.appendChild(o);
     o.addEventListener("mousemove", e => { if (e.movementX || e.movementY) vc.mouse = true; }, { passive: true });
