@@ -20,7 +20,7 @@
   --vc-lado: clamp(16px, 3.4vw, 56px);
 
   position: fixed; inset: 0; z-index: 900;
-  display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr);
+  display: grid; grid-template-rows: auto auto auto minmax(min-content, 1fr) auto auto; grid-template-columns: minmax(0, 1fr);
   background: var(--vc-fondo); color: var(--vc-txt);
   font-family: "Inter", system-ui, sans-serif;
   overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
@@ -122,7 +122,7 @@ body.vc-en-inicio { overflow: hidden; }
 .vc-div:focus-visible .vc-div-ico { box-shadow: 0 0 0 3px #fff; }
 
 /* ── La división elegida ── */
-.vc-hero { padding: 4px var(--vc-lado) 22px; min-height: 0; }
+.vc-hero { padding: 4px var(--vc-lado) 22px; }
 .vc-hero-in { max-width: 780px; }
 .vc-hero-in.vc-entra > * { animation: vcSube .5s var(--vc-curva) both; }
 .vc-hero-in.vc-entra > :nth-child(2) { animation-delay: .03s; }
@@ -293,7 +293,8 @@ body.vc-modo .sidebar, body.vc-modo .menu-toggle, body.vc-modo .sidebar-overlay 
 
 /* ── Celular ── */
 @media (max-width: 640px) {
-  .vc { grid-template-rows: auto auto auto auto auto auto; }
+  .vc { display: flex; flex-direction: column; }
+  .vc > :not(.vc-fondo):not(.vc-grano) { flex: none; }
   .vc-top { padding-top: 12px; }
   .vc-marca span, .vc-ico-txt span, .vc-yo { display: none; }
   .vc-divs { min-height: 96px; gap: 10px; }
@@ -417,4 +418,26 @@ body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: c
 }
 @media (prefers-reduced-motion: reduce) {
   .vc-av, .vc-div-badge { animation: none !important; }
+}
+
+/* ── Celular: números en dos columnas y sin el hueco del botón de menú ── */
+@media (max-width: 640px) {
+  .vc-cifras { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; margin-top: 18px; }
+  .vc-cifra b { font-size: 32px; }
+  .vc-cifra b small { font-size: 18px; }
+  .vc-cifra span { font-size: 11px; letter-spacing: .04em; line-height: 1.3; }
+  .vc-hero-tit { font-size: 52px; }
+  .vc-hero-acc { margin-top: 20px; }
+  .vc-btn { width: 100%; justify-content: center; }
+  .vc-subs-wrap { padding-top: 6px; }
+  .vc-av { max-width: calc(100vw - 48px); }
+}
+@media (max-width: 768px) {
+  body.vc-modo .page-header { padding-top: 20px; }
+}
+/* En el celular las subdivisiones van en grilla de dos: se ven todas bajando con el dedo */
+@media (max-width: 640px) {
+  .vc-subs { display: grid; grid-template-columns: 1fr 1fr; overflow: visible; -webkit-mask-image: none; mask-image: none; padding-bottom: 28px; }
+  .vc-sub { width: auto; min-height: 150px; }
+  .vc-sub.on, .vc-sub:focus-visible { transform: none; }
 }
