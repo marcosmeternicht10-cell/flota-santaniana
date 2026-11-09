@@ -33,7 +33,6 @@ const vcPlural = (n, uno, varios) => `${vcN(n)} ${+n === 1 ? uno : varios}`;
 const VC_DIVISIONES = [
   {
     id: "flota", nombre: "Flota", icono: "ti-bus", tono: "#3D8BDB",
-    foto: "/static/consola/flota.jpg?v=2", fotoPos: "50% 62%", fotoPosCel: "88% 60%",
     lema: "Los coches, su estado y sus papeles.",
     cifras: r => [
       r.flota && { n: r.flota.disponibles, de: r.flota.activos, txt: "coches disponibles hoy" },
@@ -52,7 +51,6 @@ const VC_DIVISIONES = [
   },
   {
     id: "operacion", nombre: "Operación", icono: "ti-route", tono: "#1FB5A8",
-    foto: "/static/consola/operacion.jpg", fotoPos: "30% 55%", fotoPosCel: "30% 55%",
     lema: "Las salidas del día y lo que rinden los servicios.",
     cifras: r => [
       r.trafico && { n: r.trafico.total, txt: r.trafico.existe ? "salidas hoy" : "sin tráfico cargado hoy" },
@@ -69,7 +67,6 @@ const VC_DIVISIONES = [
   },
   {
     id: "taller", nombre: "Taller", icono: "ti-tool", tono: "#F08A3C",
-    foto: "/static/consola/taller.jpg", fotoPos: "62% 40%", fotoPosCel: "30% 40%",
     lema: "Órdenes de trabajo, preventivos y el día a día del taller.",
     cifras: r => [
       r.ots && { n: r.ots.abiertas, txt: "OTs sin cerrar" },
@@ -129,7 +126,6 @@ const VC_DIVISIONES = [
   },
   {
     id: "turismo", nombre: "Turismo", icono: "ti-beach", tono: "#E9568C",
-    foto: "/static/consola/turismo.jpg", fotoPos: "60% 40%", fotoPosCel: "40% 60%", fotoLuz: 0.8,
     lema: "Viajes contratados, de la agenda a la rendición.",
     cifras: r => [
       r.turismo_hoy && { n: r.turismo_hoy.total, txt: "salen hoy" },
@@ -221,6 +217,12 @@ const VC_DIVISIONES = [
   },
 ];
 
+// La foto de fondo de todas las divisiones: los tres coches de la flota, teñidos
+// con el color de cada una. Una división puede tener la suya propia con
+// `foto`, `fotoPos`, `fotoPosCel` y `fotoLuz` (hay más en static/consola/ para
+// más adelante: operacion.jpg, taller.jpg, turismo.jpg).
+const VC_FOTO_GENERAL = { foto: "/static/consola/flota.jpg?v=2", fotoPos: "50% 62%", fotoPosCel: "88% 60%" };
+
 // ── Estado ───────────────────────────────────────────────────────────────────
 const vc = {
   activa: false,          // la vista consola está prendida
@@ -271,7 +273,7 @@ function vcArmar() {
     d.subs.push({ sec, nombre: v.nombre, icono: v.icono, desc: v.grupo });
   });
   vc.divs = divs.filter(d => d.subs.length);
-  vc.divs.forEach(d => { if (d.foto && !d._img) { d._img = new Image(); d._img.src = d.foto; } });
+  [VC_FOTO_GENERAL, ...vc.divs].forEach(d => { if (d.foto && !d._img) { d._img = new Image(); d._img.src = d.foto; } });
 }
 
 // ── Prender / apagar ─────────────────────────────────────────────────────────
@@ -508,11 +510,12 @@ function vcFondo(d, inmediato) {
   if (capas.length < 2) return;
   const nueva = capas[1 - vc.fondo], vieja = capas[vc.fondo];
   nueva.style.setProperty("--vc-tono", d.tono);
-  // Con foto propia (la flota real) va la foto; si no, el ícono grande de la división
-  nueva.innerHTML = d.foto
-    ? `<div class="vc-foto" style="background-image:url('${d.foto}');--vc-foto-pos:${d.fotoPos || "center"};--vc-foto-pos-cel:${d.fotoPosCel || d.fotoPos || "center"};--vc-foto-luz:${d.fotoLuz || 0.62}"></div><div class="vc-foto-tinte"></div>`
+  // La foto propia de la división, o la general de la flota; sin foto, el ícono grande
+  const f = d.foto ? d : VC_FOTO_GENERAL;
+  nueva.innerHTML = f.foto
+    ? `<div class="vc-foto" style="background-image:url('${f.foto}');--vc-foto-pos:${f.fotoPos || "center"};--vc-foto-pos-cel:${f.fotoPosCel || f.fotoPos || "center"};--vc-foto-luz:${f.fotoLuz || 0.62}"></div><div class="vc-foto-tinte"></div>`
     : `<i class="ti ${d.icono} vc-arte"></i>`;
-  nueva.classList.toggle("con-foto", !!d.foto);
+  nueva.classList.toggle("con-foto", !!f.foto);
   if (inmediato) { nueva.style.transition = "none"; requestAnimationFrame(() => { nueva.style.transition = ""; }); }
   nueva.classList.add("on");
   vieja.classList.remove("on");
