@@ -16,6 +16,7 @@ Enganche en app.py (después de los otros módulos):
     app.register_blueprint(bp_corp)
 """
 
+import re
 from flask import Blueprint, request, jsonify, session
 from db_compat import get_connection, USE_POSTGRES, IntegrityError
 from hora_local import ahora, ahora_iso, hoy
@@ -937,6 +938,15 @@ def registrar_rendicion(datos, limitar_fecha=False):
         if not ok_fecha:
             return False, msg_fecha
 
+    # Administrativos: uno entrante y uno saliente por día (o un completo).
+    # Esto no se justifica: dos entrantes son a la misma hora en dos plantas.
+    if _es_adm(datos["tramo"]) and estado != "suspendido":
+        quien = (datos.get("chofer_usuario") or "").strip()
+        if quien:
+            otro = _choque_adm(servicios_del_dia(quien, datos["fecha_servicio"]), estado)
+            if otro:
+                return False, _msg_choque_adm(otro, estado)
+
     # Si choca en horario con otro servicio del mismo chofer, no se rebota
     # sin más: en el papel dos tramos pueden caer a la misma hora y en la
     # realidad haberse hecho uno atrás del otro (terminó la salida de un
@@ -1240,6 +1250,44 @@ def plus_pagado(chofer_usuario, anio, semana):
 
 # Clientes que solo operan de lunes a viernes. El resto trabaja todos los días.
 CLIENTES_SOLO_HABILES = ["ADM", "BALL", "LASCA"]
+
+
+def _es_adm(tramo):
+    """Los servicios administrativos (ADMIN. ESPAÑA, ADM RUTA 1, TRAMO
+    ADMINIST 2...): llevan al personal a la planta y lo traen de vuelta."""
+    t = re.sub(r"\s+", " ", (tramo or "").strip().upper())
+    return bool(re.match(r"(ADMIN|ADM\b|TRAMO ADMINIST)", t))
+
+
+def _choque_adm(previos, estado_nuevo):
+    """Un chofer hace como mucho UN administrativo entrante y UN saliente por
+    día (o un completo, que son los dos). No puede tener dos entrantes —son a
+    la misma hora, en distintas plantas— ni un completo y además otra mitad.
+    Devuelve el servicio con el que choca, o None."""
+    if estado_nuevo not in ("completado", "entrante", "saliente"):
+        return None
+    for p in previos:
+        e = p.get("estado")
+        if e not in ("completado", "entrante", "saliente") or not _es_adm(p.get("tramo")):
+            continue
+        if e == "completado" or estado_nuevo == "completado" or e == estado_nuevo:
+            return p
+    return None
+
+
+def _msg_choque_adm(otro, estado_nuevo):
+    que = {"completado": "completo", "entrante": "entrante", "saliente": "saliente"}
+    e = otro.get("estado")
+    if e == "completado":
+        return (f"Ese día ya tenés cargado el administrativo {otro['tramo']} completo (entrante y saliente). "
+                f"No se puede cargar otro administrativo: si el cargado es el equivocado, corregilo o borralo primero.")
+    if estado_nuevo == "completado":
+        return (f"Ese día ya tenés cargado el {que[e]} de {otro['tramo']}. Un administrativo completo ocupa "
+                f"el entrante y el saliente: si hiciste solo la otra mitad, marcá «solo el "
+                f"{'saliente' if e == 'entrante' else 'entrante'}».")
+    return (f"Ese día ya tenés cargado un administrativo {que[e]}: {otro['tramo']}. "
+            f"Se puede hacer un solo {que[e]} por día (es a la misma hora). "
+            f"Si el cargado es el equivocado, corregilo o borralo primero.")
 
 
 def _es_variable(tramo):
@@ -2149,8 +2197,17 @@ def rendiciones_sospechosas(desde=None, hasta=None):
                 "monto": round(sum(float(g["monto"] or 0) for g in grupo)),
                 "detalle": [f"{g['cliente']} · {g['tramo']}" for g in grupo],
             })
-        # 5. Dos servicios del mismo chofer a la misma hora
+        # 5. Dos servicios del mismo chofer a la misma hora (incluye dos
+        # administrativos entrantes, o un completo y otra mitad, aunque el
+        # tramo no diga el horario)
         ids_choque, detalle_choque = _pares_que_se_pisan(grupo)
+        adms = [g for g in grupo if _es_adm(g["tramo"])]
+        for i, a in enumerate(adms):
+            for b in adms[i + 1:]:
+                if _choque_adm([a], b.get("estado")) and not (a["id"] in ids_choque and b["id"] in ids_choque):
+                    ids_choque |= {a["id"], b["id"]}
+                    detalle_choque.append(f"{a['tramo']} ({a['estado']}) y {b['tramo']} ({b['estado']}): "
+                                          f"dos administrativos en el mismo horario")
         if ids_choque:
             choque = [g for g in grupo if g["id"] in ids_choque]
             # Lo que explicó el chofer al cargar, si lo explicó
