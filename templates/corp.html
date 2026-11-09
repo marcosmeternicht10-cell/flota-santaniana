@@ -428,7 +428,7 @@
       const cfg = await r.json();
       CLIENTES_TRAMOS = cfg.clientes_tramos;
       EMBLEMAS = cfg.emblemas || [];
-      $("f-fecha").onchange = chequearDisponibilidad;
+      $("f-fecha").onchange = () => { traerOcupados(); chequearDisponibilidad(); };
       $("cb-litros").addEventListener("input", chequearLitros);
       const sel = $("f-cliente");
       Object.keys(CLIENTES_TRAMOS).forEach(c => {
@@ -454,6 +454,44 @@
       });
       selT.onchange = () => { chequearDisponibilidad(); actualizarObservacion(); };
       $("aviso-tramo").innerHTML = "";
+      traerOcupados();
+    }
+
+    // Los tramos que caen a la misma hora que algo que el chofer ya cargó ese
+    // día no se pueden elegir (a la tarde puede hacer otro; en la misma franja no)
+    let OCUPADOS = {}, CARGADOS_DIA = [], ocupSeq = 0;
+    async function traerOcupados(){
+      const cliente = $("f-cliente").value, fecha = $("f-fecha").value, n = ++ocupSeq;
+      OCUPADOS = {}; CARGADOS_DIA = [];
+      if(cliente && fecha){
+        try {
+          const r = await fetch(`/api/corp/horarios_ocupados?cliente=${encodeURIComponent(cliente)}&fecha=${fecha}`);
+          const d = await r.json();
+          if(n !== ocupSeq) return;
+          OCUPADOS = d.ocupados || {}; CARGADOS_DIA = d.cargados || [];
+        } catch(e){}
+      }
+      const selT = $("f-tramo");
+      [...selT.options].forEach(o => {
+        if(!o.value) return;
+        const b = OCUPADOS[o.value] || {};
+        const todo = b.completado && b.entrante && b.saliente;
+        o.disabled = !!todo;
+        o.textContent = todo ? `${o.value} — ocupado` : (b.entrante || b.saliente || b.completado) ? `${o.value} — solo una mitad` : o.value;
+      });
+      if(selT.value && selT.selectedOptions[0] && selT.selectedOptions[0].disabled){ selT.value = ""; }
+      pintarCargadosDia();
+      chequearDisponibilidad();
+    }
+    function pintarCargadosDia(){
+      let c = $("ya-cargado-dia");
+      if(!c){
+        c = document.createElement("div"); c.id = "ya-cargado-dia";
+        $("f-tramo").closest(".campo").appendChild(c);
+      }
+      c.innerHTML = CARGADOS_DIA.length
+        ? `<div class="aviso parcial" style="margin-top:8px"><i class="ti ti-clock"></i><span>Ese día ya cargaste: ${CARGADOS_DIA.map(x => `<b>${x.tramo}</b>${x.estado !== "completado" ? " (" + x.estado + ")" : ""} de ${x.horario}`).join(", ")}. Los tramos a esa misma hora no se pueden elegir.</span></div>`
+        : "";
     }
 
     // Buscador de bus por Nº interno
@@ -547,6 +585,13 @@
     }
 
     function habilitarEstados(bloqueados){
+      const choque = OCUPADOS[$("f-tramo").value] || {};
+      bloqueados = bloqueados.concat(Object.keys(choque));
+      const libres = ["completado","entrante","saliente"].filter(k => !bloqueados.includes(k));
+      if(bloqueados.includes(estadoSel) && libres.length) setEstado(libres[0]);
+      const aviso = Object.entries(choque).filter(([k]) => k !== "completado").map(([k, v]) => `el ${k} choca con <b>${v}</b>`);
+      if(Object.keys(choque).length && libres.length) $("aviso-tramo").insertAdjacentHTML("beforeend",
+        `<div class="aviso parcial"><i class="ti ti-clock"></i><span>A esa hora ya tenés otro servicio: ${aviso.join("; ") || "el completo choca con " + choque.completado}. Podés marcar ${libres.map(k => k === "completado" ? "«completado»" : "«solo el " + k + "»").join(" o ")}.</span></div>`);
       ["completado","entrante","saliente"].forEach(k => {
         const btn = $("est-" + k);
         if(!btn) return;

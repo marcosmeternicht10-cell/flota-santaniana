@@ -828,6 +828,8 @@ def rango_horario(tramo, hora_inicio="", hora_fin="", estado="completado"):
     estaba en la planta a las 14, y puede haber hecho otro servicio antes.
     """
     horas = _horas_del_tramo(tramo)
+    if not horas and _es_adm(tramo):
+        horas = list(HORARIO_ADM)      # ADMIN. ESPAÑA, ADMIN. SAJONIA...: la jornada de oficina
     if len(horas) >= 2:
         ini, fin = horas[0], horas[1]
     elif len(horas) == 1:
@@ -849,6 +851,54 @@ def rango_horario(tramo, hora_inicio="", hora_fin="", estado="completado"):
     return (ini, fin)
 
 
+# Los administrativos que no dicen el horario en el nombre (ADMIN. ESPAÑA,
+# ADMIN. SAJONIA, ADMIN. LUQUE) son de 7 a 17, como el resto.
+HORARIO_ADM = (7.0, 17.0)
+
+
+def rangos_servicio(tramo, hora_inicio="", estado="completado"):
+    """Los momentos del día en que el chofer está ocupado con ese servicio.
+
+    Casi siempre es un solo rango. El administrativo completo son DOS viajes:
+    el entrante a la mañana y el saliente a la tarde; entre medio el chofer
+    está libre y puede hacer otro servicio (un turnante del mediodía, por
+    ejemplo). Lo que no puede es otro servicio a la hora del entrante o del
+    saliente."""
+    r = rango_horario(tramo, hora_inicio, estado=estado)
+    if not r:
+        return []
+    if estado == "completado" and _es_adm(tramo) and (r[1] - r[0]) >= HORAS_JORNADA_COMPLETA:
+        return [rango_horario(tramo, hora_inicio, estado="entrante"),
+                rango_horario(tramo, hora_inicio, estado="saliente")]
+    return [r]
+
+
+def _hhmm(h):
+    h %= 24
+    return f"{int(h):02d}:{int(round((h - int(h)) * 60)):02d}"
+
+
+def _txt_rangos(rs):
+    return " y ".join(f"{_hhmm(a)} a {_hhmm(b)}" for a, b in rs)
+
+
+def _choque_con(previos, tramo, hora_inicio="", estado="completado"):
+    """El primer servicio ya cargado que se pisa en horario con el nuevo, con
+    los rangos de ese servicio. None si no choca con ninguno."""
+    if estado == "suspendido" or _es_variable(tramo):
+        return None
+    nuevo = rangos_servicio(tramo, hora_inicio, estado)
+    if not nuevo:
+        return None
+    for s_ in previos:
+        if _es_variable(s_["tramo"]):
+            continue
+        otro = rangos_servicio(s_["tramo"], s_.get("hora_inicio", ""), s_.get("estado") or "completado")
+        if any(_se_pisan(a, b) for a in nuevo for b in otro):
+            return s_, otro
+    return None
+
+
 def _se_pisan(a, b):
     """Si dos rangos horarios se superponen, contemplando los que cruzan la
     medianoche."""
@@ -865,37 +915,44 @@ def puede_cargar_servicio(chofer_usuario, fecha, tramo, hora_inicio="",
                           estado="completado", excluir_id=None):
     """Si este servicio se pisa con otro que el chofer ya cargó ese día.
 
-    Es el único control de horario que queda, y se limita al choque real:
-    nadie puede hacer dos tramos a la misma hora. Dos servicios seguidos o en
-    momentos distintos del día pasan sin problema; tampoco hay tope de
-    cantidad de servicios ni límite de fechas hacia atrás.
+    Se limita al choque real: nadie puede hacer dos tramos en la misma franja
+    horaria. Dos servicios seguidos o en momentos distintos del día (uno a la
+    mañana y otro a la tarde) pasan sin problema.
     """
     if estado == "suspendido" or _es_variable(tramo):
         return True, ""
-
     ya = servicios_del_dia(chofer_usuario, fecha, excluir_id)
-    if not ya:
+    choque = _choque_con(ya, tramo, hora_inicio, estado)
+    if not choque:
         return True, ""
+    s_, otro = choque
+    mitad = f" ({s_['estado']})" if s_.get("estado") in ("entrante", "saliente") else ""
+    return False, (f"Ese día, a esa misma hora, ya hay cargado: "
+                   f"{s_['cliente']} · {s_['tramo']}{mitad} "
+                   f"({_txt_rangos(otro)}). "
+                   f"No se puede estar en dos lugares a la vez: "
+                   f"si el que está cargado es el equivocado, corregilo o borralo primero.")
 
-    nuevo = rango_horario(tramo, hora_inicio, estado=estado)
-    if not nuevo:
-        return True, ""
 
-    def _hhmm(h):
-        h = h % 24
-        return f"{int(h):02d}:{int(round((h - int(h)) * 60)):02d}"
-
-    for s in ya:
-        if _es_variable(s["tramo"]):
-            continue
-        otro = rango_horario(s["tramo"], s.get("hora_inicio", ""), estado=s.get("estado") or "completado")
-        if _se_pisan(nuevo, otro):
-            return False, (f"Ese día, a esa misma hora, ya hay cargado: "
-                           f"{s['cliente']} · {s['tramo']} "
-                           f"({_hhmm(otro[0])} a {_hhmm(otro[1])}). "
-                           f"No se puede estar en dos lugares a la vez: "
-                           f"si el que está cargado es el equivocado, corregilo o borralo primero.")
-    return True, ""
+def horarios_ocupados(chofer_usuario, fecha, cliente):
+    """Para el formulario del chofer: qué tramos del cliente (y qué mitad) ya
+    no puede elegir ese día porque caen en la franja de algo que ya cargó."""
+    ya = servicios_del_dia(chofer_usuario, fecha)
+    out = {}
+    for t in CLIENTES_TRAMOS.get(cliente, []):
+        bloq = {}
+        for e in ("completado", "entrante", "saliente"):
+            c = _choque_con(ya, t, "", e)
+            if c:
+                s_, otro = c
+                mitad = f" {s_['estado']}" if s_.get("estado") in ("entrante", "saliente") else ""
+                bloq[e] = f"{s_['tramo']}{mitad} ({_txt_rangos(otro)})"
+        if bloq:
+            out[t] = bloq
+    return {"ocupados": out,
+            "cargados": [{"tramo": x["tramo"], "cliente": x["cliente"], "estado": x["estado"],
+                          "horario": _txt_rangos(rangos_servicio(x["tramo"], x.get("hora_inicio", ""), x.get("estado") or "completado"))}
+                         for x in ya if not _es_variable(x["tramo"])]}
 
 
 def registrar_rendicion(datos, limitar_fecha=False):
@@ -938,15 +995,6 @@ def registrar_rendicion(datos, limitar_fecha=False):
         if not ok_fecha:
             return False, msg_fecha
 
-    # Administrativos: uno entrante y uno saliente por día (o un completo).
-    # Esto no se justifica: dos entrantes son a la misma hora en dos plantas.
-    if _es_adm(datos["tramo"]) and estado != "suspendido":
-        quien = (datos.get("chofer_usuario") or "").strip()
-        if quien:
-            otro = _choque_adm(servicios_del_dia(quien, datos["fecha_servicio"]), estado)
-            if otro:
-                return False, _msg_choque_adm(otro, estado)
-
     # Si choca en horario con otro servicio del mismo chofer, no se rebota
     # sin más: en el papel dos tramos pueden caer a la misma hora y en la
     # realidad haberse hecho uno atrás del otro (terminó la salida de un
@@ -957,6 +1005,10 @@ def registrar_rendicion(datos, limitar_fecha=False):
         datos["chofer_usuario"], datos["fecha_servicio"], datos["tramo"],
         datos.get("hora_inicio", ""), estado)
     if not libre:
+        # El chofer no puede cargar dos servicios en la misma franja. Desde la
+        # oficina sí, explicando por qué (para regularizar un caso real).
+        if limitar_fecha:
+            return False, motivo
         if len(justificacion) < JUSTIFICACION_MIN:
             return False, {"msg": motivo, "requiere_justificacion": True,
                            "minimo": JUSTIFICACION_MIN}
@@ -1257,37 +1309,6 @@ def _es_adm(tramo):
     ADMINIST 2...): llevan al personal a la planta y lo traen de vuelta."""
     t = re.sub(r"\s+", " ", (tramo or "").strip().upper())
     return bool(re.match(r"(ADMIN|ADM\b|TRAMO ADMINIST)", t))
-
-
-def _choque_adm(previos, estado_nuevo):
-    """Un chofer hace como mucho UN administrativo entrante y UN saliente por
-    día (o un completo, que son los dos). No puede tener dos entrantes —son a
-    la misma hora, en distintas plantas— ni un completo y además otra mitad.
-    Devuelve el servicio con el que choca, o None."""
-    if estado_nuevo not in ("completado", "entrante", "saliente"):
-        return None
-    for p in previos:
-        e = p.get("estado")
-        if e not in ("completado", "entrante", "saliente") or not _es_adm(p.get("tramo")):
-            continue
-        if e == "completado" or estado_nuevo == "completado" or e == estado_nuevo:
-            return p
-    return None
-
-
-def _msg_choque_adm(otro, estado_nuevo):
-    que = {"completado": "completo", "entrante": "entrante", "saliente": "saliente"}
-    e = otro.get("estado")
-    if e == "completado":
-        return (f"Ese día ya tenés cargado el administrativo {otro['tramo']} completo (entrante y saliente). "
-                f"No se puede cargar otro administrativo: si el cargado es el equivocado, corregilo o borralo primero.")
-    if estado_nuevo == "completado":
-        return (f"Ese día ya tenés cargado el {que[e]} de {otro['tramo']}. Un administrativo completo ocupa "
-                f"el entrante y el saliente: si hiciste solo la otra mitad, marcá «solo el "
-                f"{'saliente' if e == 'entrante' else 'entrante'}».")
-    return (f"Ese día ya tenés cargado un administrativo {que[e]}: {otro['tramo']}. "
-            f"Se puede hacer un solo {que[e]} por día (es a la misma hora). "
-            f"Si el cargado es el equivocado, corregilo o borralo primero.")
 
 
 def _es_variable(tramo):
@@ -2094,24 +2115,20 @@ def _pares_que_se_pisan(grupo):
     for g in grupo:
         if _es_variable(g["tramo"]):
             continue
-        r = rango_horario(g["tramo"], g.get("hora_inicio", ""),
-                          estado=g.get("estado") or "completado")
+        r = rangos_servicio(g["tramo"], g.get("hora_inicio", ""), g.get("estado") or "completado")
         if r:
             rangos.append((g, r))
-
-    def hhmm(h):
-        h %= 24
-        return f"{int(h):02d}:{int(round((h - int(h)) * 60)):02d}"
-
     ids, detalle = set(), []
     for i in range(len(rangos)):
         for j in range(i + 1, len(rangos)):
             (a, ra), (b, rb) = rangos[i], rangos[j]
-            if _se_pisan(ra, rb):
+            if any(_se_pisan(x, y) for x in ra for y in rb):
                 ids.add(a["id"])
                 ids.add(b["id"])
-                detalle.append(f"{a['tramo']} ({hhmm(ra[0])}) se pisa con "
-                               f"{b['tramo']} ({hhmm(rb[0])})")
+                ma = f" {a['estado']}" if a.get("estado") in ("entrante", "saliente") else ""
+                mb = f" {b['estado']}" if b.get("estado") in ("entrante", "saliente") else ""
+                detalle.append(f"{a['tramo']}{ma} ({_txt_rangos(ra)}) se pisa con "
+                               f"{b['tramo']}{mb} ({_txt_rangos(rb)})")
     return ids, detalle
 
 
@@ -2198,16 +2215,8 @@ def rendiciones_sospechosas(desde=None, hasta=None):
                 "detalle": [f"{g['cliente']} · {g['tramo']}" for g in grupo],
             })
         # 5. Dos servicios del mismo chofer a la misma hora (incluye dos
-        # administrativos entrantes, o un completo y otra mitad, aunque el
-        # tramo no diga el horario)
+        # administrativos entrantes, aunque el tramo no diga el horario)
         ids_choque, detalle_choque = _pares_que_se_pisan(grupo)
-        adms = [g for g in grupo if _es_adm(g["tramo"])]
-        for i, a in enumerate(adms):
-            for b in adms[i + 1:]:
-                if _choque_adm([a], b.get("estado")) and not (a["id"] in ids_choque and b["id"] in ids_choque):
-                    ids_choque |= {a["id"], b["id"]}
-                    detalle_choque.append(f"{a['tramo']} ({a['estado']}) y {b['tramo']} ({b['estado']}): "
-                                          f"dos administrativos en el mismo horario")
         if ids_choque:
             choque = [g for g in grupo if g["id"] in ids_choque]
             # Lo que explicó el chofer al cargar, si lo explicó
@@ -2452,6 +2461,18 @@ def api_corp_disponibilidad():
     if not (cliente and tramo and fecha):
         return jsonify({"libre": True, "tomados": []})
     return jsonify(segmentos_tomados(cliente, tramo, fecha))
+
+
+@bp_corp.route("/api/corp/horarios_ocupados", methods=["GET"])
+def api_corp_horarios_ocupados():
+    """Qué tramos del cliente no puede elegir el chofer ese día porque caen a
+    la misma hora que algo que ya cargó."""
+    if session.get("rol") not in ("chofer_corp", "admin"):
+        return jsonify({"error": "Sin permiso"}), 403
+    fecha, cliente = request.args.get("fecha", ""), request.args.get("cliente", "")
+    if not (fecha and cliente):
+        return jsonify({"ocupados": {}, "cargados": []})
+    return jsonify(horarios_ocupados(session.get("usuario", ""), fecha, cliente))
 
 
 def _rol_efectivo():
