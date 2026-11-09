@@ -666,7 +666,8 @@ def proteger_rutas():
             p.startswith("/api/vehiculos") or    # lista de coches para el formulario de OT
             p.startswith("/api/repuestos") or    # inventario del depósito (reponer stock)
             p.startswith("/api/historial_carga") or  # carga de historial retroactivo
-            p == "/api/dashboard"
+            p == "/api/dashboard" or
+            p == "/api/consola/resumen"          # la vista consola (filtra por su sector)
         )
         if not permitido:
             if p.startswith("/api/"):

@@ -1,10 +1,16 @@
 """
-consola.py — Los números de la vista «consola» del administrador
+consola.py — Los números y los avisos de la vista «consola»
 
 La vista consola (static/consola.js) muestra el sistema como el inicio de una
 PlayStation: las divisiones arriba, y adentro de cada una sus subdivisiones
-como tarjetas. Cada tarjeta lleva un dato en vivo (OTs abiertas, servicios
-de hoy, lo que falta liquidar…). Todos salen de acá, en un solo pedido.
+como tarjetas con un dato en vivo. Arriba de todo, una fila de avisos con lo
+que hay que resolver hoy.
+
+Cada usuario ve SU sector: las divisiones, los números y los avisos de las
+secciones que tiene habilitadas (el de compras ve compras y taller, el
+auditor ve corporativos y combustible, un usuario de taller con secciones
+elegidas ve solo esas). Eso se decide acá, no en el navegador: ocultar una
+tarjeta no alcanza, los números tampoco tienen que viajar.
 
 Cada número se calcula por separado: si una tabla no existe o una consulta
 falla, ese dato queda vacío y los demás se muestran igual.
@@ -25,9 +31,69 @@ from hora_local import hoy, ahora
 bp_consola = Blueprint("consola", __name__)
 
 # Se guarda unos segundos: la consola pide los números al abrir y cada minuto,
-# y varias pestañas abiertas no tienen que multiplicar las consultas.
+# y varios usuarios con la consola abierta no tienen que multiplicar las consultas.
 _memo = {"t": 0.0, "datos": None}
-_MEMO_SEG = 20
+_MEMO_SEG = 30
+
+# ── Qué ve cada uno ──────────────────────────────────────────────────────────
+TODAS = {
+    "dashboard", "vehiculos", "documentos", "trafico", "servicios", "comb_rendicion", "costos", "kpis",
+    "ots", "pedidos_ot", "planes", "mantenimientos", "mantenimiento", "neumaticos", "correctivos",
+    "inventario_neu", "historial_carga", "personal", "tablero_taller", "contabilidad", "compras",
+    "repuestos", "proveedores", "cajas", "gerencial", "oee", "corp_asignacion", "corp_resumen",
+    "corp_historial", "corp_empresas", "corp_servicios", "corp_combustible", "corp_cargas",
+    "turismo_agenda", "turismo_rendiciones", "turismo", "agencias", "combustible", "historial",
+    "alpha", "controles", "integraciones", "limpieza",
+}
+SOLO_ADMIN = {"alpha", "controles", "integraciones", "limpieza", "contabilidad", "historial", "combustible"}
+# Lo mismo que muestra el menú (static/app.js) a cada rol
+SECCIONES_COMPRAS = {"compras", "ots", "repuestos", "proveedores", "historial_carga", "personal", "cajas", "tablero_taller"}
+SECCIONES_AUDITOR = {"combustible", "corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas",
+                     "corp_servicios", "corp_combustible", "corp_cargas", "turismo_rendiciones",
+                     "comb_rendicion", "agencias", "cajas"}
+CORP = {"corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios",
+        "corp_combustible", "corp_cargas"}
+
+
+def secciones_del_usuario():
+    """Las secciones que ve el usuario logueado (las mismas de su menú)."""
+    rol = session.get("rol")
+    if rol == "admin":
+        return set(TODAS)
+    if rol == "compras":
+        return set(SECCIONES_COMPRAS)
+    if rol == "auditor":
+        return set(SECCIONES_AUDITOR)
+    if rol == "taller":
+        try:
+            import permisos
+            propias = set(permisos.desde_texto(",".join(session.get("secciones") or [])))
+        except Exception:
+            propias = set(session.get("secciones") or [])
+        ve = propias or (TODAS - SOLO_ADMIN)
+        if "ots" in ve:
+            ve = ve | {"pedidos_ot"}
+        return ve
+    return set()
+
+
+# Cada dato del resumen, y qué secciones hacen falta para verlo
+DATO_SECCIONES = {
+    "flota": TODAS,                                   # cuántos coches hay: lo ve cualquiera
+    "trafico": {"trafico"},
+    "turismo_hoy": {"turismo_agenda", "turismo"},
+    "corp_hoy": CORP,
+    "corp_pend": {"corp_resumen", "corp_historial"},
+    "ots": {"ots", "compras", "tablero_taller"},
+    "pedidos": {"pedidos_ot"},
+    "correctivos": {"correctivos", "ots"},
+    "docs": {"documentos"},
+    "combustible": {"combustible", "comb_rendicion", "corp_combustible"},
+    "turismo_rend": {"turismo_rendiciones"},
+    "alpha_hoy": {"alpha"},
+    "integ_revisar": {"integraciones"},
+    "preventivo": {"planes", "mantenimiento"},
+}
 
 
 def _uno(conn, sql, params=(), campo="n", defecto=None):
@@ -46,13 +112,20 @@ def _uno(conn, sql, params=(), campo="n", defecto=None):
         return defecto
 
 
-def resumen():
+def _calcular():
+    """Todos los números y avisos, para todos. Después se filtra por usuario."""
     f = date.fromisoformat(hoy())
     hoy_txt = f.isoformat()
+    manana = f + timedelta(days=1)
+    en7 = (f + timedelta(days=7)).isoformat()
     en30 = (f + timedelta(days=30)).isoformat()
-    hace7 = (f - timedelta(days=7)).isoformat()
     mes = hoy_txt[:7]
-    d = {"fecha": hoy_txt, "hora": ahora().strftime("%H:%M")}
+    hora = ahora().strftime("%H:%M")
+    d = {"fecha": hoy_txt, "hora": hora}
+    avisos = []
+
+    def aviso(sec, nivel, icono, titulo, detalle=""):
+        avisos.append({"sec": sec, "nivel": nivel, "icono": icono, "titulo": titulo, "detalle": detalle})
 
     # Lo del día (lo mismo que ve el gerente): tráfico, turismo, corporativos, flota
     try:
@@ -66,22 +139,48 @@ def resumen():
         d["corp_hoy"] = {"servicios": co["servicios"], "completos": co["completos"], "medios": co["medios"]}
         d["flota"] = {"activos": fl["activos"], "disponibles": fl["disponibles"],
                       "en_taller": fl["en_taller"], "fuera_servicio": fl["fuera_servicio"]}
+        if not t["existe"]:
+            aviso("trafico", "aviso", "ti-route-off", "No hay tráfico cargado para hoy")
+        elif t["sin_coche"]:
+            aviso("trafico", "alerta", "ti-bus-off",
+                  f"{t['sin_coche']} {'salida' if t['sin_coche'] == 1 else 'salidas'} de hoy sin coche",
+                  f"{t['por_salir']} por salir")
+        if tu["sin_asignar"]:
+            aviso("turismo_agenda", "alerta", "ti-calendar-exclamation",
+                  f"{tu['sin_asignar']} {'viaje' if tu['sin_asignar'] == 1 else 'viajes'} de turismo de hoy sin coche o chofer")
+        try:
+            tm = gerencia.turismo_del_dia(manana)
+            if tm["sin_asignar"]:
+                aviso("turismo_agenda", "aviso", "ti-calendar-event",
+                      f"{tm['sin_asignar']} {'viaje' if tm['sin_asignar'] == 1 else 'viajes'} de mañana sin asignar")
+        except Exception:
+            pass
     except Exception:
         pass
 
     conn = get_connection()
     try:
+        # El tráfico de mañana, después de las 16
+        if hora >= "16:00" and "trafico" in d:
+            n = _uno(conn, "SELECT COUNT(*) AS n FROM trafico_dias WHERE fecha = ?", (manana.isoformat(),), defecto=None)
+            if n == 0:
+                aviso("trafico", "aviso", "ti-calendar-time", "Falta cargar el tráfico de mañana")
+
         # Taller
         d["ots"] = {
             "abiertas": _uno(conn, """SELECT COUNT(DISTINCT COALESCE(ot_grupo, id)) AS n FROM ordenes_trabajo
                                       WHERE estado <> 'cerrada'""", defecto=0),
             "en_compras": _uno(conn, """SELECT COUNT(*) AS n FROM ordenes_trabajo WHERE estado <> 'cerrada'
                                         AND COALESCE(estado_compras,'') IN ('en_espera','presupuestado','en_camino')""", defecto=0),
+            "esperando_pedido": _uno(conn, """SELECT COUNT(*) AS n FROM ordenes_trabajo WHERE estado <> 'cerrada'
+                                              AND COALESCE(estado_compras,'') = 'en_espera'""", defecto=0),
             "cerradas_mes": _uno(conn, """SELECT COUNT(*) AS n FROM ordenes_trabajo WHERE estado = 'cerrada'
                                           AND substr(COALESCE(fecha_cierre,''),1,7) = ?""", (mes,), defecto=0),
         }
-        d["pedidos_7d"] = _uno(conn, "SELECT COUNT(*) AS n FROM ot_pedido_reportes WHERE substr(COALESCE(fecha,''),1,10) >= ?",
-                               (hace7,), defecto=0)
+        if d["ots"]["esperando_pedido"]:
+            n = d["ots"]["esperando_pedido"]
+            aviso("compras", "aviso", "ti-shopping-cart-exclamation",
+                  f"{n} {'pedido' if n == 1 else 'pedidos'} del taller sin presupuestar")
         d["correctivos"] = _uno(conn, "SELECT COUNT(*) AS n FROM correctivos WHERE estado IN ('pendiente','en_reparacion')", defecto=0)
 
         # Documentos de los coches
@@ -91,7 +190,17 @@ def resumen():
             "por_vencer": _uno(conn, """SELECT COUNT(*) AS n FROM documentos WHERE reemplazado_por IS NULL
                                         AND COALESCE(fecha_vencimiento,'') <> '' AND fecha_vencimiento >= ? AND fecha_vencimiento <= ?""",
                                (hoy_txt, en30), defecto=0),
+            "semana": _uno(conn, """SELECT COUNT(*) AS n FROM documentos WHERE reemplazado_por IS NULL
+                                    AND COALESCE(fecha_vencimiento,'') <> '' AND fecha_vencimiento >= ? AND fecha_vencimiento <= ?""",
+                           (hoy_txt, en7), defecto=0),
         }
+        if d["docs"]["vencidos"]:
+            n = d["docs"]["vencidos"]
+            aviso("documentos", "alerta", "ti-file-alert", f"{n} {'documento vencido' if n == 1 else 'documentos vencidos'}",
+                  "Habilitaciones, seguros o VTV")
+        if d["docs"]["semana"]:
+            n = d["docs"]["semana"]
+            aviso("documentos", "aviso", "ti-file-time", f"{n} {'documento vence' if n == 1 else 'documentos vencen'} esta semana")
 
         # Combustible del mes
         d["combustible"] = {
@@ -108,8 +217,11 @@ def resumen():
         }
 
         # Turismo: rendiciones que esperan revisión
-        d["turismo_rend"] = _uno(conn, "SELECT COUNT(*) AS n FROM turismo_rendiciones WHERE estado = 'presentada'",
-                                 defecto=0)
+        d["turismo_rend"] = _uno(conn, "SELECT COUNT(*) AS n FROM turismo_rendiciones WHERE estado = 'presentada'", defecto=0)
+        if d["turismo_rend"]:
+            n = d["turismo_rend"]
+            aviso("turismo_rendiciones", "aviso", "ti-receipt-2",
+                  f"{n} {'rendición de viaje' if n == 1 else 'rendiciones de viaje'} para aprobar")
 
         # Pasajes (Alpha): lo vendido hoy
         d["alpha_hoy"] = {
@@ -119,25 +231,90 @@ def resumen():
                                                AND substr(COALESCE(creado_el,''),1,10) = ?""", (hoy_txt,), defecto=0) or 0)),
         }
 
-        # Integraciones: lo que llegó y hay que mirar
+        # Integraciones: lo que llegó y hay que mirar, y los avisos que se cortaron
         d["integ_revisar"] = _uno(conn, "SELECT COUNT(*) AS n FROM integ_entrada WHERE estado IN ('revisar','error')", defecto=0)
-
-        # Tesorería: cajas abiertas
-        d["cajas"] = _uno(conn, "SELECT COUNT(*) AS n FROM cajas", defecto=None)
+        if d["integ_revisar"]:
+            n = d["integ_revisar"]
+            aviso("integraciones", "alerta", "ti-inbox", f"{n} {'dato recibido' if n == 1 else 'datos recibidos'} de otro sistema para revisar")
+        pausados = _uno(conn, "SELECT COUNT(*) AS n FROM integ_avisos WHERE COALESCE(activo,1)=0 AND COALESCE(fallos_seguidos,0) >= 30",
+                        defecto=0)
+        if pausados:
+            aviso("integraciones", "alerta", "ti-plug-connected-x",
+                  f"{pausados} {'aviso automático pausado' if pausados == 1 else 'avisos automáticos pausados'} por fallas")
     finally:
         try:
             conn.close()
         except Exception:
             pass
+
+    # Pedidos de los choferes sin decidir
+    try:
+        import ot_pedidos
+        p = ot_pedidos.pendientes()
+        d["pedidos"] = {"nuevos": p.get("nuevos", 0), "urgentes": p.get("urgentes", 0), "a_revisar": p.get("a_revisar", 0)}
+        if p.get("urgentes"):
+            aviso("pedidos_ot", "alerta", "ti-urgent", f"{p['urgentes']} {'pedido urgente' if p['urgentes'] == 1 else 'pedidos urgentes'} de choferes")
+        if p.get("nuevos"):
+            aviso("pedidos_ot", "aviso", "ti-inbox", f"{p['nuevos']} {'pedido nuevo' if p['nuevos'] == 1 else 'pedidos nuevos'} de choferes",
+                  "Sin decidir si van a la OT")
+    except Exception:
+        pass
+
+    # Preventivo vencido
+    try:
+        import plan_preventivo
+        prev = plan_preventivo.resumen_para_dashboard()
+        venc = sum(1 for v in prev.values() if v.get("estado") == "vencido")
+        pronto = sum(1 for v in prev.values() if v.get("estado") == "pronto")
+        d["preventivo"] = {"vencidos": venc, "pronto": pronto}
+        if venc:
+            aviso("planes", "alerta", "ti-calendar-x", f"{venc} {'coche' if venc == 1 else 'coches'} con el preventivo vencido")
+        if pronto:
+            aviso("planes", "aviso", "ti-calendar-due", f"{pronto} {'coche' if pronto == 1 else 'coches'} con el preventivo por vencer")
+    except Exception:
+        pass
+
+    # Corporativos: servicios que se pisan en horario, sin liquidar
+    try:
+        import corporativos
+        s = corporativos.rendiciones_sospechosas()
+        choques = [x for x in s.get("misma_franja", []) if not x.get("justificado")]
+        if choques:
+            n = len(choques)
+            aviso("corp_resumen", "alerta", "ti-clock-exclamation",
+                  f"{n} {'choque' if n == 1 else 'choques'} de horario en rendiciones",
+                  "Servicios que se pisan · revisar antes de liquidar")
+    except Exception:
+        pass
+
+    if d.get("correctivos"):
+        n = d["correctivos"]
+        aviso("correctivos", "aviso", "ti-alert-triangle", f"{n} {'correctivo pendiente' if n == 1 else 'correctivos pendientes'}")
+
+    # Primero lo urgente
+    avisos.sort(key=lambda a: 0 if a["nivel"] == "alerta" else 1)
+    d["avisos"] = avisos
     return d
+
+
+def resumen_para(secciones):
+    """Lo que le corresponde ver a alguien con esas secciones."""
+    ahora_s = time.time()
+    if not _memo["datos"] or ahora_s - _memo["t"] > _MEMO_SEG:
+        _memo["datos"] = _calcular()
+        _memo["t"] = ahora_s
+    todo = _memo["datos"]
+    out = {"fecha": todo["fecha"], "hora": todo["hora"]}
+    for clave, necesita in DATO_SECCIONES.items():
+        if clave in todo and (necesita & secciones):
+            out[clave] = todo[clave]
+    out["avisos"] = [a for a in todo.get("avisos", []) if a["sec"] in secciones]
+    return out
 
 
 @bp_consola.route("/api/consola/resumen", methods=["GET"])
 def api_consola_resumen():
-    if session.get("rol") != "admin":
-        return jsonify({"error": "Solo el administrador"}), 403
-    ahora_s = time.time()
-    if not _memo["datos"] or ahora_s - _memo["t"] > _MEMO_SEG:
-        _memo["datos"] = resumen()
-        _memo["t"] = ahora_s
-    return jsonify(_memo["datos"])
+    secs = secciones_del_usuario()
+    if not secs:
+        return jsonify({"error": "Sin acceso"}), 403
+    return jsonify(resumen_para(secs))

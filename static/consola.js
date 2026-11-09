@@ -16,9 +16,11 @@
 // central para el inicio).
 // ════════════════════════════════════════════════════════════════════════════
 
-const VC_CLAVE_VISTA = "santaniana.vista";
-const VC_CLAVE_DIV = "santaniana.consola.division";
-const VC_CLAVE_SONIDO = "santaniana.consola.sonido";
+// Por usuario: en una PC compartida cada uno tiene su vista
+const _vcU = String(window.USUARIO_NOMBRE || "");
+const VC_CLAVE_VISTA = "santaniana.vista." + _vcU;
+const VC_CLAVE_DIV = "santaniana.consola.division." + _vcU;
+const VC_CLAVE_SONIDO = "santaniana.consola.sonido." + _vcU;
 
 const vcGs = n => "Gs. " + Math.round(+n || 0).toLocaleString("es-PY");
 const vcN = n => (+n || 0).toLocaleString("es-PY");
@@ -34,7 +36,7 @@ const VC_DIVISIONES = [
     lema: "Los coches, su estado y sus papeles.",
     cifras: r => [
       r.flota && { n: r.flota.disponibles, de: r.flota.activos, txt: "coches disponibles hoy" },
-      r.flota && { n: r.flota.en_taller + r.flota.fuera_servicio, txt: "parados", alerta: (r.flota.en_taller + r.flota.fuera_servicio) > 0 },
+      r.flota && { n: r.flota.en_taller + r.flota.fuera_servicio, txt: "con OT abierta o fuera de servicio" },
       r.docs && { n: r.docs.vencidos, txt: "documentos vencidos", alerta: r.docs.vencidos > 0 },
     ],
     subs: [
@@ -75,8 +77,11 @@ const VC_DIVISIONES = [
       { sec: "ots", nombre: "Órdenes de trabajo", icono: "ti-clipboard-check", desc: "Abrir, seguir y cerrar OTs",
         dato: r => r.ots && { txt: `${vcN(r.ots.abiertas)} sin cerrar` } },
       { sec: "pedidos_ot", nombre: "Pedidos de choferes", icono: "ti-inbox", desc: "Lo que reportan desde la ruta",
-        dato: r => r.pedidos_7d != null && { txt: `${vcN(r.pedidos_7d)} en la última semana` } },
-      { sec: "planes", nombre: "Plan preventivo", icono: "ti-calendar-check", desc: "Qué le toca a cada coche y cuándo" },
+        dato: r => r.pedidos && { txt: r.pedidos.nuevos ? `${vcN(r.pedidos.nuevos)} sin decidir` : "Nada pendiente",
+                                  tono: r.pedidos.urgentes ? "alerta" : r.pedidos.nuevos ? "aviso" : "ok" } },
+      { sec: "planes", nombre: "Plan preventivo", icono: "ti-calendar-check", desc: "Qué le toca a cada coche y cuándo",
+        dato: r => r.preventivo && (r.preventivo.vencidos ? { txt: `${vcN(r.preventivo.vencidos)} vencidos`, tono: "alerta" }
+                                    : { txt: r.preventivo.pronto ? `${vcN(r.preventivo.pronto)} por vencer` : "Al día", tono: r.preventivo.pronto ? "aviso" : "ok" }) },
       { sec: "mantenimientos", nombre: "Mantenimientos", icono: "ti-book", desc: "El catálogo de tareas" },
       { sec: "correctivos", nombre: "Correctivos", icono: "ti-alert-triangle", desc: "Fallas por reparar",
         dato: r => r.correctivos != null && { txt: vcPlural(r.correctivos, "pendiente", "pendientes"), tono: r.correctivos ? "alerta" : "ok" } },
@@ -219,7 +224,8 @@ const vc = {
   divs: [],               // las divisiones que existen en este sistema (con sus subs)
   div: 0,                 // división elegida
   sub: 0,                 // tarjeta elegida
-  zona: "divs",           // "divs" | "subs": dónde está el foco
+  zona: "divs",           // "avisos" | "divs" | "subs": dónde está el foco
+  av: 0,                  // aviso elegido
   datos: {},              // los números en vivo
   datosAt: 0,
   actual: null,           // { div, sub } de la sección abierta
@@ -235,16 +241,22 @@ function vcGuardar(k, v) { try { localStorage.setItem(k, v); } catch (e) { } }
 // Las secciones que existen en el menú de este sistema. Lo que la consola no
 // conoce (una sección nueva) se agrega solo a la división con el mismo título
 // del menú, o a «Sistema», para que nunca quede nada afuera.
+function vcSeVe(el) { return el && el.style.display !== "none" && getComputedStyle(el).display !== "none"; }
 function vcArmar() {
+  // Cada usuario ve su sector: solo las secciones que tiene en su menú
   const enMenu = new Map();
   let grupo = "";
+  const links = [...document.querySelectorAll(".sidebar .nav > .nav-item:not([data-sec])")].filter(vcSeVe)
+    .map(b => b.getAttribute("onclick") || "");
   document.querySelectorAll(".sidebar .nav > .nav-section, .sidebar .nav > .nav-item[data-sec]").forEach(el => {
     if (el.classList.contains("nav-section")) { grupo = el.textContent.trim(); return; }
+    if (!vcSeVe(el)) return;
     enMenu.set(el.dataset.sec, { grupo, nombre: el.textContent.trim(), icono: (el.querySelector(".ti")?.className || "ti ti-point").replace(/^ti\s+/, "") });
   });
   const conocidas = new Set();
   const divs = VC_DIVISIONES.map(d => ({ ...d, subs: d.subs.filter(s => {
-    if (!s.sec) return true;
+    if (s.abrir) return links.some(l => l.includes(`'${s.abrir}'`));
+    if (s.fn) return s.fn !== "renderUsuarios" || window.USUARIO_ROL === "admin";
     conocidas.add(s.sec);
     return enMenu.has(s.sec);
   }) }));
@@ -259,7 +271,6 @@ function vcArmar() {
 
 // ── Prender / apagar ─────────────────────────────────────────────────────────
 function vcPrender(irAlInicio = true) {
-  if (window.USUARIO_ROL !== "admin") return;
   vc.activa = true;
   vcGuardar(VC_CLAVE_VISTA, "consola");
   document.body.classList.add("vc-modo");
@@ -307,6 +318,7 @@ function vcInicio() {
           <div class="vc-reloj" id="vc-reloj"></div>
         </div>
       </header>
+      <section class="vc-avisos" id="vc-avisos" aria-label="Avisos de hoy"></section>
       <nav class="vc-divs" id="vc-divs" aria-label="Divisiones"></nav>
       <section class="vc-hero" id="vc-hero" aria-live="polite"></section>
       <section class="vc-subs-wrap">
@@ -314,7 +326,7 @@ function vcInicio() {
         <div class="vc-subs" id="vc-subs" role="list"></div>
       </section>
       <footer class="vc-ayuda">
-        <span><kbd>←</kbd><kbd>→</kbd> moverse</span><span><kbd>↓</kbd> subdivisiones</span>
+        <span><kbd>←</kbd><kbd>→</kbd> moverse</span><span><kbd>↑</kbd> avisos</span><span><kbd>↓</kbd> subdivisiones</span>
         <span><kbd>Enter</kbd> entrar</span><span><kbd>Esc</kbd> volver</span>
         <span class="vc-pad" id="vc-pad" hidden><i class="ti ti-device-gamepad-2"></i> Joystick conectado</span>
       </footer>`;
@@ -333,9 +345,15 @@ function vcInicio() {
   document.body.classList.add("vc-en-inicio");
   const guardada = vc.divs.findIndex(d => d.id === vcLeer(VC_CLAVE_DIV, ""));
   if (vc.actual && vc.volviendo) { vc.div = vc.actual.div; vc.sub = vc.actual.sub; vc.zona = "subs"; }
-  else { vc.div = guardada >= 0 ? guardada : 0; vc.sub = 0; vc.zona = "divs"; }
+  else {
+    // La primera vez, la división de su sector (compras arranca en Compras, el auditor en Corporativos)
+    const principal = vc.divs.findIndex(d => d.id === ({ compras: "compras", auditor: "corporativos" }[window.USUARIO_ROL] || ""));
+    vc.div = guardada >= 0 ? guardada : Math.max(0, principal);
+    vc.sub = 0; vc.zona = "divs";
+  }
   vc.volviendo = false;
   vcPintarSonido();
+  vcPintarAvisos();
   vcPintarDivs();
   vcElegirDiv(vc.div, { sinSonido: true, inmediato: true });
   vcReloj();
@@ -368,8 +386,82 @@ async function vcTraerDatos() {
     if (!r.ok) return;
     vc.datos = await r.json();
     vc.datosAt = Date.now();
-    if (vc.enInicio) { vcPintarHero(false); vcPintarSubs(false); }
+    if (vc.enInicio) { vcPintarAvisos(); vcPintarBadges(); vcPintarHero(false); vcPintarSubs(false); }
   } catch (e) { /* sin red: se queda con lo que había */ }
+}
+
+// ── Avisos: lo que hay que resolver hoy, del sector de cada uno ─────────────
+function vcDondeSec(sec) {
+  for (let i = 0; i < vc.divs.length; i++) {
+    const k = vc.divs[i].subs.findIndex(s => s.sec === sec);
+    if (k >= 0) return { div: i, sub: k };
+  }
+  return null;
+}
+function vcAvisos() {
+  return ((vc.datos && vc.datos.avisos) || []).filter(a => vcDondeSec(a.sec));
+}
+function vcPintarAvisos() {
+  const box = document.getElementById("vc-avisos");
+  if (!box) return;
+  const avs = vcAvisos();
+  if (!vc.datosAt) { box.innerHTML = `<div class="vc-av-tit"><i class="ti ti-bell"></i> Para hoy</div><div class="vc-av-fila"><span class="vc-av vacio">Revisando…</span></div>`; return; }
+  if (vc.av >= avs.length) vc.av = Math.max(0, avs.length - 1);
+  const alertas = avs.filter(a => a.nivel === "alerta").length;
+  box.innerHTML = `
+    <div class="vc-av-tit"><i class="ti ${avs.length ? "ti-bell-ringing" : "ti-bell-check"}"></i> Para hoy
+      ${avs.length ? `<b class="${alertas ? "alerta" : ""}">${avs.length}</b>` : ""}</div>
+    <div class="vc-av-fila" id="vc-av-fila" role="list">
+      ${avs.length ? avs.map((a, i) => {
+        const donde = vcDondeSec(a.sec), d = vc.divs[donde.div];
+        return `<button type="button" role="listitem" class="vc-av ${a.nivel}" data-i="${i}" style="--vc-tono:${d.tono}"
+            onclick="vcAbrirAviso(${i})" onmouseenter="vcSobreAviso(${i})">
+            <i class="ti ${a.icono || "ti-bell"} vc-av-ico"></i>
+            <span class="vc-av-txt"><b>${vcEsc(a.titulo)}</b><small>${vcEsc(a.detalle ? a.detalle + " · " : "")}${vcEsc(d.nombre)}</small></span>
+            <i class="ti ti-chevron-right vc-av-ir"></i></button>`;
+      }).join("") : `<span class="vc-av ok"><i class="ti ti-circle-check vc-av-ico"></i><span class="vc-av-txt"><b>Todo en orden</b><small>No hay nada urgente en tu sector</small></span></span>`}
+    </div>`;
+  const fila = box.querySelector("#vc-av-fila");
+  fila?.addEventListener("wheel", e => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { e.currentTarget.scrollLeft += e.deltaY; e.preventDefault(); }
+  }, { passive: false });
+  vcMarcarAviso(false);
+}
+function vcMarcarAviso(scroll = true) {
+  document.querySelectorAll("#vc-avisos .vc-av[data-i]").forEach((b, i) => b.classList.toggle("on", vc.zona === "avisos" && i === vc.av));
+  if (scroll && vc.zona === "avisos") document.querySelector(`#vc-avisos .vc-av[data-i="${vc.av}"]`)?.scrollIntoView({ behavior: "smooth", inline: "nearest", block: "nearest" });
+}
+function vcSobreAviso(i) {
+  if (!vc.mouse) return;
+  vc.zona = "avisos"; vc.av = i;
+  vcMarcarAviso(false); vcMarcarSub(false);
+}
+function vcAbrirAviso(i) {
+  const a = vcAvisos()[i];
+  const donde = a && vcDondeSec(a.sec);
+  if (!donde) return;
+  vc.div = donde.div;
+  vcAbrir(donde.div, donde.sub);
+}
+// Cuántos avisos tiene cada división, en su ícono
+function vcPintarBadges() {
+  const por = {};
+  vcAvisos().forEach(a => {
+    const d = vcDondeSec(a.sec);
+    if (!d) return;
+    por[d.div] = por[d.div] || { n: 0, alerta: false };
+    por[d.div].n++;
+    if (a.nivel === "alerta") por[d.div].alerta = true;
+  });
+  document.querySelectorAll("#vc-divs .vc-div").forEach((b, i) => {
+    let g = b.querySelector(".vc-div-badge");
+    const x = por[i];
+    if (!x) { g?.remove(); return; }
+    if (!g) { g = document.createElement("span"); g.className = "vc-div-badge"; b.querySelector(".vc-div-ico").appendChild(g); }
+    g.textContent = x.n;
+    g.classList.toggle("alerta", x.alerta);
+    g.title = `${x.n} ${x.n === 1 ? "aviso" : "avisos"}`;
+  });
 }
 
 // ── Dibujo ───────────────────────────────────────────────────────────────────
@@ -382,6 +474,7 @@ function vcPintarDivs() {
       <span class="vc-div-ico"><i class="ti ${d.icono}"></i></span>
       <span class="vc-div-nom">${vcEsc(d.nombre)}</span>
     </button>`).join("");
+  vcPintarBadges();
 }
 
 function vcElegirDiv(i, op = {}) {
@@ -486,7 +579,8 @@ function vcPintarSubs(animar) {
 
 function vcMarcarSub(scroll = true) {
   document.querySelectorAll("#vc-subs .vc-sub").forEach((b, k) => b.classList.toggle("on", vc.zona === "subs" && k === vc.sub));
-  document.getElementById("consola")?.classList.toggle("vc-zona-subs", vc.zona === "subs");
+  document.getElementById("consola")?.classList.toggle("vc-zona-subs", vc.zona !== "divs");
+  vcMarcarAviso(false);
   if (scroll && vc.zona === "subs") {
     document.querySelector(`#vc-subs .vc-sub[data-k="${vc.sub}"]`)?.scrollIntoView({ behavior: "smooth", inline: "nearest", block: "nearest" });
   }
@@ -496,7 +590,8 @@ function vcMarcarSub(scroll = true) {
 function vcFoco() {
   if (!vc.enInicio) return;
   const el = vc.zona === "subs" ? document.querySelector(`#vc-subs .vc-sub[data-k="${vc.sub}"]`)
-                                : document.querySelector(`#vc-divs .vc-div[data-i="${vc.div}"]`);
+           : vc.zona === "avisos" ? document.querySelector(`#vc-avisos .vc-av[data-i="${vc.av}"]`)
+           : document.querySelector(`#vc-divs .vc-div[data-i="${vc.div}"]`);
   el?.focus({ preventScroll: true });
 }
 
@@ -538,7 +633,11 @@ function vcTecla(e) {
     e.preventDefault();
     const paso = k === "ArrowRight" ? 1 : -1;
     if (vc.zona === "divs") vcElegirDiv(vc.div + paso);
-    else {
+    else if (vc.zona === "avisos") {
+      const n = vcAvisos().length;
+      const nuevo = Math.max(0, Math.min(n - 1, vc.av + paso));
+      if (nuevo !== vc.av) { vc.av = nuevo; vcMarcarAviso(); vcSonar("mover"); } else vcSonar("tope");
+    } else {
       const n = vc.divs[vc.div].subs.length;
       const nuevo = Math.max(0, Math.min(n - 1, vc.sub + paso));
       if (nuevo !== vc.sub) { vc.sub = nuevo; vcMarcarSub(); vcSonar("mover"); } else vcSonar("tope");
@@ -546,17 +645,20 @@ function vcTecla(e) {
     vcFoco();
   } else if (k === "ArrowDown") {
     e.preventDefault();
-    if (vc.zona === "divs") { vc.zona = "subs"; vc.sub = Math.min(vc.sub, vc.divs[vc.div].subs.length - 1); vcMarcarSub(); vcSonar("mover"); vcFoco(); }
+    if (vc.zona === "avisos") { vc.zona = "divs"; vcMarcarSub(false); vcSonar("mover"); vcFoco(); }
+    else if (vc.zona === "divs") { vc.zona = "subs"; vc.sub = Math.min(vc.sub, vc.divs[vc.div].subs.length - 1); vcMarcarSub(); vcSonar("mover"); vcFoco(); }
   } else if (k === "ArrowUp") {
     e.preventDefault();
     if (vc.zona === "subs") { vc.zona = "divs"; vcMarcarSub(); vcSonar("mover"); vcFoco(); }
+    else if (vc.zona === "divs" && vcAvisos().length) { vc.zona = "avisos"; vcMarcarSub(false); vcMarcarAviso(); vcSonar("mover"); vcFoco(); }
   } else if (k === "Enter" || k === " ") {
     e.preventDefault();
     if (vc.zona === "divs") { vc.zona = "subs"; vc.sub = 0; vcMarcarSub(); vcSonar("mover"); vcFoco(); }
+    else if (vc.zona === "avisos") vcAbrirAviso(vc.av);
     else vcAbrir(vc.div, vc.sub);
   } else if (k === "Escape" || k === "Backspace") {
     e.preventDefault();
-    if (vc.zona === "subs") { vc.zona = "divs"; vcMarcarSub(); vcSonar("mover"); vcFoco(); }
+    if (vc.zona !== "divs") { vc.zona = "divs"; vcMarcarSub(); vcSonar("mover"); vcFoco(); }
     else if (vc.actual) vcVolverASeccion();
   } else if (k === "Home") {
     e.preventDefault(); vc.zona = "divs"; vcElegirDiv(0); vcMarcarSub(false); vcFoco();
@@ -757,7 +859,6 @@ function vcPadAccion(k, tecla) {
 
 // ── Botón para prenderla, en el menú clásico ─────────────────────────────────
 (function vcArrancar() {
-  if (window.USUARIO_ROL !== "admin") return;
   vc.sonido = vcLeer(VC_CLAVE_SONIDO, "0") === "1";
   const acc = document.querySelector(".user-actions");
   if (acc && !document.getElementById("vc-prender")) {

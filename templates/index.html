@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="{{ estatico('style.css') }}">
   <link rel="stylesheet" href="{{ estatico('alpha.css') }}">
   <link rel="stylesheet" href="{{ estatico('cajas.css') }}">
-  {% if rol == 'admin' %}<link rel="stylesheet" href="{{ estatico('consola.css') }}">{% endif %}
+  <link rel="stylesheet" href="{{ estatico('consola.css') }}">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#1D344E">
   <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
@@ -267,6 +267,6 @@
   <script src="{{ estatico('alpha.js') }}"></script>
   <script src="{{ estatico('controles.js') }}"></script>
   <script src="{{ estatico('cajas.js') }}"></script>
-  {% if rol == 'admin' %}<script src="{{ estatico('consola.js') }}"></script>{% endif %}
+  <script src="{{ estatico('consola.js') }}"></script>
 </body>
 </html>
