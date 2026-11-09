@@ -32,7 +32,7 @@ const vcPlural = (n, uno, varios) => `${vcN(n)} ${+n === 1 ? uno : varios}`;
 // dato(r): el número en vivo de la tarjeta → { txt, tono } (tono: "alerta" | "ok" | "")
 const VC_DIVISIONES = [
   {
-    id: "flota", nombre: "Flota", icono: "ti-bus", tono: "#3D8BDB",
+    id: "flota", nombre: "Flota", icono: "ti-bus", tono: "#3D8BDB", foto: "/static/consola/flota.jpg",
     lema: "Los coches, su estado y sus papeles.",
     cifras: r => [
       r.flota && { n: r.flota.disponibles, de: r.flota.activos, txt: "coches disponibles hoy" },
@@ -267,6 +267,7 @@ function vcArmar() {
     d.subs.push({ sec, nombre: v.nombre, icono: v.icono, desc: v.grupo });
   });
   vc.divs = divs.filter(d => d.subs.length);
+  vc.divs.forEach(d => { if (d.foto && !d._img) { d._img = new Image(); d._img.src = d.foto; } });
 }
 
 // ── Prender / apagar ─────────────────────────────────────────────────────────
@@ -503,7 +504,11 @@ function vcFondo(d, inmediato) {
   if (capas.length < 2) return;
   const nueva = capas[1 - vc.fondo], vieja = capas[vc.fondo];
   nueva.style.setProperty("--vc-tono", d.tono);
-  nueva.innerHTML = `<i class="ti ${d.icono} vc-arte"></i>`;
+  // Con foto propia (la flota real) va la foto; si no, el ícono grande de la división
+  nueva.innerHTML = d.foto
+    ? `<div class="vc-foto" style="background-image:url('${d.foto}')"></div><div class="vc-foto-tinte"></div>`
+    : `<i class="ti ${d.icono} vc-arte"></i>`;
+  nueva.classList.toggle("con-foto", !!d.foto);
   if (inmediato) { nueva.style.transition = "none"; requestAnimationFrame(() => { nueva.style.transition = ""; }); }
   nueva.classList.add("on");
   vieja.classList.remove("on");

@@ -441,3 +441,29 @@ body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: c
   .vc-sub { width: auto; min-height: 150px; }
   .vc-sub.on, .vc-sub:focus-visible { transform: none; }
 }
+
+/* ═══ Fotos propias de fondo (la flota real, como el arte de cada juego) ═══ */
+.vc-foto {
+  position: absolute; inset: -3%; background-size: cover; background-position: 62% 40%;
+  filter: saturate(.9) contrast(1.05) brightness(.62);
+  animation: vcFotoMov 26s ease-in-out infinite alternate;
+}
+@keyframes vcFotoMov { from { transform: scale(1.08) translate3d(-1%, 0, 0); } to { transform: scale(1) translate3d(1%, -1%, 0); } }
+/* el color de la división tiñe la foto, para que siga siendo «su» división */
+.vc-foto-tinte {
+  position: absolute; inset: 0;
+  background: linear-gradient(115deg, color-mix(in srgb, var(--vc-tono) 55%, #05080F) 0%, color-mix(in srgb, var(--vc-tono) 22%, transparent) 55%, transparent 80%);
+  mix-blend-mode: multiply;
+}
+/* con foto, el texto necesita más oscuro a la izquierda y abajo */
+.vc-fondo.con-foto::after {
+  background: linear-gradient(180deg, rgba(4,7,13,.35) 0%, rgba(4,7,13,0) 30%, rgba(4,7,13,.55) 62%, rgba(4,7,13,.92) 100%),
+              linear-gradient(90deg, rgba(4,7,13,.82) 0%, rgba(4,7,13,.45) 42%, rgba(4,7,13,0) 75%);
+}
+@media (max-width: 640px) {
+  .vc-foto { background-position: 30% 40%; }
+  .vc-fondo.con-foto::after {
+    background: linear-gradient(180deg, rgba(4,7,13,.55) 0%, rgba(4,7,13,.55) 40%, rgba(4,7,13,.9) 100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) { .vc-foto { animation: none !important; } }
