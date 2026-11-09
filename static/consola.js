@@ -52,6 +52,7 @@ const VC_DIVISIONES = [
   },
   {
     id: "operacion", nombre: "Operación", icono: "ti-route", tono: "#1FB5A8",
+    foto: "/static/consola/operacion.jpg", fotoPos: "30% 55%", fotoPosCel: "30% 55%",
     lema: "Las salidas del día y lo que rinden los servicios.",
     cifras: r => [
       r.trafico && { n: r.trafico.total, txt: r.trafico.existe ? "salidas hoy" : "sin tráfico cargado hoy" },
