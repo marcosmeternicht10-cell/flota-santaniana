@@ -234,6 +234,7 @@ function irA(sec) {
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
     integraciones: renderIntegraciones,
+    salud: renderSalud,
     historial_carga: renderHistorialCarga,
     trafico: renderTrafico,
     personal: renderPersonal,

@@ -212,6 +212,8 @@ const VC_DIVISIONES = [
       { fn: "renderUsuarios", nombre: "Usuarios", icono: "ti-users", desc: "Quién entra y qué puede ver" },
       { sec: "integraciones", nombre: "Integraciones", icono: "ti-plug-connected", desc: "Delta, planillas, avisos y API",
         dato: r => r.integ_revisar != null && { txt: r.integ_revisar ? `${vcN(r.integ_revisar)} para revisar` : "Todo en orden", tono: r.integ_revisar ? "alerta" : "ok" } },
+      { sec: "salud", nombre: "Salud del sistema", icono: "ti-heartbeat", desc: "Errores, avisos al celular y vigilancia",
+        dato: r => r.errores_sin_ver != null && { txt: r.errores_sin_ver ? `${vcN(r.errores_sin_ver)} errores sin mirar` : "Sin errores", tono: r.errores_sin_ver ? "alerta" : "ok" } },
       { sec: "limpieza", nombre: "Limpiar datos de prueba", icono: "ti-eraser", desc: "Borrar lo cargado para probar" },
     ],
   },

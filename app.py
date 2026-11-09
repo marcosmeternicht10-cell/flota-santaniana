@@ -291,6 +291,11 @@ app.register_blueprint(bp_informe_coche)
 # Vista «consola» del administrador (tipo PlayStation): sus números en vivo
 from consola import bp_consola
 app.register_blueprint(bp_consola)
+
+# Vigilancia: errores guardados, avisos al celular y /salud para el vigilante externo
+from vigilancia import bp_vigilancia, init_vigilancia
+app.register_blueprint(bp_vigilancia)
+init_vigilancia()
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
@@ -434,8 +439,15 @@ def _error_500(e):
         quien = session.get("usuario") or "-"
     except Exception:
         quien = "-"
-    _log_errores.error("Error en %s %s (usuario %s): %s\n%s", request.method, request.path, quien,
-                       original, "".join(_traceback.format_exception(type(original), original, original.__traceback__)))
+    pila = "".join(_traceback.format_exception(type(original), original, original.__traceback__))
+    _log_errores.error("Error en %s %s (usuario %s): %s\n%s", request.method, request.path, quien, original, pila)
+    # Queda guardado en Sistema → Salud del sistema y, si hay avisos configurados, llega al celular
+    try:
+        from vigilancia import registrar_error
+        registrar_error("servidor", f"{request.method} {request.path}", f"{type(original).__name__}: {original}",
+                        pila, quien, request.headers.get("User-Agent", "")[:200])
+    except Exception:
+        pass
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": "error_interno",
                         "msg": "Algo falló en el servidor. Probá de nuevo; si sigue pasando, avisá al administrador."}), 500
@@ -532,6 +544,8 @@ def proteger_rutas():
     p = request.path
     if p == "/login" or p == "/api/login":
         return None
+    if p == "/salud":                # el vigilante externo (dice solo si anda, sin datos)
+        return None
     if p.startswith("/static/"):
         return None
     # Lo que leen Android y la Play Store sin sesión (manifiesto, service worker, privacidad)
@@ -575,6 +589,7 @@ def proteger_rutas():
     # escriben, aunque llegue por fuera de la pantalla.
     if session.get("rol") == "auditor" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
         permitidos_auditor = (p == "/api/logout" or p.startswith("/api/combustible")
+                              or p == "/api/sistema/error_pantalla"   # avisar un error, no modifica datos
                               # salvo que se le haya habilitado corregir el km
                               or (re.fullmatch(r"/api/ots/\d+/(km|conductor)", p) is not None and _puede_editar_km_sesion()))
         if not permitidos_auditor:
@@ -667,7 +682,8 @@ def proteger_rutas():
             p.startswith("/api/repuestos") or    # inventario del depósito (reponer stock)
             p.startswith("/api/historial_carga") or  # carga de historial retroactivo
             p == "/api/dashboard" or
-            p == "/api/consola/resumen"          # la vista consola (filtra por su sector)
+            p == "/api/consola/resumen" or       # la vista consola (filtra por su sector)
+            p == "/api/sistema/error_pantalla"   # avisar un error de pantalla
         )
         if not permitido:
             if p.startswith("/api/"):

@@ -43,9 +43,9 @@ TODAS = {
     "repuestos", "proveedores", "cajas", "gerencial", "oee", "corp_asignacion", "corp_resumen",
     "corp_historial", "corp_empresas", "corp_servicios", "corp_combustible", "corp_cargas",
     "turismo_agenda", "turismo_rendiciones", "turismo", "agencias", "combustible", "historial",
-    "alpha", "controles", "integraciones", "limpieza",
+    "alpha", "controles", "integraciones", "limpieza", "salud",
 }
-SOLO_ADMIN = {"alpha", "controles", "integraciones", "limpieza", "contabilidad", "historial", "combustible"}
+SOLO_ADMIN = {"alpha", "controles", "integraciones", "limpieza", "contabilidad", "historial", "combustible", "salud"}
 # Lo mismo que muestra el menú (static/app.js) a cada rol
 SECCIONES_COMPRAS = {"compras", "ots", "repuestos", "proveedores", "historial_carga", "personal", "cajas", "tablero_taller"}
 SECCIONES_AUDITOR = {"combustible", "corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas",
@@ -93,6 +93,7 @@ DATO_SECCIONES = {
     "alpha_hoy": {"alpha"},
     "integ_revisar": {"integraciones"},
     "preventivo": {"planes", "mantenimiento"},
+    "errores_sin_ver": {"salud"},
 }
 
 
@@ -284,6 +285,18 @@ def _calcular():
             aviso("corp_resumen", "alerta", "ti-clock-exclamation",
                   f"{n} {'choque' if n == 1 else 'choques'} de horario en rendiciones",
                   "Servicios que se pisan · revisar antes de liquidar")
+    except Exception:
+        pass
+
+    # Errores del sistema sin mirar (Salud del sistema)
+    try:
+        import vigilancia
+        n = vigilancia.sin_ver()
+        if n is not None:
+            d["errores_sin_ver"] = n
+            if n:
+                aviso("salud", "alerta", "ti-bug", f"{n} {'error del sistema' if n == 1 else 'errores del sistema'} sin mirar",
+                      "Salud del sistema")
     except Exception:
         pass
 
