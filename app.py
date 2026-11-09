@@ -288,6 +288,9 @@ app.register_blueprint(bp_choferes_app)
 # Informe completo de un coche en PDF (todo lo que se le hizo y sus números)
 from informe_coche import bp_informe_coche
 app.register_blueprint(bp_informe_coche)
+# Vista «consola» del administrador (tipo PlayStation): sus números en vivo
+from consola import bp_consola
+app.register_blueprint(bp_consola)
 # No dejar que Flask ponga su propio caché largo en los estáticos: lo manejamos
 # nosotros con revalidación + versionado (ver _comprimir_respuesta y version_assets).
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
