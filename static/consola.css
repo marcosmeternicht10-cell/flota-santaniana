@@ -322,3 +322,29 @@ body.vc-modo .sidebar, body.vc-modo .menu-toggle, body.vc-modo .sidebar-overlay 
   .vc, .vc.vc-sale, .vc-arte, .vc-hero-in.vc-entra > *, .vc-sub.vc-entra, .vc-sub-dato.alerta i { animation: none !important; }
   .vc-fondo, .vc-div-ico, .vc-div-nom, .vc-sub { transition-duration: .01ms !important; }
 }
+
+/* ═══ Al entrar a una subdivisión, la sección sube en cascada ═══ */
+#content.vc-entra { --vc-base: 0s; }
+#content.vc-entra.vc-entra-tarde { --vc-base: .16s; }
+body.vc-modo #content.vc-entra > * {
+  animation: vcSubeSec .7s cubic-bezier(.2, .8, .2, 1) backwards;
+  animation-delay: calc(var(--vc-base) + .02s);
+}
+body.vc-modo #content.vc-entra > :nth-child(2) { animation-delay: calc(var(--vc-base) + .09s); }
+body.vc-modo #content.vc-entra > :nth-child(3) { animation-delay: calc(var(--vc-base) + .15s); }
+body.vc-modo #content.vc-entra > :nth-child(4) { animation-delay: calc(var(--vc-base) + .21s); }
+body.vc-modo #content.vc-entra > :nth-child(n+5) { animation-delay: calc(var(--vc-base) + .27s); }
+/* adentro del primer bloque, cada tarjeta o grupo sube un poco después */
+body.vc-modo #content.vc-entra > .section > * {
+  animation: vcSubeBloque .62s cubic-bezier(.2, .8, .2, 1) backwards;
+  animation-delay: calc(var(--vc-base) + .14s);
+}
+body.vc-modo #content.vc-entra > .section > :nth-child(2) { animation-delay: calc(var(--vc-base) + .2s); }
+body.vc-modo #content.vc-entra > .section > :nth-child(3) { animation-delay: calc(var(--vc-base) + .26s); }
+body.vc-modo #content.vc-entra > .section > :nth-child(4) { animation-delay: calc(var(--vc-base) + .32s); }
+body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: calc(var(--vc-base) + .38s); }
+@keyframes vcSubeSec { from { opacity: 0; transform: translateY(34px); } }
+@keyframes vcSubeBloque { from { opacity: 0; transform: translateY(18px); } }
+@media (prefers-reduced-motion: reduce) {
+  body.vc-modo #content.vc-entra > *, body.vc-modo #content.vc-entra > .section > * { animation: none !important; }
+}

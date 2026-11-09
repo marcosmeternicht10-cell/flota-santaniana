@@ -579,7 +579,9 @@ function vcAbrir(di, k) {
   const card = vc.enInicio && document.querySelector(`#vc-subs .vc-sub[data-k="${k}"]`);
   if (card) card.classList.add("vc-elegida");
   vc.actual = { div: di, sub: k };
+  const desdeInicio = vc.enInicio;
   vcCerrarInicio(false);
+  vcAnimarEntrada(desdeInicio);
   if (s.fn) { if (typeof window[s.fn] === "function") window[s.fn](); }
   else {
     document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.sec === s.sec));
@@ -588,10 +590,24 @@ function vcAbrir(di, k) {
   vcBarra();
 }
 function vcVolver() { vcSonar("volver"); vc.volviendo = true; vcInicio(); }
+
+// La sección que se abre entra subiendo: primero el título, después cada bloque
+// en cascada. Si la sección trae sus datos más tarde, lo que llega también sube.
+function vcAnimarEntrada(desdeInicio) {
+  const c = document.getElementById("content");
+  if (!c) return;
+  c.classList.remove("vc-entra", "vc-entra-tarde");
+  void c.offsetWidth;                       // reinicia la animación aunque sea la misma sección
+  c.classList.add("vc-entra");
+  if (desdeInicio) c.classList.add("vc-entra-tarde");   // espera a que el inicio empiece a irse
+  clearTimeout(vc.entraT);
+  vc.entraT = setTimeout(() => c.classList.remove("vc-entra", "vc-entra-tarde"), 2600);
+}
 function vcVolverASeccion() {
   // Esc en el inicio, si se venía de una sección: vuelve a ella tal como estaba
   vcSonar("volver");
   vcCerrarInicio(false);
+  vcAnimarEntrada(true);
   vcBarra();
 }
 function vcCambiarCoche() {
@@ -651,6 +667,8 @@ function vcBarra() {
           if (k >= 0) { vc.actual = { div: i, sub: k }; break; }
         }
       }
+      const c = document.getElementById("content");
+      if (!c || !c.classList.contains("vc-entra")) vcAnimarEntrada(vc.enInicio);
       if (vc.enInicio) vcCerrarInicio(false);
       vcBarra();
     }
