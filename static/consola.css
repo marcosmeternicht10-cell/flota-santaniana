@@ -444,7 +444,7 @@ body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: c
 
 /* ═══ Fotos propias de fondo (la flota real, como el arte de cada juego) ═══ */
 .vc-foto {
-  position: absolute; inset: -3%; background-size: cover; background-position: 62% 40%;
+  position: absolute; inset: -3%; background-size: cover; background-position: var(--vc-foto-pos, center);
   filter: saturate(.9) contrast(1.05) brightness(.62);
   animation: vcFotoMov 26s ease-in-out infinite alternate;
 }
@@ -461,7 +461,7 @@ body.vc-modo #content.vc-entra > .section > :nth-child(n+5) { animation-delay: c
               linear-gradient(90deg, rgba(4,7,13,.82) 0%, rgba(4,7,13,.45) 42%, rgba(4,7,13,0) 75%);
 }
 @media (max-width: 640px) {
-  .vc-foto { background-position: 30% 40%; }
+  .vc-foto { background-position: var(--vc-foto-pos-cel, center); }
   .vc-fondo.con-foto::after {
     background: linear-gradient(180deg, rgba(4,7,13,.55) 0%, rgba(4,7,13,.55) 40%, rgba(4,7,13,.9) 100%);
   }
