@@ -729,6 +729,12 @@ MAX_SERVICIOS_DIA = 2
 # Largo mínimo de la explicación cuando dos servicios chocan en horario: lo
 # justo para que no alcance con poner "ok" o un punto.
 JUSTIFICACION_MIN = 15
+
+# Control de franja horaria (no dejar cargar dos servicios que se pisan).
+# APAGADO por ahora, a pedido de la oficina, hasta revisar bien las reglas.
+# Para volver a prenderlo: CORP_CONTROL_HORARIO=1 en Render, o poner True acá.
+import os as _os
+CONTROL_HORARIO = _os.environ.get("CORP_CONTROL_HORARIO", "0") == "1"
 # Ningún tanque de la flota pasa de esto (los pisos bajos llegan a 700). Un número más alto es un error de
 # tipeo (poner 2000 en vez de 200), y si entra arruina el consumo del coche.
 MAX_LITROS_POR_CARGA = 700
@@ -950,7 +956,7 @@ def horarios_ocupados(chofer_usuario, fecha, cliente):
     no puede elegir ese día porque caen en la franja de algo que ya cargó."""
     ya = servicios_del_dia(chofer_usuario, fecha)
     out = {}
-    for t in CLIENTES_TRAMOS.get(cliente, []):
+    for t in (CLIENTES_TRAMOS.get(cliente, []) if CONTROL_HORARIO else []):
         bloq = {}
         for e in ("completado", "entrante", "saliente"):
             c = _choque_con(ya, t, "", e)
@@ -963,7 +969,7 @@ def horarios_ocupados(chofer_usuario, fecha, cliente):
     return {"ocupados": out,
             "cargados": [{"tramo": x["tramo"], "cliente": x["cliente"], "estado": x["estado"],
                           "horario": _txt_rangos(rangos_servicio(x["tramo"], x.get("hora_inicio", ""), x.get("estado") or "completado"))}
-                         for x in ya if not _es_variable(x["tramo"])]}
+                         for x in ya if CONTROL_HORARIO and not _es_variable(x["tramo"])]}
 
 
 def registrar_rendicion(datos, limitar_fecha=False):
@@ -1012,9 +1018,9 @@ def registrar_rendicion(datos, limitar_fecha=False):
     # cliente y fue directo al otro). Se le pide que lo explique por escrito:
     # con eso entra, y queda marcado para que el encargado lo revise.
     justificacion = (datos.get("justificacion_horario") or "").strip()
-    libre, motivo = puede_cargar_servicio(
+    libre, motivo = (puede_cargar_servicio(
         datos["chofer_usuario"], datos["fecha_servicio"], datos["tramo"],
-        datos.get("hora_inicio", ""), estado)
+        datos.get("hora_inicio", ""), estado) if CONTROL_HORARIO else (True, ""))
     if not libre:
         # El chofer no puede cargar dos servicios en la misma franja. Desde la
         # oficina sí, explicando por qué (para regularizar un caso real).
