@@ -78,18 +78,18 @@ EMBLEMAS = ["PETROPAR", "COPETROL", "SHELL", "PUMA", "PETROBRAS", "BARCOS Y RODA
 # los contaría como otro tramo. Para un cambio futuro alcanza con agregar una
 # línea acá: (cliente, nombre viejo, nombre nuevo).
 RENOMBRES_TRAMOS = [
-    # Octubre 2026: el administrativo de LASCA quedó de 7:00 a 17:00. Antes
-    # era 7:30–17:00 y por unos días figuró 6:00–16:00, así que los dos nombres
-    # viejos van directo al definitivo (cada uno apunta al nombre final, nunca
-    # a otro intermedio, para que no importe el orden en que se apliquen).
-    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. TACUMBU (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. LIMPIO (6:00 A 16:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 2 (6:00 A 16:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:00 HS.)"),
-    ("LASCA", "ADMIN. TACUMBU (6:00 A 16:00 HS.)", "ADMIN. TACUMBU (7:00 A 17:00 HS.)"),
+    # Noviembre 2026: el administrativo de LASCA es de 6:00 a 16:00. Antes
+    # figuró 7:30–17:00 y 7:00–17:00, así que esos nombres van directo al
+    # definitivo (cada uno apunta al nombre final, nunca a otro intermedio,
+    # para que no importe el orden en que se apliquen).
+    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. TACUMBU (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. LIMPIO (7:00 A 17:00 HS.)",  "ADMIN. LIMPIO (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (7:00 A 17:00 HS.)",  "ADMIN. RUTA 1 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (7:00 A 17:00 HS.)",  "ADMIN. RUTA 2 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. TACUMBU (7:00 A 17:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)"),
 ]
 
 
@@ -110,6 +110,17 @@ def aplicar_renombres_tramos():
                 conn.execute("UPDATE rendiciones_corp SET tramo=? WHERE cliente=? AND tramo=?",
                              (nuevo, cliente, viejo))
                 movidos += n
+            # La asignación del día (corp_asignacion.py) también nombra el tramo
+            for tabla in ("corp_asig", "corp_asig_horarios"):
+                try:
+                    conn.execute(f"SAVEPOINT ren_{tabla}")
+                    conn.execute(f"UPDATE {tabla} SET tramo=? WHERE cliente=? AND tramo=?", (nuevo, cliente, viejo))
+                    conn.execute(f"RELEASE SAVEPOINT ren_{tabla}")
+                except Exception:
+                    try:
+                        conn.execute(f"ROLLBACK TO SAVEPOINT ren_{tabla}")
+                    except Exception:
+                        pass
         # La tarifa guardada se muda al nombre nuevo
         row = conn.execute("SELECT valor FROM config_corp WHERE clave=?",
                            ("tarifas_tramos",)).fetchone()
@@ -301,8 +312,8 @@ CLIENTES_TRAMOS = {
         "VARIABLE",
     ],
     "LASCA": [
-        "ADMIN. LIMPIO (7:00 A 17:00 HS.)", "ADMIN. RUTA 1 (7:00 A 17:00 HS.)",
-        "ADMIN. RUTA 2 (7:00 A 17:00 HS.)", "ADMIN. TACUMBU (7:00 A 17:00 HS.)",
+        "ADMIN. LIMPIO (6:00 A 16:00 HS.)", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",
+        "ADMIN. RUTA 2 (6:00 A 16:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)",
         "TURNANTE LIMPIO (4:30 HS.)", "TURNANTE RUTA 1 (4:30 HS.)", "TURNANTE RUTA 2 (4:30 HS.)",
         "TURNANTE LIMPIO (13:30 HS.)", "TURNANTE RUTA 1 (13:30 HS.)", "TURNANTE RUTA 2 (13:30 HS.)",
         "TURNANTE LIMPIO (23:50 HS.)", "TURNANTE RUTA 1 (23:50 HS.)", "TURNANTE RUTA 2 (23:50 HS.)",
