@@ -67,7 +67,7 @@ const VC_DIVISIONES = [
   },
   {
     id: "taller", nombre: "Taller", icono: "ti-tool", tono: "#F08A3C",
-    lema: "Órdenes de trabajo, preventivos y el día a día del taller.",
+    lema: "Las órdenes de trabajo, lo que piden los choferes y la ficha de cada coche.",
     cifras: r => [
       r.ots && { n: r.ots.abiertas, txt: "OTs sin cerrar" },
       r.flota && { n: r.flota.en_taller, txt: "coches en el taller" },
@@ -79,29 +79,9 @@ const VC_DIVISIONES = [
       { sec: "pedidos_ot", nombre: "Pedidos de choferes", icono: "ti-inbox", desc: "Lo que reportan desde la ruta",
         dato: r => r.pedidos && { txt: r.pedidos.nuevos ? `${vcN(r.pedidos.nuevos)} sin decidir` : "Nada pendiente",
                                   tono: r.pedidos.urgentes ? "alerta" : r.pedidos.nuevos ? "aviso" : "ok" } },
-      { sec: "planes", nombre: "Plan preventivo", icono: "ti-calendar-check", desc: "Qué le toca a cada coche y cuándo",
-        dato: r => r.preventivo && (r.preventivo.vencidos ? { txt: `${vcN(r.preventivo.vencidos)} vencidos`, tono: "alerta" }
-                                    : { txt: r.preventivo.pronto ? `${vcN(r.preventivo.pronto)} por vencer` : "Al día", tono: r.preventivo.pronto ? "aviso" : "ok" }) },
-      { sec: "mantenimientos", nombre: "Mantenimientos", icono: "ti-book", desc: "El catálogo de tareas" },
-      { sec: "correctivos", nombre: "Correctivos", icono: "ti-alert-triangle", desc: "Fallas por reparar",
-        dato: r => r.correctivos != null && { txt: vcPlural(r.correctivos, "pendiente", "pendientes"), tono: r.correctivos ? "alerta" : "ok" } },
-      { sec: "tablero_taller", nombre: "Tablero de control", icono: "ti-layout-grid", desc: "Cómo viene el taller" },
-      { sec: "inventario_neu", nombre: "Inventario de neumáticos", icono: "ti-box", desc: "Cubiertas en stock y montadas" },
-      { sec: "historial_carga", nombre: "Historial por coche", icono: "ti-timeline-event", desc: "Todo lo que se le hizo a un coche" },
-      { sec: "personal", nombre: "Personal de taller", icono: "ti-users", desc: "Mecánicos y turnos" },
-      { abrir: "/tablero", nombre: "Tablero (TV)", icono: "ti-device-tv", desc: "La pantalla del taller, en otra pestaña" },
-    ],
-  },
-  {
-    id: "coche", nombre: "Por coche", icono: "ti-steering-wheel", tono: "#9B7BF0",
-    lema: "Los números de un coche: costos, rendimiento, preventivo y cubiertas.",
-    porCoche: true,
-    cifras: () => [],
-    subs: [
-      { sec: "costos", nombre: "Costos", icono: "ti-coin", desc: "Cuánto cuesta mantenerlo" },
-      { sec: "kpis", nombre: "KPIs", icono: "ti-chart-bar", desc: "Rendimiento y consumo" },
-      { sec: "mantenimiento", nombre: "Preventivo", icono: "ti-tool", desc: "Sus tareas y vencimientos" },
-      { sec: "neumaticos", nombre: "Neumáticos", icono: "ti-disc", desc: "Sus cubiertas, posición por posición" },
+      { sec: "coches", nombre: "Coches", icono: "ti-bus", desc: "La ficha de cada coche: historial, preventivo, cubiertas y costos",
+        dato: r => r.preventivo && (r.preventivo.vencidos ? { txt: `${vcN(r.preventivo.vencidos)} con preventivo vencido`, tono: "alerta" }
+                                    : { txt: r.preventivo.pronto ? `${vcN(r.preventivo.pronto)} por vencer` : "Preventivo al día", tono: r.preventivo.pronto ? "aviso" : "ok" }) },
     ],
   },
   {
@@ -165,6 +145,7 @@ const VC_DIVISIONES = [
       { sec: "compras", nombre: "Compras / Depósito", icono: "ti-shopping-cart", desc: "Pedidos del taller y entregas",
         dato: r => r.ots && { txt: `${vcN(r.ots.en_compras)} esperando repuestos`, tono: r.ots.en_compras ? "aviso" : "ok" } },
       { sec: "repuestos", nombre: "Inventario de repuestos", icono: "ti-packages", desc: "Stock y movimientos" },
+      { sec: "inventario_neu", nombre: "Inventario de neumáticos", icono: "ti-box", desc: "Cubiertas en stock y montadas" },
       { sec: "proveedores", nombre: "Proveedores", icono: "ti-address-book", desc: "Contactos y condiciones" },
     ],
   },
@@ -263,6 +244,7 @@ function vcArmar() {
   });
   const conocidas = new Set();
   const divs = VC_DIVISIONES.map(d => ({ ...d, subs: d.subs.filter(s => {
+    if (s.si) return s.si();
     if (s.abrir) return links.some(l => l.includes(`'${s.abrir}'`));
     if (s.fn) return s.fn !== "renderUsuarios" || window.USUARIO_ROL === "admin";
     conocidas.add(s.sec);
@@ -778,11 +760,19 @@ function vcBarra() {
     const r = original.apply(this, arguments);
     if (vc.activa) {
       const ya = vc.actual && vc.divs[vc.actual.div]?.subs[vc.actual.sub];
-      if (!ya || ya.sec !== sec) {
-        for (let i = 0; i < vc.divs.length; i++) {
-          const k = vc.divs[i].subs.findIndex(s => s.sec === sec);
-          if (k >= 0) { vc.actual = { div: i, sub: k }; break; }
+      // Las secciones que ahora viven adentro de otra (Coches, Órdenes) siguen a la que las contiene
+      const dentro = typeof FC_MENU_DE !== "undefined" ? FC_MENU_DE[sec] : null;
+      const es = s => s.sec === sec || s.alias === sec;
+      if (!ya || !es(ya)) {
+        let d = null;
+        for (const prueba of [es, s => dentro && s.sec === dentro]) {
+          for (let i = 0; i < vc.divs.length && !d; i++) {
+            const k = vc.divs[i].subs.findIndex(prueba);
+            if (k >= 0) d = { div: i, sub: k };
+          }
+          if (d) break;
         }
+        if (d && !(ya && dentro && ya.sec === dentro)) vc.actual = d;
       }
       const c = document.getElementById("content");
       if (!c || !c.classList.contains("vc-entra")) vcAnimarEntrada(vc.enInicio);

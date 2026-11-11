@@ -38,8 +38,8 @@ _MEMO_SEG = 30
 # ── Qué ve cada uno ──────────────────────────────────────────────────────────
 TODAS = {
     "dashboard", "vehiculos", "documentos", "trafico", "servicios", "comb_rendicion", "costos", "kpis",
-    "ots", "pedidos_ot", "planes", "mantenimientos", "mantenimiento", "neumaticos", "correctivos",
-    "inventario_neu", "historial_carga", "personal", "tablero_taller", "contabilidad", "compras",
+    "ots", "pedidos_ot", "coches",
+    "inventario_neu", "personal", "tablero_taller", "contabilidad", "compras",
     "repuestos", "proveedores", "cajas", "gerencial", "oee", "corp_asignacion", "corp_resumen",
     "corp_historial", "corp_empresas", "corp_servicios", "corp_combustible", "corp_cargas",
     "turismo_agenda", "turismo_rendiciones", "turismo", "agencias", "combustible", "historial",
@@ -47,7 +47,8 @@ TODAS = {
 }
 SOLO_ADMIN = {"alpha", "controles", "integraciones", "limpieza", "contabilidad", "historial", "combustible", "salud"}
 # Lo mismo que muestra el menú (static/app.js) a cada rol
-SECCIONES_COMPRAS = {"compras", "ots", "repuestos", "proveedores", "historial_carga", "personal", "cajas", "tablero_taller"}
+SECCIONES_COMPRAS = {"compras", "ots", "repuestos", "proveedores", "inventario_neu", "coches", "personal", "cajas",
+                     "tablero_taller"}
 SECCIONES_AUDITOR = {"combustible", "corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas",
                      "corp_servicios", "corp_combustible", "corp_cargas", "turismo_rendiciones",
                      "comb_rendicion", "agencias", "cajas"}
@@ -86,13 +87,13 @@ DATO_SECCIONES = {
     "corp_pend": {"corp_resumen", "corp_historial"},
     "ots": {"ots", "compras", "tablero_taller"},
     "pedidos": {"pedidos_ot"},
-    "correctivos": {"correctivos", "ots"},
+    "correctivos": {"coches", "ots"},
     "docs": {"documentos"},
     "combustible": {"combustible", "comb_rendicion", "corp_combustible"},
     "turismo_rend": {"turismo_rendiciones"},
     "alpha_hoy": {"alpha"},
     "integ_revisar": {"integraciones"},
-    "preventivo": {"planes", "mantenimiento"},
+    "preventivo": {"coches"},
     "errores_sin_ver": {"salud"},
 }
 
@@ -269,9 +270,9 @@ def _calcular():
         pronto = sum(1 for v in prev.values() if v.get("estado") == "pronto")
         d["preventivo"] = {"vencidos": venc, "pronto": pronto}
         if venc:
-            aviso("planes", "alerta", "ti-calendar-x", f"{venc} {'coche' if venc == 1 else 'coches'} con el preventivo vencido")
+            aviso("coches", "alerta", "ti-calendar-x", f"{venc} {'coche' if venc == 1 else 'coches'} con el preventivo vencido")
         if pronto:
-            aviso("planes", "aviso", "ti-calendar-due", f"{pronto} {'coche' if pronto == 1 else 'coches'} con el preventivo por vencer")
+            aviso("coches", "aviso", "ti-calendar-due", f"{pronto} {'coche' if pronto == 1 else 'coches'} con el preventivo por vencer")
     except Exception:
         pass
 
@@ -302,7 +303,7 @@ def _calcular():
 
     if d.get("correctivos"):
         n = d["correctivos"]
-        aviso("correctivos", "aviso", "ti-alert-triangle", f"{n} {'correctivo pendiente' if n == 1 else 'correctivos pendientes'}")
+        aviso("coches", "aviso", "ti-alert-triangle", f"{n} {'correctivo pendiente' if n == 1 else 'correctivos pendientes'}")
 
     # Primero lo urgente
     avisos.sort(key=lambda a: 0 if a["nivel"] == "alerta" else 1)

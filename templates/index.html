@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="{{ estatico('alpha.css') }}">
   <link rel="stylesheet" href="{{ estatico('cajas.css') }}">
   <link rel="stylesheet" href="{{ estatico('consola.css') }}">
+  <link rel="stylesheet" href="{{ estatico('coches.css') }}">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#1D344E">
   <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
@@ -39,10 +40,11 @@
         </div>
       </div>
 
-      <div class="coche-card" id="cocheBox">
+      <div class="coche-card" id="cocheBox" role="button" tabindex="0" title="Abrir la ficha del coche"
+           onclick="fcDesdeCaja()" onkeydown="if(event.key==='Enter')fcDesdeCaja()">
         <div class="coche-label">Coche seleccionado</div>
         <div class="coche-name" id="cocheName">Ninguno</div>
-        <div class="coche-info" id="cocheInfo">Hacé clic en un vehículo</div>
+        <div class="coche-info" id="cocheInfo">Tocá para buscar un coche</div>
       </div>
 
       <button class="destino-btn" type="button" onclick="abrirDestino()" title="Buscar un coche o una sección (Ctrl+K)">
@@ -72,14 +74,6 @@
           <i class="ti ti-mail-opened"></i> Rendición de combustible
         </button>
 
-        <div class="nav-section">Vehículo</div>
-        <button class="nav-item" data-sec="costos" data-needs-coche>
-          <i class="ti ti-coin"></i> Costos
-        </button>
-        <button class="nav-item" data-sec="kpis" data-needs-coche>
-          <i class="ti ti-chart-bar"></i> KPIs
-        </button>
-
         <div class="nav-section">Taller</div>
         <button class="nav-item" data-sec="ots">
           <i class="ti ti-clipboard-check"></i> Órdenes de Trabajo
@@ -87,35 +81,8 @@
         <button class="nav-item" data-sec="pedidos_ot">
           <i class="ti ti-inbox"></i> Pedidos de choferes <span class="nav-badge" id="nav-pedidos-n" hidden></span>
         </button>
-        <button class="nav-item" data-sec="planes">
-          <i class="ti ti-calendar-check"></i> Plan preventivo
-        </button>
-        <button class="nav-item" data-sec="mantenimientos">
-          <i class="ti ti-book"></i> Mantenimientos
-        </button>
-        <button class="nav-item" onclick="window.open('/tablero','_blank')">
-          <i class="ti ti-device-tv"></i> Tablero (TV)
-        </button>
-        <button class="nav-item" data-sec="mantenimiento" data-needs-coche>
-          <i class="ti ti-tool"></i> Preventivo
-        </button>
-        <button class="nav-item" data-sec="neumaticos" data-needs-coche>
-          <i class="ti ti-disc"></i> Neumáticos
-        </button>
-        <button class="nav-item" data-sec="correctivos">
-          <i class="ti ti-alert-triangle"></i> Correctivos
-        </button>
-        <button class="nav-item" data-sec="inventario_neu">
-          <i class="ti ti-box"></i> Inventario neumáticos
-        </button>
-        <button class="nav-item" data-sec="historial_carga">
-          <i class="ti ti-timeline-event"></i> Historial por coche
-        </button>
-        <button class="nav-item" data-sec="personal">
-          <i class="ti ti-users"></i> Personal de taller
-        </button>
-        <button class="nav-item" data-sec="tablero_taller">
-          <i class="ti ti-layout-grid"></i> Tablero de control
+        <button class="nav-item" data-sec="coches" title="La ficha de cada coche: historial, preventivo, neumáticos, costos y KPIs">
+          <i class="ti ti-bus"></i> Coches
         </button>
 
         {% if rol == 'admin' or rol == 'contabilidad' %}
@@ -131,6 +98,9 @@
         </button>
         <button class="nav-item" data-sec="repuestos">
           <i class="ti ti-packages"></i> Inventario Repuestos
+        </button>
+        <button class="nav-item" data-sec="inventario_neu">
+          <i class="ti ti-box"></i> Inventario neumáticos
         </button>
         <button class="nav-item" data-sec="proveedores">
           <i class="ti ti-address-book"></i> Proveedores
@@ -265,6 +235,7 @@
     window.USUARIO_NOMBRE = "{{ usuario }}";
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="{{ estatico('coches.js') }}"></script>
   <script src="{{ estatico('app.js') }}"></script>
   <script src="{{ estatico('pedidos-fecha.js') }}"></script>
   <script src="{{ estatico('alpha.js') }}"></script>

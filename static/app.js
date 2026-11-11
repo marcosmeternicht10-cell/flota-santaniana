@@ -109,7 +109,7 @@ function setCoche(v) {
     box.classList.add("has-coche");
   } else {
     $("#cocheName").textContent = "Ninguno";
-    $("#cocheInfo").textContent = "Hacé clic en un vehículo";
+    $("#cocheInfo").textContent = "Tocá para buscar un coche";
     box.classList.remove("has-coche");
   }
   // Las secciones de un coche no se apagan: si no hay coche elegido, al
@@ -157,16 +157,22 @@ function tieneSeccionesLimitadas() {
 }
 // Secciones que van con otra: quien ve las OTs ve los pedidos de los choferes
 const SECCION_CON = { pedidos_ot: "ots" };
+// Lo que antes eran secciones sueltas de un coche ahora es la sección Coches
+const SECCION_VIEJA = { planes: "coches", mantenimientos: "coches", mantenimiento: "coches", neumaticos: "coches",
+                        correctivos: "coches", historial_carga: "coches" };
+// Botones del menú que agrupan varias secciones: se ven si tiene alguna
+const SECCION_GRUPO = { ots: ["personal", "tablero_taller"], coches: ["costos", "kpis"] };
 function tieneSeccion(secs, sec) { return secs.includes(sec) || (SECCION_CON[sec] && secs.includes(SECCION_CON[sec])); }
+function tieneSeccionMenu(secs, sec) { return tieneSeccion(secs, sec) || (SECCION_GRUPO[sec] || []).some(x => secs.includes(x)); }
 function puedeVerSeccion(sec) {
   if (sec === "pedidos_ot" && !["admin", "taller"].includes(window.USUARIO_ROL)) return false;
-  return !tieneSeccionesLimitadas() || tieneSeccion(window.USUARIO_SECCIONES, sec);
+  return !tieneSeccionesLimitadas() || tieneSeccion(window.USUARIO_SECCIONES, SECCION_VIEJA[sec] || sec);
 }
 // Esconde del menú lo que no tiene, y los títulos que quedan vacíos
 function aplicarSecciones() {
   const secs = window.USUARIO_SECCIONES;
   document.querySelectorAll(".nav-item[data-sec]").forEach(b => {
-    if (!tieneSeccion(secs, b.dataset.sec)) b.style.display = "none";
+    if (!tieneSeccionMenu(secs, b.dataset.sec)) b.style.display = "none";
   });
   document.querySelectorAll(".nav-section").forEach(t => {
     let n = t.nextElementSibling, alguno = false;
@@ -179,22 +185,24 @@ function aplicarSecciones() {
   });
   // Arranca en la primera sección que tiene (el dashboard si lo tiene)
   const primera = secs.includes("dashboard") ? "dashboard"
-    : secs.find(s => !["costos", "kpis", "mantenimiento", "neumaticos"].includes(s)) || secs[0];
+    : secs[0];
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
-  document.querySelector(`.nav-item[data-sec="${primera}"]`)?.classList.add("active");
+  document.querySelector(`.nav-item[data-sec="${FC_MENU_DE[primera] || primera}"]`)?.classList.add("active");
   // Después de que termine de cargar todo el archivo (si no, las secciones
   // que están más abajo todavía no existen)
   setTimeout(() => irA(primera), 0);
 }
 
 function irA(sec) {
-  destRecordar(sec);
+  // Órdenes de trabajo agrupa el tablero y el personal: quien no tiene las
+  // órdenes pero sí alguno de los otros, entra por ese
+  if (sec === "ots" && !puedeVerSeccion("ots")) sec = ["tablero_taller", "personal"].find(puedeVerSeccion) || sec;
+  destRecordar(FC_MENU_DE[sec] === "coches" ? "coches" : sec);
+  // Coches y las secciones que ahora viven adentro de la ficha (static/coches.js)
+  const aCoches = fcRuta(sec);
+  if (aCoches) { aCoches(); return; }
   if (!puedeVerSeccion(sec)) {
     toast("No tenés acceso a esa sección", "error");
-    return;
-  }
-  if (["costos", "kpis", "mantenimiento", "neumaticos"].includes(sec) && !cocheActual) {
-    elegirCocheYIr(sec);
     return;
   }
   // Volver al inicio al cambiar de pantalla
@@ -234,7 +242,8 @@ function irA(sec) {
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
     integraciones: renderIntegraciones,
-    salud: renderSalud,
+    // Salud vive en static/salud.js, que se carga después: se busca recién al entrar
+    salud: () => renderSalud(),
     historial_carga: renderHistorialCarga,
     trafico: renderTrafico,
     personal: renderPersonal,
@@ -414,7 +423,7 @@ async function renderDashboard() {
             </thead>
             <tbody>
               ${data.vehiculos.map(v => `
-                <tr class="clickable" onclick="seleccionarYIr(${v.id}, 'mantenimiento')">
+                <tr class="clickable" onclick="fcAbrir(${v.id})">
                   <td><b>${v.patente}</b></td>
                   <td>${v.n_interno ? `<span class="badge cat">${v.n_interno}</span>` : "—"}</td>
                   <td>${v.marca || "—"} ${v.modelo || ""}</td>
@@ -483,7 +492,7 @@ async function seleccionarYIr(vid, sec) {
 //  VEHÍCULOS
 // ════════════════════════════════════════════════════════════════════════
 async function renderVehiculos() {
-  status("Hacé clic en un coche para seleccionarlo.");
+  status("Tocá un coche para abrir su ficha.");
   const planes = await api("/api/planes");
   content.innerHTML = `
     <div class="page-header">
@@ -579,6 +588,8 @@ async function cargarVehiculos() {
 
 function seleccionarCoche(id) {
   const v = window._vehiculos.find(x => x.id === id);
+  // Tocar un coche abre su ficha (quien no la ve, lo deja elegido como antes)
+  if (v && fcTabs().length) { fcAbrir(id); return; }
   setCoche(v);
   document.querySelectorAll("#v-body tr").forEach(tr => tr.classList.remove("selected"));
   $(`#v-body tr[data-id="${id}"]`)?.classList.add("selected");
@@ -729,8 +740,10 @@ async function bajaVehiculo(id, pat) {
 // ════════════════════════════════════════════════════════════════════════
 async function renderCostos() {
   const v = cocheActual;
+  const donde = lienzo("costos");
+  if (!v || !donde) return;
   status(`Costos del coche ${v.patente}`);
-  content.innerHTML = `
+  donde.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-coin"></i> Costos · ${v.patente}</h1>
       <p>Registro de costos variables, fijos directos e indirectos</p>
@@ -768,6 +781,7 @@ const NOMBRE_TIPO = { variable: "Variable", fijo_directo: "Fijo Directo", fijo_i
 async function cargarCostos() {
   const costos = await api(`/api/costos/${cocheActual.id}`);
   const body = $("#c-body");
+  if (!body) return;
   if (!costos.length) {
     body.innerHTML = `<tr><td colspan="5" class="empty"><i class="ti ti-coin-off"></i>Sin costos cargados</td></tr>`;
     return;
@@ -1611,7 +1625,9 @@ async function renderKpis() {
   const v = cocheActual;
   status(`KPIs del coche ${v.patente}`);
   const meses = await api(`/api/meses/${v.id}`);
-  content.innerHTML = `
+  const donde = lienzo("kpis");
+  if (!donde || cocheActual !== v) return;
+  donde.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-chart-bar"></i> KPIs · ${v.patente}</h1>
       <p>${v.marca} ${v.modelo} — indicadores económicos</p>
@@ -1645,6 +1661,7 @@ async function cargarKpis() {
   if (kpiModo === "mes") url += `&mes=${$("#k-mes")?.value || ""}`;
   const k = await api(url);
   const res = $("#k-result");
+  if (!res) return;
   if (!k || !k.cantidad_servicios) {
     res.innerHTML = `<div class="empty"><i class="ti ti-chart-area-line"></i>Sin datos para mostrar en este período.</div>`;
     if (chartBarras) { chartBarras.destroy(); chartBarras = null; }
@@ -4952,7 +4969,7 @@ if (["admin", "taller"].includes(window.USUARIO_ROL)) {
 }
 if (window.USUARIO_ROL === "compras") {
   // Compras ve su sección + Órdenes de Trabajo (las carga) + Inventario Repuestos (repone)
-  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "historial_carga", "personal", "cajas", "tablero_taller"];
+  const seccionesCompras = ["compras", "ots", "repuestos", "proveedores", "inventario_neu", "coches", "cajas"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesCompras.includes(b.dataset.sec)) b.style.display = "none";
   });
@@ -5127,9 +5144,11 @@ async function renderNeumaticos() {
   const v = cocheActual;
   status(`Neumáticos del coche ${v.patente}`);
   const data = await api(`/api/vehiculos/${v.id}/neumaticos`);
+  let donde = lienzo("neumaticos");
+  if (!donde || cocheActual !== v) return;
 
   if (!data.configuracion) {
-    content.innerHTML = `
+    donde.innerHTML = `
       <div class="page-header">
         <h1><i class="ti ti-disc"></i> Neumáticos · ${v.patente}</h1>
         <p>${v.marca} ${v.modelo}</p>
@@ -5148,6 +5167,8 @@ async function renderNeumaticos() {
 
   // Disponibles para el panel lateral
   const disponibles = await api("/api/neumaticos?estado=disponible");
+  donde = lienzo("neumaticos");
+  if (!donde || cocheActual !== v) return;
 
   const avisoVerificar = (data.verificado === 0) ? `
     <div class="neu-aviso-verif">
@@ -5159,7 +5180,7 @@ async function renderNeumaticos() {
       <button class="btn btn-primary" onclick="confirmarConfig(${v.id})"><i class="ti ti-check"></i> Es correcta</button>
     </div>` : "";
 
-  content.innerHTML = `
+  donde.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-disc"></i> Neumáticos · ${v.patente}</h1>
       <p>${v.marca} ${v.modelo} — arrastrá las cubiertas al bus</p>
@@ -7562,7 +7583,7 @@ function filtrarOTs(estado) {
   renderOts();
 }
 
-async function abrirNuevaOT() {
+async function abrirNuevaOT(vidElegido) {
   const vehiculos = await api("/api/vehiculos");
   if (vehiculos.length === 0) {
     toast("Cargá vehículos primero", "error");
@@ -7582,7 +7603,7 @@ async function abrirNuevaOT() {
       <div style="padding:22px">
         <div class="form-row">
           <div class="field" style="flex:1;min-width:200px"><label>Vehículo *</label>
-            ${buscadorCoche("ot-veh", vehiculos)}
+            ${buscadorCoche("ot-veh", vehiculos, vidElegido ? { seleccionado: vidElegido } : {})}
           </div>
           <div class="field"><label>Fecha *</label><input id="ot-fecha" type="date" value="${hoy()}"></div>
           <div class="field"><label>KM</label><input id="ot-km" placeholder="765387" style="width:110px"></div>
@@ -7627,6 +7648,8 @@ Control general"></textarea>
   window._otPed = {};
   $("#ot-items-raw").addEventListener("input", () => otPedRevisar("ot-veh"));
   otChoferesLista().then(() => acNombres($("#ot-cond"), () => window._choferesOT));
+  // Abierta desde la ficha de un coche: ya viene elegido (y avisa si tiene una OT abierta)
+  if (vidElegido) { otAvisoAbierta("ot-veh", vidElegido); setTimeout(() => $("#ot-items-raw")?.focus(), 80); }
 }
 
 // Un coche tiene una sola OT abierta: si ya tiene una, lo que se cargue acá
@@ -7836,7 +7859,7 @@ async function guardarNuevaOT() {
       ? `Se sumó${n ? ` ${n} trabajo${n === 1 ? "" : "s"}` : ""} a la OT #${r.numero || r.ot_id}, que el coche ya tenía abierta${mas}`
       : `OT #${r.ot_id} creada${extra.length ? ` con ${extra.length + 1} coches` : ""} · ${n} trabajo${n === 1 ? "" : "s"}${mas}`, "success");
     cerrarModalOT();
-    await renderOts();
+    if (!fcDetrasDeOT()) await renderOts();
     abrirOT(r.ot_id);              // para cargar el material y los técnicos
   } else toast(r.msg || "Error", "error");
 }
@@ -9494,10 +9517,12 @@ function cerrarModalOTDetalle() {
   if (m) m.remove();
   ptCerrarPop();
   // Abierta desde Personal de taller: se queda ahí (y se actualiza)
-  if (document.querySelector('.nav-item[data-sec="personal"].active') && $("#pt-cuerpo")) {
+  if ($("#pt-cuerpo")) {
     if (pt.tab === "trabajo" && $("#pt-datos")) setTimeout(ptTraer, 250);
     return;
   }
+  // Abierta desde la ficha de un coche: también se queda ahí
+  if (fcDetrasDeOT()) return;
   renderOts();
 }
 
@@ -9644,10 +9669,8 @@ async function borrarOT(otId) {
   if (modal) modal.remove();
   // Se refresca la pantalla en la que se está
   const enCompras = document.querySelector('.nav-item[data-sec="compras"].active');
-  const enCorrectivos = document.querySelector('.nav-item[data-sec="correctivos"].active');
   if (enCompras) renderCompras();
-  else if (enCorrectivos && typeof renderCorrectivos === "function") renderCorrectivos();
-  else renderOts();
+  else if (!fcDetrasDeOT()) renderOts();
 }
 
 
@@ -11848,17 +11871,17 @@ async function hiTransicion(cambiar) {
 }
 
 async function renderHistorialCarga() {
-  status("Historial por coche");
+  status("Coches: tocá uno para abrir su ficha");
   const abrir = window._hiAbrirCoche;
   window._hiAbrirCoche = null;
   content.innerHTML = `
     <div class="page-header">
-      <h1><i class="ti ti-timeline-event"></i> Historial por coche</h1>
-      <p>Todo lo que se le hizo a cada coche: lo cargado del papel, los correctivos, el plan preventivo y las órdenes de trabajo</p>
+      <h1><i class="ti ti-bus"></i> Coches</h1>
+      <p>Tocá un coche para abrir su ficha: cómo está, qué tiene en el taller y todo lo que se le hizo</p>
     </div>
     <div class="section hi-raiz" id="hi-raiz"><div class="dossier-loading"></div></div>`;
   hi.flota = null;
-  if (abrir) { await hiAbrirCoche(abrir, null); return; }
+  if (abrir) { fcAbrir(abrir, "historial"); return; }
   await hiVerFlota(true);
 }
 
@@ -11938,7 +11961,7 @@ function hiTarjeta(v, i) {
   const modelo = `${v.marca || ""} ${v.modelo || ""}`.trim();
   return `
     <button class="hi-coche ${v.registros ? "" : "sin"}" data-vid="${v.id}" style="--i:${Math.min(i, 24)}"
-            onclick="hiAbrirCoche(${v.id}, this)" aria-label="Abrir el historial del coche ${hiEsc(v.n_interno || v.patente)}">
+            onclick="fcAbrir(${v.id})" aria-label="Abrir la ficha del coche ${hiEsc(v.n_interno || v.patente)}">
       <span class="hi-coche-cab">
         <span class="hi-coche-num">${hiEsc(v.n_interno || "—")}</span>
         ${v.correctivos_90 ? `<span class="hi-coche-alerta" title="Correctivos en los últimos 90 días">${v.correctivos_90}</span>` : ""}
@@ -12046,21 +12069,14 @@ function hiPintarFicha(d) {
   const raiz = $("#hi-raiz");
   const c = d.coche;
   const modelo = `${c.marca || ""} ${c.modelo || ""}`.trim();
+  // Va adentro de la ficha del coche (static/coches.js), que ya tiene el
+  // cartel y el "volver". Lo de hoy se carga por orden de trabajo; "Cargar del
+  // papel" queda para pasar los registros viejos que están en papel.
   raiz.innerHTML = `
     <div class="hi-ficha">
-      <div class="hi-nav">
-        <button class="hi-volver" onclick="hiVolver()"><i class="ti ti-arrow-left"></i> Toda la flota</button>
-        <span style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-ghost" onclick="informeCoche(${c.id})"><i class="ti ti-file-type-pdf"></i> Informe completo</button>
-          ${d.puede_cargar ? `<button class="btn btn-primary" onclick="hiAbrirCarga()"><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
-        </span>
-      </div>
-      <section class="hi-hero">
-        <div class="hi-hero-cartel">
-          <span class="hi-hero-num">${hiEsc(c.n_interno || "—")}</span>
-          <span class="hi-hero-id"><b>${hiEsc(c.patente || "")}</b>${modelo ? `<span>${hiEsc(modelo)}</span>` : ""}</span>
-        </div>
+      <section class="hi-hero hi-hero-enficha">
         <p class="hi-hero-texto" id="hi-resumen">${hiResumen(d)}</p>
+        ${d.puede_cargar ? `<button class="btn btn-ghost" onclick="hiAbrirCarga()" title="Para pasar registros viejos que están en papel. Lo de hoy se carga por orden de trabajo."><i class="ti ti-file-plus"></i> Cargar del papel</button>` : ""}
       </section>
       <section class="hi-vida" id="hi-vida"></section>
       <div class="hi-tipos" id="hi-tipos"></div>
@@ -12176,7 +12192,7 @@ function hiParada(e, i) {
     e.taller ? [e.origen === "ot" ? "Técnico" : "Taller", hiEsc(e.taller)] : null,
     ["De dónde viene", MT_ORIGEN[e.origen] || e.origen],
   ].filter(Boolean);
-  const dondeCorregir = { plan: "Plan preventivo", ot: "Órdenes de trabajo", correctivos: "Correctivos" }[e.origen];
+  const dondeCorregir = { plan: "la pestaña Preventivo", ot: "Órdenes de trabajo" }[e.origen];
   return `
     <article class="hi-parada" data-k="${e.origen}-${e.id}" style="--c:${hiColor(g)};--i:${Math.min(i, 12)}">
       <span class="hi-punto"></span>
@@ -17513,8 +17529,8 @@ function flapTitulo(h1) {
 })();
 
 // ─── ¿A dónde vamos? — ir a cualquier coche o sección escribiendo ───
-const DEST_COCHE_SECCIONES = [["historial_carga", "Historial"], ["mantenimientos", "Mantenimientos"], ["costos", "Costos"],
-                              ["kpis", "KPIs"], ["mantenimiento", "Preventivo"]];
+const DEST_COCHE_SECCIONES = [["resumen", "Ficha"], ["historial", "Historial"], ["preventivo", "Preventivo"],
+                              ["neumaticos", "Neumáticos"], ["costos", "Costos"], ["kpis", "KPIs"]];
 let _dest = { sel: 0, items: [], coches: null, cochesAt: 0 };
 
 function destRecordar(sec) {
@@ -17547,6 +17563,19 @@ function destSecciones() {
     out.push({ tipo: "seccion", sec: el.dataset.sec, nombre: el.textContent.trim(), grupo,
                icono: (el.querySelector(".ti")?.className || "ti ti-point").replace(/\s+/g, " ") });
   });
+  // Lo que ya no está en el menú porque vive adentro de otra sección: se
+  // sigue encontrando por su nombre de siempre
+  const tabs = fcTabs();
+  if (tabs.includes("preventivo")) {
+    out.push({ tipo: "seccion", sec: "coches", nombre: "Plan preventivo", grupo: "Coches", icono: "ti ti-calendar-check" },
+             { tipo: "seccion", sec: "coches", nombre: "Agenda del taller", grupo: "Coches", icono: "ti ti-calendar-event", fn: () => fcAgenda() });
+  }
+  if (tabs.length) out.push({ tipo: "seccion", sec: "coches", nombre: "Historial por coche", grupo: "Coches", icono: "ti ti-timeline-event" },
+                            { tipo: "seccion", sec: "coches", nombre: "Mantenimientos y correctivos", grupo: "Coches", icono: "ti ti-book" });
+  if (document.querySelector('.nav-item[data-sec="ots"]') && getComputedStyle(document.querySelector('.nav-item[data-sec="ots"]')).display !== "none") {
+    if (puedeVerSeccion("tablero_taller")) out.push({ tipo: "seccion", sec: "tablero_taller", nombre: "Tablero de control", grupo: "Órdenes de Trabajo", icono: "ti ti-layout-grid" });
+    if (puedeVerSeccion("personal")) out.push({ tipo: "seccion", sec: "personal", nombre: "Personal de taller", grupo: "Órdenes de Trabajo", icono: "ti ti-users" });
+  }
   return out;
 }
 
@@ -17645,7 +17674,7 @@ function destDibujar() {
         return `<div class="destino-item ${i === _dest.sel ? "sel" : ""}" data-i="${i}">
           <div class="destino-num">#${destMarcar(v.n_interno, q)}</div>
           <div class="destino-txt"><b>${destMarcar(v.patente, q)}</b><small>${destEsc([v.marca, v.modelo].filter(Boolean).join(" "))}</small></div>
-          <div class="destino-atajos">${DEST_COCHE_SECCIONES.filter(([s]) => puedeVerSeccion(s))
+          <div class="destino-atajos">${DEST_COCHE_SECCIONES.filter(([s]) => fcTabs().includes(s))
             .map(([s, n]) => `<button type="button" data-i="${i}" data-sec="${s}">${n}</button>`).join("")}</div>
         </div>`;
       }
@@ -17689,21 +17718,14 @@ function destNavegar(sec) {
 function destIr(it, secCoche = null) {
   cerrarDestino();
   if (it.tipo === "seccion") {
-    if (["costos", "kpis", "mantenimiento", "neumaticos"].includes(it.sec) && !cocheActual) {
-      elegirCocheYIr(it.sec);
-      return;
-    }
-    destNavegar(it.sec);
+    if (it.fn) it.fn(); else destNavegar(it.sec);
     return;
   }
+  // Un coche: se abre su ficha (en la pestaña elegida, si tocó un atajo)
   const v = it.v;
   setCoche(v);
-  let sec = secCoche || (puedeVerSeccion("historial_carga") ? "historial_carga"
-    : puedeVerSeccion("mantenimientos") ? "mantenimientos" : "costos");
-  if (!puedeVerSeccion(sec)) sec = "costos";
-  if (sec === "mantenimientos") window._mtAbrirCoche = v.id;
-  if (sec === "historial_carga") window._hiAbrirCoche = v.id;
-  destNavegar(sec);
+  if (fcTabs().length) fcAbrir(v.id, secCoche || undefined);
+  else toast(`Coche ${v.n_interno || v.patente} elegido`, "success");
 }
 
 document.addEventListener("keydown", e => {
@@ -19432,11 +19454,11 @@ async function pvPost(url, body, metodo = "POST") {
 
 // ─── La pantalla: Flota / Agenda del taller / Cumplimiento / Planes ───
 async function renderPlanes() {
-  status("Plan preventivo: qué le toca a cada coche y cuándo entra al taller");
+  status("Coches: tocá uno para abrir su ficha");
   content.innerHTML = `
     <div class="page-header">
-      <h1><i class="ti ti-calendar-check"></i> Plan preventivo</h1>
-      <p>Qué le toca a cada coche, cuándo entra al taller y si se cumple. Todo por kilómetro.</p>
+      <h1><i class="ti ti-bus"></i> Coches</h1>
+      <p>Tocá un coche para abrir su ficha. Acá se ve qué le toca a cada uno; la agenda del taller y los planes están en las pestañas.</p>
       <div class="page-actions" id="pv-acc"></div>
     </div>
     <div class="section pv-raiz" id="pv-raiz">
@@ -19465,8 +19487,9 @@ async function pvFlota() {
   if (!f || !f.coches) { $("#pv-cuerpo").innerHTML = pvError(); return; }
   pv.flota = f;
   const acc = $("#pv-acc");
-  if (acc && pvPuede()) acc.innerHTML = `<button class="btn btn-ghost" onclick="pvIr('agenda')"><i class="ti ti-calendar-plus"></i> Agenda del taller</button>`;
+  if (acc) acc.innerHTML = `<button class="btn btn-ghost" onclick="abrirReporteCorrectivos()" title="Los correctivos de toda la flota entre dos fechas, para imprimir"><i class="ti ti-printer"></i> Correctivos por fechas</button>`;
   pvFlotaPintar();
+  if (!pv.corr) fcTraerCorrectivos();
 }
 function pvFlotaFiltrados() {
   const f = pv.flota, q = pv.q.trim().toLowerCase();
@@ -19478,6 +19501,7 @@ function pvFlotaFiltrados() {
     if (pv.filtro === "sin_dato" && !["sin_dato", "sin_km"].includes(c.estado)) return false;
     if (pv.filtro === "sin_plan" && c.estado !== "sin_plan") return false;
     if (pv.filtro === "sin_turno" && (c.turno || !["vencido", "pronto"].includes(c.estado))) return false;
+    if (pv.filtro === "correctivos" && !(pv.corr && pv.corr[c.vehiculo_id])) return false;
     if (q && ![c.n_interno, c.patente, c.marca, c.modelo, c.plan_nombre].some(x => String(x || "").toLowerCase().includes(q))) return false;
     return true;
   });
@@ -19491,6 +19515,9 @@ function pvFlotaPintar() {
   const sinTurno = f.coches.filter(c => ["vencido", "pronto"].includes(c.estado) && !c.turno).length;
   const chips = [["todos", "Todos", k.coches], ["vencido", "Vencidos", k.vencidos], ["pronto", `Próximos ${lim} días`, k.pronto],
                  ["sin_turno", "Sin turno", sinTurno], ["ok", "Al día", k.al_dia], ["sin_dato", "Sin datos", k.sin_dato], ["sin_plan", "Sin plan", k.sin_plan]];
+  // Los que tuvieron correctivos en los últimos 90 días (llega después de dibujar)
+  if (pv.corr) chips.push(["correctivos", "Con correctivos", f.coches.filter(c => pv.corr[c.vehiculo_id]).length]);
+  else if (pv.filtro === "correctivos") chips.push(["correctivos", "Con correctivos", "…"]);
   $("#pv-cuerpo").innerHTML = `
     <div class="pv-hero">
       <div class="pv-hero-num">
@@ -19551,7 +19578,7 @@ function pvFila(c, i) {
   else der = "";
   return `
     <div class="pv-fila ${(PV_ESTADO[c.estado] || {}).c || ""}" style="animation-delay:${Math.min(i, 14) * 25}ms" tabindex="0"
-         onclick="pvAbrirCoche(${c.vehiculo_id}, true)" onkeydown="if(event.key==='Enter')pvAbrirCoche(${c.vehiculo_id}, true)">
+         onclick="fcAbrir(${c.vehiculo_id})" onkeydown="if(event.key==='Enter')fcAbrir(${c.vehiculo_id})">
       <div class="pv-num"><small>Coche</small><b>${pvEsc(c.n_interno || "—")}</b></div>
       <div class="pv-f-info">
         <div class="pv-f-pat">${pvEsc(c.patente)} <span>${pvEsc(c.marca)} ${pvEsc(c.modelo)}</span></div>
@@ -19559,7 +19586,7 @@ function pvFila(c, i) {
         <div class="pv-f-km"><i class="ti ti-gauge"></i> ${c.km_actual ? pvKm(c.km_actual) + " km" : "sin km"}${c.km_actual ? ` · ≈ ${pvKm(c.km_dia)} km/día` : ""}</div>
       </div>
       <div class="pv-f-medio">${medio}</div>
-      <div class="pv-f-der">${pvPill(c.estado)}${der}</div>
+      <div class="pv-f-der">${pv.corr && pv.corr[c.vehiculo_id] ? `<span class="fc-corr" title="Correctivos en los últimos 90 días"><i class="ti ti-alert-triangle"></i>${pv.corr[c.vehiculo_id]}</span>` : ""}${pvPill(c.estado)}${der}</div>
     </div>`;
 }
 async function pvSiguienteSinDato(despuesDe) {
@@ -19580,11 +19607,11 @@ async function renderMantenimiento() {
 }
 async function pvAbrirCoche(vid, desdeHub) {
   if (desdeHub !== undefined) pv.desdeHub = !!desdeHub;
+  // Vive adentro de la ficha del coche: si no está abierta la de este coche,
+  // se abre en la pestaña Preventivo
+  const caja = $("#pv-ficha");
+  if (!caja || Number(caja.dataset.vid) !== Number(vid)) { fcAbrir(vid, "preventivo"); return; }
   status("Preventivo del coche: qué le toca y cuándo");
-  if (!$("#pv-ficha")) {
-    content.innerHTML = `<div class="section pv-raiz pv-ficha" id="pv-ficha">${pvCargando()}</div>`;
-    content.scrollTop = 0;
-  }
   const [f, vs] = await Promise.all([api(`/api/prev/coche/${vid}`), pvVehiculos()]);
   if (!$("#pv-ficha")) return;
   if (!f || !f.vehiculo_id) { $("#pv-ficha").innerHTML = pvError("No se encontró el coche"); return; }
@@ -19594,7 +19621,11 @@ async function pvAbrirCoche(vid, desdeHub) {
   if (v && (!cocheActual || cocheActual.id !== vid)) setCoche(v);
   pvFichaPintar();
 }
-function pvRecargarCoche() { if (pv.coche) pvAbrirCoche(pv.coche.vehiculo_id); }
+function pvRecargarCoche() {
+  if (!pv.coche || !$("#pv-ficha")) return;
+  if ($("#fc-raiz")) fcTraerResumen();          // el cartel de la ficha (km, estado) también se actualiza
+  return pvAbrirCoche(pv.coche.vehiculo_id);
+}
 
 function pvFichaPintar() {
   const f = pv.coche;
@@ -19603,21 +19634,16 @@ function pvFichaPintar() {
   const fuenteKm = { manual: "fijado a mano", lecturas: "según las cargas y las OT", meta: "según la meta mensual", flota: "lo que anda la flota (sin lecturas del coche)" }[f.km_dia_fuente] || "";
   const pr = f.proximo;
   const verif = f.km_verif ? `<i class="ti ti-circle-check"></i> Verificado en la OT #${f.km_verif.ot} · ${otFechaHora(f.km_verif.fecha)}` : `<i class="ti ti-info-circle"></i> Sale de las cargas de combustible y de las OT`;
-  const volver = pv.desdeHub || puedeVerSeccion("planes")
-    ? `<button class="rv-volver pv-volver" onclick="pvVolverFlota()"><i class="ti ti-arrow-left"></i> Toda la flota</button>` : "";
   $("#pv-ficha").innerHTML = `
     <div class="pv-ficha-top">
-      ${volver}
       <div class="pv-ficha-acc">
         <button class="btn btn-ghost" onclick="window.open('/api/vehiculos/${f.vehiculo_id}/plan_pdf','_blank')"><i class="ti ti-printer"></i> Imprimir plan</button>
-        ${puede && f.plan_id ? `<button class="btn btn-primary" onclick="pvRegistrar(${f.vehiculo_id})"><i class="ti ti-checks"></i> Registrar trabajo</button>` : ""}
+        ${puede && f.plan_id && PV_REGISTRO_DIRECTO ? `<button class="btn btn-primary" onclick="pvRegistrar(${f.vehiculo_id})"><i class="ti ti-checks"></i> Registrar trabajo</button>` : ""}
       </div>
     </div>
     <div class="pv-hero pv-hero-coche">
       <div class="pv-hc-coche">
-        <span class="pv-et">Coche</span>
-        <b>${pvEsc(f.n_interno || "—")}</b>
-        <span class="pv-hc-pat">${pvEsc(f.patente)} · ${pvEsc(f.marca)} ${pvEsc(f.modelo)}</span>
+        <span class="pv-et">Plan</span>
         <span class="pv-hc-plan"><i class="ti ti-clipboard-list"></i> ${f.plan_nombre ? pvEsc(f.plan_nombre) : "Sin plan"}
           ${puede ? `<button class="pv-link-claro" onclick="pvCambiarPlan(${f.vehiculo_id})">${f.plan_nombre ? "cambiar" : "asignar"}</button>` : ""}</span>
       </div>
@@ -19651,11 +19677,11 @@ function pvFichaPintar() {
       ${f.turnos && f.turnos.length ? pvTurnosCoche(f) : ""}
     `}`;
 }
-function pvVolverFlota() {
-  document.querySelectorAll(".nav-item").forEach(b => b.classList.toggle("active", b.dataset.sec === "planes"));
-  pv.tab = "flota";
-  renderPlanes();
-}
+function pvVolverFlota() { pv.tab = "flota"; fcVolver(); }
+// El trabajo del taller se carga por orden de trabajo: al completar el ítem de
+// la OT, la tarea del plan queda registrada sola. Con true vuelven los botones
+// para registrar una tarea a mano desde la ficha, sin orden.
+const PV_REGISTRO_DIRECTO = false;
 function pvAnillo(pct) {
   if (pct == null) return `<div class="pv-anillo vacio"><b>—</b></div>`;
   const r = 30, c = 2 * Math.PI * r, v = Math.max(0, Math.min(100, pct));
@@ -19769,7 +19795,7 @@ function pvTareasAgrupadas(f) {
       <div class="pv-tg-cab ${(PV_ESTADO[p.estado] || {}).c || ""}">
         <b>Cada ${pvKm(k)} km</b><span>${ts.length} tarea${ts.length === 1 ? "" : "s"}</span>
         ${pvPill(p.estado, "mini")}${n < ts.length ? `<span class="pv-tg-mix">${n} de ${ts.length}</span>` : ""}
-        ${pvPuede() && ts.length > 1 ? `<button class="pv-link" onclick="pvRegistrar(${f.vehiculo_id}, [${ts.map(t => t.tarea_id).join(",")}])">registrar todo el grupo</button>` : ""}
+        ${pvPuede() && PV_REGISTRO_DIRECTO && ts.length > 1 ? `<button class="pv-link" onclick="pvRegistrar(${f.vehiculo_id}, [${ts.map(t => t.tarea_id).join(",")}])">registrar todo el grupo</button>` : ""}
       </div>
       ${ts.map(t => pvTareaFila(t, f)).join("")}
     </div>`;
@@ -19794,7 +19820,7 @@ function pvTareaFila(t, f) {
       <div class="pv-t-ult"><span class="pv-t-et">Última vez</span>${ult}</div>
       <div class="pv-t-falta"><span class="pv-t-et">${t.km_restantes != null && t.km_restantes < 0 ? "Vencida" : "Próxima"}${t.proximo_km != null ? ` a los ${pvKm(t.proximo_km)}` : ""}</span>${faltan}${t.km_restantes != null ? pvBarra(t.porcentaje, t.estado) : ""}</div>
       <div class="pv-t-est">${pvPill(t.estado)}</div>
-      <div class="pv-t-acc">${puede ? `<button class="btn btn-ghost btn-sm" onclick="pvRegistrar(${f.vehiculo_id}, [${t.tarea_id}])" title="Registrar que se hizo"><i class="ti ti-check"></i><span> Hecho</span></button>` : ""}</div>
+      <div class="pv-t-acc">${puede && PV_REGISTRO_DIRECTO ? `<button class="btn btn-ghost btn-sm" onclick="pvRegistrar(${f.vehiculo_id}, [${t.tarea_id}])" title="Registrar que se hizo"><i class="ti ti-check"></i><span> Hecho</span></button>` : ""}</div>
     </div>`;
 }
 function pvCadaHtml(t) {
@@ -20319,6 +20345,7 @@ function pvMenu(btn) {
   }), 0);
 }
 async function pvRefrescarDespuesDeTurno() {
+  if ($("#fc-raiz")) { await fcRefrescar(); return; }
   if (pv.tab === "agenda" && $("#pv-dia")) await pvAgenda();
   else if ($("#pv-ficha") && pv.coche) await pvRecargarCoche();
   else if ($("#pv-lista")) await pvFlota();

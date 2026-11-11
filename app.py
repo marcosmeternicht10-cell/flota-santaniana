@@ -291,6 +291,9 @@ app.register_blueprint(bp_informe_coche)
 # Vista «consola» del administrador (tipo PlayStation): sus números en vivo
 from consola import bp_consola
 app.register_blueprint(bp_consola)
+# La ficha única de cada coche (sección Coches de Taller)
+from ficha_coche import bp_ficha_coche
+app.register_blueprint(bp_ficha_coche)
 
 # Vigilancia: errores guardados, avisos al celular y /salud para el vigilante externo
 from vigilancia import bp_vigilancia, init_vigilancia
@@ -681,6 +684,8 @@ def proteger_rutas():
             p.startswith("/api/vehiculos") or    # lista de coches para el formulario de OT
             p.startswith("/api/repuestos") or    # inventario del depósito (reponer stock)
             p.startswith("/api/historial_carga") or  # carga de historial retroactivo
+            p.startswith("/api/historia/") or    # la historia de cada coche (sección Coches)
+            p.startswith("/api/coche/") or       # el resumen de la ficha del coche
             p == "/api/dashboard" or
             p == "/api/consola/resumen" or       # la vista consola (filtra por su sector)
             p == "/api/sistema/error_pantalla"   # avisar un error de pantalla

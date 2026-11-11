@@ -1,0 +1,190 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   COCHES — la ficha única de cada coche (static/coches.js)
+   Usa los colores y las piezas de siempre (cartel del historial, pestañas y
+   píldoras del preventivo); acá va solo lo propio de la ficha.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Arriba: volver, acciones, cartel y pestañas ── */
+.fc-raiz { display: flex; flex-direction: column; min-width: 0; }
+.fc-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+.fc-acc { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.fc-cartel { align-items: flex-end; margin-bottom: 14px; }
+.fc-cartel-der { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; padding-bottom: 4px; min-height: 30px; }
+.fc-km { font-size: 13.5px; color: rgba(255,255,255,.75); white-space: nowrap; }
+.fc-km b { font: 700 26px/1 var(--display); color: #fff; font-variant-numeric: tabular-nums; margin-right: 2px; }
+.fc-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px 5px 9px; border-radius: 999px; white-space: nowrap;
+  font: 600 12.5px "Inter", sans-serif; background: rgba(255,255,255,.14); color: #fff; animation: fcSube .4s var(--ui-suave) both; }
+.fc-chip .ti { font-size: 16px; }
+.fc-chip.mal { background: var(--brand-red); }
+.fc-chip.aviso { background: #D99A1E; color: #2B1F00; }
+.fc-chip.bien { background: rgba(67,176,105,.28); color: #C9F2D6; }
+.fc-chip.taller { background: rgba(140,189,235,.24); color: #D9ECFC; }
+.fc-tabs { margin-bottom: 16px; }
+.fc-cuerpo { min-width: 0; animation: fcSube .35s var(--ui-suave) both; }
+@keyframes fcSube { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+/* ── Las pantallas de cada módulo, adentro de la ficha ── */
+.fc-cuerpo .page-header { display: none; }
+.fc-cuerpo > .section { padding: 0; }
+.fc-cuerpo .pv-hc-coche .pv-hc-plan { margin-top: 10px; font: 600 19px/1.25 var(--display); color: #fff; }
+.fc-cuerpo .pv-ficha-top { justify-content: flex-end; }
+.hi-hero-enficha { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px 24px; }
+.hi-hero-enficha .hi-hero-texto { margin-top: 0; flex: 1 1 420px; }
+
+/* ── Resumen ── */
+.fc-res { display: flex; flex-direction: column; gap: 14px; }
+.fc-alertas { display: flex; flex-wrap: wrap; gap: 8px; }
+.fc-alerta { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px 8px 11px; border-radius: 11px;
+  font: 600 13px "Inter", sans-serif; background: var(--warning-bg); color: #8A5A00; border: 1px solid var(--warning-bd); }
+.fc-alerta .ti { font-size: 18px; }
+.fc-alerta.mal { background: var(--danger-bg); color: var(--brand-red-dark); border-color: var(--danger-bd); }
+
+.fc-cifras { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.fc-cifra { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; min-width: 0;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow-sm);
+  border-top: 3px solid var(--lighter); }
+.fc-cifra.mal { border-top-color: var(--brand-red); }
+.fc-cifra.aviso { border-top-color: #D99A1E; }
+.fc-cifra.bien { border-top-color: var(--success); }
+.fc-cifra.taller { border-top-color: var(--brand-blue); }
+.fc-et { font: 600 11px "Inter", sans-serif; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.fc-cifra > b { font: 700 34px/1.05 var(--display); color: var(--azul-oscuro); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-cifra > b small { font-size: 16px; font-weight: 600; color: var(--muted); }
+.fc-cifra > b.fc-palabra { font-size: 28px; }
+.fc-cifra.mal > b { color: var(--brand-red-dark); }
+.fc-cifra.aviso > b { color: #8A5A00; }
+.fc-cifra.bien > b { color: var(--success); }
+.fc-cifra > span:last-child { font-size: 12.5px; line-height: 1.4; color: var(--muted); }
+
+.fc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.fc-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.fc-caja { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow-sm); }
+.fc-caja > h3 { display: flex; align-items: center; gap: 8px; margin: 0; padding: 14px 18px 0; font: 700 17px var(--display); color: var(--azul-oscuro); letter-spacing: .2px; }
+.fc-caja > h3 .ti { font-size: 19px; color: var(--brand-blue); }
+.fc-caja-c { padding: 12px 18px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.fc-caja-pie { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 14px; padding: 10px 18px;
+  border-top: 1px solid var(--border); background: var(--surface2); border-radius: 0 0 var(--radius) var(--radius); }
+.fc-pie-txt { font-size: 12.5px; color: var(--muted); }
+.fc-link { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; padding: 4px 2px; border: 0; background: none; cursor: pointer;
+  font: 600 13px "Inter", sans-serif; color: var(--brand-blue); }
+.fc-link .ti { font-size: 16px; transition: transform .2s var(--ui-suave); }
+.fc-link:hover { color: var(--azul-oscuro); }
+.fc-link:hover .ti { transform: translateX(3px); }
+.fc-nada { display: flex; align-items: center; gap: 9px; margin: 2px 0; font-size: 13.5px; color: var(--muted); }
+.fc-nada .ti { font-size: 20px; color: var(--light); }
+.fc-nota { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.fc-nota b { color: var(--text); }
+.fc-linea { margin: 0; font-size: 13.5px; }
+.fc-sub { margin-top: 4px; font: 600 11px "Inter", sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+
+/* Qué le toca */
+.fc-toca { display: flex; flex-direction: column; gap: 8px; }
+.fc-toca-que { font: 700 22px/1.15 var(--display); color: var(--azul-oscuro); }
+.fc-toca-vence { font-size: 13.5px; }
+.fc-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.fc-chips span { padding: 3px 9px; border-radius: 8px; font-size: 11.5px; background: var(--surface3); color: var(--muted); }
+.fc-turno { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-radius: 11px;
+  background: var(--info-bg); font-size: 13px; color: var(--azul-oscuro); }
+.fc-turno .ti { vertical-align: -2px; }
+
+/* En el taller */
+.fc-lista { display: flex; flex-direction: column; gap: 8px; }
+.fc-ot { display: flex; flex-direction: column; gap: 4px; padding: 11px 13px; text-align: left; cursor: pointer; font: inherit; color: inherit;
+  border: 1px solid var(--border); border-left: 3px solid var(--brand-blue); border-radius: 11px; background: var(--surface2);
+  transition: background .2s, border-color .2s, transform .2s var(--ui-suave); }
+.fc-ot:hover { background: var(--info-bg); border-color: var(--info-bd); border-left-color: var(--brand-blue); transform: translateX(2px); }
+.fc-ot-cab { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fc-ot-cab b { font: 700 16px var(--display); color: var(--azul-oscuro); }
+.fc-ot-sub { font-size: 12.5px; color: var(--muted); }
+.fc-ot-falta { font-size: 12.5px; color: var(--text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.fc-pedidos, .fc-ultimos, .fc-papeles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.fc-pedidos li { display: flex; flex-direction: column; gap: 1px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.fc-pedidos li:last-child { border-bottom: 0; }
+.fc-pedidos li span, .fc-pedidos .fc-mas { font-size: 12px; color: var(--muted); }
+
+/* Lo último que se le hizo */
+.fc-ultimos li { display: grid; grid-template-columns: 62px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 8px 0 8px 12px;
+  border-bottom: 1px solid var(--border); border-left: 3px solid var(--c, var(--lighter)); font-size: 13px; }
+.fc-ultimos li:last-child { border-bottom: 0; }
+.fc-ultimos time { font-size: 12px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.fc-ult-txt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+.fc-tag { padding: 2px 9px; border-radius: 8px; font-size: 11px; font-weight: 600; background: var(--surface3); color: var(--muted); white-space: nowrap; }
+
+/* Cubiertas: un punto por posición, con el color de su desgaste */
+.fc-ruedas { display: flex; flex-wrap: wrap; gap: 7px; }
+.fc-ruedas i { width: 22px; height: 22px; border-radius: 50%; border: 5px solid var(--grad-optimo); background: var(--surface); }
+.fc-ruedas i.g-bueno { border-color: var(--grad-bueno); }
+.fc-ruedas i.g-regular { border-color: var(--grad-regular); }
+.fc-ruedas i.g-atencion { border-color: var(--grad-atencion); }
+.fc-ruedas i.g-vencido { border-color: var(--grad-vencido); }
+.fc-ruedas i.vacia { border: 2px dashed var(--lighter); }
+
+/* Papeles */
+.fc-papeles li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.fc-papeles li:last-child { border-bottom: 0; }
+.fc-papeles li small { font-weight: 400; color: var(--muted); }
+.fc-papeles li span { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.fc-papeles li.mal span { color: var(--brand-red-dark); font-weight: 600; }
+.fc-papeles li.aviso span { color: #8A5A00; font-weight: 600; }
+
+/* Datos del coche */
+.fc-datos { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
+.fc-datos div { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.fc-datos dt { font-size: 11.5px; color: var(--muted); }
+.fc-datos dd { margin: 0; font-size: 13.5px; font-weight: 500; overflow-wrap: anywhere; }
+
+/* ── La lista de la flota: correctivos de los últimos 90 días ── */
+.fc-corr { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 8px;
+  font: 600 11.5px "Inter", sans-serif; background: var(--danger-bg); color: var(--brand-red-dark); }
+.fc-corr .ti { font-size: 13px; }
+
+/* ── Órdenes de trabajo: sus pestañas (Órdenes · Tablero · Personal) ── */
+.fc-subnav { padding: 14px 32px 0; }
+.fc-subnav .pv-tabs { margin-bottom: 0; }
+.fc-ext { font-size: 13px !important; opacity: .6; }
+
+@media (max-width: 900px) {
+  /* Una sola columna: primero qué le toca y el taller, después lo demás */
+  .fc-grid { display: flex; flex-direction: column; align-items: stretch; }
+  .fc-col { display: contents; }
+  .fc-caja { order: 3; }
+  .fc-col:first-child .fc-caja:first-child { order: 1; }
+  .fc-caja.fc-o2 { order: 2; }
+}
+@media (max-width: 768px) {
+  /* El botón del menú flota arriba a la izquierda: "Toda la flota" le deja lugar */
+  .fc-top { padding-left: 54px; min-height: 44px; }
+  /* Seis pestañas no entran: se deslizan de costado, con el nombre entero */
+  .fc-tabs { width: 100%; }
+  .fc-tabs .pv-tab { flex: 0 0 auto; min-width: 74px; padding: 0 10px; }
+  .fc-subnav .pv-tab { flex: 0 0 auto; min-width: 82px; padding: 0 10px; }
+  .fc-ext { display: none; }
+}
+@media (max-width: 640px) {
+  .fc-top { align-items: center; }
+  .fc-acc .btn span { display: none; }
+  .fc-acc .btn { padding-left: 12px; padding-right: 12px; }
+  .fc-cartel { padding: 16px 18px 20px; gap: 6px 16px; }
+  .fc-cartel .hi-hero-num { font-size: 60px; }
+  .fc-cartel-der { margin-left: 0; flex-direction: row; flex-wrap: wrap; align-items: center; width: 100%; padding-top: 6px; }
+  .fc-km b { font-size: 20px; }
+  .fc-cifras { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .fc-cifra { padding: 12px 13px; }
+  .fc-cifra > b { font-size: 26px; }
+  .fc-cifra > b.fc-palabra { font-size: 22px; }
+  .fc-cifra > b small { font-size: 13px; }
+  .fc-caja > h3 { padding: 12px 14px 0; }
+  .fc-caja-c { padding: 10px 14px 14px; }
+  .fc-caja-pie { padding: 9px 14px; }
+  .fc-ultimos li { grid-template-columns: 52px minmax(0, 1fr); }
+  .fc-ultimos .fc-tag { display: none; }
+  .fc-subnav { padding: 12px 14px 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fc-cuerpo, .fc-chip { animation: none; }
+}
+
+/* La caja "Coche seleccionado" del menú abre la ficha de ese coche */
+.coche-card { cursor: pointer; }
+.coche-card:focus-visible { outline: 2px solid var(--celeste); outline-offset: 2px; }

@@ -25,21 +25,13 @@ GRUPOS_SECCIONES = [
         ("servicios", "Servicios"),
         ("comb_rendicion", "Rendición de combustible"),
     ]),
-    ("Vehículo", [
-        ("costos", "Costos"),
-        ("kpis", "KPIs"),
-    ]),
     ("Taller", [
         ("ots", "Órdenes de Trabajo"),
-        ("mantenimientos", "Mantenimientos"),
-        ("mantenimiento", "Preventivo"),
-        ("neumaticos", "Neumáticos"),
-        ("correctivos", "Correctivos"),
-        ("planes", "Plan preventivo (flota, agenda y planes)"),
-        ("inventario_neu", "Inventario neumáticos"),
-        ("historial_carga", "Historial por coche"),
-        ("personal", "Personal de taller"),
-        ("tablero_taller", "Tablero de control (plan vs real)"),
+        ("personal", "Órdenes: pestaña Personal de taller"),
+        ("tablero_taller", "Órdenes: pestaña Tablero de control (plan vs real)"),
+        ("coches", "Coches: ficha de cada coche (historial, preventivo, neumáticos) y agenda del taller"),
+        ("costos", "Coches: pestaña Costos"),
+        ("kpis", "Coches: pestaña KPIs"),
     ]),
     ("Contabilidad", [
         ("contabilidad", "Contabilidad y tesorería"),
@@ -48,6 +40,7 @@ GRUPOS_SECCIONES = [
         ("compras", "Compras / Depósito"),
         ("repuestos", "Inventario Repuestos"),
         ("proveedores", "Proveedores"),
+        ("inventario_neu", "Inventario de neumáticos"),
     ]),
     ("Tesorería", [
         ("cajas", "Tesorería: cajas, flujo, pagos, cheques y conciliación"),
@@ -74,6 +67,11 @@ GRUPOS_SECCIONES = [
         ("agencias", "Agencias y contratos"),
     ]),
 ]
+
+# Taller quedó en tres secciones. Lo que antes eran secciones sueltas por coche
+# ahora vive adentro de "Coches": quien tenía alguna de las viejas, tiene Coches.
+SECCIONES_VIEJAS = {"mantenimientos": "coches", "mantenimiento": "coches", "neumaticos": "coches",
+                    "correctivos": "coches", "planes": "coches", "historial_carga": "coches"}
 
 SECCIONES_VALIDAS = {clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs}
 ORDEN = [clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs]
@@ -112,6 +110,7 @@ def normalizar(secciones):
     if isinstance(secciones, str):
         secciones = [s for s in secciones.split(",")]
     pedidas = {str(s).strip() for s in (secciones or []) if str(s).strip()}
+    pedidas = {SECCIONES_VIEJAS.get(s, s) for s in pedidas}
     return [s for s in ORDEN if s in pedidas]
 
 
