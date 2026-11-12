@@ -1282,19 +1282,23 @@ def _migrar_documentos(conn):
         conn.rollback()
         return
 
-    # Documentos ya renovados antes de este cambio: de cada vehículo y tipo,
-    # el vigente es el de vencimiento más lejano; los anteriores son historial.
+    # Documentos ya renovados antes de este cambio: de cada vehículo, tipo y
+    # nombre, el vigente es el de vencimiento más lejano; los anteriores son
+    # historial. El nombre cuenta: un coche tiene más de un seguro (pasajeros y
+    # responsabilidad civil) y más de una habilitación, y renovar uno no puede
+    # mandar al historial al otro.
     try:
         filas = conn.execute("""
-            SELECT id, vehiculo_id, tipo, fecha_vencimiento
+            SELECT id, vehiculo_id, tipo, nombre, fecha_vencimiento
             FROM documentos
             WHERE reemplazado_por IS NULL
             ORDER BY vehiculo_id, tipo, fecha_vencimiento DESC
         """).fetchall()
         grupos = {}
         for f in filas:
-            grupos.setdefault((f["vehiculo_id"], f["tipo"]), []).append(dict(f))
-        for (_, _), docs in grupos.items():
+            nombre = " ".join(str(f["nombre"] or "").lower().split())
+            grupos.setdefault((f["vehiculo_id"], f["tipo"], nombre), []).append(dict(f))
+        for docs in grupos.values():
             if len(docs) < 2:
                 continue
             vigente = docs[0]                       # el de vencimiento más lejano

@@ -295,6 +295,10 @@ app.register_blueprint(bp_consola)
 from ficha_coche import bp_ficha_coche
 app.register_blueprint(bp_ficha_coche)
 
+# Cargas de datos que se aplican una sola vez (la póliza del seguro, etc.)
+from cargas_datos import init_cargas_datos
+init_cargas_datos()
+
 # Vigilancia: errores guardados, avisos al celular y /salud para el vigilante externo
 from vigilancia import bp_vigilancia, init_vigilancia
 app.register_blueprint(bp_vigilancia)
