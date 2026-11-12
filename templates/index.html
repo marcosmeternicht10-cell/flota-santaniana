@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="{{ estatico('cajas.css') }}">
   <link rel="stylesheet" href="{{ estatico('consola.css') }}">
   <link rel="stylesheet" href="{{ estatico('coches.css') }}">
+  <link rel="stylesheet" href="{{ estatico('corp_ranking.css') }}">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="#1D344E">
   <link rel="icon" type="image/png" sizes="48x48" href="/static/app/favicon-48.png">
@@ -140,6 +141,9 @@
         <button class="nav-item" data-sec="corp_servicios">
           <i class="ti ti-chart-histogram"></i> Servicios
         </button>
+        <button class="nav-item" data-sec="corp_ranking">
+          <i class="ti ti-trophy"></i> Ranking de choferes
+        </button>
         <button class="nav-item" data-sec="corp_combustible">
           <i class="ti ti-gas-station"></i> Combustible corporativos
         </button>
@@ -236,6 +240,7 @@
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <script src="{{ estatico('coches.js') }}"></script>
+  <script src="{{ estatico('corp_ranking.js') }}"></script>
   <script src="{{ estatico('app.js') }}"></script>
   <script src="{{ estatico('pedidos-fecha.js') }}"></script>
   <script src="{{ estatico('alpha.js') }}"></script>

@@ -1,0 +1,92 @@
+/* Ranking de choferes de corporativos (static/corp_ranking.js) */
+
+/* ── Podio ── */
+.rk-podio { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: end; margin: 6px 0 14px; }
+.rk-pod { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px 14px 16px; text-align: center; cursor: pointer;
+  font: inherit; color: inherit; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  box-shadow: var(--shadow-sm); transition: transform .2s var(--ui-suave), box-shadow .2s; min-width: 0; }
+.rk-pod:hover { transform: translateY(-3px); box-shadow: var(--shadow); }
+.rk-pod.p1 { padding-top: 26px; padding-bottom: 22px; border-color: #E2C36B; background: linear-gradient(180deg, #FFF8E1, var(--surface) 70%); }
+.rk-pod.p2 { border-color: #C9D2DC; }
+.rk-pod.p3 { border-color: #E3B795; }
+.rk-med { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px 3px 7px; border-radius: 999px; font: 700 13px var(--display); color: #fff; background: #A3AEBB; }
+.rk-pod.p1 .rk-med { background: #C9A227; }
+.rk-pod.p3 .rk-med { background: #B87444; }
+.rk-pod b { font: 700 17px/1.2 var(--display); color: var(--azul-oscuro); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rk-pod-pts { font: 700 34px/1 var(--display); color: var(--azul-oscuro); font-variant-numeric: tabular-nums; }
+.rk-pod.p1 .rk-pod-pts { font-size: 42px; }
+.rk-pod-pts small { font-size: 14px; color: var(--muted); }
+.rk-pod-sub { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rk-resumen { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+.rk-resumen b { color: var(--azul-oscuro); font-size: 15px; }
+.rk-resumen .mal b { color: var(--brand-red-dark); }
+.rk-ayuda { margin-left: auto; cursor: help; display: inline-flex; align-items: center; gap: 4px; }
+.rk-nota, .rk-pocos, .rk-pie { display: flex; align-items: flex-start; gap: 7px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.rk-nota { margin-bottom: 12px; padding: 9px 12px; border-radius: 10px; background: var(--info-bg); color: var(--azul-oscuro); }
+.rk-pocos, .rk-pie { margin-top: 12px; }
+.rk-nota .ti, .rk-pocos .ti, .rk-pie .ti { margin-top: 2px; flex-shrink: 0; }
+
+/* ── Lista ── */
+.rk-card .pv-card-cab { justify-content: space-between; align-items: center; }
+.rk-lista { display: flex; flex-direction: column; }
+.rk-fila { border-top: 1px solid var(--border); }
+.rk-fila-cab { display: grid; grid-template-columns: 36px minmax(150px, 1.1fr) minmax(0, 1.6fr) 56px 18px; align-items: center; gap: 14px;
+  width: 100%; padding: 11px 6px; border: 0; background: none; cursor: pointer; font: inherit; color: inherit; text-align: left; border-radius: 10px; }
+.rk-fila-cab:hover { background: var(--surface2); }
+.rk-pos { font: 700 18px var(--display); color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+.rk-pos.top { color: #B58A12; }
+.rk-nom { display: flex; flex-direction: column; min-width: 0; }
+.rk-nom b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-nom small { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-barras { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.rk-b { position: relative; display: flex; flex-direction: column; gap: 3px; }
+.rk-b::before { content: ""; height: 6px; border-radius: 3px; background: var(--surface3); }
+.rk-b i { position: absolute; left: 0; top: 0; height: 6px; border-radius: 3px; background: var(--success); }
+.rk-b.medio i { background: #D99A1E; }
+.rk-b.mal i { background: var(--brand-red); }
+.rk-b em { font-style: normal; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rk-b.nd em { opacity: .55; }
+.rk-pts { justify-self: end; min-width: 46px; padding: 4px 0; text-align: center; border-radius: 10px; font: 700 18px var(--display);
+  font-variant-numeric: tabular-nums; background: var(--surface2); color: var(--azul-oscuro); }
+.rk-pts.bien { background: var(--success-bg); color: var(--success); }
+.rk-pts.medio { background: var(--warning-bg); color: #8A5A00; }
+.rk-pts.mal { background: var(--danger-bg); color: var(--brand-red-dark); }
+.rk-flecha { color: var(--muted); transition: transform .2s; }
+.rk-fila.abierta .rk-flecha { transform: rotate(180deg); }
+
+/* ── Detalle de un chofer ── */
+.rk-det { padding: 4px 6px 16px 56px; display: flex; flex-direction: column; gap: 10px; animation: fcSube .3s var(--ui-suave) both; }
+.rk-mejorar { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; font-size: 13px; background: var(--warning-bg); color: #6B4700; }
+.rk-mejorar.bien { background: var(--success-bg); color: var(--success); }
+.rk-mejorar .ti { font-size: 18px; flex-shrink: 0; }
+.rk-det-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.rk-det-caja { padding: 10px 12px; border-radius: 11px; border: 1px solid var(--border); border-top: 3px solid var(--lighter); background: var(--surface); }
+.rk-det-caja.bien { border-top-color: var(--success); }
+.rk-det-caja.medio { border-top-color: #D99A1E; }
+.rk-det-caja.mal { border-top-color: var(--brand-red); }
+.rk-det-tit { display: flex; align-items: center; gap: 6px; font: 600 12px "Inter", sans-serif; color: var(--muted); }
+.rk-det-tit b { margin-left: auto; font: 700 17px var(--display); color: var(--azul-oscuro); }
+.rk-det-caja p { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; }
+.rk-det-lista { font-size: 12.5px; border: 1px solid var(--border); border-radius: 10px; max-height: 200px; overflow-y: auto; }
+.rk-det-lista > div:not(.rk-det-sub) { padding: 6px 12px; border-top: 1px solid var(--border); }
+.rk-det-sub { position: sticky; top: 0; padding: 7px 12px; font: 600 11px "Inter", sans-serif; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); background: var(--surface2); }
+.rk-det-num { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--muted); }
+
+@media (max-width: 900px) {
+  .rk-det-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .rk-podio { gap: 6px; }
+  .rk-pod { padding: 12px 6px; }
+  .rk-pod.p1 { padding-top: 16px; padding-bottom: 14px; }
+  .rk-pod b { font-size: 13.5px; }
+  .rk-pod-pts { font-size: 26px; }
+  .rk-pod.p1 .rk-pod-pts { font-size: 32px; }
+  .rk-pod-sub { display: none; }
+  .rk-fila-cab { grid-template-columns: 28px minmax(0, 1fr) 48px 16px; gap: 10px; }
+  .rk-barras { grid-column: 2 / 4; grid-row: 2; }
+  .rk-det { padding-left: 6px; }
+  .rk-det-grid { grid-template-columns: minmax(0, 1fr); }
+  .rk-ayuda { margin-left: 0; }
+}

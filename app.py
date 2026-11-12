@@ -268,6 +268,9 @@ app.register_blueprint(bp_compras_motivo)
 # Servicios de corporativos: el ranking por servicio sacado de las rendiciones
 from corp_servicios import bp_corp_servicios
 app.register_blueprint(bp_corp_servicios)
+# Ranking de choferes de corporativos (puntaje por cumplimiento, carga a tiempo, prolijidad y consumo)
+from corp_ranking import bp_corp_ranking
+app.register_blueprint(bp_corp_ranking)
 # Agencias de venta de pasajes: fichas, contratos con versiones, papeles y vencimientos
 from agencias import bp_agencias, init_agencias
 init_agencias()

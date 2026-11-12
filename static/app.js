@@ -237,6 +237,7 @@ function irA(sec) {
     corp_empresas: renderCorpEmpresas,
     corp_cargas: renderCorpCargas,
     corp_servicios: renderCorpServicios,
+    corp_ranking: () => renderCorpRanking(),
     mantenimientos: renderMantenimientos,
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
@@ -4983,7 +4984,7 @@ if (window.USUARIO_ROL === "compras") {
   // El auditor controla: todo lo de rendiciones corporativas más lo suyo de
   // siempre (combustible e historial). Solo consulta, no modifica nada.
   const seccionesAuditor = ["combustible", "corp_asignacion",
-                            "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios",
+                            "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios", "corp_ranking",
                             "corp_combustible", "corp_cargas", "turismo_rendiciones", "comb_rendicion", "agencias", "cajas"];
   document.querySelectorAll(".nav-item").forEach(b => {
     if (!seccionesAuditor.includes(b.dataset.sec)) b.style.display = "none";

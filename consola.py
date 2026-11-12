@@ -41,7 +41,7 @@ TODAS = {
     "ots", "pedidos_ot", "coches",
     "inventario_neu", "personal", "tablero_taller", "contabilidad", "compras",
     "repuestos", "proveedores", "cajas", "gerencial", "oee", "corp_asignacion", "corp_resumen",
-    "corp_historial", "corp_empresas", "corp_servicios", "corp_combustible", "corp_cargas",
+    "corp_historial", "corp_empresas", "corp_servicios", "corp_ranking", "corp_combustible", "corp_cargas",
     "turismo_agenda", "turismo_rendiciones", "turismo", "agencias", "combustible", "historial",
     "alpha", "controles", "integraciones", "limpieza", "salud",
 }
@@ -50,9 +50,9 @@ SOLO_ADMIN = {"alpha", "controles", "integraciones", "limpieza", "contabilidad",
 SECCIONES_COMPRAS = {"compras", "ots", "repuestos", "proveedores", "inventario_neu", "coches", "personal", "cajas",
                      "tablero_taller"}
 SECCIONES_AUDITOR = {"combustible", "corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas",
-                     "corp_servicios", "corp_combustible", "corp_cargas", "turismo_rendiciones",
+                     "corp_servicios", "corp_ranking", "corp_combustible", "corp_cargas", "turismo_rendiciones",
                      "comb_rendicion", "agencias", "cajas"}
-CORP = {"corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios",
+CORP = {"corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios", "corp_ranking",
         "corp_combustible", "corp_cargas"}
 
 
