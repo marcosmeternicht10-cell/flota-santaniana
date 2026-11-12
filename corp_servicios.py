@@ -305,7 +305,7 @@ def panel(desde, hasta, cliente=""):
 ORDENES = {
     "servicios": ("Más hechos", lambda r: (-r["servicios"], -r["pasajeros"])),
     "pasajeros": ("Más pasajeros", lambda r: (-r["pasajeros"], -r["servicios"])),
-    "costo": ("Más plata", lambda r: (-r["costo"], -r["servicios"])),
+    "costo": ("Mayor importe", lambda r: (-r["costo"], -r["servicios"])),
     "costo_pasajero": ("Más caros por pasajero", lambda r: (-(r["costo_pasajero"] or 0), -r["servicios"])),
     "suspendidos": ("Más suspendidos", lambda r: (-r["suspendidos"], -r["servicios"])),
 }

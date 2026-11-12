@@ -953,7 +953,7 @@ def cerrar(caja_id, d):
              ref=f"caja_cierre:{cid}")
     return {"ok": True, "id": cid, "diferencia": dif,
             "msg": "Caja cerrada" + ("" if not dif else f" con diferencia de Gs. {abs(dif):,.0f}".replace(",", ".")
-                                     + (" de más" if dif > 0 else " de menos"))}
+                                     + (" sobrante" if dif > 0 else " faltante"))}
 
 
 def reabrir(cid):

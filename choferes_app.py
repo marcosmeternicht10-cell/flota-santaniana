@@ -1291,7 +1291,7 @@ def revisar(uid, dias=3):
                     if parecidos:
                         estado = "escrito_distinto"
                         que_hacer = ("En la planilla figura escrito de otra forma. Agregá ese nombre en «También figura como» "
-                                     "(lápiz en la lista de choferes) y le aparece al toque.")
+                                     "(lápiz en la lista de choferes) y le aparece al instante.")
                     else:
                         estado = "no_figura"
                         que_hacer = "Ese día no figura en la planilla de tráfico " + tipo + "."

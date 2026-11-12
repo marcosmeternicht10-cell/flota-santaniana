@@ -59,7 +59,7 @@ function sdPintar() {
   content.innerHTML = `
     <div class="page-header">
       <h1><i class="ti ti-heartbeat"></i> Salud del sistema</h1>
-      <p>Si algo falla, queda acá y te llega un aviso al celular, antes de que te llamen</p>
+      <p>Si algo falla, queda registrado acá y recibís un aviso en el celular, antes de que te lo reporten</p>
     </div>
     <div class="section">
       <div class="sd-resumen">
@@ -67,10 +67,10 @@ function sdPintar() {
           <small>Se revisa sola cada 5 minutos${d.vigia.ultimo_chequeo ? ` · última: ${sdEsc(d.vigia.ultimo_chequeo.slice(11, 16))}` : ""}</small></div>
         <div class="sd-caja"><span class="sd-tit">Avisos al celular</span>${can}
           <small>${d.ultimo_aviso ? `Último aviso: ${sdEsc(d.ultimo_aviso)}` : "Todavía no se mandó ninguno"}${d.ultimo_aviso_error ? ` · <b class="sd-rojo">falló: ${sdEsc(d.ultimo_aviso_error)}</b>` : ""}</small>
-          <button class="btn btn-ghost btn-sm" onclick="sdProbar(this)"><i class="ti ti-send"></i> Mandar aviso de prueba</button></div>
+          <button class="btn btn-ghost btn-sm" onclick="sdProbar(this)"><i class="ti ti-send"></i> Enviar aviso de prueba</button></div>
         <div class="sd-caja"><span class="sd-tit">Errores sin mirar</span>
           <span class="sd-estado ${d.sin_ver ? "mal" : "ok"}"><i class="ti ${d.sin_ver ? "ti-bug" : "ti-mood-smile"}"></i> ${d.sin_ver ? `${d.sin_ver} para revisar` : "Ninguno"}</span>
-          <small>El sistema arrancó hace ${sdHace(d.arranque_hace_min)}</small></div>
+          <small>El sistema se inició hace ${sdHace(d.arranque_hace_min)}</small></div>
       </div>
 
       <div class="card">
@@ -136,11 +136,11 @@ function sdPasos(d) {
       <span class="sd-num">1</span>
       <div><b>Avisos por Telegram</b> (recomendado: llegan como un mensaje más)
         <ol>
-          <li>En Telegram, buscá <b>@BotFather</b>, mandale <code>/newbot</code> y seguí los pasos. Al final te da un <b>token</b> (algo como <code>123456:ABC…</code>).</li>
-          <li>Abrí el bot que creaste y mandale cualquier mensaje (un «hola»).</li>
+          <li>En Telegram, buscá <b>@BotFather</b>, enviale <code>/newbot</code> y seguí los pasos. Al final te da un <b>token</b> (algo como <code>123456:ABC…</code>).</li>
+          <li>Abrí el bot que creaste y enviale cualquier mensaje (un «hola»).</li>
           <li>Buscá <b>@userinfobot</b>, escribile y te responde tu <b>Id</b> (un número).</li>
           <li>En Render, en el servicio del sistema → <b>Environment</b>, agregá <code>AVISOS_TELEGRAM_TOKEN</code> con el token y <code>AVISOS_TELEGRAM_CHAT</code> con tu Id. Guardá (Render reinicia solo).</li>
-          <li>Volvé acá y tocá <b>Mandar aviso de prueba</b>.</li>
+          <li>Volvé acá y tocá <b>Enviar aviso de prueba</b>.</li>
         </ol>
       </div>
     </div>
@@ -155,7 +155,7 @@ function sdPasos(d) {
     </div>
     <div class="sd-paso">
       <span class="sd-num">3</span>
-      <div><b>Vigilante externo</b> (para cuando el sistema entero se cae y no puede avisar solo)
+      <div><b>Vigilante externo</b> (para cuando el sistema completo deja de funcionar y no puede avisar por sí mismo)
         <ol>
           <li>Creá una cuenta gratis en <b>UptimeRobot</b> (o Better Stack).</li>
           <li>Agregá un monitor de tipo HTTP con esta dirección, cada 5 minutos:</li>

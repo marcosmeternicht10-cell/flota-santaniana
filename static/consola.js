@@ -33,7 +33,7 @@ const vcPlural = (n, uno, varios) => `${vcN(n)} ${+n === 1 ? uno : varios}`;
 const VC_DIVISIONES = [
   {
     id: "flota", nombre: "Flota", icono: "ti-bus", tono: "#3D8BDB",
-    lema: "Los coches, su estado y sus papeles.",
+    lema: "Los coches, su estado y su documentación.",
     cifras: r => [
       r.flota && { n: r.flota.disponibles, de: r.flota.activos, txt: "coches disponibles hoy" },
       r.flota && { n: r.flota.en_taller + r.flota.fuera_servicio, txt: "con OT abierta o fuera de servicio" },
@@ -79,7 +79,7 @@ const VC_DIVISIONES = [
       { sec: "pedidos_ot", nombre: "Pedidos de choferes", icono: "ti-inbox", desc: "Lo que reportan desde la ruta",
         dato: r => r.pedidos && { txt: r.pedidos.nuevos ? `${vcN(r.pedidos.nuevos)} sin decidir` : "Nada pendiente",
                                   tono: r.pedidos.urgentes ? "alerta" : r.pedidos.nuevos ? "aviso" : "ok" } },
-      { sec: "coches", nombre: "Coches", icono: "ti-bus", desc: "La ficha de cada coche: historial, preventivo, cubiertas y costos",
+      { sec: "coches", nombre: "Coches", icono: "ti-bus", desc: "La ficha de cada coche: historial, preventivo, neumáticos y costos",
         dato: r => r.preventivo && (r.preventivo.vencidos ? { txt: `${vcN(r.preventivo.vencidos)} con preventivo vencido`, tono: "alerta" }
                                     : { txt: r.preventivo.pronto ? `${vcN(r.preventivo.pronto)} por vencer` : "Preventivo al día", tono: r.preventivo.pronto ? "aviso" : "ok" }) },
     ],

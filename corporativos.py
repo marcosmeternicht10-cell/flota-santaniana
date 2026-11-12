@@ -2808,7 +2808,7 @@ def api_corp_cargar_combustible():
             lt = f"{litros:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
             return jsonify({"ok": False, "revisar_importe": True,
                             "msg": (f"Con Gs. {gs(importe)} por {lt} litros sale Gs. {gs(precio)} el litro, "
-                                    f"y el precio normal anda por Gs. {gs(referencia)}. Revisá el importe y los litros.")})
+                                    f"y el precio habitual ronda los Gs. {gs(referencia)}. Revisá el importe y los litros.")})
     else:
         precio = num(d.get("precio_litro")) or ultimo_precio_litro()
 
@@ -3794,7 +3794,7 @@ def _bloque_control_pdf(control, st_sec, st_per, tabla, gs, lt, mm, colors, Para
 
     if picos:
         e.append(Paragraph("Picos: tanques que se dispararon", st_sec))
-        d = [["Coche", "Fecha", "Chofer", "Consumo", "Su normal", "Desvío", "Litros de más"]]  # sin plata
+        d = [["Coche", "Fecha", "Chofer", "Consumo", "Su normal", "Desvío", "Litros en exceso"]]  # sin plata
         for g in picos:
             for t in g["tanques"]:
                 d.append([f'#{g["bus"]}', t["fecha"], (t["chofer"] or "—")[:22],

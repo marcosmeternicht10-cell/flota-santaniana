@@ -121,7 +121,7 @@ GRUPOS = {
     },
     "agencias": {
         "nombre": "Agencias y contratos",
-        "detalle": "Las agencias de venta de pasajes con sus contratos y papeles",
+        "detalle": "Las agencias de venta de pasajes con sus contratos y documentos",
         "tablas": ["agencia_documentos", "agencia_contratos", "agencias"],
         "conteo": "agencias",
     },

@@ -78,7 +78,7 @@ PERMISOS = [
     ("agencias",             "Agencias",               "Las agencias de venta: código, datos de contacto y estado"),
     ("combustible:escribir", "Cargar combustible",     "Puede registrar cargas (por ejemplo, desde el surtidor)"),
     ("km:escribir",          "Informar kilometraje",   "Puede actualizar el km de un coche (por ejemplo, desde el GPS)"),
-    ("recibir",              "Mandar cualquier dato",  "Bandeja de entrada: ventas, agencias, fallas, costos… lo que el sistema entiende se aplica solo"),
+    ("recibir",              "Enviar cualquier dato",  "Bandeja de entrada: ventas, agencias, fallas, costos… lo que el sistema entiende se aplica solo"),
 ]
 CODIGOS = {p[0] for p in PERMISOS}
 
@@ -250,7 +250,7 @@ def con_clave(permiso=None):
                 return _error(401, "clave_invalida", "La clave no existe. Revisá que esté completa.")
             if not fila["activa"]:
                 _anotar(fila["id"], 401, 0, inicio)
-                return _error(401, "clave_revocada", "Esta clave fue revocada. Pedile una nueva al administrador.")
+                return _error(401, "clave_revocada", "Esta clave fue revocada. Solicitá una nueva al administrador.")
             permisos = _permisos_de(fila)
             if permiso and permiso not in permisos:
                 _anotar(fila["id"], 403, 0, inicio)
@@ -1006,10 +1006,10 @@ def v1_planilla(token):
     finally:
         conn.close()
     if not fila or (fila["tipo"] or "clave") != "planilla":
-        return Response("error\nEste link no existe. Pedile uno nuevo al administrador.\n", 404, mimetype="text/csv")
+        return Response("error\nEste link no existe. Solicitá uno nuevo al administrador.\n", 404, mimetype="text/csv")
     if not fila["activa"]:
         _anotar(fila["id"], 401, 0, inicio)
-        return Response("error\nEste link fue desactivado. Pedile uno nuevo al administrador.\n", 401, mimetype="text/csv")
+        return Response("error\nEste link fue desactivado. Solicitá uno nuevo al administrador.\n", 401, mimetype="text/csv")
     ok, _, espera = _pasa_limite(fila["id"])
     if not ok:
         _anotar(fila["id"], 429, 0, inicio)

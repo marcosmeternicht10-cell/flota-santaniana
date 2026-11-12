@@ -192,7 +192,7 @@ async function fcAbrir(vid, tab) {
 }
 
 const fcCargando = () => `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`;
-const fcError = msg => `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>${msg}</b><span>Probá de nuevo en un rato.</span></div>`;
+const fcError = msg => `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>${msg}</b><span>Volvé a intentarlo en unos minutos.</span></div>`;
 
 async function fcIr(tab) {
   const c = $("#fc-cuerpo");
@@ -307,10 +307,10 @@ function fcAlertas(d) {
   if (d.fuera_servicio) a.push(["mal", "ban", `Fuera de servicio ${fcHaceDias(d.fuera_servicio.dias)}${d.fuera_servicio.motivo ? `: ${fcE(d.fuera_servicio.motivo)}` : ""}`]);
   const venc = (d.documentos || []).filter(x => x.dias != null && x.dias < 0).length;
   const porVencer = (d.documentos || []).filter(x => x.dias != null && x.dias >= 0 && x.dias <= 30).length;
-  if (venc) a.push(["mal", "file-alert", `${venc} ${venc === 1 ? "papel vencido" : "papeles vencidos"}`]);
-  if (porVencer) a.push(["aviso", "file-time", `${porVencer} ${porVencer === 1 ? "papel vence" : "papeles vencen"} en los próximos 30 días`]);
+  if (venc) a.push(["mal", "file-alert", `${venc} ${venc === 1 ? "documento vencido" : "documentos vencidos"}`]);
+  if (porVencer) a.push(["aviso", "file-time", `${porVencer} ${porVencer === 1 ? "documento vence" : "documentos vencen"} en los próximos 30 días`]);
   const n = d.neumaticos;
-  if (n && n.para_cambiar) a.push(["aviso", "disc", `${n.para_cambiar} ${n.para_cambiar === 1 ? "cubierta para cambiar" : "cubiertas para cambiar"}`]);
+  if (n && n.para_cambiar) a.push(["aviso", "disc", `${n.para_cambiar} ${n.para_cambiar === 1 ? "neumático para cambiar" : "neumáticos para cambiar"}`]);
   return a.length ? `<div class="fc-alertas">${a.map(([t, i, x]) => `<span class="fc-alerta ${t}"><i class="ti ti-${i}"></i>${x}</span>`).join("")}</div>` : "";
 }
 
@@ -338,7 +338,7 @@ function fcCifras(d) {
       <b>${n}<small> ${n === 1 ? "trabajo" : "trabajos"}</small></b>
       <span>${n ? [t.preventivo && `${t.preventivo} ${t.preventivo === 1 ? "preventivo" : "preventivos"}`,
                    t.correctivo && `${t.correctivo} ${t.correctivo === 1 ? "correctivo" : "correctivos"}`,
-                   t.neumaticos && `${t.neumaticos} de cubiertas`].filter(Boolean).join(" · ") || "Otros trabajos"
+                   t.neumaticos && `${t.neumaticos} de neumáticos`].filter(Boolean).join(" · ") || "Otros trabajos"
                : h.resumen.ultimo ? `El último fue el ${fcFecha(h.resumen.ultimo)}` : "Sin registros"}</span></div>`);
   }
   return out.join("");
@@ -423,29 +423,29 @@ function fcCajaUltimo(d, tabs) {
   }).join("");
   return fcCaja("timeline-event", "Lo último que se le hizo", `
     <ul class="fc-ultimos">${filas}</ul>
-    ${h.resumen.costo ? `<p class="fc-nota">En total se gastaron <b>${gs(h.resumen.costo)}</b> en ${fmtNum(h.resumen.registros)} registros.</p>` : ""}`,
+    ${h.resumen.costo ? `<p class="fc-nota">En total se invirtieron <b>${gs(h.resumen.costo)}</b> en ${fmtNum(h.resumen.registros)} registros.</p>` : ""}`,
     ve ? fcLink(`Ver todo el historial (${fmtNum(h.resumen.registros)})`, "fcIr('historial')") : "");
 }
 
 function fcCajaCubiertas(d, tabs) {
   const n = d.neumaticos;
   const ve = tabs.includes("neumaticos");
-  if (!n) return ve ? fcCaja("disc", "Cubiertas", fcVacio("disc-off", "Todavía no tiene configuración de neumáticos."), fcLink("Ver cubiertas", "fcIr('neumaticos')")) : "";
+  if (!n) return ve ? fcCaja("disc", "Neumáticos", fcVacio("disc-off", "Todavía no tiene configuración de neumáticos."), fcLink("Ver neumáticos", "fcIr('neumaticos')")) : "";
   const peor = n.peor;
-  return fcCaja("disc", "Cubiertas", `
-    <div class="fc-ruedas">${n.ruedas.map(r => `<i class="${r.vacia ? "vacia" : "g-" + (r.estado || "optimo")}" title="${fcE(r.nombre)}: ${r.vacia ? "sin cubierta" : `${Math.round(r.uso)} % de uso`}"></i>`).join("")}</div>
-    <p class="fc-linea"><b>${n.montadas}</b> de ${n.posiciones} montadas${n.para_cambiar ? ` · <b class="tx-venc">${n.para_cambiar} para cambiar</b>` : ""}${n.medida ? ` · ${fcE(n.medida)}` : ""}</p>
-    ${peor ? `<p class="fc-nota">La más gastada: ${fcE(peor.nombre)}, al ${Math.round(peor.uso)} % de su vida${peor.km_restantes ? ` (le quedan ${fmtNum(Math.round(peor.km_restantes))} km)` : ""}.</p>`
-           : `<p class="fc-nota">No hay cubiertas cargadas en este coche.</p>`}`,
-    ve ? fcLink("Ver cubiertas", "fcIr('neumaticos')") : "");
+  return fcCaja("disc", "Neumáticos", `
+    <div class="fc-ruedas">${n.ruedas.map(r => `<i class="${r.vacia ? "vacia" : "g-" + (r.estado || "optimo")}" title="${fcE(r.nombre)}: ${r.vacia ? "sin neumático" : `${Math.round(r.uso)} % de uso`}"></i>`).join("")}</div>
+    <p class="fc-linea"><b>${n.montadas}</b> de ${n.posiciones} montados${n.para_cambiar ? ` · <b class="tx-venc">${n.para_cambiar} para cambiar</b>` : ""}${n.medida ? ` · ${fcE(n.medida)}` : ""}</p>
+    ${peor ? `<p class="fc-nota">El de mayor desgaste: ${fcE(peor.nombre)}, al ${Math.round(peor.uso)} % de su vida útil${peor.km_restantes ? ` (le quedan ${fmtNum(Math.round(peor.km_restantes))} km)` : ""}.</p>`
+           : `<p class="fc-nota">No hay neumáticos cargados en este coche.</p>`}`,
+    ve ? fcLink("Ver neumáticos", "fcIr('neumaticos')") : "");
 }
 
 function fcCajaPapeles(d) {
   const docs = d.documentos;
   if (!docs) return "";
   const pie = puedeVerSeccion("documentos") ? fcLink("Ir a Documentos", "destNavegar('documentos')") : "";
-  if (!docs.length) return fcCaja("file-certificate", "Papeles", fcVacio("file-off", "No tiene documentos cargados."), pie);
-  return fcCaja("file-certificate", "Papeles", `
+  if (!docs.length) return fcCaja("file-certificate", "Documentos", fcVacio("file-off", "No tiene documentos cargados."), pie);
+  return fcCaja("file-certificate", "Documentos", `
     <ul class="fc-papeles">${docs.map(x => {
       const cl = x.dias == null ? "" : x.dias < 0 ? "mal" : x.dias <= 30 ? "aviso" : "";
       const cuando = x.dias == null ? "" : x.dias < 0 ? `vencido ${fcHaceDias(-x.dias)}` : x.dias === 0 ? "vence hoy" : x.dias <= 60 ? `en ${x.dias} ${x.dias === 1 ? "día" : "días"}` : "";

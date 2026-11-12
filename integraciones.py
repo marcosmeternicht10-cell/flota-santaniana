@@ -528,7 +528,7 @@ def _ejemplo(evento):
             elif evento == "falla.reportada":
                 f = conn.execute("SELECT id FROM vehiculos WHERE activo=1 ORDER BY id LIMIT 1").fetchone()
                 ref = {"vehiculo_id": f["id"], "pedido": 0, "chofer": "Chofer de prueba", "km": 0,
-                       "problemas": [{"descripcion": "Ejemplo: no anda el aire", "tipo": "correctivo"}]} if f else None
+                       "problemas": [{"descripcion": "Ejemplo: no funciona el aire acondicionado", "tipo": "correctivo"}]} if f else None
             else:
                 ref = None
         finally:

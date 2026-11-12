@@ -358,7 +358,7 @@ def api_probar_aviso():
     ok, errores = _enviar(f"{NOMBRE_SISTEMA}: aviso de prueba",
                           f"Si te llegó esto, los avisos funcionan. Enviado por {session.get('usuario', '-')}.")
     if ok:
-        return jsonify({"ok": True, "msg": f"Aviso enviado por {', '.join(ok)}. Fijate en el celular."})
+        return jsonify({"ok": True, "msg": f"Aviso enviado por {', '.join(ok)}. Revisá el celular."})
     return jsonify({"ok": False, "msg": "No se pudo enviar: " + "; ".join(errores)})
 
 

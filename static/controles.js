@@ -292,7 +292,7 @@ async function ctVistaRecaudacion(animar) {
     : [["Boletos vendidos", tot.boletos], ["Efectivo", alGs(tot.efectivo)], ["Tarjeta y transf.", alGs(tot.tarjeta + tot.transferencia)], ["Devol. y anul.", "− " + alGs(tot.salidas)], ["Neto", alGs(tot.neto), 1]];
   content.innerHTML = ctShell(`
     <div class="al-vista al-recv">
-      <div class="al-v-cab"><h1 class="al-d">Recaudación</h1><span>${por === "servicio" ? "Lo que dejó cada salida, por la fecha del viaje, y qué agencia vendió." : "La plata que entró y salió, por la fecha en que se cobró."}</span></div>
+      <div class="al-v-cab"><h1 class="al-d">Recaudación</h1><span>${por === "servicio" ? "Lo que dejó cada salida, por la fecha del viaje, y qué agencia vendió." : "El dinero que ingresó y egresó, por la fecha en que se cobró."}</span></div>
       <div class="al-chips">${CT_REC_POR.map(([k, t]) => `<button type="button" class="al-chip ${k === por ? "on" : ""}" aria-pressed="${k === por}" onclick="al.rec.por='${k}';ctVistaRecaudacion(false)">${t}</button>`).join("")}</div>
       <div class="al-man-sel">
         <label class="al-campo"><span>Desde</span><input type="date" value="${al.rec.desde}" onchange="al.rec.desde=this.value;ctVistaRecaudacion(false)"></label>

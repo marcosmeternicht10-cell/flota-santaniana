@@ -304,7 +304,7 @@ async function renderDashboard() {
     // Van primero (si no, con muchos preventivos vencidos no se llegan a ver)
     (av && av.avisos || []).filter(a => a.urgente).slice(0, 4).reverse().forEach(a => alertas.unshift({
       tipo: a.nivel === "mal" ? "danger" : "warning", icono: "building-store",
-      titulo: `Agencia ${a.agencia} · ${a.que === "contrato" ? "contrato" : a.que === "garantia" ? "garantía" : "papeles"}`,
+      titulo: `Agencia ${a.agencia} · ${a.que === "contrato" ? "contrato" : a.que === "garantia" ? "garantía" : "documentación"}`,
       meta: a.txt, urgente: true, ir: `agIrA(${a.agencia_id})`,
     }));
   }
@@ -2651,7 +2651,7 @@ function trInicioVacio() {
     <button class="tr-op" onclick="document.querySelector('.tr-vacio-nuevo input')?.focus()">
       <i class="ti ti-pencil-plus"></i>
       <b>Empezar en blanco</b>
-      <span>Agregar los corredores y las salidas a mano.</span>
+      <span>Agregar los corredores y las salidas manualmente.</span>
     </button>`);
   return `
     <div class="tr-vacio">
@@ -2706,7 +2706,7 @@ function trResumen() {
       ${r.a_confirmar ? n(r.a_confirmar, "a confirmar", "falta", "trIrAProblema('falta')") : n("✓", "todo asignado", "bien")}
       ${r.con_aviso ? n(r.con_aviso, r.con_aviso === 1 ? "con aviso" : "con avisos", "aviso", "trIrAProblema('aviso')") : ""}
       ${r.refuerzos ? n(r.refuerzos, r.refuerzos === 1 ? "refuerzo" : "refuerzos", "ref") : ""}
-      ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con papeles vencidos" : "coches con papeles vencidos", "doc", "trIrAProblema('doc')") : ""}
+      ${r.papeles ? n(r.papeles, r.papeles === 1 ? "coche con documentos vencidos" : "coches con documentos vencidos", "doc", "trIrAProblema('doc')") : ""}
       ${trInt() ? (r.pasados_tope
         ? n(r.pasados_tope, r.pasados_tope === 1 ? "chofer pasa los 8 viajes del mes" : "choferes pasan los 8 viajes del mes", "aviso", "trViajesMes()")
         : n(`<i class="ti ti-steering-wheel"></i>`, "viajes de los choferes en el mes", "viajes", "trViajesMes()")) : ""}
@@ -3547,7 +3547,7 @@ async function trVersiones(btn) {
       icono: "file-type-pdf", fn: () => trVerPdf(v.version),
     });
     items.push({
-      html: `<b>Versión ${v.version} · bajar imagen</b><span>Para mandar al grupo</span>`,
+      html: `<b>Versión ${v.version} · bajar imagen</b><span>Para enviar al grupo</span>`,
       icono: "photo-down", fn: () => trDescargar(v.version, "imagen"),
     });
   });
@@ -3767,7 +3767,7 @@ async function tpGuardar(btn) {
   tp.d = r;
   tp.filas = r.filas.map((f, k) => ({ ...f, _k: k }));
   tpPintar();
-  toast(`Programación guardada · ${r.rotaciones} rotaciones y las salidas por día actualizadas${r.revision.cierra ? "" : " (ojo: la semana no cierra)"}`, r.revision.cierra ? "success" : "");
+  toast(`Programación guardada · ${r.rotaciones} rotaciones y las salidas por día actualizadas${r.revision.cierra ? "" : " (atención: la semana no cierra)"}`, r.revision.cierra ? "success" : "");
   if (tr.fecha) trCargar(tr.fecha);
 }
 
@@ -6051,7 +6051,7 @@ async function renderReposicion() {
         <td class="num">${i.precio ? preMil(i.precio) : "—"}</td>
         <td class="num">${+i.recibido ? `<span class="repo-lleg">llegó ${preCant(i.recibido)}</span>` : ""}</td></tr>`).join("")}</tbody></table>
       ${p.estado === "pedido" || p.estado === "parcial" ? `<footer>
-        <button type="button" class="btn btn-ghost btn-sm" onclick="repoMandar(${p.id})"><i class="ti ti-brand-whatsapp"></i> Mandar pedido</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="repoMandar(${p.id})"><i class="ti ti-brand-whatsapp"></i> Enviar pedido</button>
         <button type="button" class="pv-link" onclick="repoAnular(${p.id}, '${p.estado}')">${p.estado === "parcial" ? "Cerrar (no llega más)" : "Anular"}</button>
         <button type="button" class="btn btn-success btn-sm" onclick="repoRecibir(${p.id})"><i class="ti ti-package-import"></i> Recibir${pend.length < (p.items || []).length ? " lo que falta" : ""}</button>
       </footer>` : ""}
@@ -6104,7 +6104,7 @@ function repoTotal() {
 async function repoArmar(btn) {
   const f = repoFilas().filter(x => x.on && x.cantidad > 0);
   const sin = f.find(x => !x.proveedor);
-  if (sin) { toast("A cada repuesto ponele a quién se le pide", "error"); sin.tr.querySelector(".repo-prov-in, .repo-prov")?.focus(); return; }
+  if (sin) { toast("Indicá a qué proveedor se le pide cada repuesto", "error"); sin.tr.querySelector(".repo-prov-in, .repo-prov")?.focus(); return; }
   btn.disabled = true;
   const r = await api("/api/compras/reposicion", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items: f.map(({ tr, on, ...x }) => x) }) }).catch(() => null);
@@ -6448,7 +6448,7 @@ async function cmpPedirProveedores(otId) {
           <td class="num">${x.precio ? preMil(x.precio) : "—"}</td></tr>`).join("")}</tbody></table>
         ${g.proveedor ? `<div class="cmp-ped-acc">
           <button type="button" class="btn btn-ghost btn-sm" onclick="navigator.clipboard.writeText(window._cmpPed[${i}]).then(()=>toast('Pedido copiado','success'))"><i class="ti ti-copy"></i> Copiar pedido</button>
-          ${wa(g.telefono) ? `<a class="btn btn-sm cmp-wa" target="_blank" rel="noopener" href="https://wa.me/${wa(g.telefono)}?text=${encodeURIComponent(texto(g))}"><i class="ti ti-brand-whatsapp"></i> Mandar por WhatsApp</a>` : `<span class="cmp-ped-sintel">Sin teléfono: cargalo en Proveedores</span>`}
+          ${wa(g.telefono) ? `<a class="btn btn-sm cmp-wa" target="_blank" rel="noopener" href="https://wa.me/${wa(g.telefono)}?text=${encodeURIComponent(texto(g))}"><i class="ti ti-brand-whatsapp"></i> Enviar por WhatsApp</a>` : `<span class="cmp-ped-sintel">Sin teléfono: cargalo en Proveedores</span>`}
         </div>` : `<div class="cmp-ped-sintel">Elegí el proveedor en «Editar precios».</div>`}
       </div>`).join("") : `<div class="empty"><i class="ti ti-building-warehouse"></i>No hay nada para comprar: todo sale del depósito.</div>`,
     pie: `<div class="pre-pie"><button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button></div>`,
@@ -6594,7 +6594,7 @@ function preCeldasMat(m) {
         <button type="button" class="pre-editar quitar" onclick="preQuitarMat(${m.id})" title="No hace falta: sacarlo del presupuesto"><i class="ti ti-trash"></i></button>`}</div>${repHtml}</td>
     <td class="pre-prov-td">${provHtml}</td>
     <td>${dep
-      ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" value="0" disabled title="Sale del depósito: no se pide plata"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
+      ? `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" value="0" disabled title="Sale del depósito: no requiere fondos"><div class="pre-costo">costo ${preMil(costo)} c/u</div>`
       : `<input class="pre-in pre-mat" data-id="${m.id}" data-q="${q}" inputmode="numeric" value="${d.precio_unit ? preMil(d.precio_unit) : ""}" placeholder="0" oninput="preRecalcular()">${costo && r ? `<div class="pre-costo">último costo ${preMil(costo)}</div>` : ""}`}</td>
     <td class="num pre-sub">—</td>`;
 }
@@ -6969,7 +6969,7 @@ async function preCrearRep(mid, texto) {
     const r = await api(`/api/compras/repuestos_buscar?q=${encodeURIComponent(q)}`).catch(() => null);
     const l = ((r && r.lista) || []).slice(0, 3);
     dup.hidden = !l.length;
-    dup.innerHTML = `<span><i class="ti ti-alert-circle"></i> Ojo, en el inventario ya hay algo parecido. Si es este, usalo en vez de crear otro:</span>`
+    dup.innerHTML = `<span><i class="ti ti-alert-circle"></i> Atención: en el inventario ya existe un artículo similar. Si es el mismo, usalo en lugar de crear otro:</span>`
       + l.map(x => `<button type="button" data-id="${x.id}"><b>${trEsc(x.codigo)}</b> ${trEsc(x.descripcion)}${x.marca ? ` · ${trEsc(x.marca)}` : ""} <em>${+x.stock_actual > 0 ? "hay " + preCant(x.stock_actual) : "sin stock"}</em> <u>Usar este</u></button>`).join("");
     dup.querySelectorAll("button").forEach(b => b.onclick = async () => { o.remove(); await preVincular(mid, +b.dataset.id); });
   }, 300); };
@@ -7704,7 +7704,7 @@ function otPedPintar(id) {
   const n = st.pedidos.length, PR = { urgente: "Urgente", alta: "Alta", normal: "Normal", baja: "Baja" };
   const est = p => p.estado === "agendado" ? `con turno${p.fecha_turno ? " el " + trEsc(ptFC(p.fecha_turno)) : ""}` : p.estado === "espera" ? `para más adelante${p.revisar_el ? " (" + trEsc(ptFC(p.revisar_el)) + ")" : ""}` : "nuevo";
   caja.innerHTML = `<div class="ot-ped-caja">
-    <div class="ot-ped-cab"><i class="ti ti-inbox"></i><div><b>Ojo: el coche ${trEsc(v.n_interno || v.patente || "")} ya tiene ${n} pedido${n === 1 ? "" : "s"} de choferes sin decidir</b>
+    <div class="ot-ped-cab"><i class="ti ti-inbox"></i><div><b>Atención: el coche ${trEsc(v.n_interno || v.patente || "")} ya tiene ${n} pedido${n === 1 ? "" : "s"} de choferes sin decidir</b>
       <span>${st.puede ? "Seguramente es lo mismo que vas a cargar. Los marcados <b>pasan a esta OT</b> y salen de Pedidos de choferes; no hace falta escribirlos de nuevo."
                        : "Seguramente es lo mismo que vas a cargar. Para pasarlos a la OT, alguien de taller lo hace desde Pedidos de choferes."}</span></div></div>
     ${st.pedidos.map(p => {
@@ -8178,7 +8178,7 @@ function otHorasPintar() {
         ${desde
           ? `<button type="button" class="btn btn-sm oh-fin" onclick="otHorasAccion('terminar', ${t.personal_id}, this)"><i class="ti ti-player-stop"></i> Terminó ahora</button>`
           : `<button type="button" class="btn btn-sm btn-primary" onclick="otHorasAccion('empezar', ${t.personal_id}, this)"><i class="ti ti-player-play"></i> Empezó ahora</button>`}
-        <button type="button" class="btn btn-ghost btn-sm" onclick="otHorasMano(${t.personal_id})"><i class="ti ti-pencil"></i> Cargar a mano</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="otHorasMano(${t.personal_id})"><i class="ti ti-pencil"></i> Cargar manualmente</button>
       </div>
       <div class="oh-mano" id="oh-mano-${t.personal_id}" hidden>
         <label class="oh-campo"><span>Inicio</span><input type="datetime-local" id="oh-mi-${t.personal_id}"></label>
@@ -9490,7 +9490,7 @@ async function otKmGuardar(btn) {
   if (!km || km <= 0) { toast("Poné el kilometraje del tablero", "error"); return; }
   const antes = Math.round(ot.km_coche || 0);
   if (antes && km < antes &&
-      !confirm(`El sistema tenía ${fmtNum(antes)} km y ponés ${fmtNum(km)} km.\n\n¿Corregir a ${fmtNum(km)}? Desde ahora manda esta lectura.`)) return;
+      !confirm(`El sistema tenía ${fmtNum(antes)} km y ponés ${fmtNum(km)} km.\n\n¿Corregir a ${fmtNum(km)}? Desde ahora rige esta lectura.`)) return;
   if (btn) btn.disabled = true;
   const r = await api(`/api/ots/${ot.id}/km`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ km })
@@ -12946,7 +12946,7 @@ async function cargarRendiciones() {
                 </td>
                 <td class="num">
                   ${r.monto ? fmtNum(r.monto) : "—"}
-                  ${r.monto_fijo ? ' <i class="ti ti-pin-filled" style="color:var(--info)" title="Monto fijado a mano por ' + (r.editado_por || 'admin') + '"></i>' : ''}
+                  ${r.monto_fijo ? ' <i class="ti ti-pin-filled" style="color:var(--info)" title="Monto fijado manualmente por ' + (r.editado_por || 'admin') + '"></i>' : ''}
                 </td>
                 ${puedeOperarCorp() ? `<td class="center" style="white-space:nowrap">
                   ${r.liquidado
@@ -13259,7 +13259,7 @@ async function verAccesosChoferes() {
 async function editarMontoRendicion(id, actual, esFijo) {
   const txt = prompt(
     "Monto de este servicio en guaraníes.\n\n" +
-    (esFijo ? "Está fijado a mano. " : "Hoy se calcula por la tarifa del tramo. ") +
+    (esFijo ? "Está fijado manualmente. " : "Hoy se calcula por la tarifa del tramo. ") +
     "Si lo cambiás queda fijo y el sistema no lo vuelve a recalcular.\n" +
     "Dejalo vacío para volver al monto por tarifa.",
     actual ? String(Math.round(actual)) : "");
@@ -15642,7 +15642,7 @@ function agCompartirAsignacion() {
   agc.blob = null; agc.clave = ""; agc.dias = []; agc.fuera = new Set();
   rvModal({
     titulo: "Compartir la asignación", icono: "share", ancho: 760,
-    sub: "Elegí las fechas: sale una imagen con el coche y la tripulación de cada servicio, lista para mandar al grupo.",
+    sub: "Elegí las fechas: sale una imagen con el coche y la tripulación de cada servicio, lista para enviar al grupo.",
     cuerpo: `
       <div class="ag-chips" id="agc-chips" style="margin-bottom:12px;flex-wrap:wrap">
         <button class="chip activo" onclick="agcRapido('hoy', this)">Hoy</button>
@@ -15878,7 +15878,7 @@ async function abrirSospechosas() {
       <div class="firma-head">
         <div>
           <h2><i class="ti ti-shield-search"></i> Revisar cargas</h2>
-          <p>${d.revisadas} servicio(s) sin liquidar revisados · ${d.total_revisar} con algo raro</p>
+          <p>${d.revisadas} servicio(s) sin liquidar revisados · ${d.total_revisar} con inconsistencias</p>
         </div>
         <button class="firma-x" onclick="this.closest('.modal-overlay').remove()"><i class="ti ti-x"></i></button>
       </div>
@@ -15886,7 +15886,7 @@ async function abrirSospechosas() {
       <div class="firma-items" style="max-height:62vh;overflow-y:auto">
         ${!hayAlgo ? `
           <div class="empty"><i class="ti ti-circle-check"></i>
-            <div style="font-weight:600;color:var(--text)">Nada raro para revisar</div>
+            <div style="font-weight:600;color:var(--text)">Sin inconsistencias para revisar</div>
             <div style="font-size:12.5px;margin-top:4px">Los ${d.revisadas} servicios sin liquidar tienen fechas coherentes.</div>
           </div>` : ""}
 
@@ -16039,8 +16039,8 @@ async function abrirReferencias(opts = {}) {
 
         <div id="ref-tab-coche" style="display:none">
           <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i>
-            <span>Si un coche anda distinto que sus hermanos —por la ruta que hace, los años o su estado— ponele su propio valor:
-            <b>manda sobre el de su modelo</b>. Vacío, usa el del modelo.</span></p>
+            <span>Si un coche rinde distinto que los demás de su modelo —por la ruta que hace, los años o su estado— asignale su propio valor:
+            <b>prevalece sobre el de su modelo</b>. Vacío, usa el del modelo.</span></p>
           <input id="ref-buscar" class="ref-buscar" placeholder="Buscar por número o patente..." oninput="refFiltrar()">
           <div id="ref-lista-coches">${coches.map(x => filaRefCoche(x, puede)).join("")}</div>
         </div>
@@ -16331,7 +16331,7 @@ function panelControl(d) {
         : (t.chofer || "—")}</span>` : ""}
       <span class="ctrl-tq-val"><b>${fmt2(t.litros_100km)}</b> L/100km</span>
       <span class="desvio ${t.nivel === "bajo" ? "revisar" : t.nivel === "alerta" ? "malo" : "atencion"}">${t.desvio_pct > 0 ? "+" : ""}${t.desvio_pct}%</span>
-      ${t.nivel !== "bajo" ? `<span class="ctrl-tq-mas">${fmtL(t.litros_de_mas)} L de más</span>` : ""}
+      ${t.nivel !== "bajo" ? `<span class="ctrl-tq-mas">${fmtL(t.litros_de_mas)} L en exceso</span>` : ""}
     </div>`;
 
   return `
@@ -16343,7 +16343,7 @@ function panelControl(d) {
       </div>
       <div class="ctrl-met ${r.litros_de_mas ? "malo" : ""}">
         <div class="ctrl-num">${fmtL(r.litros_de_mas)} L</div>
-        <div class="ctrl-lbl">consumidos de más en esos picos</div>
+        <div class="ctrl-lbl">consumidos en exceso en esos picos</div>
         <div class="ctrl-sub">${hayCosto ? gs(r.gs_de_mas) : `en ${r.alertas + r.revisar} tanque(s)`}</div>
       </div>
       <div class="ctrl-met ${parejos.length ? "medio" : ""}">
@@ -16386,7 +16386,7 @@ function panelControl(d) {
         </div>`).join("")
         : `<div class="empty"><i class="ti ti-circle-check"></i>Ningún coche tuvo picos de consumo en este período.</div>`}
       <p class="hint" style="padding:10px 16px"><i class="ti ti-bulb"></i>
-        <span>Un pico es un tanque que se aparta de lo que ese coche suele consumir. Antes de sospechar, fijate que el kilometraje esté bien cargado:
+        <span>Un pico es un tanque que se aparta de lo que ese coche suele consumir. Antes de sospechar, verificá que el kilometraje esté bien cargado:
         un número mal tipeado da un pico falso. Si el kilometraje está bien, esos litros no los consumió el coche.</span></p>
     </div>
 
@@ -16607,7 +16607,7 @@ const CS_PRESETS = [["7", "Últimos 7 días"], ["30", "Últimos 30 días"], ["me
 const CS_ORDENES = [
   ["servicios", "Más hechos", r => [-r.servicios, -r.pasajeros]],
   ["pasajeros", "Más pasajeros", r => [-r.pasajeros, -r.servicios]],
-  ["costo", "Más plata", r => [-r.costo, -r.servicios]],
+  ["costo", "Mayor importe", r => [-r.costo, -r.servicios]],
   ["costo_pasajero", "Más caros por pasajero", r => [-(r.costo_pasajero || 0), -r.servicios]],
   ["suspendidos", "Más suspendidos", r => [-r.suspendidos, -r.servicios]],
 ];
@@ -17630,7 +17630,7 @@ function destDibujar() {
 
   if (!q) {
     const rec = destRecientes().map(s => secciones.find(x => x.sec === s)).filter(Boolean).slice(0, 4);
-    if (rec.length) grupos.push(["Hace un rato", rec]);
+    if (rec.length) grupos.push(["Recientes", rec]);
     grupos.push(["Todas las secciones", secciones]);
   } else {
     const coches = (_dest.coches || []).map(v => {
@@ -17897,7 +17897,7 @@ async function renderRendicionesTurismo() {
     </div>`;
   const d = await api("/api/turismo/rendiciones");
   if (!d || !d.rendiciones) {
-    $("#rv-cuerpo").innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer las rendiciones</b><span>Probá de nuevo en un rato.</span></div>`;
+    $("#rv-cuerpo").innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer las rendiciones</b><span>Volvé a intentarlo en unos minutos.</span></div>`;
     return;
   }
   rv.datos = d;
@@ -18141,7 +18141,7 @@ async function rvNueva() {
     cuerpo: `
       <div class="rv-seg" role="tablist">
         <button class="on" data-modo="agenda" onclick="rvNuevoModo('agenda')"><i class="ti ti-calendar-event"></i> Viaje de la agenda</button>
-        <button data-modo="mano" onclick="rvNuevoModo('mano')"><i class="ti ti-pencil"></i> Cargar a mano</button>
+        <button data-modo="mano" onclick="rvNuevoModo('mano')"><i class="ti ti-pencil"></i> Cargar manualmente</button>
       </div>
       <div id="rv-n-agenda">
         <label class="rv-buscar">
@@ -18163,7 +18163,7 @@ async function rvNueva() {
       <div class="rv-n-sec">
         <div class="rv-n-tit"><i class="ti ti-wallet"></i> Anticipo <small>si todavía no se le dio, se agrega después</small></div>
         <div class="rv-n-fila">
-          <label class="rv-f f-quien"><span>Quién rinde</span><input id="rv-n-chofer" placeholder="El chofer que recibe la plata"></label>
+          <label class="rv-f f-quien"><span>Quién rinde</span><input id="rv-n-chofer" placeholder="El chofer que recibe el anticipo"></label>
           <label class="rv-f f-monto"><span>Monto</span>
             <div class="rv-monto"><input id="rv-n-ant" inputmode="decimal" placeholder="0" autocomplete="off" oninput="rvConv('rv-n')" onblur="rvFormatear(this, 'rv-n-mon')">
             <select id="rv-n-mon" onchange="rvMonedaCambio('rv-n')" aria-label="Moneda">${rvOpcMonedas("GS")}</select></div>
@@ -18220,7 +18220,7 @@ function rvNuevoListar() {
     return;
   }
   if (!lista.length) {
-    cont.innerHTML = `<div class="rv-vacio chico"><i class="ti ti-search-off"></i><b>Ningún viaje con eso</b><span>Si no está en la agenda, cargalo a mano.</span></div>`;
+    cont.innerHTML = `<div class="rv-vacio chico"><i class="ti ti-search-off"></i><b>Ningún viaje con eso</b><span>Si no está en la agenda, cargalo manualmente.</span></div>`;
     return;
   }
   cont.innerHTML = lista.map(({ v, i }) => {
@@ -18311,7 +18311,7 @@ async function rvCrear(btn) {
   let body = {};
   if (rv.nuevo.modo === "agenda") {
     const v = rv.viajes[rv.nuevo.sel];
-    if (!v) { toast("Elegí el viaje de la lista (o cargalo a mano)", "error"); return; }
+    if (!v) { toast("Elegí el viaje de la lista (o cargalo manualmente)", "error"); return; }
     body.agenda_ids = v.ids;
     // Si el servicio lleva varios coches, esta rendición es la de este coche
     if (v.coche) body.agenda_coche = v.coche;
@@ -18744,7 +18744,7 @@ function rvAnticipos(d, editable) {
   return `
     <div class="rv-bloque-cab"><h3><i class="ti ti-wallet"></i> Anticipos</h3><span class="rv-cab-dato"><b>${gs(d.anticipos)}</b></span></div>
     ${d.anticipos_lista.length ? `<div class="rv-ants">${d.anticipos_lista.map(m => rvFilaMov(m, editable)).join("")}</div>`
-      : `<p class="rv-nada">No se cargó ningún anticipo${editable ? ". Si se le dio plata al chofer antes de salir, agregala acá." : "."}</p>`}
+      : `<p class="rv-nada">No se cargó ningún anticipo${editable ? ". Si se le entregó dinero al chofer antes de salir, agregalo acá." : "."}</p>`}
     ${editable ? `<button class="rv-mas" onclick="rvMovModal('anticipo')"><i class="ti ti-plus"></i> Agregar anticipo</button>` : ""}`;
 }
 
@@ -18887,7 +18887,7 @@ function rvMovModal(tipo, m) {
   rvModal({
     titulo: m ? (esG ? "Corregir gasto" : "Corregir anticipo") : "Agregar anticipo",
     icono: esG ? "receipt" : "wallet", ancho: 540,
-    sub: esG ? "Lo que dice el comprobante." : "La plata que se le dio al chofer para el viaje.",
+    sub: esG ? "Lo que dice el comprobante." : "El dinero que se le entregó al chofer para el viaje.",
     cuerpo: `
       <div class="rv-n-grid">
         ${esG ? `<label class="rv-f g2"><span>Rubro</span><select id="rv-m-cat" onchange="$('#rv-m-lt').closest('.rv-f').hidden = !this.value.startsWith('combustible')">
@@ -19446,7 +19446,7 @@ async function pvVehiculos() {
   return pv.vehiculos || [];
 }
 function pvCargando() { return `<div class="dossier-loading"><div class="dossier-spinner"></div></div>`; }
-function pvError(msg) { return `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>${msg || "No se pudo traer el preventivo"}</b><span>Probá de nuevo en un rato.</span></div>`; }
+function pvError(msg) { return `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>${msg || "No se pudo traer el preventivo"}</b><span>Volvé a intentarlo en unos minutos.</span></div>`; }
 async function pvPost(url, body, metodo = "POST") {
   const r = await api(url, { method: metodo, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
   return r || {};
@@ -19631,7 +19631,7 @@ function pvFichaPintar() {
   const f = pv.coche;
   const puede = pvPuede();
   const cu = f.cumplimiento || {};
-  const fuenteKm = { manual: "fijado a mano", lecturas: "según las cargas y las OT", meta: "según la meta mensual", flota: "lo que anda la flota (sin lecturas del coche)" }[f.km_dia_fuente] || "";
+  const fuenteKm = { manual: "fijado manualmente", lecturas: "según las cargas y las OT", meta: "según la meta mensual", flota: "el promedio de la flota (sin lecturas del coche)" }[f.km_dia_fuente] || "";
   const pr = f.proximo;
   const verif = f.km_verif ? `<i class="ti ti-circle-check"></i> Verificado en la OT #${f.km_verif.ot} · ${otFechaHora(f.km_verif.fecha)}` : `<i class="ti ti-info-circle"></i> Sale de las cargas de combustible y de las OT`;
   $("#pv-ficha").innerHTML = `
@@ -20048,11 +20048,11 @@ async function pvUlGuardar(btn, vid, encadenar) {
 function pvKmDia() {
   const f = pv.coche;
   rvModal({
-    titulo: "¿Cuánto anda por día?", icono: "road", ancho: 460,
+    titulo: "¿Cuántos kilómetros recorre por día?", icono: "road", ancho: 460,
     sub: `Coche <b>${pvEsc(f.n_interno)}</b>. Con esto se calcula para qué día cae cada tarea.`,
     cuerpo: `
       <label class="rv-f"><span>Km por día</span><input id="pv-kd" inputmode="numeric" value="${f.km_dia_fuente === "manual" ? fmtNum(f.km_dia_manual) : ""}" placeholder="${pvKm(f.km_dia_estimado || f.km_dia)}" autofocus></label>
-      <p class="pv-nota"><i class="ti ti-info-circle"></i> ${f.km_dia_estimado ? `Según sus lecturas de odómetro anda ≈ <b>${pvKm(f.km_dia_estimado)} km por día</b>.` : "No tiene lecturas suficientes de odómetro: se usa lo que anda la flota."} Dejalo vacío para que lo calcule solo.</p>`,
+      <p class="pv-nota"><i class="ti ti-info-circle"></i> ${f.km_dia_estimado ? `Según sus lecturas de odómetro recorre ≈ <b>${pvKm(f.km_dia_estimado)} km por día</b>.` : "No tiene lecturas suficientes de odómetro: se usa lo que anda la flota."} Dejalo vacío para que lo calcule solo.</p>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
           <button class="btn btn-primary" onclick="pvKmDiaGuardar(this)"><i class="ti ti-check"></i> Guardar</button>`,
   });
@@ -20223,7 +20223,7 @@ function pvDiaPanel(d) {
             ${puede ? `<button class="pv-link" onclick="pvCupoDia('${d.fecha}', ${d.cupo})">cambiar</button>` : ""}</span>
         </div>
         <div class="pv-dia-btns">
-          ${act.length ? `<button class="btn btn-ghost btn-sm" onclick="pvAvisoDia('${d.fecha}')" title="Mandar los turnos del día con sus técnicos por WhatsApp"><i class="ti ti-brand-whatsapp"></i> Avisar</button>` : ""}
+          ${act.length ? `<button class="btn btn-ghost btn-sm" onclick="pvAvisoDia('${d.fecha}')" title="Enviar los turnos del día con sus técnicos por WhatsApp"><i class="ti ti-brand-whatsapp"></i> Avisar</button>` : ""}
           ${puede && d.fecha >= hoy ? `<button class="btn btn-primary btn-sm" onclick="pvAgendar(null, '${d.fecha}')"><i class="ti ti-plus"></i> Agendar</button>` : ""}
         </div>
       </div>
@@ -21384,7 +21384,7 @@ function phPintar() {
         ${abiertas.length ? `<div class="ph-al vivo"><i class="ti ti-player-play"></i><span><b>${abiertas.length} trabajando ahora</b> · tanda abierta, todavía no cuenta: ${abiertas.slice(0, 3).map(t => `N°${t.r.numero}`).join(", ")}${abiertas.length > 3 ? "…" : ""}</span></div>` : ""}
         ${largas ? `<div class="ph-al ojo"><i class="ti ti-alert-triangle"></i><span><b>${largas} tanda${largas === 1 ? "" : "s"} de más de 12 h</b> · puede ser que se olvidaron de poner el fin. Están marcadas en el detalle.</span></div>` : ""}
         ${sin.length ? `<div class="ph-al"><i class="ti ti-user-off"></i><span><b>${sin.length} sin horas cargadas</b> ${ptEsc(phPerTxt())}</span></div>` : ""}
-        ${!abiertas.length && !largas && !sin.length ? `<div class="ph-al ok"><i class="ti ti-circle-check"></i><span>Todos tienen horas cargadas y no hay nada raro.</span></div>` : ""}
+        ${!abiertas.length && !largas && !sin.length ? `<div class="ph-al ok"><i class="ti ti-circle-check"></i><span>Todos tienen horas cargadas y no hay inconsistencias.</span></div>` : ""}
       </div>
     </div>
     ${phGrilla(d, con)}
@@ -22195,7 +22195,7 @@ function caCliente(c) {
         <span class="ca-cli-arch">
           ${vis.length || c.variables.length ? `
             <button class="btn btn-ghost btn-sm" onclick="caVerPdf(caVersionArchivo(), '${caEsc(c.cliente)}')" title="La hoja de ${caEsc(c.cliente)}"><i class="ti ti-file-type-pdf"></i> PDF</button>
-            <button class="btn btn-ghost btn-sm" ${caVersionPublicada() ? `onpointerenter="caTraer(caVersionArchivo(), 'imagen', '${caEsc(c.cliente)}')"` : ""} onclick="${caVersionPublicada() ? `caCompartir(caVersionArchivo(), this, '${caEsc(c.cliente)}')` : `caDescargar(caVersionArchivo(), this, '${caEsc(c.cliente)}')`}" title="${caVersionPublicada() ? "Mandar la hoja de " + caEsc(c.cliente) + " al grupo" : "Descargar la hoja de " + caEsc(c.cliente) + " como imagen"}"><i class="ti ti-${caVersionPublicada() ? "brand-whatsapp" : "photo-down"}"></i></button>` : ""}
+            <button class="btn btn-ghost btn-sm" ${caVersionPublicada() ? `onpointerenter="caTraer(caVersionArchivo(), 'imagen', '${caEsc(c.cliente)}')"` : ""} onclick="${caVersionPublicada() ? `caCompartir(caVersionArchivo(), this, '${caEsc(c.cliente)}')` : `caDescargar(caVersionArchivo(), this, '${caEsc(c.cliente)}')`}" title="${caVersionPublicada() ? "Enviar la hoja de " + caEsc(c.cliente) + " al grupo" : "Descargar la hoja de " + caEsc(c.cliente) + " como imagen"}"><i class="ti ti-${caVersionPublicada() ? "brand-whatsapp" : "photo-down"}"></i></button>` : ""}
           ${puede && sobran.length ? `<button class="btn btn-ghost btn-sm ca-quitar-varios" onclick="caQuitarVarios('${caEsc(c.cliente)}')" title="Los que están vacíos y no suelen correr ${caEsc(caDiaSemana())}"><i class="ti ti-trash"></i> Quitar ${sobran.length}<span class="ca-largo"> que no suele${sobran.length === 1 ? "" : "n"} correr</span></button>` : ""}
           ${puede ? `<button class="btn btn-ghost btn-sm" onclick="caNuevaVariable('${caEsc(c.cliente)}')"><i class="ti ti-plus"></i> Variable</button>` : ""}
         </span>
@@ -22965,7 +22965,7 @@ async function rcTraer() {
   const cuerpo = $("#rc-cuerpo");
   if (!cuerpo) return;
   if (!d || !d.sobres) {
-    cuerpo.innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer los sobres</b><span>Probá de nuevo en un rato.</span></div>`;
+    cuerpo.innerHTML = `<div class="rv-vacio"><i class="ti ti-plug-connected-x"></i><b>No se pudieron traer los sobres</b><span>Volvé a intentarlo en unos minutos.</span></div>`;
     return;
   }
   rc.datos = d;
@@ -23601,7 +23601,7 @@ async function agActualizarBadge() {
   if (!r) return;
   b.hidden = !r.atender;
   b.textContent = r.atender;
-  b.title = `${r.atender} agencia${r.atender === 1 ? "" : "s"} para atender (contratos vencidos o que vencen en 30 días, papeles o garantías vencidas)`;
+  b.title = `${r.atender} agencia${r.atender === 1 ? "" : "s"} para atender (contratos vencidos o que vencen en 30 días, documentación o garantías vencidas)`;
 }
 
 // ─── Pantalla ───
@@ -23658,7 +23658,7 @@ function agPintarLista() {
         ${agPuede() ? `<button class="btn btn-primary btn-sm" onclick="agFormAgencia()"><i class="ti ti-plus"></i> Nueva agencia</button>` : ""}
       </span>
     </div>
-    ${ag.recorrido ? `<div class="ag-rec-ayuda"><i class="ti ti-hand-finger"></i> Tocá el círculo de cada agencia en el orden en que las vas a visitar. Maps arranca desde donde estés.</div>` : ""}
+    ${ag.recorrido ? `<div class="ag-rec-ayuda"><i class="ti ti-hand-finger"></i> Tocá el círculo de cada agencia en el orden en que las vas a visitar. Maps comienza desde tu ubicación.</div>` : ""}
     <div id="ag-tarjetas" class="ag-tarjetas"></div>
     <div id="ag-rec-barra"></div>`;
   agPintarTarjetas(true);
@@ -23685,7 +23685,7 @@ function agPintarTarjetas(animar) {
   const vis = agVisibles();
   if (!ag.d.agencias.length) {
     caja.innerHTML = `<div class="agc-vacio grande"><i class="ti ti-building-store"></i><b>Todavía no hay agencias cargadas</b>
-      <p>Cargá cada agencia con sus datos y la ubicación del local; después, su contrato y sus papeles.</p>
+      <p>Cargá cada agencia con sus datos y la ubicación del local; después, su contrato y su documentación.</p>
       ${agPuede() ? `<button class="btn btn-primary" onclick="agFormAgencia()"><i class="ti ti-plus"></i> Cargar la primera</button>` : ""}</div>`;
   } else if (!vis.length) {
     caja.innerHTML = `<div class="agc-vacio"><i class="ti ti-filter-off"></i><b>Ninguna agencia con ese filtro</b>
@@ -23697,7 +23697,7 @@ function agPintarTarjetas(animar) {
 }
 
 function agBarraVigencia(c, hoy) {
-  if (c.por_empezar) return `<div class="ag-vig-txt">Arranca el ${agFechaLarga(c.desde)}</div>`;
+  if (c.por_empezar) return `<div class="ag-vig-txt">Comienza el ${agFechaLarga(c.desde)}</div>`;
   if (!c.hasta) return `<div class="ag-vig-txt">Desde el ${agFechaLarga(c.desde)} · sin fecha de fin</div>`;
   const ini = new Date(c.desde + "T00:00"), fin = new Date(c.hasta + "T00:00"), h = new Date((hoy || trHoy()) + "T00:00");
   const pct = Math.max(2, Math.min(100, (h - ini) / Math.max(1, fin - ini) * 100));
@@ -23804,7 +23804,7 @@ function agPintarFicha() {
   const [nivelTxt, nivelIc] = AG_NIVEL[f.nivel] || ["", "point"];
   const nPap = f.papeles.faltan.length + f.papeles.vencidos.length;
   const tabs = [["contrato", "Contrato", "file-certificate", ""],
-                ["papeles", "Papeles", "files", nPap ? `<em>${nPap}</em>` : ""],
+                ["papeles", "Documentos", "files", nPap ? `<em>${nPap}</em>` : ""],
                 ["historial", "Historial", "history", `<small>${f.versiones.length}</small>`]];
   document.getElementById("ag-raiz").innerHTML = `
     <button class="pv-link ag-volver" onclick="agVolver()"><i class="ti ti-arrow-left"></i> Todas las agencias</button>
@@ -23823,7 +23823,7 @@ function agPintarFicha() {
     </div>
     <div class="ag-favisos">${f.avisos.length
       ? f.avisos.map(x => `<div class="ag-faviso ${x.nivel}"><i class="ti ti-${AG_ICONO_AVISO[x.que] || "point"}"></i><span>${agEsc(x.txt)}</span></div>`).join("")
-      : `<div class="ag-faviso ok"><i class="ti ti-circle-check"></i><span>Contrato, garantía y papeles al día</span></div>`}</div>
+      : `<div class="ag-faviso ok"><i class="ti ti-circle-check"></i><span>Contrato, garantía y documentación al día</span></div>`}</div>
     <div class="ag-fgrid">
       <aside class="ag-flado">
         ${agUbicacionCard(a)}
@@ -23933,7 +23933,7 @@ function agTabContrato(f) {
   const x = v || prox;
   return `
     ${prox && v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Ya está cargada la ${agEsc(prox.tipo_txt.toLowerCase())} que rige desde el ${agFechaLarga(prox.desde)}.</div>` : ""}
-    ${!v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Este contrato arranca el ${agFechaLarga(prox.desde)}.</div>` : ""}
+    ${!v ? `<div class="ag-prox"><i class="ti ti-calendar-plus"></i> Este contrato comienza el ${agFechaLarga(prox.desde)}.</div>` : ""}
     <div class="ag-c-cab">
       <div>
         <span class="ag-c-tipo">${agEsc(x.tipo_txt)}${x.numero ? " Nº " + agEsc(x.numero) : ""}</span>
@@ -24068,7 +24068,7 @@ async function agCambiarEstado(estado) {
   let motivo = "";
   if (estado !== "activa") {
     motivo = await agPedirMotivo(estado === "baja" ? `Dar de baja ${a.nombre}` : `Suspender ${a.nombre}`,
-      estado === "baja" ? "Deja de figurar entre las activas; sus contratos y papeles se conservan." : "Queda marcada como suspendida hasta que la reactives.",
+      estado === "baja" ? "Deja de figurar entre las activas; sus contratos y documentos se conservan." : "Queda marcada como suspendida hasta que la reactives.",
       estado === "baja" ? "Dar de baja" : "Suspender", estado === "baja");
     if (!motivo) return;
   }
@@ -24170,7 +24170,7 @@ function agFormAgencia(id, foco) {
   const campo = (k, t, extra = "", clase = "") => `<label class="rv-f ${clase}"><span>${t}</span><input id="agf-${k}" value="${agEsc(a[k] || "")}" ${extra}></label>`;
   const o = rvModal({
     titulo: id ? "Datos de la agencia" : "Nueva agencia", icono: "building-store", ancho: 720, clase: "agc-modal",
-    sub: id ? agEsc(a.nombre) : "Después vas a poder cargar su contrato y sus papeles.",
+    sub: id ? agEsc(a.nombre) : "Después vas a poder cargar su contrato y su documentación.",
     cuerpo: `
       <div class="agc-form">
         ${campo("nombre", "Nombre de la agencia *", `maxlength="120" ${foco === "ubicacion" ? "" : "autofocus"}`, "ag-f-2")}
@@ -24313,7 +24313,7 @@ function agFormContrato(modo, cid) {
             <label class="rv-f ag-f-zona" ${x.exclusividad ? "" : "hidden"}><span>En qué zona o terminal</span><input id="agc-zona" value="${agEsc(x.zona_exclusiva || "")}" maxlength="160"></label>
           </div>
         </fieldset>
-        <fieldset class="ag-f-2"><legend><i class="ti ti-building-bank"></i> Plata</legend>
+        <fieldset class="ag-f-2"><legend><i class="ti ti-building-bank"></i> Condiciones económicas</legend>
           <div class="ag-f-fila">
             <label class="rv-f"><span>Cada cuánto deposita</span><select id="agc-frec">${op(FREC, x.deposito_frec)}</select></label>
             <label class="rv-f"><span>Detalle</span><input id="agc-depdet" value="${agEsc(x.deposito_detalle || "")}" maxlength="160" placeholder="Ej: antes de las 10 del día siguiente"></label>
@@ -25104,7 +25104,7 @@ async function caeProbar(id, btn) {
   btn.disabled = true;
   const r = await fetch(`/api/choferes_app/avisar_prueba/${id}`, { method: "POST" }).then(x => x.json()).catch(() => null);
   btn.disabled = false;
-  toast(r && r.ok ? "Aviso de prueba enviado" : ((r && r.msg) || "No se pudo mandar"), r && r.ok ? "success" : "info");
+  toast(r && r.ok ? "Aviso de prueba enviado" : ((r && r.msg) || "No se pudo enviar"), r && r.ok ? "success" : "info");
 }
 async function caeClave(id) {
   const c = caeUno(id);
@@ -25565,7 +25565,7 @@ function igCuando(t) {
   return d.toLocaleDateString("es-PY", { day: "numeric", month: "short" });
 }
 function igCopiar(texto, que = "Copiado") {
-  navigator.clipboard.writeText(texto).then(() => toast(que, "success"), () => toast("No se pudo copiar: seleccioná y copiá a mano", "error"));
+  navigator.clipboard.writeText(texto).then(() => toast(que, "success"), () => toast("No se pudo copiar: seleccioná y copiá manualmente", "error"));
 }
 function igCampoCopiar(valor, id) {
   return `<div class="ig-copiar"><input id="${id}" readonly value="${igEsc(valor)}" onclick="this.select()">
@@ -25618,7 +25618,7 @@ const IG_TIPO_TXT = { combustible: "Combustible", kilometraje: "Kilometraje", ag
   servicios_delta: "Servicios de Delta" };
 const igTipoNombre = t => IG_TIPO_TXT[t] || (t.charAt(0).toUpperCase() + t.slice(1).replace(/_/g, " "));
 function igBandeja() {
-  if (!ig.entrada.length) return `<div class="empty"><i class="ti ti-inbox"></i>Todavía no llegó nada. Cuando otro sistema mande datos (o subas un archivo), aparecen acá.
+  if (!ig.entrada.length) return `<div class="empty"><i class="ti ti-inbox"></i>Todavía no llegó nada. Cuando otro sistema envíe datos (o subas un archivo), aparecen acá.
     <div class="ig-conocidos">${ig.conocidos.map(c => `<span><b>${igEsc(igTipoNombre(c.tipo))}</b> ${igEsc(c.hace.toLowerCase())}</span>`).join("")}
     <span><b>Cualquier otro</b> (ventas, pasajeros, liquidaciones…) se guarda y queda a la vista</span></div></div>`;
   return `<div class="ig-lista">${ig.entrada.map(t => `
@@ -25737,10 +25737,10 @@ function igLista() {
       uso = `${x.usos_7_dias} pedido${x.usos_7_dias === 1 ? "" : "s"} esta semana<br>último ${igCuando(x.ultimo_uso)}${x.ultima_ip ? ` · ${igEsc(x.ultima_ip)}` : ""}`;
       acc = (k === "planilla" && x.url ? `<button class="btn btn-ghost btn-sm" onclick="igVerPlanilla(${x.id})"><i class="ti ti-link"></i> Ver link</button>` : "")
           + `<button class="btn btn-ghost btn-sm" onclick="igRegistro(${x.id})"><i class="ti ti-history"></i></button>`
-          + (x.activa ? `<button class="btn btn-ghost btn-sm ig-cortar" onclick="igRevocar(${x.id}, '${k}')"><i class="ti ti-plug-off"></i> Cortar</button>` : "");
+          + (x.activa ? `<button class="btn btn-ghost btn-sm ig-cortar" onclick="igRevocar(${x.id}, '${k}')"><i class="ti ti-plug-off"></i> Revocar</button>` : "");
     }
     const estado = activo ? `<span class="ig-estado on">Activa</span>`
-      : `<span class="ig-estado">${k === "aviso" ? "Pausada" : `Cortada ${igCuando(x.revocada_el)}`}</span>`;
+      : `<span class="ig-estado">${k === "aviso" ? "Pausada" : `Revocada ${igCuando(x.revocada_el)}`}</span>`;
     return `<div class="ig-fila ${activo ? "" : "apagada"}">
       <span class="ig-fila-ic ${k}"><i class="ti ti-${ic}"></i></span>
       <div class="ig-fila-info"><div class="ig-fila-nom">${igEsc(x.nombre)} <span class="ig-tipo">${tipo}</span> ${estado}</div>${det}</div>
@@ -25762,7 +25762,7 @@ const IG_CAMINOS = [
   { ic: "bell-ringing", color: "rojo", tit: "Avisar a otro sistema", fn: "igNuevoAviso", ir: "Pegar un link", tuto: "avisos",
     txt: "Pegás el link del otro sistema (o de <b>Make</b>, <b>Zapier</b>, <b>n8n</b>) y elegís cuándo avisarle." },
   { ic: "arrows-exchange", color: "azul", tit: "Conectar un sistema", fn: "igNuevaClave", ir: "Crear conexión", tuto: "conectar",
-    txt: "Ida y vuelta (como <b>Delta</b>): una clave para que lea lo de acá y nos mande lo suyo." },
+    txt: "Ida y vuelta (como <b>Delta</b>): una clave para que lea lo de acá y nos envíe lo suyo." },
   { ic: "file-upload", color: "ambar", tit: "Subir un archivo", fn: "igSubirArchivo", ir: "Elegir archivo", tuto: "archivo",
     txt: "Si el otro sistema solo exporta <b>Excel</b> o <b>CSV</b>: lo subís y entra a la bandeja." },
 ];
@@ -25801,27 +25801,27 @@ const IG_TUTOS = [
     problemas: [
       ["Los números salen raros (7350.5 aparece como 73505 o como texto)", "Es por la coma decimal de Paraguay: el link usa punto. En Excel: <b>Datos → Obtener datos → Iniciar el Editor de Power Query</b>, clic derecho en la columna → <b>Cambiar tipo → Usar configuración regional</b> → Número decimal, <b>Inglés (Estados Unidos)</b>. En Google Sheets usá <code>=IMPORTDATA(\"link\"; \",\"; \"en_US\")</code>."],
       ["Excel pide usuario y contraseña", "Elegí <b>Anónimo</b>. La «llave» ya va dentro del link."],
-      ["Dice «Este link fue desactivado»", "Alguien lo cortó en <b>Lo que está conectado</b>. Generá uno nuevo y reemplazalo (en Excel: Consultas y conexiones → clic derecho → Editar → Origen)."],
+      ["Dice «Este link fue desactivado»", "Alguien lo desactivó en <b>Lo que está conectado</b>. Generá uno nuevo y reemplazalo (en Excel: Consultas y conexiones → clic derecho → Editar → Origen)."],
       ["Google Sheets dice «No se pudo obtener la URL»", "Esperá un minuto y volvé a escribir la fórmula; si el período es «Todo» y hay muchísimos datos, achicalo a los últimos 3 meses o al último año."],
     ],
-    ojo: "El link es como una llave: quien lo tenga ve esos datos. No lo publiques en un grupo de WhatsApp. Si se compartió de más, cortalo y generá otro." },
+    ojo: "El link es como una llave: quien lo tenga ve esos datos. No lo publiques en un grupo de WhatsApp. Si se compartió con quien no correspondía, desactivalo y generá otro." },
 
   { id: "avisos", ic: "bell-ringing", tit: "Avisar a otro sistema", corto: "Avisos", fn: "igNuevoAviso",
-    intro: "Cuando pasa algo acá (se cierra una OT, se publica el tráfico o la asignación, un chofer reporta una falla…), el sistema le manda los datos al link que pegues, en ese mismo momento. El link puede ser de otro sistema (como Delta) o de una herramienta como <b>Make</b>, <b>Zapier</b> o <b>n8n</b>, que después lo llevan a WhatsApp, Gmail, una planilla de Google o lo que quieras.",
+    intro: "Cuando pasa algo acá (se cierra una OT, se publica el tráfico o la asignación, un chofer reporta una falla…), el sistema le envía los datos al link que pegues, en ese mismo momento. El link puede ser de otro sistema (como Delta) o de una herramienta como <b>Make</b>, <b>Zapier</b> o <b>n8n</b>, que después lo llevan a WhatsApp, Gmail, una planilla de Google o lo que quieras.",
     pasos: [
       ["Conseguí el link del otro lado", "Si es un sistema (Delta, la contabilidad), pedíselo al que lo maneja: «necesito la URL donde reciben avisos por POST con JSON». Si usás Make, Zapier o n8n, mirá los pasos de abajo para sacarlo."],
-      ["Pegalo y probalo", "Tocá <b>Pegar un link</b>. En el paso 1 pegá el link y tocá <b>Probar</b>: manda un aviso de ejemplo con datos reales (la última OT, la última carga…). Si dice <b>Llegó bien</b>, seguí."],
+      ["Pegalo y probalo", "Tocá <b>Pegar un link</b>. En el paso 1 pegá el link y tocá <b>Probar</b>: envía un aviso de ejemplo con datos reales (la última OT, la última carga…). Si dice <b>Llegó bien</b>, seguí."],
       ["Elegí cuándo avisar", "Marcá los eventos: <b>Se cierra una OT</b>, <b>Se publica la asignación de corporativos</b>, <b>Se publica el tráfico</b>, etc. Solo le llega lo que marques."],
-      ["Ponele nombre y conectá", "Un nombre que diga a dónde va («Delta – asignaciones», «WhatsApp jefe de taller») y <b>Conectar</b>. Te muestra un <b>secreto</b>: solo hace falta si el otro sistema quiere comprobar que el aviso viene de acá (se lo pasás a su programador). Con Make o Zapier no hace falta."],
-      ["Comprobá que anda", "En <b>Lo que está conectado</b> vas a ver cuántos avisos se mandaron y cuándo fue el último. El botón del reloj muestra los últimos 50: qué se mandó, si llegó y qué contestó el otro lado."],
+      ["Asignale un nombre y conectá", "Un nombre que diga a dónde va («Delta – asignaciones», «WhatsApp jefe de taller») y <b>Conectar</b>. Te muestra un <b>secreto</b>: solo hace falta si el otro sistema quiere comprobar que el aviso viene de acá (se lo pasás a su programador). Con Make o Zapier no hace falta."],
+      ["Comprobá que funciona", "En <b>Lo que está conectado</b> vas a ver cuántos avisos se enviaron y cuándo fue el último. El botón del reloj muestra los últimos 50: qué se mandó, si llegó y qué contestó el otro lado."],
     ],
     extra: [
       ["Con Make (para mandarlo a WhatsApp, Gmail, Google Sheets…)", [
         "En make.com: <b>Create a new scenario</b> → tocá el <b>+</b> → buscá <b>Webhooks</b> → <b>Custom webhook</b>.",
-        "<b>Create a webhook</b> → ponele un nombre → <b>Save</b> → <b>Copy address to clipboard</b>. Ese es el link.",
+        "<b>Create a webhook</b> → asignale un nombre → <b>Save</b> → <b>Copy address to clipboard</b>. Ese es el link.",
         "Pegalo acá en <b>Avisar a otro sistema</b> y conectalo. En Make tocá <b>Run once</b> y acá tocá <b>Probar</b>: Make aprende cómo vienen los datos.",
         "En Make agregá el siguiente paso (por ejemplo <b>Gmail → Send an email</b> o <b>WhatsApp Business → Send a message</b>) y armá el mensaje con los datos: <code>datos.coche</code>, <code>datos.items</code>, <code>datos.cambios</code>…",
-        "Prendé el escenario (el interruptor de abajo a la izquierda). Listo: cada vez que pase, llega.",
+        "Activá el escenario (el interruptor de abajo a la izquierda). Con eso, cada vez que ocurra el evento, llega el aviso.",
       ]],
       ["Con Zapier", [
         "En zapier.com: <b>Create Zap</b> → disparador <b>Webhooks by Zapier</b> → <b>Catch Hook</b> (Webhooks es de los planes pagos de Zapier).",
@@ -25839,29 +25839,29 @@ const IG_TUTOS = [
       "Podés tener varios avisos: uno por destino. Cada uno con sus eventos.",
     ],
     problemas: [
-      ["«No llegó: el otro sistema no está atendiendo»", "El link está mal o el otro sistema está apagado. Copialo de nuevo desde el otro lado; en Make, fijate que el escenario esté prendido."],
+      ["«No llegó: el otro sistema no está atendiendo»", "El link es incorrecto o el otro sistema está fuera de servicio. Copialo de nuevo desde el otro lado; en Make, verificá que el escenario esté activo."],
       ["«No llegó (respondió 404)»", "El link no existe del otro lado (se borró el webhook o tiene una letra de menos)."],
       ["Aparece <b>Pausada</b> sola", "Falló 30 veces seguidas y se pausó para no insistir. Arreglá el link del otro lado, tocá <b>Probar</b> y después <b>Reactivar</b>."],
       ["Llega pero en Make no aparecen los campos", "En Make tocá <b>Run once</b> y acá <b>Probar</b> otra vez, así toma la estructura."],
     ] },
 
   { id: "conectar", ic: "arrows-exchange", tit: "Conectar un sistema (ida y vuelta)", corto: "Conectar", fn: "igNuevaClave",
-    intro: "Una clave para otro sistema: con ella lee lo de acá (OTs, combustible, tráfico, asignación, agencias…) y nos manda lo suyo (ventas, agencias, fallas, lo que sea). Es la forma de conectar Delta. La parte de ellos la hace su programador (ADS); vos creás la clave y se la pasás.",
+    intro: "Una clave para otro sistema: con ella lee lo de acá (OTs, combustible, tráfico, asignación, agencias…) y nos envía lo suyo (ventas, agencias, fallas, lo que sea). Es la forma de conectar Delta. La parte de ellos la hace su programador (ADS); vos creás la clave y se la pasás.",
     pasos: [
-      ["Creá la conexión", "Tocá <b>Crear conexión</b>. Escribí el nombre del sistema (<b>Delta</b>). Viene todo marcado: lo que puede <b>ver</b> de acá y lo que nos puede <b>mandar</b>. Desmarcá lo que no quieras compartir (por ejemplo, si no querés que vean las rendiciones con montos)."],
+      ["Creá la conexión", "Tocá <b>Crear conexión</b>. Escribí el nombre del sistema (<b>Delta</b>). Viene todo marcado: lo que puede <b>ver</b> de acá y lo que nos puede <b>enviar</b>. Desmarcá lo que no quieras compartir (por ejemplo, si no querés que vean las rendiciones con montos)."],
       ["Copiá la clave YA", "Tocá <b>Crear conexión</b>. Aparece la clave (empieza con <code>ls_</code>). <b>Se muestra una sola vez</b>: copiala y guardala. Si se pierde, no se recupera: se corta y se crea otra."],
-      ["Pasale todo a ADS", "Mandale al programador: <b>la clave</b>, el <b>link de la documentación</b> (botón «Copiar link de la documentación») y qué querés que haga. Más abajo tenés un mensaje listo para copiar."],
-      ["Si además querés que les llegue al instante", "La clave sirve para que ellos <i>pregunten</i>. Para que les llegue apenas publicás el tráfico o la asignación, pediles su link de avisos y cargalo en <b>Avisar a otro sistema</b>."],
+      ["Enviá todo a ADS", "Enviale al programador: <b>la clave</b>, el <b>link de la documentación</b> (botón «Copiar link de la documentación») y qué querés que haga. Más abajo tenés un mensaje listo para copiar."],
+      ["Si además querés que les llegue al instante", "La clave sirve para que ellos <i>pregunten</i>. Para que les llegue apenas publicás el tráfico o la asignación, solicitales su link de avisos y cargalo en <b>Avisar a otro sistema</b>."],
       ["Comprobá que la usan", "En <b>Lo que está conectado</b>, la fila «Delta» dice cuántos pedidos hizo esta semana y cuándo fue el último. El botón del reloj muestra cada pedido: qué pidió, si salió bien y desde dónde."],
-      ["Mirá lo que mandan", "Lo que Delta nos mande aparece en <b>Lo que llegó de otros sistemas</b> (ver el tutorial «Lo que llegó»)."],
+      ["Mirá lo que envían", "Lo que Delta nos envíe aparece en <b>Lo que llegó de otros sistemas</b> (ver el tutorial «Lo que llegó»)."],
     ],
-    copiar: ["Mensaje para ADS", "Hola, les paso el acceso para integrar Delta con el sistema de flota de La Santaniana.\n\nClave: (pegar la clave)\nDocumentación con ejemplos: (pegar el link de la documentación)\n\nLo que necesitamos:\n1. Que Delta lea de nuestro sistema el tráfico y la asignación publicados (coche y choferes de cada salida) y los cargue en Unidad y Conductores de cada servicio.\n2. Que Delta nos mande sus servicios (con ocupación y pasajeros), las ventas y las agencias a /api/v1/entrada/<tipo>.\n3. Si Delta puede recibir avisos, que nos pasen la URL para mandarles el tráfico y la asignación apenas se publican.\n\nSi Delta no tiene API, ¿nos pueden decir dónde está su base de datos (en la oficina o en un servidor de ustedes) y si nos pueden dar acceso de lectura a los servicios y de escritura a unidad y conductores?\n\nGracias."],
+    copiar: ["Mensaje para ADS", "Hola, les paso el acceso para integrar Delta con el sistema de flota de La Santaniana.\n\nClave: (pegar la clave)\nDocumentación con ejemplos: (pegar el link de la documentación)\n\nLo que necesitamos:\n1. Que Delta lea de nuestro sistema el tráfico y la asignación publicados (coche y choferes de cada salida) y los cargue en Unidad y Conductores de cada servicio.\n2. Que Delta nos envíe sus servicios (con ocupación y pasajeros), las ventas y las agencias a /api/v1/entrada/<tipo>.\n3. Si Delta puede recibir avisos, que nos pasen la URL para mandarles el tráfico y la asignación apenas se publican.\n\nSi Delta no tiene API, ¿nos pueden decir dónde está su base de datos (en la oficina o en un servidor de ustedes) y si nos pueden dar acceso de lectura a los servicios y de escritura a unidad y conductores?\n\nGracias."],
     tips: [
-      "Una clave por sistema. Si mañana se conecta la contabilidad, se le crea la suya: así se puede cortar una sin afectar a la otra.",
-      "Si un sistema solo tiene que leer, desmarcá todo lo de «Lo que nos puede mandar».",
+      "Una clave por sistema. Si mañana se conecta la contabilidad, se le crea la suya: así se puede revocar una sin afectar a la otra.",
+      "Si un sistema solo tiene que leer, desmarcá todo lo de «Lo que nos puede enviar».",
     ],
     problemas: [
-      ["El programador dice «401 clave inválida»", "Copió mal la clave (tiene que ir completa, con el <code>ls_</code>) o no la manda como <code>Authorization: Bearer ls_…</code>. Si no la tenés, cortala y creá otra."],
+      ["El programador dice «401 clave inválida»", "Copió mal la clave (tiene que ir completa, con el <code>ls_</code>) o no la envía como <code>Authorization: Bearer ls_…</code>. Si no la tenés, cortala y creá otra."],
       ["Dice «403 sin permiso»", "A la clave le falta ese permiso. Creá una nueva con lo que necesita y cortá la vieja."],
       ["Dice «429 demasiados pedidos»", "Pasó los 120 pedidos por minuto. Que espere lo que indica la respuesta y que pida de a más registros por vez."],
     ] },
@@ -25910,15 +25910,15 @@ const IG_TUTOS = [
     tips: ["Descartar un registro de la bandeja <b>no borra</b> lo que ya se cargó en el sistema: solo lo saca de la lista."] },
 
   { id: "cuidar", ic: "shield-lock", tit: "Cuidar lo conectado", corto: "Cuidar",
-    intro: "En <b>Lo que está conectado</b> está todo: avisos, claves y links de planilla. Desde ahí ves quién usa qué y lo cortás al toque si hace falta.",
+    intro: "En <b>Lo que está conectado</b> está todo: avisos, claves y links de planilla. Desde ahí ves quién usa qué y lo desactivás de inmediato si hace falta.",
     pasos: [
       ["Mirá el uso", "Cada fila dice cuántos pedidos o avisos hubo esta semana, cuándo fue el último y desde qué dirección. Si algo que debería usarse dice «último: nunca», no lo están usando."],
       ["Mirá el detalle", "El botón del reloj abre los últimos movimientos: cada pedido con su resultado (200 = bien; 401, 403, 429 = problema, ver el tutorial de cada forma)."],
-      ["Pausá un aviso", "<b>Pausar</b> deja de mandar sin borrarlo; <b>Reactivar</b> lo vuelve a prender. Útil si el otro sistema está en mantenimiento."],
-      ["Cortá una clave o un link", "<b>Cortar</b> la desactiva en el momento: el próximo pedido ya no entra. No se puede deshacer; si hacía falta, se crea otra."],
+      ["Pausá un aviso", "<b>Pausar</b> deja de enviar sin borrarlo; <b>Reactivar</b> lo vuelve a activar. Útil si el otro sistema está en mantenimiento."],
+      ["Revocá una clave o un link", "<b>Revocar</b> la desactiva en el momento: el próximo pedido ya no entra. No se puede deshacer; si hacía falta, se crea otra."],
     ],
     tips: [
-      "Cortá y volvé a crear si: se fue el programador que tenía la clave, se compartió un link de planilla de más, o ves pedidos desde una dirección que no conocés.",
+      "Revocá y volvé a crear si: se fue el programador que tenía la clave, un link de planilla se compartió con quien no correspondía, o ves pedidos desde una dirección que no conocés.",
       "Todo lo que se crea, se corta o se cambia queda en el <b>Historial</b> del sistema, con quién lo hizo.",
     ] },
 ];
@@ -26051,12 +26051,12 @@ function igMostrarPlanilla(nombre, url) {
       </div>
       <ol class="ig-pasos" data-tab="excel">
         <li>Abrí Excel y andá a <b>Datos → Obtener datos → Desde la Web</b> (en algunos Excel: <b>Datos → Desde la Web</b>).</li>
-        <li>Pegá el link y dale <b>Aceptar</b>. Si pregunta cómo entrar, elegí <b>Anónimo</b>.</li>
+        <li>Pegá el link y presioná <b>Aceptar</b>. Si pregunta cómo entrar, elegí <b>Anónimo</b>.</li>
         <li>Tocá <b>Cargar</b>. Para traer lo nuevo: <b>Datos → Actualizar todo</b> (o que se actualice solo al abrir: clic derecho en la tabla → Actualizar → Propiedades).</li>
       </ol>
       <ol class="ig-pasos" data-tab="sheets" hidden>
         <li>Abrí una planilla de Google Sheets y pará en la celda <b>A1</b>.</li>
-        <li>Pegá esta fórmula y dale Enter:${igCampoCopiar(formula, "ig-formula")}</li>
+        <li>Pegá esta fórmula y presioná Enter:${igCampoCopiar(formula, "ig-formula")}</li>
         <li>Google la actualiza sola más o menos cada hora.</li>
       </ol>
       <ol class="ig-pasos" data-tab="pbi" hidden>
@@ -26064,7 +26064,7 @@ function igMostrarPlanilla(nombre, url) {
         <li>Pegá el link, <b>Aceptar</b>, y si pregunta, <b>Anónimo → Conectar</b>.</li>
         <li><b>Cargar</b>. Con <b>Actualizar</b> trae lo nuevo; publicado en el servicio, se le puede programar la actualización.</li>
       </ol>
-      <p class="ig-nota"><i class="ti ti-shield-lock"></i> <span>El link es como una llave: quien lo tenga ve estos datos. Si se comparte de más, cortalo en la lista y generá otro.</span></p>`,
+      <p class="ig-nota"><i class="ti ti-shield-lock"></i> <span>El link es como una llave: quien lo tenga ve estos datos. Si se comparte con quien no corresponde, desactivalo en la lista y generá otro.</span></p>`,
     pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`,
   });
   o.classList.add("ig-m");
@@ -26079,7 +26079,7 @@ function igTab(b, t) {
 function igNuevoAviso() {
   const o = rvModal({
     titulo: "Avisar a otro sistema", icono: "bell-ringing", ancho: 640,
-    sub: "Cuando pasa algo acá, el sistema le manda los datos al link que pegues. Sirve con tu sistema o con Make, Zapier o n8n (para llevarlo a WhatsApp, Gmail, una planilla…).",
+    sub: "Cuando pasa algo acá, el sistema le envía los datos al link que pegues. Sirve con tu sistema o con Make, Zapier o n8n (para llevarlo a WhatsApp, Gmail, una planilla…).",
     cuerpo: `
       <label class="ig-lbl" for="ig-av-url">1 · Pegá el link del otro sistema</label>
       <div class="ig-copiar"><input id="ig-av-url" class="ig-input" placeholder="https://hook.make.com/… o https://tu-sistema.com/recibir" autofocus>
@@ -26127,14 +26127,14 @@ async function igGuardarAviso(btn) {
     sub: `<b>${igEsc(body.nombre)}</b> · Desde ahora le llega cada vez que pase lo que marcaste.`,
     cuerpo: `<p class="ig-txt">Si el otro sistema quiere comprobar que el aviso viene de acá, este es el <b>secreto</b> para validar la firma (encabezado <code>X-Santaniana-Firma</code>). Si usás Make o Zapier no hace falta.</p>
       ${igCampoCopiar(r.secreto, "ig-secreto")}
-      <p class="ig-nota"><i class="ti ti-book"></i> <span>Qué datos manda cada aviso: <a href="${igEsc(ig.docs)}#avisos" target="_blank" rel="noopener">documentación</a>.</span></p>`,
+      <p class="ig-nota"><i class="ti ti-book"></i> <span>Qué datos envía cada aviso: <a href="${igEsc(ig.docs)}#avisos" target="_blank" rel="noopener">documentación</a>.</span></p>`,
     pie: `<button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Listo</button>`,
   });
   o.classList.add("ig-m");
   renderIntegraciones();
 }
 async function igProbar(id) {
-  toast("Mandando un aviso de prueba…");
+  toast("Enviando un aviso de prueba…");
   const r = await api("/api/integ/probar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
   if (r && r.ok) toast(`Llegó bien (respondió ${r.estado})`, "success");
   else toast(`No llegó${r && r.estado ? ` (respondió ${r.estado})` : ""}: ${(r && (r.error || r.respuesta)) || "sin respuesta"}`, "error");
@@ -26172,12 +26172,12 @@ function igNuevaClave() {
   const chk = p => `<label class="ig-check"><input type="checkbox" value="${p.codigo}" checked><span><b>${igEsc(p.nombre)}</b><small>${igEsc(p.detalle)}</small></span></label>`;
   const o = rvModal({
     titulo: "Conectar un sistema", icono: "arrows-exchange", ancho: 680,
-    sub: "Una clave para el otro sistema: con ella lee lo de acá y nos manda lo suyo. Viene todo marcado (ida y vuelta completa); sacale lo que no quieras compartir.",
+    sub: "Una clave para el otro sistema: con ella lee lo de acá y nos envía lo suyo. Viene todo marcado (ida y vuelta completa); sacale lo que no quieras compartir.",
     cuerpo: `
       <label class="ig-lbl" for="ig-cl-nombre">¿Qué sistema es?</label>
       <input id="ig-cl-nombre" class="ig-input" placeholder="Ej.: Delta, Sistema contable, GPS de la flota" maxlength="80" autofocus>
       <label class="ig-lbl"><i class="ti ti-arrow-up-right"></i> Lo que puede ver de acá</label><div class="ig-checks">${lee.map(chk).join("")}</div>
-      <label class="ig-lbl"><i class="ti ti-arrow-down-left"></i> Lo que nos puede mandar</label><div class="ig-checks">${carga.map(chk).join("")}</div>`,
+      <label class="ig-lbl"><i class="ti ti-arrow-down-left"></i> Lo que nos puede enviar</label><div class="ig-checks">${carga.map(chk).join("")}</div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
           <button class="btn btn-primary" onclick="igCrearClave(this)"><i class="ti ti-arrows-exchange"></i> Crear conexión</button>`,
   });
@@ -26200,7 +26200,7 @@ async function igCrearClave(btn) {
     titulo: "Conexión creada", icono: "circle-check", ancho: 720,
     sub: `<b>${igEsc(nombre)}</b> · Copiala ahora: <b>no se vuelve a mostrar</b>. Si se pierde, se corta y se crea otra.`,
     cuerpo: `${igCampoCopiar(r.clave, "ig-clave")}
-      <p class="ig-txt">Pasale al programador la clave y la documentación. Para probar que anda:</p>
+      <p class="ig-txt">Enviale al programador la clave y la documentación. Para probar que funciona:</p>
       <pre class="ig-pre">${igEsc(ejemplo)}</pre>
       ${recibe ? `<p class="ig-txt"><b>Para mandarnos datos</b>, cualquier tipo va a <code>${igEsc(base)}/api/v1/entrada/&lt;tipo&gt;</code> (ventas, agencias, liquidaciones…):</p>
       <pre class="ig-pre">${igEsc(ejEntrada)}</pre>` : ""}
@@ -26214,9 +26214,9 @@ async function igCrearClave(btn) {
 }
 async function igRevocar(id, k) {
   const c = ig.claves.find(x => x.id === id);
-  if (!confirm(`¿Cortar «${c ? c.nombre : ""}»? ${k === "planilla" ? "El link deja de traer datos" : "El sistema que la usa deja de entrar"} al toque. No se puede deshacer.`)) return;
+  if (!confirm(`¿Revocar «${c ? c.nombre : ""}»? ${k === "planilla" ? "El link deja de traer datos" : "El sistema que la usa deja de entrar"} de inmediato. No se puede deshacer.`)) return;
   const r = await api(`/api/api_claves/${id}/revocar`, { method: "POST" });
-  if (r && r.ok) { toast("Cortada", "success"); renderIntegraciones(); }
+  if (r && r.ok) { toast("Revocada", "success"); renderIntegraciones(); }
 }
 async function igRegistro(id) {
   const c = ig.claves.find(x => x.id === id) || {};

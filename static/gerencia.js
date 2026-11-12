@@ -54,7 +54,7 @@ async function gCargar() {
     pintar();
     act.innerHTML = `<i class="ti ti-refresh"></i> Actualizado ${esc(G.d.actualizado)}`;
   } catch (e) {
-    act.innerHTML = `<i class="ti ti-wifi-off"></i> Sin conexión, reintento en un rato`;
+    act.innerHTML = `<i class="ti ti-wifi-off"></i> Sin conexión; se reintenta en unos minutos`;
   } finally {
     act.classList.remove("g-girando");
   }

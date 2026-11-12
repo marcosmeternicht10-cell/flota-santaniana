@@ -1487,7 +1487,7 @@ function alExcesoArt(v, eq) {
     ${alCabTicket()}
     <div class="cv-t">Exceso de equipaje</div>
     <p class="cv-p"><b>${e(v.nombre)}</b> · Boleto ${alNro(v.nro)}<br>${alDM(v.fecha)} ${v.sale || v.hora}, ${e(v.origen)} → ${e(v.destino)}</p>
-    ${eq.bultos ? fl("Bultos que agrega", eq.bultos) : ""}${eq.kg ? fl("Kilos de más", fmtNum(eq.kg)) : ""}${eq.nota ? fl("Nota", e(eq.nota)) : ""}
+    ${eq.bultos ? fl("Bultos que agrega", eq.bultos) : ""}${eq.kg ? fl("Kilos excedentes", fmtNum(eq.kg)) : ""}${eq.nota ? fl("Nota", e(eq.nota)) : ""}
     ${fl("Forma de pago", (AL_PAGOS.find(p => p[0] === eq.pago) || AL_PAGOS[0])[1])}
     ${fl("Total Gs.", fmtNum(eq.monto), "f")}
     <p class="cv-p s">${eq.el.slice(8, 10)}/${eq.el.slice(5, 7)} ${eq.el.slice(11, 16)} · ${e(eq.por || "")}</p>
@@ -1536,7 +1536,7 @@ function alConsResHTML() {
   if (c.res.error) return `<div class="al-vacio"><i class="ti ti-wifi-off"></i><b>No se pudo buscar</b><span>Revisá la conexión y probá de nuevo.</span></div>`;
   const vs = c.res.ventas || [];
   if (!vs.length) return `<div class="al-vacio"><i class="ti ti-ticket-off"></i><b>No hay pasajes con «${trEsc(c.q)}»</b>
-    <span>Revisá el número. Si compró online, pedile la captura o el PDF con el número de boleto.${alEsAgencia() ? " Desde tu agencia ves solo los pasajes que vendió tu agencia." : ""}</span></div>`;
+    <span>Revisá el número. Si compró online, solicitale la captura o el PDF con el número de boleto.${alEsAgencia() ? " Desde tu agencia ves solo los pasajes que vendió tu agencia." : ""}</span></div>`;
   const vienen = vs.filter(v => !v.pasado), pasados = vs.filter(v => v.pasado);
   const mismo = vs.every(v => v.doc === vs[0].doc);
   const quien = vs[0].nombre && mismo ? `<p class="al-cons-quien"><i class="ti ti-user" aria-hidden="true"></i> <b>${trEsc(vs[0].nombre)}</b> · ${vs[0].mig ? trEsc(vs[0].tipoDoc) : "CI"} ${trEsc(vs[0].doc)}</p>` : "";
@@ -1676,7 +1676,7 @@ async function alEquipaje(nro) {
       ${b ? `Ya tiene ${b} ${b === 1 ? "bulto" : "bultos"} en bodega.` : "No tiene bultos cargados."} El boleto incluye ${kg} kg.</p>
     <div class="al-fila">
       <label class="al-campo ci"><span>Bultos que agrega</span><input id="al-eq-b" inputmode="numeric" value="1" autofocus></label>
-      <label class="al-campo ci"><span>Kilos de más</span><input id="al-eq-kg" inputmode="numeric" placeholder="0"></label>
+      <label class="al-campo ci"><span>Kilos excedentes</span><input id="al-eq-kg" inputmode="numeric" placeholder="0"></label>
       <label class="al-campo"><span>Cobra por el exceso (Gs.)</span><input id="al-eq-m" inputmode="numeric" placeholder="0: no se cobra" ${num}></label>
     </div>
     <div class="al-chips" role="group" aria-label="Forma de pago">${AL_PAGOS.map(([k, t]) => `<button type="button" class="al-chip ${k === "efectivo" ? "on" : ""}" onclick="al.eqPago='${k}';alChipOn(this)">${t}</button>`).join("")}</div>
@@ -2364,13 +2364,13 @@ function alPlaTabHTML() {
       <div class="al-pa-chips">${vis.length ? vis.map(c => `
         <button type="button" class="al-pa-ch ${sel.has(c.coche) ? "on" : ""}" draggable="true" ondragstart="alPlaArrastre(event, '${trEsc(c.coche)}')"
           onclick="alPlaToca('${trEsc(c.coche)}')" aria-pressed="${sel.has(c.coche)}" title="${trEsc(`${c.marca} ${c.modelo}`.trim())}${c.patente ? " · " + trEsc(c.patente) : ""}${c.fijo ? " · plano elegido a mano" : " · plano según el modelo"}">
-          <b>${trEsc(c.coche)}</b>${c.fijo ? `<i class="ti ti-pin-filled" aria-label="elegido a mano"></i>` : ""}
+          <b>${trEsc(c.coche)}</b>${c.fijo ? `<i class="ti ti-pin-filled" aria-label="elegido manualmente"></i>` : ""}
         </button>`).join("") : `<span class="al-pa-nada">${q ? "Ninguno coincide" : "Ningún coche usa este plano"}</span>`}</div>
     </section>`;
   }).join("");
   return `${q ? `<p class="al-pa-total">${total} coche${total === 1 ? "" : "s"} con «${trEsc(al.pla.q)}»</p>` : ""}
     <div class="al-pa-cols">${cols}</div>
-    <p class="al-pa-nota">Cada coche arranca con el plano que corresponde a su modelo. Los que tienen <i class="ti ti-pin-filled" aria-hidden="true"></i> se cambiaron a mano; para que vuelvan al de su modelo, elegilos y tocá «Según el modelo».</p>`;
+    <p class="al-pa-nota">Cada coche tiene asignado el plano que corresponde a su modelo. Los que tienen <i class="ti ti-pin-filled" aria-hidden="true"></i> se cambiaron manualmente; para que vuelvan al de su modelo, elegilos y tocá «Según el modelo».</p>`;
 }
 function alPlaBarraHTML() {
   const sel = [...al.pla.selec];

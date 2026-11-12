@@ -160,7 +160,7 @@ class Ficha:
             self.lugar(34)
             h.rect(M, self.y, AW, 26, fill=VERDE_F, r=6)
             h.punto(M + 14, self.y + 13, 3.2, VERDE)
-            h.texto(M + 24, self.y + 16.6, "Contrato, garantía y papeles al día.", "I6", 9.6, VERDE)
+            h.texto(M + 24, self.y + 16.6, "Contrato, garantía y documentación al día.", "I6", 9.6, VERDE)
             self.y += 36
             return
         alto = 14 + sum(4 + self.alto_parrafo(a["txt"], "I5", 9.4, AW - 40) for a in f["avisos"])
@@ -264,7 +264,7 @@ def generar_ficha(f):
 
     # Papeles
     pap = [x for x in f.get("papeles_lista") or [] if not x.get("reemplazado")]
-    p.titulo("Papeles", f"Faltan: {', '.join(f['papeles']['faltan'])}" if f["papeles"]["faltan"] else "")
+    p.titulo("Documentos", f"Faltan: {', '.join(f['papeles']['faltan'])}" if f["papeles"]["faltan"] else "")
     if pap:
         filas = []
         for d in pap:

@@ -474,7 +474,7 @@ def generar_pdf(d, generado_por=""):
                             ("VALIGN", (0, 0), (-1, -1), "TOP"), ("TOPPADDING", (0, 0), (-1, -1), 7),
                             ("BOTTOMPADDING", (0, 0), (-1, -1), 8), ("LEFTPADDING", (0, 0), (-1, -1), 8)]))
     aviso = (f" El primer registro de este coche en el sistema es del {dmy(d['primer_registro'])}: lo anterior "
-             "(libro de a bordo, papeles) se suma desde Historial por coche → «Cargar del papel».")
+             "(libro de a bordo, documentos) se suma desde Historial por coche → «Cargar del papel».")
     el += [Spacer(1, 6), Paragraph("Los números", st["sec"]),
            Paragraph(esc(periodo) + ". El costo suma OTs (repuestos), correctivos y lo cargado en el libro; el combustible va aparte."
                      + esc(aviso), st["sub"]), kt]

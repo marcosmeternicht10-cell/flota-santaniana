@@ -49,11 +49,11 @@
 <main>
 <nav class="indice">
   <a href="#clave">La clave</a><a href="#respuestas">Respuestas</a><a href="#leer">Leer datos</a>
-  <a href="#cargar">Cargar datos</a><a href="#entrada">Mandar cualquier dato</a><a href="#planillas">Planillas</a><a href="#avisos">Avisos</a><a href="#errores">Errores</a>
+  <a href="#cargar">Cargar datos</a><a href="#entrada">Enviar cualquier dato</a><a href="#planillas">Planillas</a><a href="#avisos">Avisos</a><a href="#errores">Errores</a>
 </nav>
 
 <h2 id="clave">1. La clave</h2>
-<p>La crea el administrador en <b>Sistema → Integraciones → Conectar un sistema</b>, eligiendo qué puede ver o cargar. Se muestra una sola vez: guardala en un lugar seguro. Se manda en cada pedido:</p>
+<p>La crea el administrador en <b>Sistema → Integraciones → Conectar un sistema</b>, eligiendo qué puede ver o cargar. Se muestra una sola vez: guardala en un lugar seguro. Se envía en cada pedido:</p>
 <pre><code>Authorization: Bearer ls_xxxxxxxxxxxxxxxxxxxx</code></pre>
 <p>(También se acepta <code>X-API-Key: ls_…</code>.) Probala con:</p>
 <pre><code>curl -H "Authorization: Bearer $CLAVE" {{ base }}/api/v1/estado</code></pre>
@@ -125,8 +125,8 @@
 <pre><code>curl -X POST -H "Authorization: Bearer $CLAVE" -H "Content-Type: application/json" \
   -d '{"coche":"210","km":412450}' {{ base }}/api/v1/kilometraje</code></pre>
 
-<h2 id="entrada">5. Mandar cualquier dato (bandeja de entrada)</h2>
-<p>Para que la integración sea de ida y vuelta: el otro sistema manda <b>lo que sea</b> a un solo link, con el permiso <code>recibir</code>. El tipo va en la ruta, en minúsculas: <code>ventas</code>, <code>pasajeros</code>, <code>liquidaciones</code>, <code>agencias</code>…</p>
+<h2 id="entrada">5. Enviar cualquier dato (bandeja de entrada)</h2>
+<p>Para que la integración sea de ida y vuelta: el otro sistema envía <b>cualquier dato</b> a un solo link, con el permiso <code>recibir</code>. El tipo va en la ruta, en minúsculas: <code>ventas</code>, <code>pasajeros</code>, <code>liquidaciones</code>, <code>agencias</code>…</p>
 <h3><span class="metodo post">POST</span><span class="ruta">/api/v1/entrada/&lt;tipo&gt;</span><span class="perm">recibir</span></h3>
 <pre><code>curl -X POST -H "Authorization: Bearer $CLAVE" -H "Content-Type: application/json" \
   -d '{"registros":[
@@ -157,10 +157,10 @@
   <tr><td><b>Google Sheets</b></td><td>En una celda: <code>=IMPORTDATA("link")</code>. Se actualiza solo cada hora.</td><td></td></tr>
   <tr><td><b>Power BI</b></td><td>Obtener datos → Web → pegar el link.</td><td></td></tr>
 </table>
-<div class="caja aviso">El link es como una llave: quien lo tenga ve esos datos. Si se comparte de más, desactivalo en la pantalla y generá otro.</div>
+<div class="caja aviso">El link es como una llave: quien lo tenga ve esos datos. Si se comparte con quien no corresponde, desactivalo en la pantalla y generá otro.</div>
 
 <h2 id="avisos">7. Avisos: el sistema te avisa a vos</h2>
-<p>En <b>Sistema → Integraciones → Avisar a otro sistema</b> se pega un link (de tu sistema, o de Make, Zapier, n8n) y se eligen los eventos. Cuando pasa algo, se manda un <code>POST</code> con JSON:</p>
+<p>En <b>Sistema → Integraciones → Avisar a otro sistema</b> se pega un link (de tu sistema, o de Make, Zapier, n8n) y se eligen los eventos. Cuando ocurre un evento, se envía un <code>POST</code> con JSON:</p>
 <pre><code>POST https://tu-sistema/recibir
 Content-Type: application/json
 X-Santaniana-Evento: ot.cerrada

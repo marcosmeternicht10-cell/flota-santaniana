@@ -572,7 +572,7 @@ def api_quitar_coche(ot_id):
     if not r["ot_grupo"]:
         return jsonify({"ok": False, "msg": "Es el coche principal de la OT: para sacarlo hay que borrar la OT."}), 400
     if r["n"] and not db.puede_borrar_ots(session.get("usuario_id"), session.get("rol")):
-        return _no("Este coche ya tiene trabajos cargados: sacarlo los borra. Pedile a administración.")
+        return _no("Este coche ya tiene trabajos cargados: sacarlo los borra. Solicitalo a administración.")
     db.eliminar_ot(ot_id)
     _auditar(f"Sacó un coche de la OT #{r['ot_grupo']}",
              f"Coche {r['n_interno'] or r['patente']} · {r['n']} trabajo(s)")

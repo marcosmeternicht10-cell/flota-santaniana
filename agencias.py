@@ -486,7 +486,7 @@ def _estado_contrato(contratos, hoy):
     if not vig:
         if futuros:
             return {"estado": "por_empezar", "nivel": "ojo", "contrato": futuros[0],
-                    "txt": f"El contrato arranca el {_fmt(futuros[0]['desde'])}"}
+                    "txt": f"El contrato comienza el {_fmt(futuros[0]['desde'])}"}
         return {"estado": "sin_contrato", "nivel": "mal", "contrato": None, "txt": "Sin contrato cargado"}
     hasta, renovo = _vigencia_efectiva(vig, hoy)
     out = {"contrato": vig, "hasta": hasta, "renovado_auto": renovo, "dias": _dias(hasta, hoy),
@@ -874,7 +874,7 @@ def borrar_agencia(aid):
         n = conn.execute("SELECT COUNT(*) AS n FROM agencia_contratos WHERE agencia_id=?", (aid,)).fetchone()["n"]
         m = conn.execute("SELECT COUNT(*) AS n FROM agencia_documentos WHERE agencia_id=?", (aid,)).fetchone()["n"]
         if n or m:
-            raise Error("Tiene contratos o papeles cargados: para sacarla de la lista, dala de baja")
+            raise Error("Tiene contratos o documentos cargados: para quitarla de la lista, dala de baja")
         conn.execute("DELETE FROM agencias WHERE id=?", (aid,))
         conn.commit()
     finally:

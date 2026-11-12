@@ -588,7 +588,7 @@ async function pintarAvisar() {
   if (on) { box.innerHTML = ""; return; }
   const bloq = Notification.permission === "denied";
   box.innerHTML = `<div class="avisar entra" style="animation-delay:.1s"><span class="ic"><i class="ti ti-bell-ringing"></i></span>
-    <div><b>${bloq ? "Avisos bloqueados" : "Enterate al toque"}</b><span>${bloq
+    <div><b>${bloq ? "Avisos bloqueados" : "Recibí tus avisos al instante"}</b><span>${bloq
       ? "Para recibir tu servicio, habilitá las notificaciones de la app en los ajustes del celular."
       : "Activá los avisos y te llega tu servicio apenas la oficina lo publica."}</span></div>
     ${bloq ? `<button class="btn" onclick="ayudaAvisos()">Cómo</button>` : `<button class="btn" onclick="activarAvisos()">Activar</button>`}</div>`;
@@ -609,7 +609,7 @@ async function activarAvisos(desdeHoja) {
     let s = await suscripcion();
     if (s) {
       await api("/api/push/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sub: s.toJSON() }) });
-      if (desdeHoja) { await api("/api/push/probar", { method: "POST" }); toast("Te mandamos un aviso de prueba"); }
+      if (desdeHoja) { await api("/api/push/probar", { method: "POST" }); toast("Te enviamos un aviso de prueba"); }
       else toast("¡Listo! Te van a llegar tus servicios");
       pintarAvisar(); estadoAvisos();
       return;
@@ -623,7 +623,7 @@ async function activarAvisos(desdeHoja) {
   } catch (e) {
     const m = String((e && (e.message || e.name)) || "");
     if (/denied|permission/i.test(m)) { ayudaAvisos(); }
-    else toast(/[áéíóúñ]/.test(m) ? m : `No se pudieron activar los avisos (${m.slice(0, 60) || "error"}). Probá de nuevo en un rato.`);
+    else toast(/[áéíóúñ]/.test(m) ? m : `No se pudieron activar los avisos (${m.slice(0, 60) || "error"}). Volvé a intentarlo en unos minutos.`);
   }
   pintarAvisar(); estadoAvisos();
 }

@@ -71,7 +71,7 @@ async function renderCajas() {
     <div class="page-header cj-head">
       <div>
         <h1><i class="ti ti-cash-register"></i> Tesorería</h1>
-        <p>Cajas y cuentas, lo que viene para pagar y cobrar, los cheques y el extracto del banco: la plata de la empresa en un solo lugar.</p>
+        <p>Cajas y cuentas, lo que viene para pagar y cobrar, los cheques y el extracto del banco: los fondos de la empresa en un solo lugar.</p>
       </div>
       <div class="cj-head-acc">
         <button class="btn btn-ghost" onclick="cjLibro()"><i class="ti ti-book"></i> Libro IVA</button>
@@ -178,7 +178,7 @@ function cjPintarCuerpo() {
     <div class="cj-barra">
       ${cjPuede() ? `<div class="cj-nuevos">
         <button class="btn cj-btn-egr" onclick="cjNuevo('egreso')"><i class="ti ti-arrow-up-right"></i> Egreso <small>se pagó algo</small></button>
-        <button class="btn cj-btn-ing" onclick="cjNuevo('ingreso')"><i class="ti ti-arrow-down-left"></i> Ingreso <small>entró plata</small></button>
+        <button class="btn cj-btn-ing" onclick="cjNuevo('ingreso')"><i class="ti ti-arrow-down-left"></i> Ingreso <small>entrada de dinero</small></button>
       </div>` : ""}
       <div class="cj-acc">
         ${cjPuede() ? `<button class="btn btn-primary" onclick="cjCierre()"><i class="ti ti-lock"></i> Cerrar caja${c.sin_cerrar ? ` <span class="cj-pill">${c.sin_cerrar}</span>` : ""}</button>` : ""}
@@ -256,7 +256,7 @@ function cjNuevo(tipo, base) {
   const o = rvModal({
     titulo: ed ? `Corregir movimiento N° ${ed.numero}` : (ing ? "Nuevo ingreso" : "Nuevo egreso"),
     icono: ing ? "arrow-down-left" : "arrow-up-right", ancho: 1040, clase: `cj-modal cj-${tipo}`,
-    sub: `${cjEsc(cj.caja.nombre)} · ${ing ? "crédito: entra plata a la caja" : "débito: sale plata de la caja"}`,
+    sub: `${cjEsc(cj.caja.nombre)} · ${ing ? "crédito: ingresa dinero a la caja" : "débito: egresa dinero de la caja"}`,
     cuerpo: `
       <div class="cj-form">
         <div class="cj-col">
@@ -679,7 +679,7 @@ async function cjAgregarArchivo(mid, inp) {
 function cjAnular(mid) {
   const o = rvModal({
     titulo: "Anular movimiento", icono: "ban", ancho: 480, clase: "cj-modal",
-    sub: "Queda en la lista tachado, con el motivo. La plata vuelve a la caja.",
+    sub: "Queda en la lista tachado, con el motivo. El importe vuelve a la caja.",
     cuerpo: `<label class="cj-f"><span>¿Por qué se anula?</span><textarea id="cj-anul-m" rows="3" placeholder="Ej: se cargó dos veces"></textarea></label>`,
     pie: `<div class="cj-pie"><button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
       <button type="button" class="btn btn-danger" id="cj-anul-ok"><i class="ti ti-ban"></i> Anular</button></div>`,
@@ -907,7 +907,7 @@ async function cjAjustes() {
       <label class="cj-aj-umbral">Los pagos programados de <input inputmode="numeric" value="${cjMil((ts.res && ts.res.config && ts.res.config.umbral_aprobacion) || 5000000)}" onchange="tsUmbral(this.value)" aria-label="Monto desde el que se aprueba"> guaraníes o más necesitan que administración los apruebe antes de pagarse.</label>
       <div class="cj-aj-nueva">
         <input id="cj-nc-n" placeholder="Nombre de la caja nueva (ej: Caja chica Ciudad del Este)">
-        <input id="cj-nc-s" inputmode="numeric" placeholder="Saldo con el que arranca (Gs.)">
+        <input id="cj-nc-s" inputmode="numeric" placeholder="Saldo inicial (Gs.)">
         <button type="button" class="btn btn-ghost" onclick="cjAjNueva()"><i class="ti ti-plus"></i> Crear caja</button>
       </div>
       <h4 class="cj-h4">Conceptos</h4>
@@ -985,8 +985,8 @@ async function tsFlujo() {
       <div class="ts-kpi ${r.vencidos.n ? "ojo" : ""}"><span>Vencido sin pagar/cobrar</span><b>${r.vencidos.n}</b><small>${r.vencidos.n ? `pagar ${cjMil(r.vencidos.egresos)} · cobrar ${cjMil(r.vencidos.ingresos)}` : "todo al día"}</small></div>
       <div class="ts-kpi"><span>Gasto habitual por semana</span><b>${ts.habitual ? cjGs(r.habitual_semanal) : "—"}</b><small>promedio de las últimas 8 semanas</small></div>
     </div>
-    ${a ? `<div class="cj-aviso ${a.negativo ? "mal" : "ojo"} ts-alerta"><i class="ti ti-alert-triangle"></i><span><b>La semana del ${tsDm(a.desde)} ${a.negativo ? "la plata no alcanza" : "el saldo baja del mínimo"}:</b> quedaría en ${a.saldo < 0 ? "−" : ""}${cjGs(Math.abs(a.saldo))}. Conviene mover un pago, adelantar un cobro o pedir fondos antes.</span></div>`
-      : `<div class="cj-aviso ok ts-alerta"><i class="ti ti-circle-check"></i><span>En las próximas ${ts.semanas} semanas la plata alcanza${r.minimo ? " y no baja del mínimo" : ""}.</span></div>`}
+    ${a ? `<div class="cj-aviso ${a.negativo ? "mal" : "ojo"} ts-alerta"><i class="ti ti-alert-triangle"></i><span><b>La semana del ${tsDm(a.desde)} ${a.negativo ? "los fondos no alcanzan" : "el saldo baja del mínimo"}:</b> quedaría en ${a.saldo < 0 ? "−" : ""}${cjGs(Math.abs(a.saldo))}. Conviene mover un pago, adelantar un cobro o pedir fondos antes.</span></div>`
+      : `<div class="cj-aviso ok ts-alerta"><i class="ti ti-circle-check"></i><span>En las próximas ${ts.semanas} semanas los fondos alcanzan${r.minimo ? " y el saldo no baja del mínimo" : ""}.</span></div>`}
     <div class="ts-flujo-op">
       <div class="cj-seg">${[8, 13, 26].map(n => `<button type="button" class="${ts.semanas === n ? "on" : ""}" onclick="ts.semanas=${n};tsFlujo()">${n} semanas</button>`).join("")}</div>
       <label class="cj-check"><input type="checkbox" ${ts.habitual ? "checked" : ""} onchange="ts.habitual=this.checked;tsFlujo()"> Contar el gasto habitual</label>
@@ -1332,7 +1332,7 @@ async function tsConc() {
   const bancos = (cj.cajas || []).filter(c => c.tipo === "banco");
   const box = document.getElementById("cj-cuerpo");
   if (!bancos.length) {
-    box.innerHTML = `<div class="empty"><i class="ti ti-building-bank"></i>No hay cuentas de banco.${cj.meta.admin ? ` En «Cajas y conceptos» marcá cuál es una cuenta de banco (o creá una), con su banco y número.` : " Pedile a administración que cargue las cuentas."}</div>`;
+    box.innerHTML = `<div class="empty"><i class="ti ti-building-bank"></i>No hay cuentas de banco.${cj.meta.admin ? ` En «Cajas y conceptos» marcá cuál es una cuenta de banco (o creá una), con su banco y número.` : " Solicitá a administración que cargue las cuentas."}</div>`;
     return;
   }
   if (!bancos.some(b => b.id === ts.conCaja)) ts.conCaja = bancos[0].id;

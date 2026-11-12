@@ -1139,7 +1139,7 @@ def generar_plan_preventivo_pdf(vehiculo, plan, tareas, ruta_salida):
     datos = [[
         Paragraph(f"<b>Plan:</b> {plan.get('plan_nombre','—')}", small),
         Paragraph(f"<b>Km actual:</b> {kmf(km_actual)} km"
-                  + (f" &nbsp;·&nbsp; anda {kmf(plan.get('km_dia'))} km/día" if plan.get("km_dia") else ""), small),
+                  + (f" &nbsp;·&nbsp; recorre {kmf(plan.get('km_dia'))} km/día" if plan.get("km_dia") else ""), small),
         Paragraph(f"<b>Fecha:</b> {datetime.date.today().isoformat()}"
                   + (f"<br/><b>Turno:</b> {fdm(turno.get('fecha'))} {turno.get('hora') or ''}" if turno.get("fecha") else ""), small),
     ]]

@@ -785,7 +785,7 @@
       $("importe-wrap").style.display = "";
       $("importe-lbl").textContent = l === "tercerizado" ? "Importe pagado (Gs.)" : "Importe (Gs.) — si el surtidor lo marca";
       $("importe-ayuda").textContent = l === "tercerizado" ? "El total que marca el surtidor o el ticket"
-        : "Si el surtidor del taller no marca plata, dejalo vacío";
+        : "Si el surtidor del taller no marca importe, dejalo vacío";
       if(l !== "tercerizado"){ EMBLEMA = ""; $("emblema-otro").value = ""; }
       dibujarEmblemas();
     }
@@ -902,7 +902,7 @@
 <div id="av-corp" hidden style="position:fixed;left:12px;right:12px;bottom:calc(14px + env(safe-area-inset-bottom));z-index:50;max-width:460px;margin:0 auto;
   background:#fff;border-radius:16px;box-shadow:0 12px 34px -12px rgba(0,0,0,.35);padding:12px 12px 12px 14px;gap:12px;align-items:center;font-family:Inter,system-ui,sans-serif">
   <span id="av-corp-ic" style="width:38px;height:38px;border-radius:11px;background:#FCEBED;color:#DC2641;display:grid;place-items:center;font-size:19px;flex:none"><i class="ti ti-bell-ringing"></i></span>
-  <div style="flex:1;min-width:0"><b id="av-corp-t" style="display:block;font-size:14px;color:#1A1A18">Enterate al toque</b>
+  <div style="flex:1;min-width:0"><b id="av-corp-t" style="display:block;font-size:14px;color:#1A1A18">Recibí tus avisos al instante</b>
     <span id="av-corp-s" style="display:block;font-size:12.5px;color:#6E6D66;line-height:1.35">Te llega tu asignación al celular apenas se publica.</span></div>
   <button id="av-corp-si" style="border:0;border-radius:10px;background:#131312;color:#fff;font:600 13.5px Inter,sans-serif;padding:9px 13px;white-space:nowrap">Activar</button>
   <button id="av-corp-no" aria-label="Ahora no" style="border:0;background:none;color:#6E6D66;font-size:18px;padding:4px"><i class="ti ti-x"></i></button>
@@ -925,7 +925,7 @@
       if (sub && Notification.permission === "granted") { guardar(sub).catch(() => {}); return; }
       if (Notification.permission === "denied" || ahoraNo) return;
       document.getElementById("av-corp-ic").innerHTML = '<i class="ti ti-bell-ringing"></i>';
-      document.getElementById("av-corp-t").textContent = "Enterate al toque";
+      document.getElementById("av-corp-t").textContent = "Recibí tus avisos al instante";
       document.getElementById("av-corp-s").textContent = "Te llega tu asignación al celular apenas se publica.";
       si.textContent = "Activar"; si.disabled = false; no.style.display = "";
       no.onclick = () => { ocultar(); try { localStorage.setItem("av-corp-no", Date.now()); } catch (e) {} };
