@@ -30,12 +30,29 @@ const FC_TABS = [
 // Las secciones que ya no están en el menú y a dónde llevan ahora
 const FC_MENU_DE = { planes: "coches", mantenimientos: "coches", mantenimiento: "coches", neumaticos: "coches",
                      correctivos: "coches", historial_carga: "coches", costos: "coches", kpis: "coches",
-                     personal: "ots", tablero_taller: "ots" };
-const FC_SUBNAV_OT = [
-  ["ots", "clipboard-check", "Órdenes"],
-  ["tablero_taller", "layout-grid", "Tablero de control"],
-  ["personal", "users", "Personal"],
-];
+                     personal: "ots", tablero_taller: "ots",
+                     corp_historial: "corp_resumen", corp_servicios: "corp_empresas", corp_ranking: "corp_empresas",
+                     corp_cargas: "corp_combustible" };
+// Secciones del menú que juntan varias pantallas: cada una es una pestaña
+// arriba de la pantalla. La primera es la del botón del menú.
+const FC_GRUPOS = {
+  ots: { nombre: "Órdenes de trabajo", tv: true, tabs: [
+    ["ots", "clipboard-check", "Órdenes"],
+    ["tablero_taller", "layout-grid", "Tablero de control"],
+    ["personal", "users", "Personal"]] },
+  corp_resumen: { nombre: "Rendiciones y pagos", tabs: [
+    ["corp_resumen", "clipboard-check", "Rendiciones"],
+    ["corp_historial", "receipt", "Pagos hechos"]] },
+  corp_empresas: { nombre: "Control de corporativos", tabs: [
+    ["corp_empresas", "building-factory", "Por empresa"],
+    ["corp_servicios", "chart-histogram", "Servicios"],
+    ["corp_ranking", "trophy", "Ranking de choferes"]] },
+  corp_combustible: { nombre: "Combustible de corporativos", tabs: [
+    ["corp_combustible", "gas-station", "Cargas"],
+    ["corp_cargas", "map-pin", "Dónde se carga"]] },
+};
+// A qué grupo pertenece cada pantalla
+const FC_GRUPO_DE = Object.fromEntries(Object.entries(FC_GRUPOS).flatMap(([g, x]) => x.tabs.map(t => [t[0], g])));
 
 const fc = { vid: null, v: null, tab: "resumen", res: null, seq: 0, scroll: 0, sec: "" };
 
@@ -100,10 +117,8 @@ function fcRuta(sec) {
       const tab = sec === "mantenimiento" ? "preventivo" : sec;
       return () => cocheActual ? fcAbrir(cocheActual.id, tab) : fcEntrar();
     }
-    case "ots": case "personal": case "tablero_taller":
-      fcMarcarMenu("ots");
-      return null;
   }
+  if (FC_GRUPO_DE[sec] && puedeVerSeccion(sec)) fcMarcarMenu(FC_GRUPO_DE[sec]);
   return null;
 }
 
@@ -467,16 +482,17 @@ function fcCajaDatos(d) {
 // de Órdenes de trabajo. Se ponen arriba de la pantalla cada vez que se dibuja.
 function fcSubnavOT() {
   const raiz = document.getElementById("content");
-  if (!raiz || !FC_SUBNAV_OT.some(x => x[0] === fc.sec) || typeof puedeVerSeccion !== "function") return;
+  const g = FC_GRUPOS[FC_GRUPO_DE[fc.sec]];
+  if (!raiz || !g || typeof puedeVerSeccion !== "function") return;
   const cab = raiz.querySelector(":scope > .page-header");
   if (!cab || raiz.querySelector(":scope > .fc-subnav")) return;
-  const ve = FC_SUBNAV_OT.filter(([k]) => puedeVerSeccion(k) && (k !== "ots" || window.USUARIO_ROL !== "auditor"));
-  if (ve.length < 2) return;
+  const ve = g.tabs.filter(([k]) => puedeVerSeccion(k) && (k !== "ots" || window.USUARIO_ROL !== "auditor"));
+  if (ve.length < 2 && !g.tv) return;
   cab.insertAdjacentHTML("afterend", `
-    <nav class="fc-subnav" aria-label="Partes de Órdenes de trabajo">
+    <nav class="fc-subnav" aria-label="Partes de ${g.nombre}">
       <div class="pv-tabs">
         ${ve.map(([k, i, n]) => `<button class="pv-tab ${fc.sec === k ? "on" : ""}" onclick="destNavegar('${k}')"><i class="ti ti-${i}"></i><span>${n}</span></button>`).join("")}
-        <button class="pv-tab" onclick="window.open('/tablero','_blank')" title="La pantalla del taller, en otra pestaña"><i class="ti ti-device-tv"></i><span>Tablero TV</span><i class="ti ti-external-link fc-ext"></i></button>
+        ${g.tv ? `<button class="pv-tab" onclick="window.open('/tablero','_blank')" title="La pantalla del taller, en otra pestaña"><i class="ti ti-device-tv"></i><span>Tablero TV</span><i class="ti ti-external-link fc-ext"></i></button>` : ""}
       </div>
     </nav>`);
 }

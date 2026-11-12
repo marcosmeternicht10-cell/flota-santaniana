@@ -97,14 +97,10 @@ const VC_DIVISIONES = [
     subs: [
       { sec: "corp_asignacion", nombre: "Asignación del día", icono: "ti-calendar-user", desc: "Qué chofer y qué coche en cada tramo",
         dato: r => r.corp_hoy && { txt: vcPlural(r.corp_hoy.servicios, "servicio hoy", "servicios hoy") } },
-      { sec: "corp_resumen", nombre: "Resumen de rendiciones", icono: "ti-clipboard-check", desc: "Revisar y liquidar",
+      { sec: "corp_resumen", nombre: "Rendiciones y pagos", icono: "ti-clipboard-check", desc: "Revisar, liquidar y lo ya pagado",
         dato: r => r.corp_pend && { txt: `${vcN(r.corp_pend.servicios)} sin liquidar · ${vcGs(r.corp_pend.monto)}`, tono: r.corp_pend.servicios ? "aviso" : "ok" } },
-      { sec: "corp_historial", nombre: "Histórico de pagos", icono: "ti-receipt", desc: "Lo que ya se pagó" },
-      { sec: "corp_empresas", nombre: "Control por empresa", icono: "ti-building-factory", desc: "Lo que se le factura a cada una" },
-      { sec: "corp_servicios", nombre: "Servicios", icono: "ti-chart-histogram", desc: "Cuántos y de qué tipo" },
-      { sec: "corp_ranking", nombre: "Ranking de choferes", icono: "ti-trophy", desc: "Quién cumple, carga a tiempo y sin errores" },
-      { sec: "corp_combustible", nombre: "Combustible", icono: "ti-gas-station", desc: "Cargas de los coches corporativos" },
-      { sec: "corp_cargas", nombre: "Cargas", icono: "ti-map-pin", desc: "Dónde y cuándo se cargó" },
+      { sec: "corp_empresas", nombre: "Control", icono: "ti-building-factory", desc: "Por empresa, servicios y ranking de choferes" },
+      { sec: "corp_combustible", nombre: "Combustible", icono: "ti-gas-station", desc: "Las cargas y dónde se carga" },
     ],
   },
   {

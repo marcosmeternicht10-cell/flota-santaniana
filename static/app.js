@@ -161,7 +161,9 @@ const SECCION_CON = { pedidos_ot: "ots" };
 const SECCION_VIEJA = { planes: "coches", mantenimientos: "coches", mantenimiento: "coches", neumaticos: "coches",
                         correctivos: "coches", historial_carga: "coches" };
 // Botones del menú que agrupan varias secciones: se ven si tiene alguna
-const SECCION_GRUPO = { ots: ["personal", "tablero_taller"], coches: ["costos", "kpis"] };
+const SECCION_GRUPO = { ots: ["personal", "tablero_taller"], coches: ["costos", "kpis"],
+                        corp_resumen: ["corp_historial"], corp_empresas: ["corp_servicios", "corp_ranking"],
+                        corp_combustible: ["corp_cargas"] };
 function tieneSeccion(secs, sec) { return secs.includes(sec) || (SECCION_CON[sec] && secs.includes(SECCION_CON[sec])); }
 function tieneSeccionMenu(secs, sec) { return tieneSeccion(secs, sec) || (SECCION_GRUPO[sec] || []).some(x => secs.includes(x)); }
 function puedeVerSeccion(sec) {
@@ -196,7 +198,8 @@ function aplicarSecciones() {
 function irA(sec) {
   // Órdenes de trabajo agrupa el tablero y el personal: quien no tiene las
   // órdenes pero sí alguno de los otros, entra por ese
-  if (sec === "ots" && !puedeVerSeccion("ots")) sec = ["tablero_taller", "personal"].find(puedeVerSeccion) || sec;
+  // (igual los grupos de corporativos: Rendiciones y pagos, Control, Combustible)
+  if (FC_GRUPOS[sec] && !puedeVerSeccion(sec)) sec = FC_GRUPOS[sec].tabs.map(t => t[0]).find(puedeVerSeccion) || sec;
   destRecordar(FC_MENU_DE[sec] === "coches" ? "coches" : sec);
   // Coches y las secciones que ahora viven adentro de la ficha (static/coches.js)
   const aCoches = fcRuta(sec);
@@ -17573,10 +17576,17 @@ function destSecciones() {
   }
   if (tabs.length) out.push({ tipo: "seccion", sec: "coches", nombre: "Historial por coche", grupo: "Coches", icono: "ti ti-timeline-event" },
                             { tipo: "seccion", sec: "coches", nombre: "Mantenimientos y correctivos", grupo: "Coches", icono: "ti ti-book" });
-  if (document.querySelector('.nav-item[data-sec="ots"]') && getComputedStyle(document.querySelector('.nav-item[data-sec="ots"]')).display !== "none") {
-    if (puedeVerSeccion("tablero_taller")) out.push({ tipo: "seccion", sec: "tablero_taller", nombre: "Tablero de control", grupo: "Órdenes de Trabajo", icono: "ti ti-layout-grid" });
-    if (puedeVerSeccion("personal")) out.push({ tipo: "seccion", sec: "personal", nombre: "Personal de taller", grupo: "Órdenes de Trabajo", icono: "ti ti-users" });
-  }
+  // Las pestañas de las secciones que agrupan varias (Órdenes, Rendiciones y
+  // pagos, Control, Combustible) se encuentran con su nombre de siempre
+  const VIEJO = { tablero_taller: "Tablero de control", personal: "Personal de taller", corp_historial: "Histórico de pagos",
+                  corp_servicios: "Servicios de corporativos", corp_ranking: "Ranking de choferes", corp_cargas: "Dónde se carga combustible" };
+  Object.entries(FC_GRUPOS).forEach(([cab, g]) => {
+    const b = document.querySelector(`.nav-item[data-sec="${cab}"]`);
+    if (!b || getComputedStyle(b).display === "none") return;
+    g.tabs.slice(1).forEach(([k, i, n]) => {
+      if (puedeVerSeccion(k)) out.push({ tipo: "seccion", sec: k, nombre: VIEJO[k] || n, grupo: b.textContent.trim(), icono: "ti ti-" + i });
+    });
+  });
   return out;
 }
 
