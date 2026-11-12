@@ -925,14 +925,12 @@ def viajes_servicio(tramo, hora_inicio="", estado="completado"):
 
 
 def _mismo_horario(a, b):
-    """Si dos servicios tienen un viaje a la misma hora. La entrada de uno y la
-    salida de otro a la misma hora no chocan: es el mismo recorrido, que deja a
-    los que entran y lleva a los que salen (el cambio de turno)."""
-    for ta, ha in a:
-        for tb, hb in b:
-            if round(ha * 60) == round(hb * 60) and (ta == tb or "viaje" in (ta, tb)):
-                return True
-    return False
+    """Si dos servicios tienen un viaje a la misma hora, sea entrada o salida.
+    También el cambio de turno: quien hizo BALL Tramo 5 de 6:00 a 18:00 no
+    puede cargar además el de 18:00 a 6:00 (son 24 horas seguidas, casi
+    siempre un error de carga)."""
+    ma = {round(h * 60) for _, h in a}
+    return any(round(h * 60) in ma for _, h in b)
 
 
 def _txt_viajes(vs):
