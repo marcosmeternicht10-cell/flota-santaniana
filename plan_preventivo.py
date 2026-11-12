@@ -1471,6 +1471,92 @@ def agenda(desde, hasta):
         conn.close()
 
 
+# ─── Informe de la agenda: qué se hizo y qué no ─────────────────────────────
+RESULTADO_TURNO = {"hecho": "Se hizo", "en_taller": "En el taller", "no_hecho": "No se hizo",
+                   "pendiente": "Pendiente", "cancelado": "Cancelado"}
+# Con este porcentaje o más de turnos hechos, la agenda se da por cumplida
+AGENDA_CUMPLE_PCT = 80
+
+
+def _resultado_turno(t, hoy):
+    e = t["estado"]
+    if e == "cumplido":
+        return "hecho"
+    if e in ("en_taller", "cancelado"):
+        return e
+    if e == "ausente":
+        return "no_hecho"
+    return "no_hecho" if t["fecha"] < hoy else "pendiente"
+
+
+def informe_agenda(desde, hasta):
+    """Los turnos de la agenda entre dos fechas, cada uno con su resultado
+    (se hizo, está en el taller, no se hizo, pendiente o cancelado), y el
+    resumen: de los que ya debían hacerse, cuántos se hicieron."""
+    ag = agenda(desde, hasta)
+    hoy = ag["hoy"]
+    turnos = []
+    for d in ag["dias"]:
+        for t in d["turnos"]:
+            r = _resultado_turno(t, hoy)
+            cerrado = (t.get("cerrado_el") or "")[:10]
+            if r == "hecho":
+                tarde = (date.fromisoformat(cerrado).toordinal() - date.fromisoformat(t["fecha"]).toordinal()) if cerrado else 0
+                det = (f"Hecho el {_fecha_txt(cerrado)}" if cerrado and cerrado != t["fecha"] else "Hecho en la fecha")
+                if tarde > 0:
+                    det += f" ({tarde} {'día' if tarde == 1 else 'días'} después)"
+            elif r == "en_taller":
+                det = "El coche entró y el trabajo sigue abierto"
+            elif r == "no_hecho":
+                atraso = date.fromisoformat(hoy).toordinal() - date.fromisoformat(t["fecha"]).toordinal()
+                det = ("El coche no se presentó" if t["estado"] == "ausente"
+                       else f"Pasó la fecha hace {atraso} {'día' if atraso == 1 else 'días'} y no se registró")
+            elif r == "cancelado":
+                det = "Cancelado" + (f": {t['motivo']}" if t.get("motivo") else "")
+            else:
+                det = "Todavía no llegó la fecha"
+            if t.get("ot_id"):
+                det += f" · OT #{t['ot_id']}"
+            turnos.append({
+                "id": t["id"], "fecha": t["fecha"], "hora": t.get("hora") or "",
+                "vehiculo_id": t["vehiculo_id"], "coche": t.get("n_interno") or t.get("patente") or "",
+                "patente": t.get("patente") or "",
+                "tareas": t.get("tareas_nombres") or [], "notas": t.get("notas") or "",
+                "tecnicos": [x.get("nombre") or "" for x in (t.get("tecnicos_lista") or [])],
+                "estado": t["estado"], "resultado": r, "resultado_txt": RESULTADO_TURNO[r],
+                "detalle": det, "ot_id": t.get("ot_id"), "cerrado_el": cerrado,
+            })
+    n = {k: sum(1 for t in turnos if t["resultado"] == k) for k in RESULTADO_TURNO}
+    debian = n["hecho"] + n["en_taller"] + n["no_hecho"]
+    pct = round(100 * n["hecho"] / debian) if debian else None
+    if not debian:
+        nivel, frase = "sin_datos", "Todavía no hay turnos que ya debieran haberse hecho en este período."
+    elif not n["no_hecho"]:
+        nivel = "bien"
+        frase = ("La agenda se está cumpliendo: todos los turnos que debían hacerse se hicieron"
+                 + (f" o están en el taller ({n['en_taller']})." if n["en_taller"] else "."))
+    else:
+        nivel = "atencion" if pct >= AGENDA_CUMPLE_PCT else "mal"
+        frase = (f"{'Atención' if nivel == 'atencion' else 'No se está cumpliendo la agenda'}: "
+                 f"{n['no_hecho']} de {debian} {'turno que debía hacerse no se hizo' if n['no_hecho'] == 1 else 'turnos que debían hacerse no se hicieron'}.")
+    return {"desde": desde, "hasta": hasta, "hoy": hoy, "turnos": turnos,
+            "resumen": {**n, "total": len(turnos) - n["cancelado"], "debian": debian, "pct": pct,
+                        "nivel": nivel, "frase": frase}}
+
+
+def agenda_sin_cumplir(dias=30):
+    """Para los avisos: cuántos turnos de los últimos días pasaron y no se hicieron."""
+    hoy = date.fromisoformat(_hoy_txt())
+    conn = get_connection()
+    try:
+        r = conn.execute("""SELECT COUNT(*) AS n FROM taller_turnos
+                            WHERE fecha >= ? AND fecha < ? AND estado IN ('agendado','ausente')""",
+                         ((hoy - timedelta(days=dias)).isoformat(), hoy.isoformat())).fetchone()
+        return int(r["n"] or 0)
+    finally:
+        conn.close()
+
+
 def para_agendar(dias_adelante=None):
     """Coches que necesitan turno: vencidos o que vencen pronto y no tienen
     turno. Con la fecha sugerida (respetando los cupos)."""
@@ -2080,6 +2166,47 @@ def api_agenda():
     if date.fromisoformat(hasta).toordinal() - date.fromisoformat(desde).toordinal() > 120:
         return jsonify({"ok": False, "msg": "Rango muy largo"}), 400
     return jsonify(agenda(desde, hasta))
+
+
+def _rango_informe():
+    hoy = date.fromisoformat(_hoy_txt())
+    desde = request.args.get("desde") or hoy.replace(day=1).isoformat()
+    hasta = request.args.get("hasta") or hoy.isoformat()
+    try:
+        d0, d1 = date.fromisoformat(desde), date.fromisoformat(hasta)
+    except ValueError:
+        return None, None, "Fechas inválidas"
+    if d1 < d0:
+        return None, None, "La fecha «hasta» es anterior a «desde»"
+    if (d1 - d0).days > 370:
+        return None, None, "El período es de más de un año"
+    return desde, hasta, ""
+
+
+@bp_prev.route("/api/prev/agenda_informe", methods=["GET"])
+def api_agenda_informe():
+    """Qué se hizo y qué no de la agenda del taller, entre dos fechas."""
+    if not _puede_ver():
+        return _no()
+    desde, hasta, err = _rango_informe()
+    if err:
+        return jsonify({"ok": False, "msg": err}), 400
+    return jsonify(informe_agenda(desde, hasta))
+
+
+@bp_prev.route("/api/prev/agenda_pdf", methods=["GET"])
+def api_agenda_pdf():
+    """El mismo informe, para imprimir."""
+    if not _puede_ver():
+        return _no()
+    desde, hasta, err = _rango_informe()
+    if err:
+        return jsonify({"ok": False, "msg": err}), 400
+    from flask import send_file
+    import agenda_pdf
+    buf = agenda_pdf.pdf_agenda(informe_agenda(desde, hasta), _quien())
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"agenda_taller_{desde}_a_{hasta}.pdf")
 
 
 @bp_prev.route("/api/prev/para_agendar", methods=["GET"])

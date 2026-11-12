@@ -276,6 +276,17 @@ def _calcular():
     except Exception:
         pass
 
+    # La agenda del taller: turnos que ya pasaron y no se hicieron
+    try:
+        import plan_preventivo
+        sin = plan_preventivo.agenda_sin_cumplir(30)
+        if sin:
+            avisos.append({"sec": "coches", "nivel": "alerta", "icono": "ti-calendar-exclamation", "ir": "agenda",
+                           "titulo": f"{sin} {'turno del taller no se hizo' if sin == 1 else 'turnos del taller no se hicieron'}",
+                           "detalle": "Agenda de los últimos 30 días"})
+    except Exception:
+        pass
+
     # Corporativos: servicios que se pisan en horario, sin liquidar
     try:
         import corporativos

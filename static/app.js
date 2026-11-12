@@ -20124,10 +20124,89 @@ async function pvAgenda() {
   if (!ag || !ag.dias) { $("#pv-cuerpo").innerHTML = pvError("No se pudo traer la agenda"); return; }
   pv.agenda = ag; pv.sug = sug || [];
   const acc = $("#pv-acc");
-  if (acc && pvPuede()) acc.innerHTML = `
-    <button class="btn btn-ghost" onclick="pvCupos()"><i class="ti ti-settings"></i> Cupos del taller</button>
-    <button class="btn btn-primary" onclick="pvAgendar()"><i class="ti ti-calendar-plus"></i> Agendar turno</button>`;
+  if (acc) acc.innerHTML = `
+    <button class="btn btn-ghost" onclick="pvAgendaInforme()" title="Qué se hizo y qué no de la agenda, para imprimir"><i class="ti ti-printer"></i> Imprimir cumplimiento</button>
+    ${pvPuede() ? `<button class="btn btn-ghost" onclick="pvCupos()"><i class="ti ti-settings"></i> Cupos del taller</button>
+    <button class="btn btn-primary" onclick="pvAgendar()"><i class="ti ti-calendar-plus"></i> Agendar turno</button>` : ""}`;
   pvAgendaPintar();
+}
+
+// ─── Informe de la agenda: qué se hizo y qué no ─────────────────────────────
+// Se elige el período, se ve el resumen (si la agenda se está cumpliendo y qué
+// turnos no se hicieron) y se imprime.
+const pvInf = { desde: "", hasta: "", d: null };
+function pvInformePeriodos() {
+  const hoy = pvD(pvHoy());
+  const iso = d => trIso(d);
+  const [a, m] = (pv.mes || pvHoy().slice(0, 7)).split("-").map(Number);
+  const finMes = new Date(a, m, 0);
+  const lunes = new Date(hoy); lunes.setDate(hoy.getDate() - ((hoy.getDay() + 6) % 7));
+  const lunAnt = new Date(lunes); lunAnt.setDate(lunes.getDate() - 7);
+  const domAnt = new Date(lunes); domAnt.setDate(lunes.getDate() - 1);
+  const h30 = new Date(hoy); h30.setDate(hoy.getDate() - 29);
+  return [
+    [`${PV_MESES[m - 1][0].toUpperCase()}${PV_MESES[m - 1].slice(1)} ${a}`, iso(new Date(a, m - 1, 1)), iso(finMes)],
+    ["Esta semana", iso(lunes), iso(hoy)],
+    ["La semana pasada", iso(lunAnt), iso(domAnt)],
+    ["Últimos 30 días", iso(h30), iso(hoy)],
+  ];
+}
+function pvAgendaInforme() {
+  const per = pvInformePeriodos();
+  pvInf.desde = per[0][1]; pvInf.hasta = per[0][2]; pvInf.d = null;
+  rvModal({
+    titulo: "Cumplimiento de la agenda", icono: "printer", ancho: 620,
+    sub: "Qué se hizo y qué no de los turnos agendados. Elegí el período y se imprime.",
+    cuerpo: `
+      <div class="pv-inf-per">${per.map(([n, d, h], i) => `<button type="button" class="sv-chip ${i ? "" : "on"}" data-d="${d}" data-h="${h}" onclick="pvInformePeriodo(this)">${n}</button>`).join("")}</div>
+      <div class="rv-campos">
+        <label class="rv-f" style="flex:1"><span>Desde</span><input id="pv-inf-d" type="date" value="${pvInf.desde}" onchange="pvInformeFechas()"></label>
+        <label class="rv-f" style="flex:1"><span>Hasta</span><input id="pv-inf-h" type="date" value="${pvInf.hasta}" onchange="pvInformeFechas()"></label>
+      </div>
+      <div id="pv-inf-res">${pvCargando()}</div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>
+          <button class="btn btn-primary" id="pv-inf-imp" onclick="pvInformeImprimir()"><i class="ti ti-printer"></i> Imprimir</button>`,
+  });
+  pvInformeTraer();
+}
+function pvInformePeriodo(b) {
+  document.querySelectorAll(".pv-inf-per .sv-chip").forEach(x => x.classList.toggle("on", x === b));
+  $("#pv-inf-d").value = pvInf.desde = b.dataset.d;
+  $("#pv-inf-h").value = pvInf.hasta = b.dataset.h;
+  pvInformeTraer();
+}
+function pvInformeFechas() {
+  pvInf.desde = $("#pv-inf-d").value; pvInf.hasta = $("#pv-inf-h").value;
+  document.querySelectorAll(".pv-inf-per .sv-chip").forEach(x => x.classList.toggle("on", x.dataset.d === pvInf.desde && x.dataset.h === pvInf.hasta));
+  if (pvInf.desde && pvInf.hasta) pvInformeTraer();
+}
+async function pvInformeTraer() {
+  const caja = $("#pv-inf-res");
+  if (!caja) return;
+  const { desde, hasta } = pvInf;
+  caja.innerHTML = pvCargando();
+  const d = await api(`/api/prev/agenda_informe?desde=${desde}&hasta=${hasta}`);
+  if (!$("#pv-inf-res") || desde !== pvInf.desde || hasta !== pvInf.hasta) return;
+  if (!d || !d.resumen) { pvInf.d = null; caja.innerHTML = `<p class="pv-nota"><i class="ti ti-alert-circle"></i> ${pvEsc((d && d.msg) || "No se pudo traer el informe")}</p>`; return; }
+  pvInf.d = d;
+  const r = d.resumen;
+  const no = d.turnos.filter(t => t.resultado === "no_hecho");
+  const ic = { bien: "circle-check", atencion: "alert-triangle", mal: "alert-octagon", sin_datos: "info-circle" }[r.nivel];
+  caja.innerHTML = `
+    <div class="pv-inf-frase n-${r.nivel}"><i class="ti ti-${ic}"></i><span>${pvEsc(r.frase)}</span>${r.pct != null ? `<b>${r.pct} %</b>` : ""}</div>
+    <div class="pv-inf-cifras">
+      <div><b>${r.debian}</b><span>Debían hacerse</span></div>
+      <div class="ok"><b>${r.hecho}</b><span>Se hicieron</span></div>
+      <div class="taller"><b>${r.en_taller}</b><span>En el taller</span></div>
+      <div class="mal"><b>${r.no_hecho}</b><span>No se hicieron</span></div>
+      <div><b>${r.pendiente}</b><span>Pendientes</span></div>
+    </div>
+    ${no.length ? `<div class="pv-inf-lista"><div class="pv-inf-tit">No se hicieron</div>${no.map(t => `
+      <div class="pv-inf-fila"><b>${pvEsc(t.coche)}</b><span>${pvFL(t.fecha)} · ${pvEsc(t.tareas.join(", ") || t.notas || "Sin detalle")}</span><em>${pvEsc(t.detalle)}</em></div>`).join("")}</div>` : ""}`;
+}
+function pvInformeImprimir() {
+  if (!pvInf.desde || !pvInf.hasta) { toast("Elegí las dos fechas", "error"); return; }
+  window.open(`/api/prev/agenda_pdf?desde=${pvInf.desde}&hasta=${pvInf.hasta}`, "_blank");
 }
 function pvAgendaPintar() {
   const ag = pv.agenda, hoy = ag.hoy;

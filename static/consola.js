@@ -435,6 +435,8 @@ function vcAbrirAviso(i) {
   const donde = a && vcDondeSec(a.sec);
   if (!donde) return;
   vc.div = donde.div;
+  // El aviso de la agenda del taller abre Coches directo en la pestaña Agenda
+  if (a.ir === "agenda" && typeof pv !== "undefined") pv.tab = "agenda";
   vcAbrir(donde.div, donde.sub);
 }
 // Cuántos avisos tiene cada división, en su ícono
