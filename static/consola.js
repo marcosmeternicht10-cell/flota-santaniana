@@ -18,7 +18,9 @@
 
 // Por usuario: en una PC compartida cada uno tiene su vista
 const _vcU = String(window.USUARIO_NOMBRE || "");
-const VC_CLAVE_VISTA = "santaniana.vista." + _vcU;
+// La consola es la vista del sistema. La clave lleva «2» para que arranquen en
+// consola también quienes habían vuelto al menú de antes mientras era opcional.
+const VC_CLAVE_VISTA = "santaniana.vista2." + _vcU;
 const VC_CLAVE_DIV = "santaniana.consola.division." + _vcU;
 const VC_CLAVE_SONIDO = "santaniana.consola.sonido." + _vcU;
 
@@ -862,7 +864,8 @@ function vcPadAccion(k, tecla) {
   vcTecla({ key: tecla, target: document.body, preventDefault() { } });
 }
 
-// ── Botón para prenderla, en el menú clásico ─────────────────────────────────
+// ── Arranque: la consola es la vista de entrada ──────────────────────────────
+// (en el menú de antes queda el botón «Consola» para volver a ella)
 (function vcArrancar() {
   vc.sonido = vcLeer(VC_CLAVE_SONIDO, "0") === "1";
   const acc = document.querySelector(".user-actions");
@@ -870,10 +873,15 @@ function vcPadAccion(k, tecla) {
     const b = document.createElement("button");
     b.id = "vc-prender";
     b.className = "user-btn";
-    b.title = "Ver el sistema como una consola";
+    b.title = "Volver a la vista consola";
     b.innerHTML = `<i class="ti ti-device-gamepad-2"></i><span class="btn-txt">Consola</span>`;
     b.onclick = () => vcPrender(true);
     acc.insertBefore(b, acc.firstChild);
   }
-  if (vcLeer(VC_CLAVE_VISTA, "") === "consola") vcPrender(true);
+  // Se entra directo a la consola; el menú de antes queda solo para quien lo elija
+  if (vcLeer(VC_CLAVE_VISTA, "consola") !== "clasica") vcPrender(true);
+  // Quien tiene secciones limitadas arranca abriendo la primera suya (app.js lo
+  // hace un instante después) y eso cerraba el inicio: se vuelve a mostrar.
+  if (vc.activa && typeof tieneSeccionesLimitadas === "function" && tieneSeccionesLimitadas())
+    setTimeout(() => { if (vc.activa && !vc.enInicio) vcInicio(); }, 0);
 })();
