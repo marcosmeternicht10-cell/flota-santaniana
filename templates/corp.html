@@ -458,7 +458,7 @@
     }
 
     // Los tramos que caen a la misma hora que algo que el chofer ya cargó ese
-    // día no se pueden elegir (a la tarde puede hacer otro; en la misma franja no)
+    // día no se pueden elegir (solo el mismo horario: a las 6 y a las 8 sí puede)
     let OCUPADOS = {}, CARGADOS_DIA = [], ocupSeq = 0;
     async function traerOcupados(){
       const cliente = $("f-cliente").value, fecha = $("f-fecha").value, n = ++ocupSeq;
@@ -490,7 +490,7 @@
         $("f-tramo").closest(".campo").appendChild(c);
       }
       c.innerHTML = CARGADOS_DIA.length
-        ? `<div class="aviso parcial" style="margin-top:8px"><i class="ti ti-clock"></i><span>Ese día ya cargaste: ${CARGADOS_DIA.map(x => `<b>${x.tramo}</b>${x.estado !== "completado" ? " (" + x.estado + ")" : ""} de ${x.horario}`).join(", ")}. Los tramos a esa misma hora no se pueden elegir.</span></div>`
+        ? `<div class="aviso parcial" style="margin-top:8px"><i class="ti ti-clock"></i><span>Ese día ya cargaste: ${CARGADOS_DIA.map(x => `<b>${x.tramo}</b>${x.estado !== "completado" ? " (" + x.estado + ")" : ""} (${x.horario})`).join(", ")}. Solo se bloquean los tramos de ese mismo horario; los de otra hora se pueden elegir.</span></div>`
         : "";
     }
 
@@ -607,7 +607,7 @@
     function pedirJustificacion(msg, minimo){
       cerrarJustificacion();
       const choque = (msg || "").replace(/^Ese día, a esa misma hora, ya hay cargado: /, "")
-                                 .replace(/\. No se puede estar.*$/, "");
+                                 .replace(/\. No se puede.*$/, "");
       const o = document.createElement("div");
       o.id = "justif-overlay";
       o.className = "justif-overlay";

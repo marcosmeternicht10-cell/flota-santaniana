@@ -730,7 +730,8 @@ MAX_SERVICIOS_DIA = 2
 # justo para que no alcance con poner "ok" o un punto.
 JUSTIFICACION_MIN = 15
 
-# Control de franja horaria (no dejar cargar dos servicios que se pisan).
+# Control de horario: no dejar cargar dos servicios a la misma hora (ver
+# viajes_servicio). Uno a las 6:00 y otro a las 8:00 sí se pueden.
 # PRENDIDO. Para apagarlo en una urgencia sin tocar el código:
 # CORP_CONTROL_HORARIO=0 en Render (Environment).
 import os as _os
@@ -890,6 +891,55 @@ def rangos_servicio(tramo, hora_inicio="", estado="completado"):
     return [r]
 
 
+def viajes_servicio(tramo, hora_inicio="", estado="completado"):
+    """Los viajes del servicio, cada uno con su horario.
+
+    La regla es simple: dos servicios chocan solo si tienen un viaje A LA MISMA
+    HORA. Uno a las 6:00 y otro a las 8:00 se pueden cargar los dos.
+
+    El horario sale del nombre del tramo: 'ADMIN. LIMPIO (6:00 A 16:00 HS.)' es
+    la entrada de las 6:00 y la salida de las 16:00; 'LIMPIO 6:00/6:20', la
+    entrada de las 6:00 y la salida de las 6:20. Quien hizo solo el entrante
+    ocupa solo la hora de entrada; el saliente, solo la de salida; el completo,
+    las dos. Un tramo con una sola hora ('TURNANTE LIMPIO (4:30 HS.)') es un
+    viaje a esa hora, se cargue como se cargue.
+
+    Devuelve [(tipo, hora)] con tipo 'entrada', 'salida' o 'viaje'; vacío si no
+    hay forma de saber el horario.
+    """
+    horas = _horas_del_tramo(tramo)
+    if not horas and _es_adm(tramo):
+        horas = list(HORARIO_ADM)      # ADMIN. ESPAÑA, ADMIN. SAJONIA...: la jornada de oficina
+    if not horas:
+        horas = _horas_del_tramo(hora_inicio or "")[:1]
+    if not horas:
+        return []
+    minutos = [round(h * 60) % 1440 for h in horas[:2]]
+    if len(minutos) == 1 or minutos[0] == minutos[1]:
+        return [("viaje", minutos[0] / 60)]
+    if estado == "entrante":
+        return [("entrada", minutos[0] / 60)]
+    if estado == "saliente":
+        return [("salida", minutos[1] / 60)]
+    return [("entrada", minutos[0] / 60), ("salida", minutos[1] / 60)]
+
+
+def _mismo_horario(a, b):
+    """Si dos servicios tienen un viaje a la misma hora. La entrada de uno y la
+    salida de otro a la misma hora no chocan: es el mismo recorrido, que deja a
+    los que entran y lleva a los que salen (el cambio de turno)."""
+    for ta, ha in a:
+        for tb, hb in b:
+            if round(ha * 60) == round(hb * 60) and (ta == tb or "viaje" in (ta, tb)):
+                return True
+    return False
+
+
+def _txt_viajes(vs):
+    nombre = {"entrada": "entrada de las ", "salida": "salida de las ", "viaje": "a las "}
+    return " y ".join(nombre[t] + _hhmm(h) for t, h in vs)
+
+
 def _hhmm(h):
     h %= 24
     return f"{int(h):02d}:{int(round((h - int(h)) * 60)):02d}"
@@ -900,18 +950,18 @@ def _txt_rangos(rs):
 
 
 def _choque_con(previos, tramo, hora_inicio="", estado="completado"):
-    """El primer servicio ya cargado que se pisa en horario con el nuevo, con
-    los rangos de ese servicio. None si no choca con ninguno."""
+    """El primer servicio ya cargado que tiene un viaje a la misma hora que el
+    nuevo, con los viajes de ese servicio. None si no choca con ninguno."""
     if estado == "suspendido" or _es_variable(tramo):
         return None
-    nuevo = rangos_servicio(tramo, hora_inicio, estado)
+    nuevo = viajes_servicio(tramo, hora_inicio, estado)
     if not nuevo:
         return None
     for s_ in previos:
         if _es_variable(s_["tramo"]):
             continue
-        otro = rangos_servicio(s_["tramo"], s_.get("hora_inicio", ""), s_.get("estado") or "completado")
-        if any(_se_pisan(a, b) for a in nuevo for b in otro):
+        otro = viajes_servicio(s_["tramo"], s_.get("hora_inicio", ""), s_.get("estado") or "completado")
+        if _mismo_horario(nuevo, otro):
             return s_, otro
     return None
 
@@ -930,11 +980,11 @@ def _se_pisan(a, b):
 
 def puede_cargar_servicio(chofer_usuario, fecha, tramo, hora_inicio="",
                           estado="completado", excluir_id=None):
-    """Si este servicio se pisa con otro que el chofer ya cargó ese día.
+    """Si este servicio tiene el mismo horario que otro que el chofer ya cargó
+    ese día.
 
-    Se limita al choque real: nadie puede hacer dos tramos en la misma franja
-    horaria. Dos servicios seguidos o en momentos distintos del día (uno a la
-    mañana y otro a la tarde) pasan sin problema.
+    Solo choca el mismo horario: nadie puede hacer dos tramos a la misma hora.
+    Uno a las 6:00 y otro a las 8:00 pasan sin problema.
     """
     if estado == "suspendido" or _es_variable(tramo):
         return True, ""
@@ -946,14 +996,14 @@ def puede_cargar_servicio(chofer_usuario, fecha, tramo, hora_inicio="",
     mitad = f" ({s_['estado']})" if s_.get("estado") in ("entrante", "saliente") else ""
     return False, (f"Ese día, a esa misma hora, ya hay cargado: "
                    f"{s_['cliente']} · {s_['tramo']}{mitad} "
-                   f"({_txt_rangos(otro)}). "
-                   f"No se puede estar en dos lugares a la vez: "
+                   f"({_txt_viajes(otro)}). "
+                   f"No se pueden cargar dos servicios en el mismo horario: "
                    f"si el que está cargado es el equivocado, corregilo o borralo primero.")
 
 
 def horarios_ocupados(chofer_usuario, fecha, cliente):
     """Para el formulario del chofer: qué tramos del cliente (y qué mitad) ya
-    no puede elegir ese día porque caen en la franja de algo que ya cargó."""
+    no puede elegir ese día porque son a la misma hora que algo que ya cargó."""
     ya = servicios_del_dia(chofer_usuario, fecha)
     out = {}
     for t in (CLIENTES_TRAMOS.get(cliente, []) if CONTROL_HORARIO else []):
@@ -963,12 +1013,12 @@ def horarios_ocupados(chofer_usuario, fecha, cliente):
             if c:
                 s_, otro = c
                 mitad = f" {s_['estado']}" if s_.get("estado") in ("entrante", "saliente") else ""
-                bloq[e] = f"{s_['tramo']}{mitad} ({_txt_rangos(otro)})"
+                bloq[e] = f"{s_['tramo']}{mitad} ({_txt_viajes(otro)})"
         if bloq:
             out[t] = bloq
     return {"ocupados": out,
             "cargados": [{"tramo": x["tramo"], "cliente": x["cliente"], "estado": x["estado"],
-                          "horario": _txt_rangos(rangos_servicio(x["tramo"], x.get("hora_inicio", ""), x.get("estado") or "completado"))}
+                          "horario": _txt_viajes(viajes_servicio(x["tramo"], x.get("hora_inicio", ""), x.get("estado") or "completado"))}
                          for x in ya if CONTROL_HORARIO and not _es_variable(x["tramo"])]}
 
 
@@ -2121,31 +2171,31 @@ def rendiciones_descartables(desde=None, hasta=None):
 
 
 def _pares_que_se_pisan(grupo):
-    """Qué servicios del grupo se pisan de verdad en el horario.
+    """Qué servicios del grupo tienen un viaje a la misma hora.
 
-    Se compara el horario real de cada tramo, no una franja gruesa: una
-    jornada de 7:30 a 17:00 y un turnante de 23:50 no se pisan, pero dos
-    turnantes a la misma hora sí. Devuelve los ids involucrados y el detalle
+    Es la misma regla que al cargar (viajes_servicio): solo choca el mismo
+    horario. Una entrada a las 6:00 y otra a las 8:00 no se pisan; dos
+    turnantes a la misma hora, sí. Devuelve los ids involucrados y el detalle
     de cada cruce.
     """
     rangos = []
     for g in grupo:
         if _es_variable(g["tramo"]):
             continue
-        r = rangos_servicio(g["tramo"], g.get("hora_inicio", ""), g.get("estado") or "completado")
+        r = viajes_servicio(g["tramo"], g.get("hora_inicio", ""), g.get("estado") or "completado")
         if r:
             rangos.append((g, r))
     ids, detalle = set(), []
     for i in range(len(rangos)):
         for j in range(i + 1, len(rangos)):
             (a, ra), (b, rb) = rangos[i], rangos[j]
-            if any(_se_pisan(x, y) for x in ra for y in rb):
+            if _mismo_horario(ra, rb):
                 ids.add(a["id"])
                 ids.add(b["id"])
                 ma = f" {a['estado']}" if a.get("estado") in ("entrante", "saliente") else ""
                 mb = f" {b['estado']}" if b.get("estado") in ("entrante", "saliente") else ""
-                detalle.append(f"{a['tramo']}{ma} ({_txt_rangos(ra)}) se pisa con "
-                               f"{b['tramo']}{mb} ({_txt_rangos(rb)})")
+                detalle.append(f"{a['tramo']}{ma} ({_txt_viajes(ra)}) es a la misma hora que "
+                               f"{b['tramo']}{mb} ({_txt_viajes(rb)})")
     return ids, detalle
 
 
