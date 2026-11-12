@@ -731,10 +731,10 @@ MAX_SERVICIOS_DIA = 2
 JUSTIFICACION_MIN = 15
 
 # Control de franja horaria (no dejar cargar dos servicios que se pisan).
-# APAGADO por ahora, a pedido de la oficina, hasta revisar bien las reglas.
-# Para volver a prenderlo: CORP_CONTROL_HORARIO=1 en Render, o poner True acá.
+# PRENDIDO. Para apagarlo en una urgencia sin tocar el código:
+# CORP_CONTROL_HORARIO=0 en Render (Environment).
 import os as _os
-CONTROL_HORARIO = _os.environ.get("CORP_CONTROL_HORARIO", "0") == "1"
+CONTROL_HORARIO = _os.environ.get("CORP_CONTROL_HORARIO", "1") != "0"
 # Ningún tanque de la flota pasa de esto (los pisos bajos llegan a 700). Un número más alto es un error de
 # tipeo (poner 2000 en vez de 200), y si entra arruina el consumo del coche.
 MAX_LITROS_POR_CARGA = 700
