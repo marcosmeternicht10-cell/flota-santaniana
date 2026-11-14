@@ -2414,6 +2414,7 @@ async function renderTrafico() {
     </div>
     <div class="section tr-raiz" id="tr-raiz"><div class="dossier-loading"></div></div>
     <div id="tr-listas" hidden></div>`;
+  trPrepararCapturaImagen().catch(() => {});
   tr.asignar = null;
   trCerrarSug();
   const primera = !tr.fecha;
@@ -2983,11 +2984,78 @@ function trFila(s, lado, cambiada, k = 0) {
         <input class="tr-in tr-trip" ${v("trip2", 'placeholder="Tripulante" autocomplete="off" maxlength="60" aria-label="Segundo tripulante"')}>
       </span>
       ${trPuede() ? `<span class="tr-acc-fila">
-          <button class="tr-ref" onclick="trRefuerzo(${s.id})" title="Agregar un refuerzo: otro coche a la misma hora y el mismo tramo" tabindex="-1"><i class="ti ti-copy-plus"></i></button>
+          <button type="button" class="tr-ref tr-copiar-imagen" onclick="trCopiarImagenFila(this)" title="Copiar este horario como imagen" aria-label="Copiar este horario como imagen" tabindex="-1"><i class="ti ti-photo"></i></button>
           <button class="tr-quitar" onclick="trBorrarSalida(${s.id})" title="Quitar esta salida" tabindex="-1"><i class="ti ti-x"></i></button>
         </span>` : "<span></span>"}
       <div class="tr-avisos">${trAvisos(s)}</div>
     </div>`;
+}
+
+// Captura una sola fila de Tráfico. Se carga al entrar en la sección para que
+// el primer clic ya tenga disponible la librería y conserve el permiso de copia.
+let _trHtml2Canvas = null;
+function trPrepararCapturaImagen() {
+  if (typeof window.html2canvas === "function") return Promise.resolve(window.html2canvas);
+  if (_trHtml2Canvas) return _trHtml2Canvas;
+  _trHtml2Canvas = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js";
+    script.async = true;
+    script.onload = () => typeof window.html2canvas === "function"
+      ? resolve(window.html2canvas)
+      : reject(new Error("No se pudo iniciar la captura"));
+    script.onerror = () => {
+      _trHtml2Canvas = null;
+      reject(new Error("No se pudo cargar la herramienta de captura"));
+    };
+    document.head.appendChild(script);
+  });
+  return _trHtml2Canvas;
+}
+
+async function trCopiarImagenFila(btn) {
+  const fila = btn?.closest(".tr-fila");
+  if (!fila) return;
+  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+    toast("Este navegador no permite copiar imágenes al portapapeles.", "error");
+    return;
+  }
+  const anterior = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<i class="ti ti-loader-2"></i>';
+  try {
+    const capturar = await trPrepararCapturaImagen();
+    const id = fila.dataset.id, lado = fila.dataset.lado;
+    const fondo = getComputedStyle(fila.closest(".tr-corr") || fila).backgroundColor;
+    const canvas = await capturar(fila, {
+      backgroundColor: fondo,
+      scale: 2,
+      logging: false,
+      useCORS: true,
+      onclone: documento => {
+        const copia = [...documento.querySelectorAll(".tr-fila")]
+          .find(x => x.dataset.id === id && x.dataset.lado === lado);
+        if (!copia) return;
+        // Oculta los botones de edición en la imagen, sin alterar el ancho del horario.
+        const acciones = copia.querySelector(".tr-acc-fila");
+        if (acciones) acciones.style.visibility = "hidden";
+        // Asegura que la imagen use los valores que están visibles en los campos.
+        copia.querySelectorAll("input").forEach(input => input.setAttribute("value", input.value));
+      },
+    });
+    const imagen = await new Promise(resolve => canvas.toBlob(resolve, "image/png"));
+    if (!imagen) throw new Error("No se pudo generar el PNG");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": imagen })]);
+    toast("Horario copiado como imagen. Ya podés pegarlo en WhatsApp.", "success");
+  } catch (error) {
+    const mensaje = error?.name === "NotAllowedError"
+      ? "El navegador bloqueó el portapapeles. Permití copiar desde este sitio y probá otra vez."
+      : "No se pudo copiar el horario como imagen.";
+    toast(mensaje, "error");
+  } finally {
+    btn.innerHTML = anterior;
+    btn.disabled = false;
+  }
 }
 
 // Después de guardar: se actualiza lo que depende (avisos, resumen, tablero,
