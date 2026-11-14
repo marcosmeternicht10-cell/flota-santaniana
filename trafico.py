@@ -38,6 +38,9 @@ from datetime import date, datetime, timedelta, time as dtime
 from flask import Blueprint, request, jsonify, session, send_file
 from db_compat import get_connection, USE_POSTGRES
 
+# El aviso «El 21610 está en COP (salió ayer…)» en cada salida del tráfico
+AVISAR_COCHE_EN_OTRO_LUGAR = False
+
 bp_trafico = Blueprint("trafico", __name__)
 
 PK = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
@@ -571,8 +574,9 @@ def armar_dia(fecha, conn=None, tipo="nacional"):
                 s["modelo"] = f"{v['marca'] or ''} {v['modelo'] or ''}".strip()
                 for nivel, txt in estado.get(coche, []):
                     avisos.append({"nivel": nivel, "txt": f"El {coche} {txt}"})
-            # ¿El coche está donde sale?
-            if s["hora"] and s["origen"]:
+            # ¿El coche está donde sale? Este aviso se sacó a pedido de la oficina
+            # (AVISAR_COCHE_EN_OTRO_LUGAR = True lo vuelve a mostrar).
+            if AVISAR_COCHE_EN_OTRO_LUGAR and s["hora"] and s["origen"]:
                 u = ubicaciones(tramos, fecha, s["hora"], excluir_id=s["id"]).get(coche)
                 if u and u["lugar"] and esta_ahi(u, s["origen"], nombres_bloque.get(s["bloque_id"], ""), tipo) is None:
                     cuando = "hoy" if u["desde_fecha"] == fecha else _cuando(u["desde_fecha"], fecha)
