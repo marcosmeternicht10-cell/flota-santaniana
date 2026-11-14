@@ -52,18 +52,25 @@ def marcados(fecha):
             por_chofer.setdefault(r["chofer_usuario"], []).append(r)
             if not C._es_variable(r["tramo"]):
                 por_tramo.setdefault((r["cliente"], r["tramo"]), []).append(r)
-    avisos = {}
+    avisos, choca_con = {}, {}
+    viajes = {r["id"]: ([] if C._es_variable(r["tramo"]) else
+                        C.viajes_servicio(r["tramo"], r.get("hora_inicio") or "", r["estado"] or "completado"))
+              for r in filas}
     for grupo in por_chofer.values():
-        if len(grupo) > 1:
-            ids, _ = C._pares_que_se_pisan(grupo)
-            for i in ids:
-                avisos[i] = "Mismo horario que otro servicio suyo"
+        for i, a in enumerate(grupo):
+            for b in grupo[i + 1:]:
+                if viajes[a["id"]] and viajes[b["id"]] and C._mismo_horario(viajes[a["id"]], viajes[b["id"]]):
+                    for x, y in ((a, b), (b, a)):
+                        avisos[x["id"]] = "Mismo horario que otro servicio suyo"
+                        choca_con.setdefault(x["id"], []).append(y["id"])
     for grupo in por_tramo.values():
         choferes = {g["chofer_usuario"] for g in grupo}
         mitades = [g["estado"] for g in grupo]
         if len(choferes) > 1 and not (sorted(mitades) == ["entrante", "saliente"]):
             for g in grupo:
                 avisos.setdefault(g["id"], "Este tramo también lo marcó otro chofer")
+                choca_con.setdefault(g["id"], []).extend(
+                    x["id"] for x in grupo if x["chofer_usuario"] != g["chofer_usuario"] and x["id"] not in choca_con.get(g["id"], []))
 
     servicios, cuenta, clientes = [], {}, {}
     for r in filas:
@@ -77,7 +84,8 @@ def marcados(fecha):
             "monto": float(r["monto"] or 0), "liquidado": bool(r["liquidado"]),
             "cargado_el": cargado[:16].replace("T", " "), "otro_dia": bool(cargado) and cargado[:10] != fecha,
             "observacion": r["observacion"] or "", "editado_por": r["editado_por"] or "",
-            "aviso": avisos.get(r["id"], ""),
+            "aviso": avisos.get(r["id"], ""), "choca_con": choca_con.get(r["id"], []),
+            "horario": C._txt_viajes(viajes[r["id"]]) if viajes[r["id"]] else "",
         })
         c = cuenta.setdefault(r["chofer_usuario"], {"usuario": r["chofer_usuario"], "chofer": servicios[-1]["chofer"],
                                                     "servicios": 0, "suspendidos": 0, "avisos": 0, "clientes": set(),

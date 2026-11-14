@@ -6,7 +6,7 @@
 // corp_marcados.py; el borrado usa las rutas de siempre de corporativos.
 // ════════════════════════════════════════════════════════════════════════════
 
-const sm = { fecha: "", d: null, chofer: "", cliente: "", q: "", soloAvisos: false, sel: new Set(), confirmar: 0, seq: 0 };
+const sm = { fecha: "", d: null, chofer: "", cliente: "", q: "", soloAvisos: false, sel: new Set(), confirmar: 0, verAviso: 0, seq: 0 };
 const smE = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const SM_DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
 const SM_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -156,14 +156,36 @@ function smLista() {
           <small>${s.cargado_el ? `Marcado ${s.otro_dia ? "el " + csFC(s.cargado_el.slice(0, 10)) + " " : ""}a las ${s.cargado_el.slice(11)}` : "Sin hora de carga"}${s.editado_por ? ` · corregido por ${smE(s.editado_por)}` : ""}</small></div>
         <div class="sm-fila-que"><b><span class="sm-cli">${smE(s.cliente)}</span> ${smE(s.tramo)}</b>
           <small>${[s.coche && `Coche ${smE(s.coche)}`, s.pasajeros && `${s.pasajeros} pasajeros`, s.km && `${fmtNum(s.km)} km`, s.observacion && smE(s.observacion)].filter(Boolean).join(" · ") || "Sin más datos"}</small>
-          ${s.aviso ? `<em><i class="ti ti-alert-triangle"></i> ${smE(s.aviso)}</em>` : ""}</div>
+          ${s.aviso ? `<button class="sm-aviso" onclick="smVerAviso(${s.id})" aria-expanded="${sm.verAviso === s.id}" title="Ver con qué servicio choca"><i class="ti ti-alert-triangle"></i> ${smE(s.aviso)} <i class="ti ti-chevron-${sm.verAviso === s.id ? "up" : "down"}"></i></button>` : ""}</div>
         <span class="sm-estado e-${s.estado}">${smE(s.estado_txt)}</span>
         ${puede ? (s.liquidado
           ? `<span class="sm-liq" title="Ya está liquidado: para borrarlo hay que revertir la liquidación"><i class="ti ti-lock"></i> Liquidado</span>`
           : sm.confirmar === s.id
             ? `<span class="sm-conf"><button class="btn btn-danger btn-sm" onclick="smEliminar(${s.id})">Sí, eliminar</button><button class="btn btn-ghost btn-sm" onclick="smConfirmar(0)">No</button></span>`
             : `<button class="sm-borrar" onclick="smConfirmar(${s.id})" title="Eliminar este servicio" aria-label="Eliminar este servicio"><i class="ti ti-trash"></i></button>`) : ""}
-      </div>`).join("")}</div>` : `<div class="empty chico">Ningún servicio con ese filtro</div>`}`;
+      </div>${sm.verAviso === s.id ? smChoque(s, puede) : ""}`).join("")}</div>` : `<div class="empty chico">Ningún servicio con ese filtro</div>`}`;
+}
+
+// Al tocar el aviso de un servicio: con qué otro servicio choca, los dos lado
+// a lado con su horario, para decidir cuál está de más y borrarlo ahí mismo.
+function smVerAviso(id) { sm.verAviso = sm.verAviso === id ? 0 : id; sm.confirmar = 0; smLista(); }
+function smChoque(s, puede) {
+  const otros = s.choca_con.map(id => sm.d.servicios.find(x => x.id === id)).filter(Boolean);
+  const tarjeta = (x, cual) => `
+    <div class="sm-ch-serv">
+      <span class="sm-ch-et">${cual}</span>
+      <b><span class="sm-cli">${smE(x.cliente)}</span> ${smE(x.tramo)}</b>
+      <span class="sm-ch-hora"><i class="ti ti-clock"></i> ${x.horario ? smE(x.horario[0].toUpperCase() + x.horario.slice(1)) : "Sin horario"}${x.estado !== "completado" && x.estado !== "ok" ? ` · ${smE(x.estado_txt)}` : ""}</span>
+      <small>${smE(x.chofer)}${x.coche ? ` · coche ${smE(x.coche)}` : ""}${x.cargado_el ? ` · marcado ${x.otro_dia ? "el " + csFC(x.cargado_el.slice(0, 10)) + " " : ""}a las ${x.cargado_el.slice(11)}` : ""}</small>
+      ${puede ? (x.liquidado ? `<span class="sm-liq"><i class="ti ti-lock"></i> Liquidado</span>`
+        : sm.confirmar === -x.id
+          ? `<span class="sm-conf"><button class="btn btn-danger btn-sm" onclick="smEliminar(${x.id})">Sí, eliminar</button><button class="btn btn-ghost btn-sm" onclick="smConfirmar(0)">No</button></span>`
+          : `<button class="btn btn-ghost btn-sm sm-ch-borrar" onclick="smConfirmar(${-x.id})"><i class="ti ti-trash"></i> Eliminar este</button>`) : ""}
+    </div>`;
+  return `<div class="sm-choque">
+    <div class="sm-ch-tit"><i class="ti ti-arrows-diff"></i> ${s.aviso.startsWith("Mismo") ? "Estos servicios son a la misma hora" : "El mismo tramo, marcado por más de un chofer"}</div>
+    <div class="sm-ch-grid">${tarjeta(s, "Este servicio")}${otros.map(x => tarjeta(x, "Choca con")).join("") || `<div class="sm-ch-serv"><small>El otro servicio ya no está en la lista.</small></div>`}</div>
+  </div>`;
 }
 
 function smChofer(u) { sm.chofer = sm.chofer === u ? "" : u; sm.confirmar = 0; smPintar(); }
@@ -175,7 +197,7 @@ function smElegirTodos(si) { smFiltrados().filter(s => !s.liquidado).forEach(s =
 function smConfirmar(id) { sm.confirmar = id; smLista(); }
 
 async function smEliminar(id) {
-  sm.confirmar = 0;
+  sm.confirmar = 0; sm.verAviso = 0;
   const r = await api(`/api/corp/rendicion/${id}`, { method: "DELETE" }).catch(() => null);
   toast((r && r.msg) || (r && r.error) || "No se pudo eliminar", r && r.ok ? "success" : "error");
   if (r && r.ok) sm.sel.delete(id);

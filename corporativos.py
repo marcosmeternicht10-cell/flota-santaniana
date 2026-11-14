@@ -917,6 +917,10 @@ def viajes_servicio(tramo, hora_inicio="", estado="completado"):
     minutos = [round(h * 60) % 1440 for h in horas[:2]]
     if len(minutos) == 1 or minutos[0] == minutos[1]:
         return [("viaje", minutos[0] / 60)]
+    # Turno de noche (18:00/06:00, 22:30/06:00): la salida es a la mañana
+    # SIGUIENTE, así que no choca con un tramo de las 6:00 de ese mismo día
+    if minutos[1] < minutos[0]:
+        minutos[1] += 1440
     if estado == "entrante":
         return [("entrada", minutos[0] / 60)]
     if estado == "saliente":
@@ -935,7 +939,7 @@ def _mismo_horario(a, b):
 
 def _txt_viajes(vs):
     nombre = {"entrada": "entrada de las ", "salida": "salida de las ", "viaje": "a las "}
-    return " y ".join(nombre[t] + _hhmm(h) for t, h in vs)
+    return " y ".join(nombre[t] + _hhmm(h) + (" del día siguiente" if h >= 24 else "") for t, h in vs)
 
 
 def _hhmm(h):
