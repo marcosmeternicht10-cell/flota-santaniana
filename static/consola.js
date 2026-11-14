@@ -97,6 +97,7 @@ const VC_DIVISIONES = [
     subs: [
       { sec: "corp_asignacion", nombre: "Asignación del día", icono: "ti-calendar-user", desc: "Qué chofer y qué coche en cada tramo",
         dato: r => r.corp_hoy && { txt: vcPlural(r.corp_hoy.servicios, "servicio hoy", "servicios hoy") } },
+      { sec: "corp_marcados", nombre: "Servicios marcados", icono: "ti-checklist", desc: "Quién marcó cada servicio del día, y quién marcó más" },
       { sec: "corp_resumen", nombre: "Rendiciones y pagos", icono: "ti-clipboard-check", desc: "Revisar, liquidar y lo ya pagado",
         dato: r => r.corp_pend && { txt: `${vcN(r.corp_pend.servicios)} sin liquidar · ${vcGs(r.corp_pend.monto)}`, tono: r.corp_pend.servicios ? "aviso" : "ok" } },
       { sec: "corp_empresas", nombre: "Control", icono: "ti-building-factory", desc: "Por empresa, servicios y ranking de choferes" },

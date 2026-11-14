@@ -271,6 +271,9 @@ app.register_blueprint(bp_corp_servicios)
 # Ranking de choferes de corporativos (puntaje por cumplimiento, carga a tiempo, prolijidad y consumo)
 from corp_ranking import bp_corp_ranking
 app.register_blueprint(bp_corp_ranking)
+# Servicios marcados: todo lo del día, quién marcó cada uno y quién marcó más
+from corp_marcados import bp_corp_marcados
+app.register_blueprint(bp_corp_marcados)
 # Agencias de venta de pasajes: fichas, contratos con versiones, papeles y vencimientos
 from agencias import bp_agencias, init_agencias
 init_agencias()

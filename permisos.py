@@ -51,6 +51,7 @@ GRUPOS_SECCIONES = [
     ]),
     ("Corporativos", [
         ("corp_asignacion", "Asignación del día"),
+        ("corp_marcados", "Servicios marcados"),
         ("corp_resumen", "Rendiciones y pagos: Rendiciones"),
         ("corp_historial", "Rendiciones y pagos: Pagos hechos"),
         ("corp_empresas", "Control: Por empresa"),
@@ -77,7 +78,7 @@ SECCIONES_VIEJAS = {"mantenimientos": "coches", "mantenimiento": "coches", "neum
 SECCIONES_VALIDAS = {clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs}
 ORDEN = [clave for _, secs in GRUPOS_SECCIONES for clave, _ in secs]
 
-SECCIONES_CORP = {"corp_asignacion", "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios", "corp_ranking",
+SECCIONES_CORP = {"corp_asignacion", "corp_marcados", "corp_resumen", "corp_historial", "corp_empresas", "corp_servicios", "corp_ranking",
                   "corp_combustible", "corp_cargas"}
 
 # Rutas de la API que pertenecen a cada módulo sensible. Si el usuario no
