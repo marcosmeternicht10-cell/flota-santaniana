@@ -78,18 +78,23 @@ EMBLEMAS = ["PETROPAR", "COPETROL", "SHELL", "PUMA", "PETROBRAS", "BARCOS Y RODA
 # los contaría como otro tramo. Para un cambio futuro alcanza con agregar una
 # línea acá: (cliente, nombre viejo, nombre nuevo).
 RENOMBRES_TRAMOS = [
-    # Noviembre 2026: el administrativo de LASCA es de 6:00 a 16:00. Antes
+    # Noviembre 2026: el administrativo de LASCA era de 6:00 a 16:00. Antes
     # figuró 7:30–17:00 y 7:00–17:00, así que esos nombres van directo al
     # definitivo (cada uno apunta al nombre final, nunca a otro intermedio,
     # para que no importe el orden en que se apliquen).
-    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. LIMPIO (7:30 A 17:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:30 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:30 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (7:30 A 17:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:30 HS.)"),
     ("LASCA", "ADMIN. TACUMBU (7:30 A 17:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. LIMPIO (7:00 A 17:00 HS.)",  "ADMIN. LIMPIO (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 1 (7:00 A 17:00 HS.)",  "ADMIN. RUTA 1 (6:00 A 16:00 HS.)"),
-    ("LASCA", "ADMIN. RUTA 2 (7:00 A 17:00 HS.)",  "ADMIN. RUTA 2 (6:00 A 16:00 HS.)"),
+    ("LASCA", "ADMIN. LIMPIO (7:00 A 17:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:30 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (7:00 A 17:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:30 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (7:00 A 17:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:30 HS.)"),
     ("LASCA", "ADMIN. TACUMBU (7:00 A 17:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)"),
+    # 15/11/2026: Limpio, Ruta 1 y Ruta 2 pasan a 7:00 a 17:30. Tacumbú sigue
+    # de 6:00 a 16:00.
+    ("LASCA", "ADMIN. LIMPIO (6:00 A 16:00 HS.)",  "ADMIN. LIMPIO (7:00 A 17:30 HS.)"),
+    ("LASCA", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",  "ADMIN. RUTA 1 (7:00 A 17:30 HS.)"),
+    ("LASCA", "ADMIN. RUTA 2 (6:00 A 16:00 HS.)",  "ADMIN. RUTA 2 (7:00 A 17:30 HS.)"),
 ]
 
 
@@ -312,8 +317,8 @@ CLIENTES_TRAMOS = {
         "VARIABLE",
     ],
     "LASCA": [
-        "ADMIN. LIMPIO (6:00 A 16:00 HS.)", "ADMIN. RUTA 1 (6:00 A 16:00 HS.)",
-        "ADMIN. RUTA 2 (6:00 A 16:00 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)",
+        "ADMIN. LIMPIO (7:00 A 17:30 HS.)", "ADMIN. RUTA 1 (7:00 A 17:30 HS.)",
+        "ADMIN. RUTA 2 (7:00 A 17:30 HS.)", "ADMIN. TACUMBU (6:00 A 16:00 HS.)",
         "TURNANTE LIMPIO (4:30 HS.)", "TURNANTE RUTA 1 (4:30 HS.)", "TURNANTE RUTA 2 (4:30 HS.)",
         "TURNANTE LIMPIO (13:30 HS.)", "TURNANTE RUTA 1 (13:30 HS.)", "TURNANTE RUTA 2 (13:30 HS.)",
         "TURNANTE LIMPIO (23:50 HS.)", "TURNANTE RUTA 1 (23:50 HS.)", "TURNANTE RUTA 2 (23:50 HS.)",
