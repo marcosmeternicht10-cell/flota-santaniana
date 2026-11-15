@@ -655,7 +655,7 @@ def _canonizar(cliente, tramo):
     return (cliente_of, tramo_of) if tramo_of else (cliente_of, None)
 
 
-def tramo_ocupado(cliente, tramo, fecha, estado_nuevo, excluir_id=None):
+def tramo_ocupado(cliente, tramo, fecha, estado_nuevo, excluir_id=None, chofer_usuario=""):
     """Verifica si el tramo ya fue reportado por otro chofer.
 
     Un tramo tiene dos mitades (entrante y saliente) que pueden hacer dos
@@ -670,7 +670,7 @@ def tramo_ocupado(cliente, tramo, fecha, estado_nuevo, excluir_id=None):
         return None                                   # VARIABLE es comodín
 
     conn = get_connection()
-    q = """SELECT id, chofer_nombre, estado FROM rendiciones_corp
+    q = """SELECT id, chofer_nombre, chofer_usuario, estado FROM rendiciones_corp
            WHERE cliente=? AND tramo=? AND fecha_servicio=?
              AND estado IN ('completado','entrante','saliente')"""
     params = [cliente.strip(), tramo.strip(), fecha.strip()]
@@ -682,37 +682,54 @@ def tramo_ocupado(cliente, tramo, fecha, estado_nuevo, excluir_id=None):
 
     if not previas:
         return None
+    yo = (chofer_usuario or "").strip().lower()
+    for p in previas:
+        if yo and (p.get("chofer_usuario") or "").strip().lower() == yo:
+            p["chofer_nombre"] = "Vos"
 
     completa = next((p for p in previas if p["estado"] == "completado"), None)
     if completa:
-        return (f"Ese tramo ya lo reportó {completa['chofer_nombre']} completo "
-                f"(entrante y saliente). No se puede cargar de nuevo.")
+        if completa["chofer_nombre"] == "Vos":
+            return "Ese tramo ya lo marcaste vos ese día. No se puede marcar dos veces."
+        return (f"Ese tramo ya lo marcó {completa['chofer_nombre']} completo "
+                f"(entrante y saliente). No se puede marcar de nuevo.")
 
     tomados = {p["estado"]: p for p in previas}
+    if "entrante" in tomados and "saliente" in tomados:
+        q = lambda e: "vos" if tomados[e]["chofer_nombre"] == "Vos" else tomados[e]["chofer_nombre"]
+        return (f"Ese tramo ya está marcado completo: el entrante lo marcó {q('entrante')} "
+                f"y el saliente {q('saliente')}. No se puede marcar de nuevo.")
     if estado_nuevo == "completado":
         cual = list(tomados.values())[0]
         falta = "saliente" if cual["estado"] == "entrante" else "entrante"
-        return (f"{cual['chofer_nombre']} ya reportó el {cual['estado']} de ese tramo. "
+        if cual["chofer_nombre"] == "Vos":
+            return (f"Ya marcaste el {cual['estado']} de ese tramo. "
+                    f"Si también hiciste el {falta}, marcá «solo el {falta}».")
+        return (f"{cual['chofer_nombre']} ya marcó el {cual['estado']} de ese tramo. "
                 f"Si vos hiciste la otra mitad, marcá «solo el {falta}».")
     if estado_nuevo in tomados:
         quien = tomados[estado_nuevo]["chofer_nombre"]
-        return f"{quien} ya reportó el {estado_nuevo} de ese tramo en esa fecha."
+        if quien == "Vos":
+            return f"Ya marcaste el {estado_nuevo} de ese tramo ese día. No se puede marcar dos veces."
+        return f"{quien} ya marcó el {estado_nuevo} de ese tramo en esa fecha."
     return None
 
 
-def segmentos_tomados(cliente, tramo, fecha):
+def segmentos_tomados(cliente, tramo, fecha, chofer_usuario=""):
     """Qué mitades del tramo ya están reportadas — para avisarle al chofer
     ANTES de que cargue todo el formulario."""
     if (tramo or "").strip().upper() == TRAMO_VARIABLE:
         return {"libre": True, "tomados": []}
     conn = get_connection()
     rows = conn.execute("""
-        SELECT chofer_nombre, estado FROM rendiciones_corp
+        SELECT chofer_nombre, chofer_usuario, estado FROM rendiciones_corp
         WHERE cliente=? AND tramo=? AND fecha_servicio=?
           AND estado IN ('completado','entrante','saliente')
     """, (cliente.strip(), tramo.strip(), fecha.strip())).fetchall()
     conn.close()
-    tomados = [dict(r) for r in rows]
+    yo = (chofer_usuario or "").strip().lower()
+    tomados = [{"chofer_nombre": r["chofer_nombre"], "estado": r["estado"],
+                "yo": bool(yo) and (r["chofer_usuario"] or "").strip().lower() == yo} for r in rows]
     return {"libre": len(tomados) == 0, "tomados": tomados}
 
 
@@ -730,12 +747,11 @@ MAX_SERVICIOS_DIA = 2
 # justo para que no alcance con poner "ok" o un punto.
 JUSTIFICACION_MIN = 15
 
-# Control de horario: no dejar cargar dos servicios a la misma hora (ver
-# viajes_servicio). Uno a las 6:00 y otro a las 8:00 sí se pueden.
-# PRENDIDO. Para apagarlo en una urgencia sin tocar el código:
-# CORP_CONTROL_HORARIO=0 en Render (Environment).
+# Control de horario (no dejar cargar dos servicios a la misma hora): APAGADO
+# a pedido de la oficina. La única restricción al marcar es no repetir el
+# mismo tramo (tramo_ocupado). Para volver a prenderlo: CORP_CONTROL_HORARIO=1.
 import os as _os
-CONTROL_HORARIO = _os.environ.get("CORP_CONTROL_HORARIO", "1") != "0"
+CONTROL_HORARIO = _os.environ.get("CORP_CONTROL_HORARIO", "0") == "1"
 # Ningún tanque de la flota pasa de esto (los pisos bajos llegan a 700). Un número más alto es un error de
 # tipeo (poner 2000 en vez de 200), y si entra arruina el consumo del coche.
 MAX_LITROS_POR_CARGA = 700
@@ -1018,10 +1034,32 @@ def horarios_ocupados(chofer_usuario, fecha, cliente):
                 bloq[e] = f"{s_['tramo']}{mitad} ({_txt_viajes(otro)})"
         if bloq:
             out[t] = bloq
-    return {"ocupados": out,
+    return {"ocupados": out, "marcados": marcados_del_dia(cliente, fecha, chofer_usuario),
             "cargados": [{"tramo": x["tramo"], "cliente": x["cliente"], "estado": x["estado"],
                           "horario": _txt_viajes(viajes_servicio(x["tramo"], x.get("hora_inicio", ""), x.get("estado") or "completado"))}
                          for x in ya if CONTROL_HORARIO and not _es_variable(x["tramo"])]}
+
+
+def marcados_del_dia(cliente, fecha, chofer_usuario=""):
+    """Para la lista de tramos del chofer: quién ya marcó cada tramo del
+    cliente ese día, y qué mitad. {tramo: [{"quien", "estado", "yo"}]}"""
+    conn = get_connection()
+    try:
+        filas = conn.execute("""SELECT tramo, chofer_nombre, chofer_usuario, estado FROM rendiciones_corp
+                                WHERE cliente=? AND fecha_servicio=?
+                                  AND estado IN ('completado','entrante','saliente')
+                                ORDER BY id""", (cliente.strip(), fecha.strip())).fetchall()
+    finally:
+        conn.close()
+    yo = (chofer_usuario or "").strip().lower()
+    out = {}
+    for f in filas:
+        if _es_variable(f["tramo"]):
+            continue
+        es_yo = bool(yo) and (f["chofer_usuario"] or "").strip().lower() == yo
+        out.setdefault(f["tramo"], []).append({"quien": f["chofer_nombre"] or f["chofer_usuario"] or "otro chofer",
+                                               "estado": f["estado"], "yo": es_yo})
+    return out
 
 
 def registrar_rendicion(datos, limitar_fecha=False):
@@ -1085,7 +1123,7 @@ def registrar_rendicion(datos, limitar_fecha=False):
         justificacion = ""   # si no choca, no hay nada que justificar
 
     ocupado = tramo_ocupado(datos["cliente"], datos["tramo"],
-                            datos["fecha_servicio"], estado)
+                            datos["fecha_servicio"], estado, chofer_usuario=datos.get("chofer_usuario", ""))
     if ocupado:
         return False, ocupado
 
@@ -1114,7 +1152,7 @@ def registrar_rendicion(datos, limitar_fecha=False):
         # El candado de la base atajó una carga simultánea de dos choferes
         conn.rollback()
         conn.close()
-        return False, "Otro chofer acaba de reportar ese mismo tramo. Verificá antes de volver a cargar."
+        return False, "Ese tramo se acaba de marcar recién (por otro chofer o desde otra pestaña). Verificá antes de volver a cargar."
     conn.close()
     try:
         from integraciones import avisar
@@ -2529,7 +2567,7 @@ def api_corp_disponibilidad():
     fecha = request.args.get("fecha", "")
     if not (cliente and tramo and fecha):
         return jsonify({"libre": True, "tomados": []})
-    return jsonify(segmentos_tomados(cliente, tramo, fecha))
+    return jsonify(segmentos_tomados(cliente, tramo, fecha, session.get("usuario", "")))
 
 
 @bp_corp.route("/api/corp/horarios_ocupados", methods=["GET"])

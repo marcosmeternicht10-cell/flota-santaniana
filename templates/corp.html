@@ -457,27 +457,37 @@
       traerOcupados();
     }
 
-    // Los tramos que caen a la misma hora que algo que el chofer ya cargó ese
-    // día no se pueden elegir (solo el mismo horario: a las 6 y a las 8 sí puede)
-    let OCUPADOS = {}, CARGADOS_DIA = [], ocupSeq = 0;
+    // En la lista de tramos se ve quién ya marcó cada uno ese día. La única
+    // restricción es no marcar el mismo tramo dos veces: si ya está completo,
+    // no se puede elegir; si alguien hizo una mitad, queda la otra.
+    // (OCUPADOS: el control de horario, hoy apagado en el servidor.)
+    let OCUPADOS = {}, CARGADOS_DIA = [], MARCADOS = {}, ocupSeq = 0;
     async function traerOcupados(){
       const cliente = $("f-cliente").value, fecha = $("f-fecha").value, n = ++ocupSeq;
-      OCUPADOS = {}; CARGADOS_DIA = [];
+      OCUPADOS = {}; CARGADOS_DIA = []; MARCADOS = {};
       if(cliente && fecha){
         try {
           const r = await fetch(`/api/corp/horarios_ocupados?cliente=${encodeURIComponent(cliente)}&fecha=${fecha}`);
           const d = await r.json();
           if(n !== ocupSeq) return;
-          OCUPADOS = d.ocupados || {}; CARGADOS_DIA = d.cargados || [];
+          OCUPADOS = d.ocupados || {}; CARGADOS_DIA = d.cargados || []; MARCADOS = d.marcados || {};
         } catch(e){}
       }
       const selT = $("f-tramo");
       [...selT.options].forEach(o => {
         if(!o.value) return;
         const b = OCUPADOS[o.value] || {};
+        const m = MARCADOS[o.value] || [];
+        const quien = x => x.yo ? "vos" : x.quien;
+        const completo = m.find(x => x.estado === "completado");
+        const mitades = new Set(m.map(x => x.estado));
+        const lleno = completo || (mitades.has("entrante") && mitades.has("saliente"));
         const todo = b.completado && b.entrante && b.saliente;
-        o.disabled = !!todo;
-        o.textContent = todo ? `${o.value} — ocupado` : (b.entrante || b.saliente || b.completado) ? `${o.value} — solo una mitad` : o.value;
+        o.disabled = !!(lleno || todo);
+        o.textContent = completo ? `${o.value} — ${completo.yo ? "ya lo marcaste vos" : "ya lo marcó " + completo.quien}`
+          : m.length ? `${o.value} — ${m.map(x => `${quien(x)} (${x.estado})`).join(", ")}`
+          : todo ? `${o.value} — misma hora que otro tuyo`
+          : o.value;
       });
       if(selT.value && selT.selectedOptions[0] && selT.selectedOptions[0].disabled){ selT.value = ""; }
       pintarCargadosDia();
@@ -489,7 +499,7 @@
         c = document.createElement("div"); c.id = "ya-cargado-dia";
         $("f-tramo").closest(".campo").appendChild(c);
       }
-      c.innerHTML = CARGADOS_DIA.length
+      c.innerHTML = CARGADOS_DIA.length && Object.keys(OCUPADOS).length
         ? `<div class="aviso parcial" style="margin-top:8px"><i class="ti ti-clock"></i><span>Ese día ya cargaste: ${CARGADOS_DIA.map(x => `<b>${x.tramo}</b>${x.estado !== "completado" ? " (" + x.estado + ")" : ""} (${x.horario})`).join(", ")}. Solo se bloquean los tramos de ese mismo horario; los de otra hora se pueden elegir.</span></div>`
         : "";
     }
@@ -572,12 +582,14 @@
         }
         const completo = d.tomados.find(t => t.estado === "completado");
         if(completo){
-          cont.innerHTML = `<div class="aviso tomado"><i class="ti ti-lock"></i><span><b>${completo.chofer_nombre}</b> ya reportó este tramo completo. No se puede volver a cargar — revisá el tramo o la fecha.</span></div>`;
+          cont.innerHTML = completo.yo
+            ? `<div class="aviso tomado"><i class="ti ti-lock"></i><span>Este tramo <b>ya lo marcaste vos</b> ese día. No se puede marcar dos veces.</span></div>`
+            : `<div class="aviso tomado"><i class="ti ti-lock"></i><span>Este tramo ya lo marcó <b>${completo.chofer_nombre}</b> (completo). No se puede marcar de nuevo: revisá el tramo o la fecha.</span></div>`;
           habilitarEstados(["completado","entrante","saliente"]);
           return;
         }
         const estados = d.tomados.map(t => t.estado);
-        const quien = d.tomados.map(t => `<b>${t.chofer_nombre}</b> hizo el ${t.estado}`).join(", ");
+        const quien = d.tomados.map(t => t.yo ? `<b>Vos</b> ya marcaste el ${t.estado}` : `<b>${t.chofer_nombre}</b> marcó el ${t.estado}`).join(", ");
         const falta = estados.includes("entrante") ? "saliente" : "entrante";
         cont.innerHTML = `<div class="aviso parcial"><i class="ti ti-users"></i><span>${quien}. Si vos hiciste la otra mitad, marcá «solo el ${falta}».</span></div>`;
         habilitarEstados(estados.concat(["completado"]));
