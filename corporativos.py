@@ -327,7 +327,8 @@ CLIENTES_TRAMOS = {
     ],
 }
 
-# Los 31 choferes de corporativos (del Excel de julio 2026).
+# Los choferes de corporativos (los 31 del Excel de julio 2026 y los que se
+# sumaron después).
 # Formato: "APELLIDO, NOMBRE" tal como figura en la planilla de sueldos.
 CHOFERES_CORP = [
     "ACOSTA, ARMANDO", "ACUÑA, ANGEL", "AGUIAR, MARCOS", "ALVARENGA, CESAR",
@@ -338,6 +339,8 @@ CHOFERES_CORP = [
     "MONTANIA, JUAN", "NUÑEZ, GABRIEL", "OLMEDO, DARIO", "PEREZ, WALTER",
     "REINOSO, IVAN", "RESQUIN, RUBEN", "RIQUELME, HEBERLINO", "SAUCEDO, ALCIDES",
     "SOSA, CARLOS", "SOTO, ANGEL", "TORRES, JULIO",
+    # Noviembre 2026
+    "MARTINEZ, CANDIDO", "VELAZQUEZ, ALEJANDRO", "DAVALOS, RICARDO", "MERCADO, MARCOS",
 ]
 
 
@@ -492,7 +495,7 @@ def inicializar_corporativos():
     conn.close()
 
 
-def seed_choferes_corp():
+def seed_choferes_corp(nombres=None):
     """Da de alta a los 31 choferes como usuarios rol 'chofer_corp'.
     Usuario = primer nombre; contraseña = igual al usuario.
 
@@ -519,7 +522,7 @@ def seed_choferes_corp():
     creados, saltados = 0, 0
     usados, sin_cuenta = {}, []
 
-    for nombre in CHOFERES_CORP:
+    for nombre in (nombres or CHOFERES_CORP):
         if nombre.strip().upper() in ya_tienen:
             saltados += 1                      # ya tiene su cuenta
             continue
@@ -547,7 +550,7 @@ def seed_choferes_corp():
 
     return {"creados": creados, "saltados": saltados,
             "usuarios": usados, "sin_cuenta": sin_cuenta,
-            "total_esperado": len(CHOFERES_CORP)}
+            "total_esperado": len(nombres or CHOFERES_CORP)}
 
 
 def corregir_horarios_utc():

@@ -138,7 +138,23 @@ def _aplicar_poliza_rc(conn, p):
     return res
 
 
-CARGAS = [(POLIZA_RC_2026["clave"], lambda conn: _aplicar_poliza_rc(conn, POLIZA_RC_2026))]
+def _choferes_corp_nov2026(conn):
+    """Les crea la cuenta a los choferes de corporativos que se sumaron en
+    noviembre 2026 (usuario = primer nombre; contraseña inicial = el usuario)."""
+    from corporativos import seed_choferes_corp
+    return seed_choferes_corp(["MARTINEZ, CANDIDO", "VELAZQUEZ, ALEJANDRO", "DAVALOS, RICARDO", "MERCADO, MARCOS"])
+
+
+# (clave, qué hace, qué se anota en la auditoría, el detalle según el resultado)
+CARGAS = [
+    (POLIZA_RC_2026["clave"], lambda conn: _aplicar_poliza_rc(conn, POLIZA_RC_2026),
+     "Cargó la póliza de responsabilidad civil 2026-2027", "documentos",
+     lambda r: f"{r['renovados']} seguros renovados, {r['nuevos']} nuevos, {r['ya_estaban']} ya estaban"
+               + (f", {len(r['sin_coche'])} sin coche en el sistema" if r["sin_coche"] else "")),
+    ("choferes_corp_nov2026", _choferes_corp_nov2026,
+     "Dio de alta a los choferes de corporativos de noviembre 2026", "Corporativos",
+     lambda r: ", ".join(f"{n} (usuario {u})" for u, n in r["usuarios"].items()) or "ya tenían cuenta"),
+]
 
 
 def init_cargas_datos():
@@ -155,7 +171,7 @@ def init_cargas_datos():
         except Exception: pass
         conn.close()
         return
-    for clave, aplicar in CARGAS:
+    for clave, aplicar, accion, categoria, detalle in CARGAS:
         try:
             # Se anota primero: si otro proceso ya la tomó, esta no hace nada.
             # Todo va en una sola transacción: si algo falla, no queda a medias
@@ -169,11 +185,7 @@ def init_cargas_datos():
             conn.execute("UPDATE cargas_datos SET resumen=? WHERE clave=?", (json.dumps(res, ensure_ascii=False), clave))
             conn.execute("""INSERT INTO auditoria (fecha_hora, usuario, rol, accion, categoria, detalle, referencia)
                             VALUES (?,?,?,?,?,?,?)""",
-                         (ahora_iso(), "sistema", "sistema", "Cargó la póliza de responsabilidad civil 2026-2027",
-                          "documentos",
-                          f"{res['renovados']} seguros renovados, {res['nuevos']} nuevos, {res['ya_estaban']} ya estaban"
-                          + (f", {len(res['sin_coche'])} sin coche en el sistema" if res["sin_coche"] else ""),
-                          f"carga:{clave}"))
+                         (ahora_iso(), "sistema", "sistema", accion, categoria, detalle(res), f"carga:{clave}"))
             conn.commit()
             print(f"[cargas_datos] {clave}: {res}")
         except Exception as e:
