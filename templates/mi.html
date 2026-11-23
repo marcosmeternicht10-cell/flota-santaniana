@@ -153,6 +153,12 @@
     .lado.vuelta { background: rgba(30,90,150,.1); color: var(--blue); }
     .lado.tur { background: rgba(183,121,31,.12); color: var(--amber); }
     .lado.res { background: rgba(220,38,65,.1); color: var(--red); }
+    .rendir-corp { display: flex; align-items: center; gap: 14px; margin: 0 0 14px; padding: 16px 18px; border-radius: 18px;
+      background: #2F7C46; color: #fff; text-decoration: none; box-shadow: 0 6px 18px rgba(47,124,70,.25); }
+    .rendir-corp > .ti:first-child { font-size: 26px; }
+    .rendir-corp div { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .rendir-corp b { font-size: 16px; }
+    .rendir-corp small { opacity: .85; font-size: 13px; }
     .lado.corp { background: rgba(47,124,70,.12); color: #2F7C46; }
     .desglose { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
     .desglose span { font-size: 12px; font-weight: 600; padding: 4px 9px; border-radius: 999px; background: rgba(255,255,255,.14); }
@@ -283,6 +289,11 @@
   <main>
     <section id="v-serv">
       <div id="confirmar"></div>
+      {% if es_corp %}<a class="rendir-corp" href="/corp">
+        <i class="ti ti-receipt"></i>
+        <div><b>Cargar rendición de corporativos</b><small>Tramo, kilómetros y combustible</small></div>
+        <i class="ti ti-chevron-right"></i>
+      </a>{% endif %}
       <div id="hero"><div class="esqueleto" style="height:300px"></div></div>
       <div id="avisar"></div>
       <div id="viene"></div>

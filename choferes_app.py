@@ -861,6 +861,15 @@ def _ficha(u):
             "ultimo_acceso": u.get("ultimo_acceso") or "", "confirmado": bool(u.get("app_confirmado_el"))}
 
 
+def _tiene_rendiciones(conn, usuario):
+    try:
+        return bool(conn.execute("SELECT 1 FROM rendiciones_corp WHERE LOWER(chofer_usuario)=? LIMIT 1",
+                                 ((usuario or "").lower(),)).fetchone())
+    except Exception:
+        conn.rollback()
+        return True                              # ante la duda, no se toca
+
+
 def unir(queda_id, sale_id, quien=""):
     """Junta dos usuarios de la misma persona en uno: el que queda se lleva el
     nombre del otro como «también figura como», sus celulares con avisos y la
@@ -882,18 +891,29 @@ def unir(queda_id, sale_id, quien=""):
             return None, "Los dos son corporativos y cada uno tiene sus rendiciones: no se pueden unir"
         if s_["rol"] == CORP:                    # siempre queda el corporativo
             q, s_ = s_, q
+        # Queda como corporativo, pero si la cuenta corporativa nunca se usó
+        # (sin rendiciones, nunca entró) y el chofer ya entra con la de línea,
+        # se conserva la de línea —su usuario y su clave— y pasa a corporativa.
+        nombre_final, rol_final = q["nombre"], q["rol"]
+        if (q["rol"] == CORP and s_["rol"] != CORP and not q["ultimo_acceso"] and not q["app_confirmado_el"]
+                and (s_["ultimo_acceso"] or s_["app_confirmado_el"]) and not _tiene_rendiciones(conn, q["usuario"])):
+            q, s_ = s_, q
+            rol_final = CORP                     # nombre_final: el de la lista de corporativos
         # «También figura como»: el nombre y los alias del que sale
-        propias = _claves_de(q["nombre"])
+        propias = _claves_de(nombre_final)
         alias, ks = [], set()
-        for a in [x.strip() for x in q["alias"].split(";")] + [s_["nombre"]] + [x.strip() for x in s_["alias"].split(";")]:
+        for a in ([x.strip() for x in q["alias"].split(";")] + [q["nombre"], s_["nombre"]]
+                  + [x.strip() for x in s_["alias"].split(";")]):
             k = clave_persona(a)
             if a and k and k not in propias and k not in ks:
                 ks.add(k)
                 alias.append(a.upper())
-        conn.execute("""UPDATE usuarios SET alias_planilla=?, app_confirmado_el=?, app_modo=?, ultimo_acceso=? WHERE id=?""",
-                     ("; ".join(alias)[:500], q["app_confirmado_el"] or s_["app_confirmado_el"],
+        conn.execute("""UPDATE usuarios SET nombre=?, rol=?, alias_planilla=?, app_confirmado_el=?, app_modo=?, ultimo_acceso=?
+                        WHERE id=?""",
+                     (nombre_final, rol_final, "; ".join(alias)[:500], q["app_confirmado_el"] or s_["app_confirmado_el"],
                       q["app_modo"] or s_["app_modo"],
                       max(q["ultimo_acceso"] or "", s_["ultimo_acceso"] or "") or None, q["id"]))
+        q["nombre"], q["rol"] = nombre_final, rol_final
         try:
             conn.execute("UPDATE push_subs SET usuario_id=? WHERE usuario_id=?", (q["id"], s_["id"]))
         except Exception:
@@ -962,6 +982,16 @@ def pantalla_mi():
     if session.get("rol") not in (ROL, CORP, "admin"):
         from flask import redirect
         return redirect("/")
+    if session.get("rol") == ROL and session.get("usuario_id"):
+        # Si la oficina lo pasó a corporativo (o se unieron sus dos usuarios)
+        # mientras tenía la sesión abierta, que no tenga que volver a entrar.
+        conn = get_connection()
+        try:
+            r = conn.execute("SELECT rol, nombre FROM usuarios WHERE id=?", (session["usuario_id"],)).fetchone()
+        finally:
+            conn.close()
+        if r and r["rol"] == CORP:
+            session["rol"], session["nombre"] = CORP, r["nombre"]
     from app_movil import COLOR_TEMA
     html = render_template("mi.html", nombre=session.get("nombre") or "", tema=COLOR_TEMA,
                            admin=_es_admin(), es_corp=session.get("rol") == CORP)

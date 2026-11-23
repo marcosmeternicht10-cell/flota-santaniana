@@ -145,6 +145,28 @@ def _choferes_corp_nov2026(conn):
     return seed_choferes_corp(["MARTINEZ, CANDIDO", "VELAZQUEZ, ALEJANDRO", "DAVALOS, RICARDO", "MERCADO, MARCOS"])
 
 
+def _unir_choferes_corp_nov2026(conn):
+    """Si alguno de los choferes nuevos de corporativos ya entraba a la app con
+    un usuario de línea, ese usuario pasa a corporativo (sigue entrando igual)
+    y se borra la cuenta corporativa nueva que nunca usó. Solo si la nueva no
+    se usó nunca: si no, queda para unir a mano desde Usuarios."""
+    from choferes_app import duplicados, unir
+    from nombres import clave_persona
+    nuevos = {clave_persona(n) for n in ("MARTINEZ, CANDIDO", "VELAZQUEZ, ALEJANDRO", "DAVALOS, RICARDO", "MERCADO, MARCOS")}
+    hechos = []
+    for p in duplicados(conn):
+        corp = p["queda"] if p["queda"]["rol"] == "chofer_corp" else p["sale"]
+        otro = p["sale"] if corp is p["queda"] else p["queda"]
+        if clave_persona(corp["nombre"]) not in nuevos or corp["ultimo_acceso"] or corp["confirmado"]:
+            continue
+        if not (otro["ultimo_acceso"] or otro["confirmado"]):
+            continue
+        r, err = unir(corp["id"], otro["id"], "sistema")
+        if r:
+            hechos.append(f"{r['queda']['nombre']} sigue con el usuario {r['queda']['usuario']}")
+    return {"hechos": hechos}
+
+
 # (clave, qué hace, qué se anota en la auditoría, el detalle según el resultado)
 CARGAS = [
     (POLIZA_RC_2026["clave"], lambda conn: _aplicar_poliza_rc(conn, POLIZA_RC_2026),
@@ -154,6 +176,9 @@ CARGAS = [
     ("choferes_corp_nov2026", _choferes_corp_nov2026,
      "Dio de alta a los choferes de corporativos de noviembre 2026", "Corporativos",
      lambda r: ", ".join(f"{n} (usuario {u})" for u, n in r["usuarios"].items()) or "ya tenían cuenta"),
+    ("unir_choferes_corp_nov2026", _unir_choferes_corp_nov2026,
+     "Pasó a corporativos el usuario de la app de los choferes nuevos", "Corporativos",
+     lambda r: "; ".join(r["hechos"]) or "no hizo falta"),
 ]
 
 
