@@ -989,6 +989,27 @@ def api_crear_usuario():
     return jsonify({"ok": ok, "msg": msg})
 
 
+@app.route("/api/herramientas/editor_peliculas.zip", methods=["GET"])
+@rol_requerido("admin")
+def api_editor_peliculas_zip():
+    """El editor de películas (programa de Windows) para descargar. Solo el
+    administrador: los archivos viven fuera de static/, así que no hay otra
+    forma de llegar a ellos."""
+    import zipfile
+    carpeta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "herramientas", "editor_peliculas")
+    if not os.path.isdir(carpeta):
+        return jsonify({"error": "Falta la carpeta herramientas/editor_peliculas"}), 404
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for nombre in sorted(os.listdir(carpeta)):
+            ruta = os.path.join(carpeta, nombre)
+            if os.path.isfile(ruta) and not nombre.endswith(".pyc"):
+                z.write(ruta, f"editor_peliculas/{nombre}")
+    buf.seek(0)
+    auditar("Descargó el editor de películas", "Sistema")
+    return send_file(buf, as_attachment=True, download_name="editor_peliculas.zip", mimetype="application/zip")
+
+
 @app.route("/api/permisos/secciones", methods=["GET"])
 @rol_requerido("admin")
 def api_catalogo_secciones():

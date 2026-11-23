@@ -246,6 +246,7 @@ function irA(sec) {
     corp_combustible: renderCorpCombustible,
     corp_combustible: renderCorpCombustible,
     limpieza: renderLimpieza,
+    editor_peliculas: renderEditorPeliculas,
     integraciones: renderIntegraciones,
     // Salud vive en static/salud.js, que se carga después: se busca recién al entrar
     salud: () => renderSalud(),
@@ -13128,6 +13129,50 @@ async function confirmarLiquidacion(usuario, anio, semana, rango, btn) {
   }
 }
 
+
+// ════════════════════════════════════════════════════════════════════════
+//  EDITOR DE PELÍCULAS (solo administrador)
+// ════════════════════════════════════════════════════════════════════════
+// La conversión corre en la computadora de quien lo usa, no en el servidor:
+// acá solo se descarga el programa.
+
+function renderEditorPeliculas() {
+  status("Editor de películas");
+  const paso = (n, t, d) => `
+    <div style="display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--border)">
+      <div style="flex:none;width:28px;height:28px;border-radius:50%;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:700">${n}</div>
+      <div><div style="font-weight:600;color:var(--text)">${t}</div><div style="font-size:13.5px;color:var(--muted);line-height:1.6">${d}</div></div>
+    </div>`;
+  content.innerHTML = `
+    <div class="page-header">
+      <h1><i class="ti ti-movie"></i> Editor de películas</h1>
+      <p>Recortá la película, elegí audio y subtítulos y guardala en .vob para el pendrive de los buses</p>
+    </div>
+    <div class="section">
+      <div class="card">
+        <div class="card-body" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;justify-content:space-between">
+          <div style="font-size:14px;color:var(--muted);line-height:1.7;max-width:620px">
+            Es un programa para <b>Windows</b> que corre en tu computadora: la conversión usa la compu, no el servidor
+            (una película de 2 horas tarda más o menos lo que dura). Lo ves solo vos como administrador.
+          </div>
+          <a class="btn primary" href="/api/herramientas/editor_peliculas.zip" download>
+            <i class="ti ti-download"></i> Descargar el editor
+          </a>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><i class="ti ti-list-numbers"></i> Cómo se usa</div>
+        <div class="card-body" style="padding-top:0">
+          ${paso(1, "Descomprimí el .zip", "Donde quieras, por ejemplo en Documentos.")}
+          ${paso(2, "Doble clic en «INSTALAR.bat» (una sola vez)", "Instala Python y baja ffmpeg, el programa que convierte. Necesita internet.")}
+          ${paso(3, "Doble clic en «Abrir editor.bat»", "Abrí la película (mkv, mp4, avi…). También podés arrastrarla encima del .bat.")}
+          ${paso(4, "Recortá", "«Empieza acá» y «Termina acá» para el principio y el final; «Sacar desde acá… hasta acá» para partes del medio.")}
+          ${paso(5, "Audio, subtítulos y tamaño", "Los subtítulos quedan dibujados en la imagen. Poné los GB (1 por defecto): te avisa en verde, amarillo o rojo qué calidad va a salir.")}
+          ${paso(6, "«Guardar en .vob» y copiar al pendrive", "Sale en formato DVD (MPEG-2, sonido AC-3, PAL). Un pendrive FAT32 no acepta archivos de más de 4 GB.")}
+        </div>
+      </div>
+    </div>`;
+}
 
 // ════════════════════════════════════════════════════════════════════════
 //  LIMPIEZA DE DATOS DE PRUEBA

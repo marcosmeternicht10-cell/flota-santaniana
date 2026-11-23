@@ -1,0 +1,39 @@
+EDITOR DE PELÍCULAS PARA LOS BUSES (.vob para el pendrive)
+==========================================================
+
+LA PRIMERA VEZ
+  1. Descomprimí esta carpeta donde quieras (por ejemplo en Documentos).
+  2. Doble clic en "INSTALAR.bat". Instala Python y baja ffmpeg (necesita
+     internet, una sola vez).
+
+PARA USARLO
+  Doble clic en "Abrir editor.bat".
+  (También podés arrastrar una película encima de "Abrir editor.bat".)
+
+  1. "Abrir película": acepta mkv, mp4, avi, mov, ts, etc.
+  2. Movete con la línea de tiempo (clic o arrastrar) o con las flechas
+     ← → (1 segundo), Shift + flechas (10 s), RePág/AvPág (1 minuto).
+  3. "Empieza acá" / "Termina acá": recorta el principio y el final
+     (por ejemplo, sacar los créditos).
+  4. "Sacar desde acá…" y después "…hasta acá": saca una parte del medio.
+     Podés sacar varias. La ✕ de la lista la vuelve a poner.
+  5. Audio: elegí el idioma (si hay en español, viene elegido solo).
+  6. Subtítulos: los que trae la película o un archivo .srt. Quedan
+     dibujados en la imagen (los reproductores de los buses no tienen
+     botón de subtítulos).
+  7. Tamaño: poné cuántos GB querés (1 por defecto). Abajo te dice la
+     calidad que va a salir. Verde = muy buena, amarillo = aceptable,
+     rojo = poca (subí los GB o recortá).
+  8. "Guardar en .vob". Una película de 2 horas tarda más o menos lo
+     mismo que dura, según la computadora. Se puede cancelar.
+
+OPCIONES
+  - Resolución "Automática" elige sola: con poco espacio usa media
+    resolución (se ve más limpia que la completa con poco espacio).
+  - Norma PAL es la de Paraguay. NTSC solo si un reproductor no lo lee.
+  - Un pendrive formateado en FAT32 no acepta archivos de más de 4 GB.
+
+QUÉ SALE
+  Un .vob de DVD: video MPEG-2, sonido AC-3 (Dolby) 192 kbps, 16:9 o
+  4:3 según la película. Lo leen los reproductores de DVD/USB comunes.
+  Si un reproductor no lo abre, probá con NTSC o avisame qué modelo es.
