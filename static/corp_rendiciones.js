@@ -135,7 +135,7 @@ function crFiltradas(sinEstado) {
     (!cr.chofer || r.usuario === cr.chofer) && (!cr.cliente || r.cliente_c === cr.cliente) &&
     (sinEstado || !cr.estado || (cr.estado === "medias" ? ["entrante", "saliente"].includes(r.estado) : r.estado === cr.estado)) &&
     (!cr.pend || !r.liquidado) &&
-    (!q || `${r.chofer} ${r.cliente_c} ${r.tramo_c} ${r.bus_interno}`.toLowerCase().includes(q)));
+    (!q || `${r.chofer} ${r.usuario} ${r.cliente_c} ${r.tramo_c} ${r.bus_interno}`.toLowerCase().includes(q)));
 }
 
 function crPintar() {
@@ -222,7 +222,7 @@ function crVistaChoferes(rs, liq, filtrado) {
         <td class="cr-pos">${i + 1}</td>
         <td><button class="cr-quien" onclick="crVerChofer('${crE(f.u)}')" title="Ver sus servicios">
           <span class="sm-avatar">${crIni(f.nombre)}</span>
-          <span><b>${crE(f.nombre)}</b><small>${Object.entries(f.clientes).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${crE(c)} ${n}`).join(" · ")}</small></span></button></td>
+          <span><b>${crE(f.nombre)}</b><small><span class="cr-usu" title="Usuario con el que entra">${crE(f.u)}</span> · ${Object.entries(f.clientes).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${crE(c)} ${n}`).join(" · ")}</small></span></button></td>
         <td class="num"><span class="cr-n"><b>${f.n}</b><i style="width:${Math.max(4, Math.round(56 * f.n / max))}px"></i></span>
           <small class="cr-desg">${[f.comp && `${f.comp} completos`, f.med && `${f.med} medias`, f.susp && `${f.susp} susp.`].filter(Boolean).join(" · ")}</small></td>
         <td class="center">${Object.keys(f.dias).length}</td>
@@ -286,7 +286,16 @@ function crVistaDetalle(rs) {
   const porDia = {};
   lista.forEach(r => (porDia[r.fecha_servicio] = porDia[r.fecha_servicio] || []).push(r));
   const op = puedeOperarCorp();
-  return Object.keys(porDia).sort().reverse().map(f => {
+  const movibles = lista.filter(r => !r.liquidado);
+  const filtrado = cr.chofer || cr.q.trim() || cr.dia || cr.cliente;
+  const quienes = [...new Set(movibles.map(r => r.chofer))];
+  cr.lote = movibles.map(r => r.id);
+  const barra = op && filtrado && movibles.length ? `<div class="cr-lote">
+      <i class="ti ti-users-group"></i>
+      <span>${movibles.length} ${movibles.length === 1 ? "servicio" : "servicios"} de <b>${crE(quienes.slice(0, 3).join(", "))}${quienes.length > 3 ? " y otros" : ""}</b> con este filtro.
+        ¿Los hizo otro chofer? Pasalos todos juntos.</span>
+      <button class="btn btn-primary btn-sm" onclick="crPasarLote()"><i class="ti ti-user-share"></i> Pasar los ${movibles.length} a otro chofer</button></div>` : "";
+  return barra + Object.keys(porDia).sort().reverse().map(f => {
     const items = porDia[f].sort((a, b) => a.cliente_c.localeCompare(b.cliente_c) || a.tramo_c.localeCompare(b.tramo_c) || a.chofer.localeCompare(b.chofer));
     const monto = items.reduce((s, r) => s + (+r.monto || 0), 0);
     return `<section class="cr-dia">
@@ -337,6 +346,32 @@ function crPasar(id) {
       body: JSON.stringify({ usuario: sel.value }) }).catch(err => ({ error: err.message }));
     document.querySelector(".modal-overlay")?.remove();
     toast((x && (x.msg || x.error)) || "No se pudo pasar", x && x.ok ? "success" : "error");
+    cargarRendiciones();
+  };
+}
+
+// Pasar todo lo que se ve (con el filtro puesto) a otro chofer
+function crPasarLote() {
+  const ids = cr.lote || [];
+  if (!ids.length) return;
+  rvModal({
+    titulo: `Pasar ${ids.length} ${ids.length === 1 ? "servicio" : "servicios"} a otro chofer`, icono: "user-share", ancho: 480,
+    sub: "Para cuando los marcó un chofer (o alguien entró con su usuario) y los hizo otro. Lo liquidado no se mueve. Queda en la auditoría.",
+    cuerpo: `<input class="form-input" id="cr-lote-q" placeholder="Buscar chofer…" autocomplete="off" style="margin-bottom:8px" autofocus>
+      <select class="form-input" id="cr-lote-a" size="9" style="height:auto">${cr.choferes.map(c => `<option value="${crE(c.usuario)}">${crE(c.nombre)} (${crE(c.usuario)})</option>`).join("")}</select>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="cr-lote-si"><i class="ti ti-user-share"></i> Pasar</button>`,
+  });
+  const sel = $("#cr-lote-a");
+  $("#cr-lote-q").oninput = e => { const q = e.target.value.trim().toLowerCase(); [...sel.options].forEach(o => { o.hidden = q && !o.textContent.toLowerCase().includes(q); }); };
+  $("#cr-lote-si").onclick = async e => {
+    if (!sel.value) { toast("Elegí el chofer", "error"); return; }
+    if (!confirm(`¿Pasar los ${ids.length} servicios a ${sel.selectedOptions[0].textContent}?`)) return;
+    e.target.disabled = true;
+    const r = await api("/api/corp/marcados/pasar_lote", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, usuario: sel.value }) }).catch(err => ({ error: err.message }));
+    document.querySelector(".modal-overlay")?.remove();
+    toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok ? "success" : "error");
     cargarRendiciones();
   };
 }

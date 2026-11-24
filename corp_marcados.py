@@ -187,3 +187,29 @@ def api_pasar_a_chofer(rid):
     if err:
         return jsonify({"ok": False, "error": err}), 400
     return jsonify({"ok": True, "msg": f"Pasó de {r['antes']} a {r['chofer']}"})
+
+
+@bp_corp_marcados.route("/api/corp/marcados/pasar_lote", methods=["POST"])
+def api_pasar_lote():
+    """Pasa varios servicios a otro chofer de una vez (por ejemplo, toda una
+    semana que quedó cargada con el usuario de otro)."""
+    if C._rol_efectivo() not in ("admin", "operador_corp"):
+        return jsonify({"error": "Sin permiso"}), 403
+    from flask import session
+    d = request.get_json(silent=True) or {}
+    ids = [int(x) for x in (d.get("ids") or []) if str(x).isdigit()][:500]
+    if not ids:
+        return jsonify({"ok": False, "error": "No hay servicios elegidos"}), 400
+    quien = session.get("nombre") or session.get("usuario") or ""
+    ok, errores, a = 0, [], ""
+    for rid in ids:
+        r, err = pasar_a_chofer(rid, d.get("usuario"), quien)
+        if r:
+            ok += 1
+            a = r["chofer"]
+        elif err != "Ya está a nombre de ese chofer":
+            errores.append(f"#{rid}: {err}")
+    msg = f"{ok} servicio{'s' if ok != 1 else ''} pasado{'s' if ok != 1 else ''}" + (f" a {a}" if a else "")
+    if errores:
+        msg += f" · {len(errores)} no se pudieron ({errores[0]})"
+    return jsonify({"ok": ok > 0 or not errores, "msg": msg, "pasados": ok, "errores": errores})
