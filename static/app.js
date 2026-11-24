@@ -14076,6 +14076,7 @@ function pintarControlEmpresa() {
       <button class="emp-tab ${empTab === "faltantes" ? "activa" : ""}" onclick="verEmpTab('faltantes')">
         <i class="ti ti-alert-triangle"></i> Sin cubrir
         ${faltas.length ? `<span class="emp-tab-n rojo">${faltas.length}</span>` : ""}
+        ${cob.some(c => (c.mal_fechados || []).length) ? `<span class="emp-tab-n" title="Servicios con la fecha corrida un día"><i class="ti ti-calendar-time"></i> ${cob.reduce((n, c) => n + (c.mal_fechados || []).length, 0)}</span>` : ""}
       </button>
     </div>
 
@@ -14273,30 +14274,82 @@ function panelVariables({ vars }) {
 
 // ─── Pestaña: sin cubrir ───
 
-function panelFaltantes({ faltas }) {
+function panelFaltantes({ faltas, cob }) {
+  const puede = puedeOperarCorp();
+  const esc = x => String(x ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const mal = (cob || []).flatMap(c => c.mal_fechados || []);
+  const malArr = mal.filter(m => !m.liquidado);
+  const cajaMal = mal.length ? `<div class="falta-todos">
+      <i class="ti ti-calendar-time"></i>
+      <span><b>${mal.length} ${mal.length === 1 ? "servicio quedó" : "servicios quedaron"} con la fecha corrida un día.</b>
+        Se marcaron el mismo día que dice la fecha, pero antes de la hora del servicio (por ejemplo, el de las 22:00 marcado a la mañana): son del día anterior.
+        Por eso el día anterior aparece sin marcar.</span>
+      ${puede && malArr.length ? `<button class="btn btn-primary btn-sm" onclick="moverTodasFechas(this)">Pasar ${malArr.length === 1 ? "el servicio" : "los " + malArr.length} a su día</button>` : ""}
+      <details class="falta-mal-lista"><summary>Ver cuáles</summary>
+        ${mal.map(m => `<div class="falta-mal">${esc(m.chofer)} · <b>${esc(m.tramo)}</b> · marcado con fecha ${m.marcado.slice(8, 10)}/${m.marcado.slice(5, 7)} a las ${esc(m.hora)} → es del <b>${m.fecha.slice(8, 10)}/${m.fecha.slice(5, 7)}</b>${m.liquidado ? " (liquidado: no se puede mover)" : ""}</div>`).join("")}
+      </details></div>` : "";
   if (!faltas.length) {
-    return `<div class="empty"><i class="ti ti-circle-check"></i>Se cubrieron todos los tramos del período.</div>`;
+    return cajaMal + `<div class="empty"><i class="ti ti-circle-check"></i>Se cubrieron todos los tramos del período.</div>`;
   }
   const g = agruparFaltas(faltas);
+  const conPistas = faltas.filter(f => (f.pistas || []).length).length;
+  const pista = p => `<div class="falta-pista ${p.tipo}">
+      <i class="ti ti-${p.tipo === "fecha" ? "calendar-time" : p.tipo === "tramo" ? "arrows-exchange" : "user-question"}"></i>
+      <span>${esc(p.texto)}</span>
+      ${puede && p.id && !p.liquidado ? (p.tipo === "fecha"
+        ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();moverRendicion(${p.id}, {fecha:'${p.fecha}'}, this)">Pasar al ${p.fecha.slice(8, 10)}/${p.fecha.slice(5, 7)}</button>`
+        : p.tipo === "tramo" ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();moverRendicion(${p.id}, {tramo:'${esc(p.tramo).replace(/'/g, "\\'")}'}, this)">Cambiarlo a este tramo</button>` : "") : ""}
+      ${p.liquidado ? `<span class="mini-chip">liquidado</span>` : ""}
+    </div>`;
   return `
-    <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> Agrupado por día. Tocá una fila para ver qué tramos fueron.</p>
-    ${g.map((x, i) => `
+    <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> Agrupado por día. Tocá una fila para ver qué tramos fueron.
+      ${conPistas ? ` En <b>${conPistas}</b> el sistema encontró una posible explicación (marcado con otra fecha u otro tramo).` : ""}</p>
+    ${cajaMal}
+    ${g.map((x, i) => {
+      const nP = x.items.filter(f => (f.pistas || []).length).length;
+      return `
       <div class="falta-dia" onclick="toggleFalta(${i})">
         <span class="falta-fecha">${x.fecha}</span>
         <span class="badge">${x.cliente}</span>
         <span style="flex:1"></span>
+        ${nP ? `<span class="mini-chip azul" title="Hay una posible explicación"><i class="ti ti-bulb"></i> ${nP} con pista</span>` : ""}
         ${x.faltantes ? `<span class="mini-chip rojo">${x.faltantes} sin hacer</span>` : ""}
         ${x.parciales ? `<span class="mini-chip ambar">${x.parciales} a medias</span>` : ""}
         <i class="ti ti-chevron-down" style="color:var(--muted);margin-left:8px"></i>
       </div>
-      <div class="falta-detalle" id="falta-${i}" style="display:none">
+      <div class="falta-detalle" id="falta-${i}" style="display:${empFaltaAbierta.has(x.fecha + "|" + x.cliente) ? "" : "none"}" data-k="${esc(x.fecha + "|" + x.cliente)}">
         ${x.items.map(f => `<div class="falta-item">
           <span style="flex:1">${f.tramo}</span>
           <span style="font-size:12px;color:${f.situacion === "faltante" ? "var(--danger)" : "var(--warning)"}">
             ${f.situacion === "faltante" ? "nadie lo reportó" : f.detalle + (f.quien && f.quien !== "—" ? " · " + f.quien : "")}
           </span>
-        </div>`).join("")}
-      </div>`).join("")}`;
+        </div>${(f.pistas || []).map(pista).join("")}`).join("")}
+      </div>`;
+    }).join("")}`;
+}
+
+const empFaltaAbierta = new Set();
+async function moverRendicion(id, cambio, btn) {
+  if (btn) btn.disabled = true;
+  const r = await api(`/api/corp/rendicion/${id}/mover`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(cambio) }).catch(e => ({ error: e.message }));
+  toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok ? "success" : "error");
+  if (r && r.ok) cargarControlEmpresa(); else if (btn) btn.disabled = false;
+}
+async function moverTodasFechas(btn) {
+  const cob = (empDatos && empDatos.cobertura) || [];
+  // Del más viejo al más nuevo: una semana corrida se acomoda en cadena
+  const ps = cob.flatMap(c => c.mal_fechados || []).filter(p => !p.liquidado).sort((a, b) => a.marcado.localeCompare(b.marcado) || a.id - b.id);
+  if (!ps.length || !confirm(`¿Pasar ${ps.length === 1 ? "el servicio" : "los " + ps.length + " servicios"} al día anterior?\n\nSe marcaron antes de la hora del servicio del día que dice la fecha. Queda registrado en Auditoría.`)) return;
+  btn.disabled = true;
+  let ok = 0, mal = [];
+  for (const p of ps) {
+    const r = await api(`/api/corp/rendicion/${p.id}/mover`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fecha: p.fecha }) }).catch(e => ({ error: e.message }));
+    if (r && r.ok) ok++; else mal.push((r && r.error) || "error");
+  }
+  toast(`${ok} corregidos${mal.length ? ` · ${mal.length} no se pudieron: ${mal[0]}` : ""}`, mal.length ? "error" : "success");
+  cargarControlEmpresa();
 }
 
 // Los faltantes se agrupan por día y empresa: una lista de cientos de filas
@@ -14314,7 +14367,10 @@ function agruparFaltas(faltas) {
 
 function toggleFalta(i) {
   const el = document.getElementById("falta-" + i);
-  if (el) el.style.display = el.style.display === "none" ? "" : "none";
+  if (!el) return;
+  el.style.display = el.style.display === "none" ? "" : "none";
+  const k = el.dataset.k;               // queda abierto al volver a cargar (después de corregir)
+  if (k) el.style.display === "none" ? empFaltaAbierta.delete(k) : empFaltaAbierta.add(k);
 }
 
 function descargarControlPDF() {

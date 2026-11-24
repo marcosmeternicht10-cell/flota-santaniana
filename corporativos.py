@@ -24,8 +24,12 @@ from hora_local import ahora, ahora_iso, hoy
 try:
     from database import auditar
 except Exception:
-    def auditar(*a, **k):  # si no está disponible, no rompe la liquidación
-        pass
+    def auditar(*a, **k):  # la de app.py; si no está disponible, no rompe nada
+        try:
+            from app import auditar as _auditar
+            return _auditar(*a, **k)
+        except Exception:
+            pass
 
 PK = "SERIAL PRIMARY KEY" if USE_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
@@ -772,11 +776,12 @@ def segmentos_tomados(cliente, tramo, fecha, chofer_usuario=""):
         return {"libre": True, "tomados": []}
     tc = _tramo_c(cliente, tramo)
     rows = [r for r in _marcas_dia(cliente, fecha) if r["tramo_c"] == tc]
+    temprano = {e: marcado_antes_de_tiempo(tc, e, fecha) for e in ESTADOS_CON_PAGO}
     yo = (chofer_usuario or "").strip().lower()
     tomados = [{"chofer_nombre": r["chofer_nombre"] or r["chofer_usuario"] or "otro chofer", "estado": r["estado"],
                 "coche": r.get("bus_interno") or "", "cargado": _cuando(r.get("cargado")),
                 "yo": bool(yo) and (r["chofer_usuario"] or "").strip().lower() == yo} for r in rows]
-    return {"libre": len(tomados) == 0, "tomados": tomados}
+    return {"libre": len(tomados) == 0, "tomados": tomados, "temprano": {k: v for k, v in temprano.items() if v}}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -990,6 +995,45 @@ def viajes_servicio(tramo, hora_inicio="", estado="completado"):
     return [("entrada", minutos[0] / 60), ("salida", minutos[1] / 60)]
 
 
+# Cuánto antes de la hora del tramo se lo deja marcar (por si sale antes).
+MARGEN_ANTES_MIN = 60
+
+
+def inicio_servicio(tramo, estado="completado"):
+    """A qué hora empieza lo que se marca, en minutos desde la medianoche del
+    día del servicio (puede pasar de 1440: la salida de un turno de noche es
+    a la mañana siguiente). None si el tramo no dice horario."""
+    if _es_variable(tramo):
+        return None
+    vs = viajes_servicio(tramo, "", estado if estado in ("entrante", "saliente") else "completado")
+    return round(min(h for _, h in vs) * 60) if vs else None
+
+
+def _min_a_hora(m):
+    return f"{(m // 60) % 24}:{m % 60:02d}"
+
+
+def marcado_antes_de_tiempo(tramo, estado, fecha, cuando=None):
+    """Si se está marcando un servicio que todavía no pasó: por ejemplo, a la
+    mañana el tramo de las 22:00 con la fecha de hoy (era el de anoche y quedó
+    la fecha que viene puesta). Devuelve el mensaje, o None si está bien."""
+    if estado not in ESTADOS_CON_PAGO:
+        return None
+    ini = inicio_servicio(tramo, estado)
+    if ini is None:
+        return None
+    cuando = cuando or ahora_iso()
+    if (fecha or "")[:10] != cuando[:10]:
+        return None
+    ahora_m = int(cuando[11:13]) * 60 + int(cuando[14:16])
+    if ahora_m >= ini - MARGEN_ANTES_MIN:
+        return None
+    que = {"entrante": "El entrante de ese tramo", "saliente": "El saliente de ese tramo"}.get(estado, "Ese tramo")
+    cuando_txt = f"mañana a las {_min_a_hora(ini)}" if ini >= 1440 else f"a las {_min_a_hora(ini)}"
+    return (f"{que} con la fecha de hoy es {cuando_txt} y todavía no pasó. "
+            f"Si es el de anoche o el de ayer, cambiá la fecha a la de ayer.")
+
+
 def _mismo_horario(a, b):
     """Si dos servicios tienen un viaje a la misma hora, sea entrada o salida.
     También el cambio de turno: quien hizo BALL Tramo 5 de 6:00 a 18:00 no
@@ -1141,6 +1185,9 @@ def registrar_rendicion(datos, limitar_fecha=False):
         ok_fecha, msg_fecha = fecha_reportable(datos["fecha_servicio"])
         if not ok_fecha:
             return False, msg_fecha
+        temprano = marcado_antes_de_tiempo(datos["tramo"], estado, datos["fecha_servicio"])
+        if temprano:
+            return False, temprano
 
     # Si choca en horario con otro servicio del mismo chofer, no se rebota
     # sin más: en el papel dos tramos pueden caer a la misma hora y en la
@@ -1674,7 +1721,7 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
     for p in lista:
         p["cobertura"] = round(p["cubiertos"] / p["esperados"] * 100, 1) if p["esperados"] else 0
 
-    return {
+    salida = {
         "cliente": cliente, "dias": len(dias),
         "desde_real": desde_real, "hasta_real": hasta,
         "rango_ajustado": ajustado, "primer_servicio": primero,
@@ -1690,6 +1737,183 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
         "periodos": lista,
         "detalle_faltantes": sorted(detalle, key=lambda x: (x["fecha"], x["tramo"])),
     }
+    try:
+        _pistas_control(cliente, salida, desde_real, hasta)
+    except Exception as e:
+        print(f"[corporativos] pistas del control: {e}")
+    return salida
+
+
+# Para corregir datos ya cargados se exige más que para frenar al chofer: el
+# servicio se marcó al menos 3 horas antes de su hora (el de las 22:00 marcado
+# a la mañana). Así no se toca al que lo marcó un rato antes de salir.
+MARGEN_MAL_FECHADO_MIN = 180
+
+
+def _pistas_control(cliente, cob, desde, hasta):
+    """Para el Control: qué servicios quedaron con la fecha corrida y, para
+    cada tramo sin cubrir (o a medias), por qué puede ser.
+
+      · Marcados con la fecha del día en que se cargaron, a una hora en que el
+        servicio de ese día todavía no había pasado (el de las 22:00 marcado a
+        la mañana con la fecha que venía puesta): son del día anterior. Si un
+        chofer lo hace todas las noches, la semana entera queda corrida un día
+        y solo se ve un hueco: por eso se revisan todos, no solo los huecos.
+      · El chofer asignado ese día marcó otro tramo que no era el suyo.
+      · El chofer asignado no marcó nada ese día.
+
+    Lo que se puede corregir trae la rendición y a qué fecha o tramo pasarla
+    (POST /api/corp/rendicion/<id>/mover)."""
+    import datetime as _dt
+    detalle = cob["detalle_faltantes"]
+    un_dia = _dt.timedelta(days=1)
+    d0 = (_dt.date.fromisoformat(desde[:10]) - un_dia).isoformat()
+    d1 = (_dt.date.fromisoformat(hasta[:10]) + un_dia).isoformat()
+    cli_u = " ".join(cliente.split()).upper()
+    conn = get_connection()
+    try:
+        rows = [dict(r) for r in conn.execute(
+            """SELECT id, chofer_usuario, chofer_nombre, cliente, tramo, fecha_servicio, estado,
+                      COALESCE(cargado_el, '') AS cargado, COALESCE(liquidado, 0) AS liquidado
+               FROM rendiciones_corp WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<=?""",
+            (cli_u, d0, d1 + "~")).fetchall()]
+        asig = []
+        try:
+            asig = [dict(r) for r in conn.execute(
+                """SELECT d.fecha, a.tramo, a.lado, a.chofer_usuario, a.chofer_nombre
+                   FROM corp_asig a JOIN corp_asig_dias d ON d.id = a.dia_id
+                   WHERE UPPER(TRIM(a.cliente))=? AND d.fecha>=? AND d.fecha<=? AND COALESCE(a.chofer_usuario,'')<>''""",
+                (cli_u, desde, hasta)).fetchall()]
+        except Exception:
+            conn.rollback()
+    finally:
+        conn.close()
+    from nombres import apellido_primero
+    nom = lambda r: apellido_primero(r.get("chofer_nombre") or r.get("chofer_usuario") or "") or "otro chofer"
+    ddmm = lambda f: f"{f[8:10]}/{f[5:7]}"
+    por_dia, ocup = {}, {}
+    for r in rows:
+        r["fecha"] = str(r["fecha_servicio"])[:10]
+        r["tramo_c"] = _tramo_c(r["cliente"], r["tramo"])
+        r["estado"] = _estado_norm(r["estado"])
+        r["u"] = (r["chofer_usuario"] or "").strip().lower()
+        r["cargado"] = str(r["cargado"]).replace(" ", "T")
+        por_dia.setdefault(r["fecha"], []).append(r)
+        if r["estado"] in ESTADOS_CON_PAGO and not _es_variable(r["tramo_c"]):
+            ocup.setdefault((r["fecha"], r["tramo_c"]), set()).update(
+                ("entrante", "saliente") if r["estado"] == "completado" else (r["estado"],))
+
+    # ── Servicios con la fecha corrida un día ──
+    # Se recorren del más viejo al más nuevo y se simula el arreglo: así una
+    # semana entera corrida se corrige en cadena (el del 10 pasa al 9, el del
+    # 11 al 10 que quedó libre, etc.). Si el día anterior ya está marcado por
+    # otro, no se propone.
+    mal = []
+    for r in sorted(rows, key=lambda r: (r["fecha"], r["id"])):
+        if r["fecha"] < desde or r["estado"] not in ESTADOS_CON_PAGO or len(r["cargado"]) < 16:
+            continue
+        if r["cargado"][:10] != r["fecha"]:
+            continue
+        ini = inicio_servicio(r["tramo_c"], r["estado"])
+        if ini is None:
+            continue
+        hora = int(r["cargado"][11:13]) * 60 + int(r["cargado"][14:16])
+        if hora >= ini - MARGEN_MAL_FECHADO_MIN:
+            continue
+        antes = (_dt.date.fromisoformat(r["fecha"]) - un_dia).isoformat()
+        mitades = {"entrante", "saliente"} if r["estado"] == "completado" else {r["estado"]}
+        if mitades & ocup.get((antes, r["tramo_c"]), set()):
+            continue
+        ocup[(r["fecha"], r["tramo_c"])] -= mitades
+        ocup.setdefault((antes, r["tramo_c"]), set()).update(mitades)
+        mal.append({"id": r["id"], "chofer": nom(r), "tramo": r["tramo_c"], "estado": r["estado"],
+                    "marcado": r["fecha"], "fecha": antes, "hora": r["cargado"][11:16], "liquidado": bool(r["liquidado"]),
+                    "texto": (f"{nom(r)} marcó {r['tramo_c']}{'' if r['estado'] == 'completado' else ' (' + r['estado'] + ')'} "
+                              f"con fecha del {ddmm(r['fecha'])}, pero lo cargó ese mismo día a las {r['cargado'][11:16]}, "
+                              f"antes de la hora del servicio: es el del {ddmm(antes)}.")})
+    cob["mal_fechados"] = mal
+
+    # ── Pistas para cada hueco ──
+    asig_dia = {}
+    for a in asig:
+        a["tramo_c"] = _tramo_c(cliente, a["tramo"])
+        a["u"] = (a["chofer_usuario"] or "").strip().lower()
+        asig_dia.setdefault(str(a["fecha"])[:10], []).append(a)
+    for it in detalle:
+        if it.get("situacion") not in ("faltante", "parcial"):
+            continue
+        dia, t = it["fecha"], it["tramo"]
+        pistas = [{"tipo": "fecha", **m} for m in mal if m["fecha"] == dia and m["tramo"] == t]
+        for a in [a for a in asig_dia.get(dia, []) if a["tramo_c"] == t]:
+            suyos = [r for r in por_dia.get(dia, []) if r["u"] == a["u"] and r["estado"] in ESTADOS_CON_PAGO]
+            if any(r["tramo_c"] == t for r in suyos):
+                continue                       # marcó este mismo (a medias): ya figura en el detalle
+            asignados = {x["tramo_c"] for x in asig_dia.get(dia, []) if x["u"] == a["u"]}
+            ini = inicio_servicio(t)
+            otros = sorted([r for r in suyos if r["tramo_c"] not in asignados],
+                           key=lambda r: (inicio_servicio(r["tramo_c"]) != ini, r["id"]))
+            quien = apellido_primero(a["chofer_nombre"] or a["chofer_usuario"])
+            if otros:
+                r = otros[0]
+                pistas.append({
+                    "tipo": "tramo", "id": r["id"], "tramo": t, "liquidado": bool(r["liquidado"]),
+                    "texto": (f"Estaba asignado a {quien}, que ese día marcó {r['tramo_c']}"
+                              f"{' (a la misma hora)' if inicio_servicio(r['tramo_c']) == ini else ''}, "
+                              f"un tramo que no tenía asignado."),
+                })
+            elif not suyos:
+                pistas.append({"tipo": "info", "texto": f"Estaba asignado a {quien}, que no marcó nada de {cliente} ese día."})
+        if pistas:
+            it["pistas"] = pistas
+
+
+def mover_rendicion(rid, fecha=None, tramo=None, quien=""):
+    """Corrige la fecha o el tramo de un servicio marcado (desde el Control).
+    Respeta las mismas reglas que al marcar: no deja pisar un tramo ya marcado."""
+    import datetime as _dt
+    conn = get_connection()
+    try:
+        r = conn.execute("""SELECT id, chofer_usuario, chofer_nombre, cliente, tramo, fecha_servicio, estado, monto,
+                                   COALESCE(monto_fijo, 0) AS monto_fijo, COALESCE(liquidado, 0) AS liquidado
+                            FROM rendiciones_corp WHERE id=?""", (rid,)).fetchone()
+    finally:
+        conn.close()
+    if not r:
+        return None, "Ese servicio ya no existe"
+    r = dict(r)
+    if r["liquidado"]:
+        return None, "Ya está liquidado: para cambiarlo hay que revertir la liquidación"
+    f = (fecha or str(r["fecha_servicio"]))[:10]
+    try:
+        if _dt.date.fromisoformat(f) > _dt.date.fromisoformat(hoy()):
+            return None, "Esa fecha es futura"
+    except ValueError:
+        return None, "Fecha inválida"
+    cli, tc = _canonizar(r["cliente"], tramo or r["tramo"])
+    if not cli or not tc:
+        return None, "Ese tramo no es de ese cliente"
+    if f == str(r["fecha_servicio"])[:10] and tc == _tramo_c(r["cliente"], r["tramo"]):
+        return None, "No cambia nada"
+    estado = _estado_norm(r["estado"])
+    ocupado = tramo_ocupado(cli, tc, f, estado, excluir_id=rid)
+    if ocupado:
+        return None, ocupado.replace("Ese tramo", f"{tc} del {f[8:10]}/{f[5:7]}")
+    monto = r["monto"] if r["monto_fijo"] else calcular_monto(tc, estado, cli)
+    conn = get_connection()
+    try:
+        conn.execute("""UPDATE rendiciones_corp SET cliente=?, tramo=?, fecha_servicio=?, monto=?, editado_por=?, fecha_edicion=?
+                        WHERE id=?""", (cli, tc, f, monto, quien, ahora_iso(), rid))
+        conn.commit()
+    except IntegrityError:
+        conn.rollback()
+        return None, "Ese tramo ya está marcado ese día"
+    finally:
+        conn.close()
+    antes = f"{r['tramo']} del {str(r['fecha_servicio'])[:10]}"
+    despues = f"{tc} del {f}"
+    auditar("Corrigió un servicio de corporativos", "Corporativos",
+            f"{r['chofer_nombre']} · {cli}: {antes} → {despues}")
+    return {"antes": antes, "despues": despues}, None
 
 
 def costo_por_empresa(desde=None, hasta=None, agrupacion="total"):
@@ -2847,6 +3071,20 @@ def api_corp_control_empresa():
         "solo_habiles": CLIENTES_SOLO_HABILES,
         "primer_servicio": primer_servicio(cliente),
     })
+
+
+@bp_corp.route("/api/corp/rendicion/<int:rid>/mover", methods=["POST"])
+def api_corp_mover_rendicion(rid):
+    """Pasar un servicio a otra fecha o a otro tramo (por ejemplo, el de las
+    22:00 que quedó marcado con la fecha del día siguiente)."""
+    if _rol_efectivo() not in ("admin", "operador_corp"):
+        return jsonify({"error": "Sin permiso"}), 403
+    d = request.get_json(silent=True) or {}
+    r, err = mover_rendicion(rid, d.get("fecha"), d.get("tramo"),
+                             session.get("nombre") or session.get("usuario") or "")
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "msg": f"Listo: {r['despues']}"})
 
 
 @bp_corp.route("/api/corp/control_empresa_pdf", methods=["GET"])

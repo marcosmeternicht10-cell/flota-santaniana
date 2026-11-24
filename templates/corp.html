@@ -121,6 +121,8 @@
     .aviso.libre { background: var(--ok-bg); color: var(--ok); }
     .aviso.parcial { background: #EAF1F8; color: var(--azul); }
     .aviso.tomado { background: var(--rojo-bg); color: var(--rojo); }
+    .aviso-btn { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 9px 14px; border: 0; border-radius: 10px;
+      background: var(--rojo); color: #fff; font-weight: 600; font-size: 14px; font-family: inherit; cursor: pointer; }
     .aviso .marco { display: block; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.6); color: #3b1d1d; }
 
 
@@ -306,6 +308,7 @@
             </button>
           </div>
         </div>
+        <div id="aviso-hora"></div>
 
         <div class="campo" id="obs-campo" style="display:none">
           <label id="obs-label">¿Qué pasó? (obligatorio)</label>
@@ -546,6 +549,7 @@
         if(btn) btn.className = "estado-btn" + (k===e ? " " + clases[k] : "");
       });
       actualizarObservacion();
+      if(typeof avisoHora === "function") avisoHora();
     }
 
     // La observación es obligatoria en dos casos: si el servicio se suspendió
@@ -569,16 +573,34 @@
       }
     }
 
+    // Si marca con la fecha de hoy un servicio que todavía no pasó (el de las
+    // 22:00 a la mañana): casi siempre es el de anoche y quedó la fecha que
+    // viene puesta. Se le avisa con un botón para pasar a ayer (el servidor
+    // igual no lo deja guardar).
+    let DISP = null;
+    function avisoHora(){
+      const c = $("aviso-hora"); if(!c) return;
+      const msg = DISP && DISP.temprano && DISP.temprano[estadoSel];
+      c.innerHTML = msg ? `<div class="aviso tomado"><i class="ti ti-clock-exclamation"></i><span>${msg}
+        <button type="button" class="aviso-btn" onclick="fechaAyer()"><i class="ti ti-calendar-minus"></i> Es el de ayer: cambiar la fecha</button></span></div>` : "";
+    }
+    function fechaAyer(){
+      const d = new Date($("f-fecha").value + "T12:00:00"); d.setDate(d.getDate() - 1);
+      $("f-fecha").value = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      $("f-fecha").onchange();
+    }
+
     // Avisa si el tramo ya fue reportado, antes de llenar todo el formulario
     let dispTimer = null;
     function chequearDisponibilidad(){
       clearTimeout(dispTimer);
       const cliente = $("f-cliente").value, tramo = $("f-tramo").value, fecha = $("f-fecha").value;
       const cont = $("aviso-tramo");
-      if(!cliente || !tramo || !fecha){ cont.innerHTML = ""; habilitarEstados([]); return; }
+      if(!cliente || !tramo || !fecha){ cont.innerHTML = ""; habilitarEstados([]); DISP = null; avisoHora(); return; }
       dispTimer = setTimeout(async () => {
         const r = await fetch(`/api/corp/disponibilidad?cliente=${encodeURIComponent(cliente)}&tramo=${encodeURIComponent(tramo)}&fecha=${fecha}`);
         const d = await r.json();
+        DISP = d; avisoHora();
         if(d.libre){
           cont.innerHTML = '<div class="aviso libre"><i class="ti ti-circle-check"></i><span>Tramo libre — nadie lo reportó todavía.</span></div>';
           habilitarEstados([]);

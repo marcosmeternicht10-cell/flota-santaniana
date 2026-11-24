@@ -1669,6 +1669,21 @@ td.center, th.center { text-align: center; }
   display: flex; align-items: center; gap: 12px; padding: 6px 12px;
   font-size: 12.5px; border-left: 2px solid var(--border); color: var(--text);
 }
+.falta-pista { display: flex; align-items: center; gap: 10px; margin: 2px 0 6px 14px; padding: 8px 12px; border-radius: 10px;
+  font-size: 12.5px; line-height: 1.45; background: var(--info-bg); color: var(--azul-oscuro); }
+.falta-pista > .ti { font-size: 17px; color: var(--brand-blue); flex-shrink: 0; }
+.falta-pista > span { flex: 1; }
+.falta-pista.info { background: var(--surface2); color: var(--muted); }
+.falta-pista.info > .ti { color: var(--muted); }
+.falta-pista .btn { flex-shrink: 0; white-space: nowrap; }
+.falta-todos { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 12px; padding: 12px 16px; border-radius: 12px;
+  background: var(--info-bg); border: 1px solid var(--border); font-size: 13px; color: var(--azul-oscuro); }
+.falta-todos > .ti { font-size: 22px; color: var(--brand-blue); }
+.falta-todos > span { flex: 1; min-width: 220px; }
+.mini-chip.azul { background: var(--info-bg); color: var(--brand-blue); }
+.falta-mal-lista { flex-basis: 100%; margin-left: 36px; }
+.falta-mal-lista summary { cursor: pointer; font-weight: 600; color: var(--brand-blue); font-size: 12.5px; }
+.falta-mal { padding: 5px 0; border-top: 1px solid rgba(31,78,140,.12); font-size: 12.5px; }
 
 /* ═══════════════════════════════════════════════════════════════════
    CONTROL POR EMPRESA — pantalla rediseñada
