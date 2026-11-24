@@ -153,7 +153,7 @@ function smLista() {
         ${puede ? `<input type="checkbox" class="sm-chk" ${sm.sel.has(s.id) ? "checked" : ""} ${s.liquidado ? "disabled" : ""} onchange="smElegir(${s.id}, this.checked)" aria-label="Elegir este servicio">` : ""}
         <span class="sm-avatar">${smIniciales(s.chofer)}</span>
         <div class="sm-fila-quien"><b>${smE(s.chofer)}</b>
-          <small>${s.cargado_el ? `Marcado ${s.otro_dia ? "el " + csFC(s.cargado_el.slice(0, 10)) + " " : ""}a las ${s.cargado_el.slice(11)}` : "Sin hora de carga"}${s.editado_por ? ` · corregido por ${smE(s.editado_por)}` : ""}</small></div>
+          <small>${s.cargado_el ? `Marcado ${s.otro_dia ? "el " + csFC(s.cargado_el.slice(0, 10)) + " " : ""}a las ${s.cargado_el.slice(11)}` : "Sin hora de carga"}${s.editado_por ? ` · ${s.editado_por.startsWith("cargado por") ? "" : "corregido por "}${smE(s.editado_por)}` : ""}</small></div>
         <div class="sm-fila-que"><b><span class="sm-cli">${smE(s.cliente)}</span> ${smE(s.tramo)}</b>
           <small>${[s.coche && `Coche ${smE(s.coche)}`, s.pasajeros && `${s.pasajeros} pasajeros`, s.km && `${fmtNum(s.km)} km`, s.observacion && smE(s.observacion)].filter(Boolean).join(" · ") || "Sin más datos"}</small>
           ${s.aviso ? `<button class="sm-aviso" onclick="smVerAviso(${s.id})" aria-expanded="${sm.verAviso === s.id}" title="Ver con qué servicio choca"><i class="ti ti-alert-triangle"></i> ${smE(s.aviso)} <i class="ti ti-chevron-${sm.verAviso === s.id ? "up" : "down"}"></i></button>` : ""}</div>

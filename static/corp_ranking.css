@@ -90,3 +90,54 @@
   .rk-det-grid { grid-template-columns: minmax(0, 1fr); }
   .rk-ayuda { margin-left: 0; }
 }
+
+/* ── Servicios de un chofer, día por día (rkServicios) ── */
+.rk-det-acc { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.rk-link { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; color: var(--brand-blue); text-decoration: underline; text-underline-offset: 2px; }
+.rks-modal .rv-modal-cuerpo { max-height: min(70vh, 760px); overflow-y: auto; }
+.rks-barra { position: sticky; top: -1px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 4px 0 12px;
+  background: var(--surface); border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.rks-tot { flex: 1 1 280px; min-width: 240px; font-size: 13px; color: var(--muted); }
+.rks-tot b { color: var(--azul-oscuro); }
+.rks-dias { display: flex; flex-direction: column; }
+.rks-dia { display: grid; grid-template-columns: 52px minmax(0, 1fr) 34px; gap: 12px; align-items: start; padding: 9px 4px; border-top: 1px solid var(--surface3); }
+.rks-dia:first-child { border-top: 0; }
+.rks-dia.finde .rks-fecha { color: var(--muted); }
+.rks-fecha { display: flex; flex-direction: column; align-items: center; line-height: 1.1; color: var(--azul-oscuro); padding-top: 2px; }
+.rks-fecha small { font-size: 10.5px; font-weight: 600; text-transform: uppercase; color: var(--muted); }
+.rks-fecha b { font: 700 20px var(--display); }
+.rks-servs { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rks-nada { font-size: 12.5px; color: var(--lighter); padding-top: 8px; }
+.rks-dia.vacio { padding-top: 5px; padding-bottom: 5px; }
+.rks-dia.vacio .rks-fecha b { font-size: 16px; color: var(--muted); }
+.rks-s { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 8px 112px 8px 12px; border-radius: 10px;
+  background: var(--surface2); border: 1px solid transparent; }
+.rks-s:hover { border-color: var(--border); }
+.rks-s.susp { background: #FFF6F6; }
+.rks-s-que { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13.5px; color: var(--text); }
+.rks-s small { font-size: 12px; color: var(--muted); }
+.rks-acc, .rks-s .sm-liq { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: inline-flex; gap: 2px; }
+.rks-ed:hover, .rks-ed:focus-visible { background: var(--info-bg) !important; color: var(--brand-blue) !important; border-color: var(--border) !important; }
+.rks-mas { width: 32px; height: 32px; margin-top: 3px; border-radius: 10px; border: 1px dashed var(--border); background: none; cursor: pointer;
+  display: grid; place-items: center; color: var(--muted); font-size: 16px; transition: all .15s; }
+.rks-mas:hover { border-style: solid; border-color: var(--brand-blue); color: var(--brand-blue); background: var(--info-bg); }
+.rks-nuevo { margin-bottom: 12px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--brand-blue); background: #F6F9FE; }
+.rks-nuevo-tit { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-weight: 700; color: var(--azul-oscuro); }
+.rks-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 12px; }
+.rks-ancho { grid-column: span 2; }
+.rks-grid .rv-f small { font-weight: 400; color: var(--muted); }
+.rks-nuevo-pie { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.rks-aviso { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; padding: 9px 12px; border-radius: 10px; font-size: 12.5px;
+  background: var(--info-bg); color: var(--azul-oscuro); }
+.rks-aviso.bien { background: var(--ok-bg, #E8F5EE); color: var(--success); }
+.rks-aviso.mal { background: var(--danger-bg); color: var(--brand-red-dark); }
+.rks-aviso .ti { font-size: 16px; margin-top: 1px; }
+@media (max-width: 700px) {
+  .rks-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rks-s { padding-right: 12px; }
+  .rks-acc, .rks-s .sm-liq { position: static; transform: none; align-self: flex-end; }
+}
+.rk-det-acc { gap: 8px; flex-wrap: wrap; }
+.rks-pdf { display: inline-flex; align-items: center; gap: 10px; }
+.rks-pend { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.rks-pend input { width: 15px; height: 15px; accent-color: var(--brand-blue); }

@@ -294,7 +294,8 @@ function crVistaDetalle(rs) {
         const km = (+r.km_final || 0) - (+r.km_inicial || 0);
         const datos = [r.bus_interno && `Coche ${crE(r.bus_interno)}`, (r.hora_inicio || r.hora_fin) && `${crE(r.hora_inicio || "?")}${r.hora_fin ? "–" + crE(r.hora_fin) : ""}`,
                        km > 0 && km < 2000 && `${fmtNum(km)} km`, r.pasajeros && `${r.pasajeros} pasajeros`,
-                       r.cargado && `marcado ${r.cargado.slice(0, 10) !== f ? "el " + csFC(r.cargado.slice(0, 10)) + " " : ""}a las ${r.cargado.slice(11, 16)}`].filter(Boolean);
+                       r.cargado && `marcado ${r.cargado.slice(0, 10) !== f ? "el " + csFC(r.cargado.slice(0, 10)) + " " : ""}a las ${r.cargado.slice(11, 16)}`,
+                       r.editado_por && (r.editado_por.startsWith("cargado por") ? crE(r.editado_por) : "corregido por " + crE(r.editado_por))].filter(Boolean);
         return `<div class="cr-fila ${r.estado === "suspendido" ? "susp" : ""}">
           <span class="sm-avatar">${crIni(r.chofer)}</span>
           <div class="cr-fila-quien"><button class="cr-link" onclick="crVerChofer('${crE(r.usuario)}')"><b>${crE(r.chofer)}</b></button>

@@ -1225,15 +1225,16 @@ def registrar_rendicion(datos, limitar_fecha=False):
         conn.execute("""INSERT INTO rendiciones_corp
             (chofer_usuario, chofer_nombre, cliente, tramo, fecha_servicio,
              bus_interno, hora_inicio, hora_fin, km_inicial, km_final,
-             pasajeros, estado, observacion, monto, cargado_el, justificacion_horario)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             pasajeros, estado, observacion, monto, cargado_el, justificacion_horario, editado_por)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (datos.get("chofer_usuario", ""), datos.get("chofer_nombre", ""),
              datos["cliente"].strip(), datos["tramo"].strip(),
              datos["fecha_servicio"].strip(), str(datos["bus_interno"]).strip(),
              datos.get("hora_inicio", ""), datos.get("hora_fin", ""),
              num(datos.get("km_inicial")), num(datos.get("km_final")),
              int(num(datos.get("pasajeros"))), estado,
-             datos.get("observacion", "").strip(), monto, ahora_iso(), justificacion))
+             datos.get("observacion", "").strip(), monto, ahora_iso(), justificacion,
+             (datos.get("cargado_por") or "").strip()))
         conn.commit()
     except IntegrityError:
         # El candado de la base atajó una carga simultánea de dos choferes
@@ -2915,6 +2916,35 @@ def api_corp_editar_monto(rid):
     return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
 
 
+@bp_corp.route("/api/corp/rendicion_para", methods=["POST"])
+def api_corp_rendicion_para():
+    """La oficina carga un servicio a nombre de un chofer (el que se olvidó de
+    marcarlo, o lo marcó otro). Mismas reglas que el chofer, salvo la fecha:
+    se puede cargar cualquier día pasado. Queda quién lo cargó."""
+    if _rol_efectivo() not in ("admin", "operador_corp"):
+        return jsonify({"ok": False, "msg": "Sin permiso"}), 403
+    d = dict(request.json or {})
+    u = (d.get("chofer_usuario") or "").strip().lower()
+    conn = get_connection()
+    try:
+        ch = conn.execute("SELECT usuario, nombre FROM usuarios WHERE LOWER(usuario)=? AND rol='chofer_corp'", (u,)).fetchone()
+    finally:
+        conn.close()
+    if not ch:
+        return jsonify({"ok": False, "msg": "Ese chofer no es de corporativos"}), 400
+    quien = session.get("nombre") or session.get("usuario") or ""
+    d["chofer_usuario"], d["chofer_nombre"] = ch["usuario"], ch["nombre"] or ch["usuario"]
+    d["cargado_por"] = f"cargado por {quien}"
+    ok, msg = registrar_rendicion(d, limitar_fecha=False)
+    if isinstance(msg, dict):
+        return jsonify({"ok": False, **msg}), 409
+    if ok:
+        auditar("Cargó un servicio de corporativos a nombre de un chofer", "Corporativos",
+                f"{ch['nombre']}: {d.get('cliente')} {d.get('tramo')} del {d.get('fecha_servicio')} ({d.get('estado') or 'completado'})")
+        msg = f"Se cargó a {ch['nombre']}"
+    return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
+
+
 @bp_corp.route("/api/corp/rendicion/<int:rid>", methods=["DELETE"])
 def api_corp_eliminar_rendicion(rid):
     """Elimina un servicio cargado."""
@@ -3749,13 +3779,15 @@ def api_corp_rendiciones_pdf():
     cliente = request.args.get("cliente") or None
     resumen = request.args.get("resumen") in ("1", "true", "si")
     rends = obtener_rendiciones(chofer, desde, hasta, cliente)
+    if request.args.get("pendientes") in ("1", "true", "si"):      # solo lo que falta pagarle
+        rends = [r for r in rends if not r.get("liquidado")]
     nombre = rends[0]["chofer_nombre"] if rends else (chofer or "Todos")
     if resumen:
         pdf_bytes = generar_pdf_resumen_liquidacion(rends, desde, hasta)
         archivo = "liquidacion_resumen.pdf"
     else:
         pdf_bytes = generar_pdf_rendiciones(rends, nombre, desde, hasta)
-        archivo = f"liquidacion_{(chofer or 'todos')}.pdf"
+        archivo = f"servicios_{(chofer or 'todos')}_{desde or ''}_{hasta or ''}.pdf".replace("__", "_")
     return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
                      as_attachment=False, download_name=archivo)
 

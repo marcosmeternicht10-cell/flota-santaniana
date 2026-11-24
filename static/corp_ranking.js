@@ -25,7 +25,8 @@ async function renderCorpRanking() {
     <div class="page-header">
       <h1><i class="ti ti-trophy"></i> Ranking de choferes</h1>
       <p>Quién trabaja mejor en corporativos: cumple lo que se le asigna, carga a tiempo, sin errores y sin gastar combustible de más</p>
-      <div class="page-actions"><button class="btn btn-ghost" onclick="rkPdf()"><i class="ti ti-printer"></i> Imprimir</button></div>
+      <div class="page-actions"><button class="btn btn-ghost" onclick="rksElegir()"><i class="ti ti-calendar-user"></i> Servicios de un chofer</button>
+        <button class="btn btn-ghost" onclick="rkPdf()"><i class="ti ti-printer"></i> Imprimir</button></div>
     </div>
     <div class="section cs-raiz rk-raiz">
       <div class="cs-filtros" id="rk-filtros"></div>
@@ -64,10 +65,10 @@ function rkFechas() {
 function rkCliente(c) { rk.cliente = c; rk.abierto = ""; rkFiltros(); rkCargar(); }
 function rkPdf() { window.open(`/api/corp/ranking_choferes/pdf?${rkQuery()}`, "_blank"); }
 
-async function rkCargar() {
+async function rkCargar(fresco) {
   const seq = ++rk.seq, box = $("#rk-cuerpo");
   if (box && rk.d) box.classList.add("cargando");
-  const d = await api(`/api/corp/ranking_choferes?${rkQuery()}`).catch(() => null);
+  const d = await api(`/api/corp/ranking_choferes?${rkQuery()}${fresco ? "&fresco=1" : ""}`).catch(() => null);
   if (seq !== rk.seq || !$("#rk-cuerpo")) return;
   $("#rk-cuerpo").classList.remove("cargando");
   if (!d || d.error) { $("#rk-cuerpo").innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>${rkE((d && d.error) || "No se pudo traer el ranking")}</div>`; return; }
@@ -150,6 +151,9 @@ function rkDetalle(f) {
       <p>${cuerpo}</p></div>`;
   };
   return `<div class="rk-det">
+    <div class="rk-det-acc">
+      <button class="btn btn-pdf btn-sm" onclick="rksPdf('${rkE(f.usuario)}', rk.desde, rk.hasta)" title="Lo que hizo en el período, con el total y lugar para firmar"><i class="ti ti-file-type-pdf"></i> PDF de sus servicios</button>
+      <button class="btn btn-primary btn-sm" onclick="rkServicios('${rkE(f.usuario)}', '${rkE(f.nombre).replace(/'/g, "\\'")}')"><i class="ti ti-calendar-user"></i> Ver sus servicios por fecha${puedeOperarCorp() ? " · agregar o quitar" : ""}</button></div>
     ${f.motivos.length ? `<div class="rk-mejorar"><i class="ti ti-target-arrow"></i><span><b>A mejorar:</b> ${rkE(f.motivos.join("; "))}.</span></div>` : `<div class="rk-mejorar bien"><i class="ti ti-star"></i><span>Viene muy bien en todo.</span></div>`}
     <div class="rk-det-grid">
       ${caja("cumplimiento", a ? `Se le asignaron <b>${a.asignados}</b> servicios en ${a.dias} días publicados. ${a.sin_rendir ? `No rindió <b>${a.sin_rendir}</b>. ` : ""}${a.otro_chofer ? `<b>${a.otro_chofer}</b> los hizo otro chofer. ` : ""}${a.sin_rendir || a.otro_chofer ? "" : "Rindió todo lo asignado. "}Confirmó la asignación ${a.confirmo} de ${a.dias} días.` : "No tuvo asignaciones publicadas en el período.")}
@@ -165,5 +169,227 @@ function rkDetalle(f) {
 function rkPocos() {
   const p = rk.d.pocos_servicios;
   if (!p.length) return "";
-  return `<p class="rk-pocos"><i class="ti ti-user-minus"></i> <span><b>Con menos de ${rk.d.min_servicios} servicios</b> (no entran al ranking): ${p.map(f => `${rkE(f.nombre)} (${fmtNum(f.servicios)})`).join(", ")}</span></p>`;
+  return `<p class="rk-pocos"><i class="ti ti-user-minus"></i> <span><b>Con menos de ${rk.d.min_servicios} servicios</b> (no entran al ranking): ${p.map(f => `<button class="rk-link" onclick="rkServicios('${rkE(f.usuario)}', '${rkE(f.nombre).replace(/'/g, "\\'")}')" title="Ver sus servicios">${rkE(f.nombre)}</button> (${fmtNum(f.servicios)})`).join(", ")}</span></p>`;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// SERVICIOS DE UN CHOFER, DÍA POR DÍA (desde el ranking)
+// Todos los días del período, con lo que rindió cada uno. Desde acá la oficina
+// agrega un servicio que el chofer no marcó, lo quita, lo pasa a otro chofer o
+// le corrige la fecha. Cada cambio queda en la auditoría.
+// ════════════════════════════════════════════════════════════════════════════
+
+const rks = { u: "", nombre: "", desde: "", hasta: "", d: null, cfg: null, choferes: null, seq: 0 };
+const RKS_EST = { completado: "Completo", entrante: "Entrante", saliente: "Saliente", suspendido: "Suspendido" };
+const rksD = f => new Date(f + "T12:00:00");
+const rksIso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const RKS_DIAS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const RKS_MESES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+async function rksListas() {
+  if (!rks.cfg) rks.cfg = await api("/api/corp/config").catch(() => null);
+  if (!rks.choferes) rks.choferes = await api("/api/corp/choferes").catch(() => []);
+}
+
+async function rksElegir() {
+  await rksListas();
+  const lista = Array.isArray(rks.choferes) ? rks.choferes : [];
+  rvModal({
+    titulo: "Servicios de un chofer", icono: "calendar-user", ancho: 440,
+    sub: "Elegí el chofer para ver lo que rindió día por día.",
+    cuerpo: `<input class="form-input" id="rks-q" placeholder="Buscar chofer…" autocomplete="off" style="margin-bottom:8px" autofocus>
+      <select class="form-input" id="rks-sel" size="10" style="height:auto">${lista.map(c => `<option value="${rkE(c.usuario)}">${rkE(c.nombre)}</option>`).join("")}</select>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="rks-ir"><i class="ti ti-arrow-right"></i> Ver</button>`,
+  });
+  const sel = $("#rks-sel");
+  $("#rks-q").oninput = e => { const q = e.target.value.trim().toLowerCase(); [...sel.options].forEach(o => { o.hidden = q && !o.textContent.toLowerCase().includes(q); }); };
+  const ir = () => { if (!sel.value) return; const o = sel.selectedOptions[0]; sel.closest(".modal-overlay").remove(); rkServicios(sel.value, o.textContent); };
+  $("#rks-ir").onclick = ir; sel.ondblclick = ir;
+}
+
+async function rkServicios(u, nombre) {
+  Object.assign(rks, { u: u.toLowerCase(), nombre, desde: rk.desde, hasta: rk.hasta > trHoy() ? trHoy() : rk.hasta, d: null });
+  rvModal({
+    titulo: rkE(nombre), icono: "calendar-user", ancho: 860, clase: "rks-modal",
+    sub: "Sus servicios día por día" + (puedeOperarCorp() ? ". Podés agregar lo que no marcó, quitar lo que está de más, pasarlo a otro chofer o corregirle la fecha." : "."),
+    cuerpo: `<div id="rks"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
+  });
+  rksListas();
+  rksCargar();
+}
+
+async function rksCargar() {
+  const seq = ++rks.seq;
+  const d = await api(`/api/corp/rendiciones?chofer=${encodeURIComponent(rks.u)}&desde=${rks.desde}&hasta=${rks.hasta}`).catch(() => null);
+  if (seq !== rks.seq || !$("#rks")) return;
+  rks.d = d;
+  rksPintar();
+}
+
+function rksFechas() {
+  const a = $("#rks-desde").value, b = $("#rks-hasta").value;
+  if (!a || !b) return;
+  [rks.desde, rks.hasta] = a <= b ? [a, b] : [b, a];
+  if ((rksD(rks.hasta) - rksD(rks.desde)) / 864e5 > 92) rks.desde = rksIso(new Date(rksD(rks.hasta).getTime() - 92 * 864e5));
+  rksCargar();
+}
+
+function rksPintar() {
+  const box = $("#rks");
+  if (!box) return;
+  const d = rks.d;
+  if (!d || d.error) { box.innerHTML = `<div class="empty"><i class="ti ti-alert-circle"></i>${rkE((d && d.error) || "No se pudieron traer los servicios")}</div>`; return; }
+  const puede = puedeOperarCorp();
+  const por = {};
+  d.rendiciones.forEach(r => (por[r.fecha_servicio] = por[r.fecha_servicio] || []).push(r));
+  const hechos = d.rendiciones.filter(r => r.estado !== "suspendido");
+  const dias = [];
+  for (let f = rks.hasta; f >= rks.desde && dias.length < 93; f = rksIso(new Date(rksD(f).getTime() - 864e5))) dias.push(f);
+  const monto = d.rendiciones.reduce((s, r) => s + (+r.monto || 0), 0);
+  box.innerHTML = `
+    <div class="rks-barra">
+      <label class="cs-fechas on"><i class="ti ti-calendar"></i>
+        <input type="date" id="rks-desde" value="${rks.desde}" max="${trHoy()}" onchange="rksFechas()" aria-label="Desde"><span>al</span>
+        <input type="date" id="rks-hasta" value="${rks.hasta}" max="${trHoy()}" onchange="rksFechas()" aria-label="Hasta"></label>
+      <span class="rks-tot"><b>${d.rendiciones.length}</b> ${d.rendiciones.length === 1 ? "servicio" : "servicios"} · <b>${new Set(hechos.map(r => r.fecha_servicio)).size}</b> días trabajados · Gs. ${fmtNum(Math.round(monto))}</span>
+      <span class="rks-pdf">
+        <label class="rks-pend" title="Deja afuera lo que ya se le liquidó"><input type="checkbox" id="rks-pend" ${rks.pend ? "checked" : ""} onchange="rks.pend=this.checked"> Solo lo que falta pagar</label>
+        <button class="btn btn-pdf btn-sm" onclick="rksPdf(rks.u, rks.desde, rks.hasta, rks.pend)" title="Lo que hizo en estas fechas, con el total y lugar para firmar"><i class="ti ti-file-type-pdf"></i> PDF para rendir</button>
+      </span>
+      ${puede ? `<button class="btn btn-primary btn-sm" onclick="rksNuevo('${dias[0] || trHoy()}')"><i class="ti ti-plus"></i> Agregar servicio</button>` : ""}
+    </div>
+    <div id="rks-form"></div>
+    <div class="rks-dias">${dias.map(f => {
+      const rs = (por[f] || []).sort((a, b) => a.cliente_c.localeCompare(b.cliente_c) || a.tramo_c.localeCompare(b.tramo_c));
+      const dd = rksD(f), finde = [0, 6].includes(dd.getDay());
+      return `<div class="rks-dia ${rs.length ? "" : "vacio"} ${finde ? "finde" : ""}">
+        <div class="rks-fecha"><small>${RKS_DIAS[dd.getDay()]}</small><b>${dd.getDate()}</b><small>${RKS_MESES[dd.getMonth()]}</small></div>
+        <div class="rks-servs">${rs.length ? rs.map(r => `
+          <div class="rks-s ${r.estado === "suspendido" ? "susp" : ""}">
+            <div class="rks-s-que"><span class="sm-cli">${rkE(r.cliente_c)}</span> <b>${rkE(r.tramo_c)}</b>
+              <span class="sm-estado e-${rkE(r.estado)}">${RKS_EST[r.estado] || rkE(r.estado)}</span></div>
+            <small>${[r.bus_interno && `Coche ${rkE(r.bus_interno)}`, r.cargado && `marcado ${r.cargado.slice(0, 10) !== f ? "el " + csFC(r.cargado.slice(0, 10)) + " " : ""}a las ${r.cargado.slice(11, 16)}`,
+                      r.editado_por && (r.editado_por.startsWith("cargado por") ? rkE(r.editado_por) : "corregido por " + rkE(r.editado_por)),
+                      r.monto && `Gs. ${fmtNum(Math.round(r.monto))}`, r.observacion && rkE(r.observacion)].filter(Boolean).join(" · ")}</small>
+            ${puede ? (r.liquidado ? `<span class="sm-liq" title="Ya está liquidado"><i class="ti ti-lock"></i> Liquidado</span>` : `<span class="rks-acc">
+              <button class="sm-borrar rks-ed" title="Cambiar la fecha" onclick="rksFecha(${r.id}, '${f}')"><i class="ti ti-calendar-event"></i></button>
+              <button class="sm-borrar rks-ed" title="Pasar a otro chofer" onclick="rksPasar(${r.id})"><i class="ti ti-user-share"></i></button>
+              <button class="sm-borrar" title="Quitar este servicio" onclick="rksQuitar(${r.id})"><i class="ti ti-trash"></i></button></span>`) : ""}
+          </div>`).join("") : `<span class="rks-nada">Sin servicios</span>`}</div>
+        ${puede ? `<button class="rks-mas" onclick="rksNuevo('${f}')" title="Agregar un servicio el ${dd.getDate()}/${dd.getMonth() + 1}" aria-label="Agregar un servicio este día"><i class="ti ti-plus"></i></button>` : ""}
+      </div>`;
+    }).join("")}</div>`;
+}
+
+// PDF con lo que hizo el chofer en el período: el total a pagarle, cómo se
+// compone, cada servicio y lugar para firmar (el de Rendiciones y pagos)
+function rksPdf(u, desde, hasta, pend) {
+  const q = new URLSearchParams({ chofer: u, desde, hasta, ...(pend ? { pendientes: "1" } : {}) });
+  window.open(`/api/corp/rendiciones_pdf?${q}`, "_blank");
+}
+
+// ── Agregar ──
+function rksNuevo(fecha) {
+  const box = $("#rks-form");
+  if (!box) return;
+  const clis = Object.keys((rks.cfg && rks.cfg.clientes_tramos) || {});
+  box.innerHTML = `<div class="rks-nuevo">
+    <div class="rks-nuevo-tit"><i class="ti ti-plus"></i> Agregar un servicio a ${rkE(rks.nombre)}</div>
+    <div class="rks-grid">
+      <label class="rv-f"><span>Fecha</span><input type="date" id="rksn-fecha" value="${fecha}" max="${trHoy()}" onchange="rksDisp()"></label>
+      <label class="rv-f"><span>Empresa</span><select id="rksn-cli" onchange="rksTramos()"><option value="">Elegí…</option>${clis.map(c => `<option>${rkE(c)}</option>`).join("")}</select></label>
+      <label class="rv-f rks-ancho"><span>Tramo</span><select id="rksn-tramo" onchange="rksDisp()"><option value="">Primero la empresa</option></select></label>
+      <label class="rv-f"><span>¿Qué hizo?</span><select id="rksn-estado" onchange="rksDisp()">
+        <option value="completado">Completo (entrante y saliente)</option><option value="entrante">Solo el entrante</option>
+        <option value="saliente">Solo el saliente</option><option value="suspendido">Suspendido</option></select></label>
+      <label class="rv-f"><span>Coche</span><input id="rksn-bus" inputmode="numeric" placeholder="N° interno"></label>
+      <label class="rv-f"><span>Km inicial</span><input id="rksn-kmi" inputmode="numeric" placeholder="0"></label>
+      <label class="rv-f"><span>Km final</span><input id="rksn-kmf" inputmode="numeric" placeholder="0"></label>
+      <label class="rv-f"><span>Pasajeros</span><input id="rksn-pas" inputmode="numeric" placeholder="0"></label>
+      <label class="rv-f rks-ancho"><span>Observación <small>(obligatoria si fue suspendido o es variable)</small></span><input id="rksn-obs" placeholder="Por ejemplo: no lo marcó, lo confirmó el supervisor"></label>
+    </div>
+    <div id="rksn-aviso"></div>
+    <div class="rks-nuevo-pie"><button class="btn btn-ghost btn-sm" onclick="$('#rks-form').innerHTML=''">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="rksn-ok" onclick="rksGuardar(this)"><i class="ti ti-check"></i> Agregar</button></div>
+  </div>`;
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  $("#rksn-cli").focus();
+}
+function rksTramos() {
+  const c = $("#rksn-cli").value, t = $("#rksn-tramo");
+  const lista = (rks.cfg && rks.cfg.clientes_tramos && rks.cfg.clientes_tramos[c]) || [];
+  t.innerHTML = `<option value="">Elegí el tramo…</option>` + lista.map(x => `<option>${rkE(x)}</option>`).join("");
+  rksDisp();
+}
+let rksDispSeq = 0;
+async function rksDisp() {
+  const av = $("#rksn-aviso");
+  if (!av) return;
+  const cli = $("#rksn-cli").value, tr = $("#rksn-tramo").value, f = $("#rksn-fecha").value, est = $("#rksn-estado").value;
+  if (!cli || !tr || !f || est === "suspendido") { av.innerHTML = ""; return; }
+  const n = ++rksDispSeq;
+  const d = await api(`/api/corp/disponibilidad?cliente=${encodeURIComponent(cli)}&tramo=${encodeURIComponent(tr)}&fecha=${f}`).catch(() => null);
+  if (n !== rksDispSeq || !d || !Array.isArray(d.tomados)) return;
+  const choca = d.tomados.filter(t => t.estado === "completado" || est === "completado" || t.estado === est);
+  av.innerHTML = choca.length
+    ? `<div class="rks-aviso mal"><i class="ti ti-lock"></i><span>Ese día ese tramo ya lo marcó ${choca.map(t => `<b>${rkE(t.chofer_nombre)}</b> (${t.estado === "completado" ? "completo" : t.estado})`).join(" y ")}. Si lo hizo ${rkE(rks.nombre)}, usá <b>Pasar a otro chofer</b> en ese servicio en vez de agregar uno nuevo.</span></div>`
+    : d.tomados.length ? `<div class="rks-aviso"><i class="ti ti-users"></i><span>La otra mitad la marcó ${d.tomados.map(t => `<b>${rkE(t.chofer_nombre)}</b> (${t.estado})`).join(", ")}.</span></div>`
+    : `<div class="rks-aviso bien"><i class="ti ti-circle-check"></i><span>Ese tramo está libre ese día.</span></div>`;
+}
+async function rksGuardar(btn) {
+  const v = id => ($("#" + id).value || "").trim();
+  const datos = { chofer_usuario: rks.u, fecha_servicio: v("rksn-fecha"), cliente: v("rksn-cli"), tramo: v("rksn-tramo"), estado: v("rksn-estado"),
+                  bus_interno: v("rksn-bus"), km_inicial: v("rksn-kmi"), km_final: v("rksn-kmf"), pasajeros: v("rksn-pas"), observacion: v("rksn-obs") };
+  if (!datos.cliente || !datos.tramo) { toast("Elegí la empresa y el tramo", "error"); return; }
+  if (!datos.bus_interno) { toast("Poné el coche", "error"); return; }
+  btn.disabled = true;
+  const r = await api("/api/corp/rendicion_para", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos) })
+    .catch(e => ({ ok: false, msg: e.message }));
+  btn.disabled = false;
+  toast((r && r.msg) || "No se pudo", r && r.ok ? "success" : "error");
+  if (r && r.ok) { $("#rks-form").innerHTML = ""; rksCargar(); rkCargar(true); }
+}
+
+// ── Quitar, pasar, cambiar fecha ──
+async function rksQuitar(id) {
+  const r0 = rks.d.rendiciones.find(x => x.id === id);
+  if (!r0 || !confirm(`¿Quitar ${r0.cliente_c} ${r0.tramo_c} del ${csFC(r0.fecha_servicio)} a ${rks.nombre}?\n\nEl tramo queda libre para volver a cargarse. Queda en la auditoría.`)) return;
+  const r = await api(`/api/corp/rendicion/${id}`, { method: "DELETE" }).catch(e => ({ ok: false, msg: e.message }));
+  toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok ? "success" : "error");
+  if (r && r.ok) { rksCargar(); rkCargar(true); }
+}
+async function rksFecha(id, actual) {
+  const f = prompt("¿De qué fecha es este servicio? (AAAA-MM-DD)", actual);
+  if (!f || f === actual) return;
+  const r = await api(`/api/corp/rendicion/${id}/mover`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fecha: f.trim() }) })
+    .catch(e => ({ ok: false, error: e.message }));
+  toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok ? "success" : "error");
+  if (r && r.ok) { if (f < rks.desde) rks.desde = f; rksCargar(); rkCargar(true); }
+}
+async function rksPasar(id) {
+  await rksListas();
+  const r0 = rks.d.rendiciones.find(x => x.id === id);
+  const lista = (rks.choferes || []).filter(c => c.usuario.toLowerCase() !== rks.u);
+  const caja = $("#rks-form");
+  caja.innerHTML = `<div class="rks-nuevo">
+    <div class="rks-nuevo-tit"><i class="ti ti-user-share"></i> Pasar ${rkE(r0.cliente_c)} ${rkE(r0.tramo_c)} del ${csFC(r0.fecha_servicio)} a otro chofer</div>
+    <input class="form-input" id="rksp-q" placeholder="Buscar chofer…" autocomplete="off" style="margin-bottom:8px">
+    <select class="form-input" id="rksp-a" size="7" style="height:auto">${lista.map(c => `<option value="${rkE(c.usuario)}">${rkE(c.nombre)}</option>`).join("")}</select>
+    <div class="rks-nuevo-pie"><button class="btn btn-ghost btn-sm" onclick="$('#rks-form').innerHTML=''">Cancelar</button>
+      <button class="btn btn-primary btn-sm" id="rksp-ok"><i class="ti ti-user-share"></i> Pasar</button></div></div>`;
+  caja.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const sel = $("#rksp-a");
+  $("#rksp-q").oninput = e => { const q = e.target.value.trim().toLowerCase(); [...sel.options].forEach(o => { o.hidden = q && !o.textContent.toLowerCase().includes(q); }); };
+  $("#rksp-q").focus();
+  $("#rksp-ok").onclick = async e => {
+    if (!sel.value) { toast("Elegí el chofer", "error"); return; }
+    e.target.disabled = true;
+    const r = await api(`/api/corp/marcados/${id}/chofer`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ usuario: sel.value }) })
+      .catch(err => ({ error: err.message }));
+    toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok ? "success" : "error");
+    if (r && r.ok) { caja.innerHTML = ""; rksCargar(); rkCargar(true); } else e.target.disabled = false;
+  };
 }

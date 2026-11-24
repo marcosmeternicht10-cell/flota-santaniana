@@ -166,12 +166,12 @@ def _observaciones(rends, asientos):
     return obs
 
 
-def ranking(desde, hasta, cliente=""):
+def ranking(desde, hasta, cliente="", fresco=False):
     hoy = _hoy()
     hasta = min(hasta, hoy)
     clave = (desde, hasta, cliente)
     m = _memo.get(clave)
-    if m and time.time() - m[0] < 120:
+    if m and time.time() - m[0] < 120 and not fresco:
         return m[1]
     rends, asientos, dias_pub = _leer(desde, hasta, cliente)
     asig = _asignacion(dias_pub, hoy, cliente)
@@ -292,7 +292,8 @@ def api_ranking():
         desde, hasta = _periodo()
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    return jsonify(ranking(desde, hasta, (request.args.get("cliente") or "").strip().upper()))
+    return jsonify(ranking(desde, hasta, (request.args.get("cliente") or "").strip().upper(),
+                           fresco=bool(request.args.get("fresco"))))
 
 
 @bp_corp_ranking.route("/api/corp/ranking_choferes/pdf", methods=["GET"])
