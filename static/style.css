@@ -8973,3 +8973,23 @@ tr.oee-no-cuenta td { opacity: .55; }
 .sd-url code { font-size: 13px; padding: 6px 10px; }
 .sd-nota { margin: 6px 0 0; font-size: 12.5px; color: var(--muted, #6B7280); }
 @media (max-width: 800px) { .sd-resumen { grid-template-columns: 1fr; } }
+
+/* Control → Sin cubrir: por fecha, con «Asignar chofer» */
+.sc-dia { margin-bottom: 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); overflow: hidden; }
+.sc-dia-cab { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--surface2); border-bottom: 1px solid var(--border); }
+.sc-dia-cab b { font-size: 14px; color: var(--azul-oscuro); }
+.sc-dia-cab b::first-letter { text-transform: uppercase; }
+.sc-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 9px 14px; border-top: 1px solid var(--surface3); font-size: 13px; }
+.sc-item:first-of-type { border-top: 0; }
+.sc-tramo { flex: 1; min-width: 200px; font-weight: 600; color: var(--text); }
+.sc-que { font-size: 12.5px; }
+.sc-que.faltante { color: var(--danger); }
+.sc-que.parcial { color: var(--warning); }
+.ea-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-top: 12px; }
+.ea-aviso { margin-top: 8px; font-size: 12.5px; color: var(--muted); min-height: 16px; }
+/* Campos sueltos de las ventanas (buscador y lista de choferes, etc.) */
+.form-input { display: block; width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--surface); font: 500 13.5px "Inter", sans-serif; color: var(--text); }
+.form-input:focus { outline: none; border-color: var(--brand-blue); box-shadow: 0 0 0 3px rgba(30,90,150,.12); }
+select.form-input[size] { padding: 4px; }
+select.form-input[size] option { padding: 7px 10px; border-radius: 6px; }

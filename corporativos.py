@@ -1829,10 +1829,6 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
         "detalle_faltantes": sorted(detalle, key=lambda x: (x["fecha"], x["tramo"])),
         "pendientes_carga": sorted(pendientes, key=lambda x: (x["fecha"], x["tramo"])),
     }
-    try:
-        _pistas_control(cliente, salida, desde_real, hasta)
-    except Exception as e:
-        print(f"[corporativos] pistas del control: {e}")
     return salida
 
 
