@@ -26,32 +26,8 @@ import corporativos as C
 bp_corp_propuestas = Blueprint("corp_propuestas", __name__)
 
 # (fecha, cliente, tramo, estado)
-PROPUESTAS = [
-    {
-        "clave": "sosa_carlos_16_20_nov_2026",
-        "titulo": "Servicios del coche 21018, del 16 al 20 de noviembre",
-        "chofer": "SOSA, CARLOS",
-        "coche": "21018",
-        "motivo": "Los tiene en el celular; tienen que quedar a nombre de Sosa Carlos.",
-        "servicios": [
-            ("2026-11-16", "CERVEPAR", "ITAUGUA 22:00/22:20", "completado"),
-            ("2026-11-16", "LASCA", "ADMIN. RUTA 2 (7:00 A 17:30 HS.)", "saliente"),
-            ("2026-11-16", "CERVEPAR", "ADMIN. LUQUE", "entrante"),
-            ("2026-11-16", "LASCA", "TURNANTE RUTA 1 (4:30 HS.)", "completado"),
-            ("2026-11-17", "CERVEPAR", "ADMIN. LUQUE", "completado"),
-            ("2026-11-17", "CERVEPAR", "ITAUGUA 14:00/14:20", "completado"),
-            ("2026-11-17", "LASCA", "TURNANTE RUTA 2 (4:30 HS.)", "completado"),
-            ("2026-11-18", "CERVEPAR", "ITAUGUA 22:00/22:20", "completado"),
-            ("2026-11-18", "LASCA", "ADMIN. RUTA 2 (7:00 A 17:30 HS.)", "saliente"),
-            ("2026-11-18", "CERVEPAR", "ADMIN. LUQUE", "entrante"),
-            ("2026-11-19", "CERVEPAR", "ITAUGUA 22:00/22:20", "completado"),
-            ("2026-11-19", "CERVEPAR", "ADMIN. LUQUE", "completado"),
-            ("2026-11-20", "CERVEPAR", "ITAUGUA 22:00/22:20", "completado"),
-            ("2026-11-20", "LASCA", "TURNANTE RUTA 2 (13:30 HS.)", "completado"),
-            ("2026-11-20", "CERVEPAR", "ITAUGUA 6:00/6:20", "completado"),
-        ],
-    },
-]
+PROPUESTAS = []   # la de Sosa Carlos (16 al 20/11) se sacó: ya estaba todo a su nombre
+
 
 MITADES = {"completado": {"entrante", "saliente"}, "entrante": {"entrante"}, "saliente": {"saliente"}}
 
