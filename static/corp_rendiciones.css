@@ -138,3 +138,4 @@
   .cr-fila .sm-acc, .cr-fila .sm-liq { grid-column: 3; grid-row: 3; }
   .cr-sp { display: none; }
 }
+.cr-acc-ch { white-space: nowrap; } .cr-acc-ch .btn + .btn, .cr-acc-ch .btn + .cr-ok { margin-left: 4px; }

@@ -3659,6 +3659,8 @@ def api_corp_rendiciones():
         desde=request.args.get("desde") or None,
         hasta=request.args.get("hasta") or None,
         cliente=request.args.get("cliente") or None)
+    if request.args.get("pendientes") in ("1", "true", "si"):      # solo lo que falta pagar
+        rends = [r for r in rends if not r.get("liquidado")]
     from nombres import apellido_primero
     for r in rends:                       # para la pantalla: nombres prolijos y el tramo del catálogo
         c, t = _canonizar(r.get("cliente"), r.get("tramo"))

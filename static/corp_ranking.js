@@ -152,7 +152,7 @@ function rkDetalle(f) {
   };
   return `<div class="rk-det">
     <div class="rk-det-acc">
-      <button class="btn btn-pdf btn-sm" onclick="rksPdf('${rkE(f.usuario)}', rk.desde, rk.hasta)" title="Lo que hizo en el período, con el total y lugar para firmar"><i class="ti ti-file-type-pdf"></i> PDF de sus servicios</button>
+      <button class="btn btn-pdf btn-sm" onclick="rksRendir('${rkE(f.usuario)}', '${rkE(f.nombre).replace(/'/g, "\\'")}', rk.desde, rk.hasta)" title="Elegí de qué fecha a qué fecha y bajá el PDF con lo que hizo"><i class="ti ti-file-type-pdf"></i> Rendir por fechas</button>
       <button class="btn btn-primary btn-sm" onclick="rkServicios('${rkE(f.usuario)}', '${rkE(f.nombre).replace(/'/g, "\\'")}')"><i class="ti ti-calendar-user"></i> Ver sus servicios por fecha${puedeOperarCorp() ? " · agregar o quitar" : ""}</button></div>
     ${f.motivos.length ? `<div class="rk-mejorar"><i class="ti ti-target-arrow"></i><span><b>A mejorar:</b> ${rkE(f.motivos.join("; "))}.</span></div>` : `<div class="rk-mejorar bien"><i class="ti ti-star"></i><span>Viene muy bien en todo.</span></div>`}
     <div class="rk-det-grid">
@@ -255,10 +255,7 @@ function rksPintar() {
         <input type="date" id="rks-desde" value="${rks.desde}" max="${trHoy()}" onchange="rksFechas()" aria-label="Desde"><span>al</span>
         <input type="date" id="rks-hasta" value="${rks.hasta}" max="${trHoy()}" onchange="rksFechas()" aria-label="Hasta"></label>
       <span class="rks-tot"><b>${d.rendiciones.length}</b> ${d.rendiciones.length === 1 ? "servicio" : "servicios"} · <b>${new Set(hechos.map(r => r.fecha_servicio)).size}</b> días trabajados · Gs. ${fmtNum(Math.round(monto))}</span>
-      <span class="rks-pdf">
-        <label class="rks-pend" title="Deja afuera lo que ya se le liquidó"><input type="checkbox" id="rks-pend" ${rks.pend ? "checked" : ""} onchange="rks.pend=this.checked"> Solo lo que falta pagar</label>
-        <button class="btn btn-pdf btn-sm" onclick="rksPdf(rks.u, rks.desde, rks.hasta, rks.pend)" title="Lo que hizo en estas fechas, con el total y lugar para firmar"><i class="ti ti-file-type-pdf"></i> PDF para rendir</button>
-      </span>
+      <button class="btn btn-pdf btn-sm" onclick="rksRendir(rks.u, rks.nombre, rks.desde, rks.hasta)" title="Elegí de qué fecha a qué fecha y bajá el PDF con lo que hizo"><i class="ti ti-file-type-pdf"></i> Rendir por fechas</button>
       ${puede ? `<button class="btn btn-primary btn-sm" onclick="rksNuevo('${dias[0] || trHoy()}')"><i class="ti ti-plus"></i> Agregar servicio</button>` : ""}
     </div>
     <div id="rks-form"></div>
@@ -289,6 +286,81 @@ function rksPintar() {
 function rksPdf(u, desde, hasta, pend) {
   const q = new URLSearchParams({ chofer: u, desde, hasta, ...(pend ? { pendientes: "1" } : {}) });
   window.open(`/api/corp/rendiciones_pdf?${q}`, "_blank");
+}
+
+// Rendir por fechas: se elige de tal a tal fecha (con atajos de semana,
+// quincena y mes), se ve cuántos servicios y cuánto da, y se baja el PDF.
+const rr = { u: "", nombre: "", desde: "", hasta: "", pend: false, seq: 0 };
+function rrRangos() {
+  const hoy = trHoy(), d = rksD(hoy), y = d.getFullYear(), m = d.getMonth();
+  const iso = x => rksIso(x), dow = (d.getDay() + 6) % 7;
+  const lunes = new Date(d.getTime() - dow * 864e5);
+  const finMes = (yy, mm) => new Date(yy, mm + 1, 0);
+  const q1 = d.getDate() <= 15;
+  const qAct = q1 ? [new Date(y, m, 1), new Date(y, m, 15)] : [new Date(y, m, 16), finMes(y, m)];
+  const qAnt = q1 ? [new Date(y, m - 1, 16), finMes(y, m - 1)] : [new Date(y, m, 1), new Date(y, m, 15)];
+  const tope = x => (iso(x) > hoy ? hoy : iso(x));
+  return [
+    ["Esta semana", iso(lunes), hoy],
+    ["Semana pasada", iso(new Date(lunes.getTime() - 7 * 864e5)), iso(new Date(lunes.getTime() - 864e5))],
+    ["Esta quincena", iso(qAct[0]), tope(qAct[1])],
+    ["Quincena anterior", iso(qAnt[0]), iso(qAnt[1])],
+    ["Este mes", iso(new Date(y, m, 1)), hoy],
+    ["Mes pasado", iso(new Date(y, m - 1, 1)), iso(finMes(y, m - 1))],
+  ];
+}
+function rksRendir(u, nombre, desde, hasta) {
+  Object.assign(rr, { u: u.toLowerCase(), nombre, desde, hasta: hasta > trHoy() ? trHoy() : hasta });
+  rvModal({
+    titulo: `Rendir a ${rkE(nombre)}`, icono: "file-type-pdf", ancho: 560, clase: "rr-modal",
+    sub: "Elegí de qué fecha a qué fecha. El PDF trae cada servicio, el total a pagar y lugar para firmar.",
+    cuerpo: `<div class="rr-atajos" id="rr-atajos"></div>
+      <div class="rr-fechas">
+        <label class="rv-f"><span>Desde</span><input type="date" id="rr-desde" value="${rr.desde}" max="${trHoy()}" onchange="rrFechas()"></label>
+        <label class="rv-f"><span>Hasta</span><input type="date" id="rr-hasta" value="${rr.hasta}" max="${trHoy()}" onchange="rrFechas()"></label>
+      </div>
+      <label class="rks-pend rr-pend"><input type="checkbox" id="rr-pend" ${rr.pend ? "checked" : ""} onchange="rr.pend=this.checked;rrVer()"> Solo lo que todavía no se le pagó</label>
+      <div id="rr-ver" class="rr-ver"></div>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-pdf" id="rr-pdf" onclick="rksPdf(rr.u, rr.desde, rr.hasta, rr.pend)"><i class="ti ti-download"></i> Descargar PDF</button>`,
+  });
+  rrAtajos(); rrVer();
+}
+function rrAtajos() {
+  const box = $("#rr-atajos");
+  if (box) box.innerHTML = rrRangos().map(([t, a, b]) =>
+    `<button class="chip ${rr.desde === a && rr.hasta === b ? "activo" : ""}" onclick="rrPoner('${a}','${b}')">${t}</button>`).join("");
+}
+function rrPoner(a, b) { rr.desde = a; rr.hasta = b; $("#rr-desde").value = a; $("#rr-hasta").value = b; rrAtajos(); rrVer(); }
+function rrFechas() {
+  const a = $("#rr-desde").value, b = $("#rr-hasta").value;
+  if (!a || !b) return;
+  [rr.desde, rr.hasta] = a <= b ? [a, b] : [b, a];
+  $("#rr-desde").value = rr.desde; $("#rr-hasta").value = rr.hasta;
+  rrAtajos(); rrVer();
+}
+async function rrVer() {
+  const box = $("#rr-ver"), n = ++rr.seq;
+  if (!box) return;
+  box.innerHTML = `<div class="rr-cargando">Calculando…</div>`;
+  const q = new URLSearchParams({ chofer: rr.u, desde: rr.desde, hasta: rr.hasta, ...(rr.pend ? { pendientes: "1" } : {}) });
+  const d = await api(`/api/corp/rendiciones?${q}`).catch(() => null);
+  if (n !== rr.seq || !$("#rr-ver")) return;
+  const btn = $("#rr-pdf");
+  if (!d || d.error) { box.innerHTML = `<div class="rks-aviso mal">No se pudo calcular</div>`; return; }
+  const rs = d.rendiciones || [], l = (d.liquidacion || [])[0] || {};
+  if (btn) btn.disabled = !rs.length;
+  if (!rs.length) { box.innerHTML = `<div class="rks-aviso"><i class="ti ti-calendar-off"></i><span>No tiene servicios ${rr.pend ? "sin pagar " : ""}del ${csFC(rr.desde)} al ${csFC(rr.hasta)}.</span></div>`; return; }
+  const dias = new Set(rs.filter(r => r.estado !== "suspendido").map(r => r.fecha_servicio)).size;
+  const liq = rs.filter(r => r.liquidado).length;
+  box.innerHTML = `<div class="rr-res">
+      <div><b>${rs.length}</b><span>servicios</span></div>
+      <div><b>${dias}</b><span>días trabajados</span></div>
+      <div><b>${l.completados || 0}</b><span>completos</span></div>
+      <div><b>${l.medios || 0}</b><span>medias</span></div>
+      <div class="rr-total"><b>Gs. ${fmtNum(Math.round(l.total || 0))}</b><span>total${l.tiene_plus ? " con plus" : ""}</span></div>
+    </div>
+    ${liq ? `<p class="rr-nota"><i class="ti ti-info-circle"></i> ${liq} de estos ya ${liq === 1 ? "está liquidado" : "están liquidados"}. Marcá «Solo lo que todavía no se le pagó» si querés dejarlos afuera.</p>` : ""}`;
 }
 
 // ── Agregar ──

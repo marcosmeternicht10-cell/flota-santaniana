@@ -232,7 +232,8 @@ function crVistaChoferes(rs, liq, filtrado) {
         }).join("")}</span>` : ""}</td>
         <td class="num">${fmtNum(Math.round(f.monto))}${f.pend && f.pend !== f.monto ? `<small class="cr-desg">${fmtNum(Math.round(f.pend))} sin liquidar</small>` : ""}</td>
         ${filtrado ? "" : `<td class="num">${l.tiene_plus ? fmtNum(l.plus) : "—"}</td><td class="num"><b>${fmtNum(Math.round(l.total || f.monto))}</b></td>`}
-        ${op ? `<td class="center">${f.u && f.pend ? `<button class="btn btn-ghost btn-sm" onclick="abrirLiquidacion('${crE(f.u)}','${crE(f.nombre).replace(/'/g, "\\'")}')"><i class="ti ti-cash"></i> Liquidar</button>`
+        ${op ? `<td class="center cr-acc-ch"><button class="btn btn-ghost btn-sm" title="Rendir por fechas: PDF con lo que hizo de tal a tal fecha" onclick="rksRendir('${crE(f.u)}','${crE(f.nombre).replace(/'/g, "\\'")}', cr.desde, cr.hasta)"><i class="ti ti-file-type-pdf"></i> PDF</button>
+              ${f.u && f.pend ? `<button class="btn btn-ghost btn-sm" onclick="abrirLiquidacion('${crE(f.u)}','${crE(f.nombre).replace(/'/g, "\\'")}')"><i class="ti ti-cash"></i> Liquidar</button>`
               : `<span class="cr-ok"><i class="ti ti-circle-check"></i> Al día</span>`}</td>` : ""}
       </tr>`;
     }).join("")}</tbody></table></div>
