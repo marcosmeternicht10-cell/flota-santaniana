@@ -914,6 +914,18 @@ def unir(queda_id, sale_id, quien=""):
                       q["app_modo"] or s_["app_modo"],
                       max(q["ultimo_acceso"] or "", s_["ultimo_acceso"] or "") or None, q["id"]))
         q["nombre"], q["rol"] = nombre_final, rol_final
+        # Lo que la oficina le asignó con el usuario que se borra pasa al que queda
+        for tabla in ("corp_asig", "corp_asig_acuses"):
+            try:
+                if tabla == "corp_asig_acuses":      # un acuse por día y chofer: no duplicar
+                    conn.execute("""DELETE FROM corp_asig_acuses WHERE LOWER(chofer_usuario)=?
+                                    AND fecha IN (SELECT fecha FROM corp_asig_acuses WHERE chofer_usuario=?)""",
+                                 (s_["usuario"].lower(), q["usuario"]))
+                conn.execute(f"UPDATE {tabla} SET chofer_usuario=? WHERE LOWER(chofer_usuario)=?",
+                             (q["usuario"], s_["usuario"].lower()))
+            except Exception:
+                conn.rollback()
+                raise
         try:
             conn.execute("UPDATE push_subs SET usuario_id=? WHERE usuario_id=?", (q["id"], s_["id"]))
         except Exception:

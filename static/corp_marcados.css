@@ -155,3 +155,6 @@
 .sm-ch-hora { display: inline-flex; align-items: center; gap: 5px; font: 700 15px var(--display); color: var(--azul-oscuro); }
 .sm-ch-serv small { font-size: 11.5px; color: var(--muted); }
 .sm-ch-borrar { margin-top: 4px; color: var(--brand-red-dark); }
+.sm-acc { display: inline-flex; gap: 2px; }
+.sm-acc .sm-borrar:first-child:hover, .sm-acc .sm-borrar:first-child:focus-visible { background: var(--surface-2, #EEF3FA); color: var(--primary, #1F4E8C); border-color: var(--border); }
+@media (max-width: 720px) { .sm-acc { grid-column: 4; grid-row: 1; } }

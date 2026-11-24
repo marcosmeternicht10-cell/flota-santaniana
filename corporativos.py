@@ -663,6 +663,56 @@ def _canonizar(cliente, tramo):
     return (cliente_of, tramo_of) if tramo_of else (cliente_of, None)
 
 
+def _estado_norm(e):
+    e = (e or "").strip().lower()
+    return "completado" if e == "ok" else e
+
+
+def _marcas_dia(cliente, fecha, excluir_id=None):
+    """Lo marcado de un cliente en un día, con el tramo como figura en el
+    catálogo. Es la misma lectura que usan las pantallas de la oficina
+    (Asignación, Servicios marcados, Control): sin mayúsculas/espacios de
+    diferencia, con los nombres viejos de tramo y con la fecha aunque venga
+    con hora. Así lo que el chofer ve como «ya marcado» y lo que la oficina
+    ve como marcado es siempre lo mismo."""
+    f = (fecha or "").strip()[:10]
+    cli_c = _canonizar(cliente, "")[0] or " ".join(str(cliente or "").split()).upper()
+    conn = get_connection()
+    try:
+        filas = [dict(r) for r in conn.execute(
+            """SELECT id, cliente, tramo, chofer_nombre, chofer_usuario, estado, bus_interno,
+                      COALESCE(cargado_el, fecha_carga) AS cargado
+               FROM rendiciones_corp
+               WHERE fecha_servicio >= ? AND fecha_servicio <= ?""", (f, f + "~")).fetchall()]
+    finally:
+        conn.close()
+    out = []
+    for r in filas:
+        if excluir_id and r["id"] == excluir_id:
+            continue
+        c, t = _canonizar(r["cliente"], r["tramo"])
+        if (c or " ".join(str(r["cliente"] or "").split()).upper()) != cli_c:
+            continue
+        r["tramo_c"] = t or " ".join(str(r["tramo"] or "").split()).upper()
+        r["estado"] = _estado_norm(r["estado"])
+        if r["estado"] in ESTADOS_CON_PAGO:
+            out.append(r)
+    return out
+
+
+def _cuando(c):
+    """«hoy 10:32» / «el 23/11 a las 21:05» para decir cuándo se marcó."""
+    c = str(c or "").replace("T", " ")
+    if len(c) < 16:
+        return ""
+    from hora_local import hoy as _h
+    return f"hoy a las {c[11:16]}" if c[:10] == _h() else f"el {c[8:10]}/{c[5:7]} a las {c[11:16]}"
+
+
+def _tramo_c(cliente, tramo):
+    return _canonizar(cliente, tramo)[1] or " ".join(str(tramo or "").split()).upper()
+
+
 def tramo_ocupado(cliente, tramo, fecha, estado_nuevo, excluir_id=None, chofer_usuario=""):
     """Verifica si el tramo ya fue reportado por otro chofer.
 
@@ -677,16 +727,8 @@ def tramo_ocupado(cliente, tramo, fecha, estado_nuevo, excluir_id=None, chofer_u
     if (tramo or "").strip().upper() == TRAMO_VARIABLE:
         return None                                   # VARIABLE es comodín
 
-    conn = get_connection()
-    q = """SELECT id, chofer_nombre, chofer_usuario, estado FROM rendiciones_corp
-           WHERE cliente=? AND tramo=? AND fecha_servicio=?
-             AND estado IN ('completado','entrante','saliente')"""
-    params = [cliente.strip(), tramo.strip(), fecha.strip()]
-    if excluir_id:
-        q += " AND id<>?"
-        params.append(excluir_id)
-    previas = [dict(r) for r in conn.execute(q, params).fetchall()]
-    conn.close()
+    tc = _tramo_c(cliente, tramo)
+    previas = [r for r in _marcas_dia(cliente, fecha, excluir_id) if r["tramo_c"] == tc]
 
     if not previas:
         return None
@@ -728,15 +770,11 @@ def segmentos_tomados(cliente, tramo, fecha, chofer_usuario=""):
     ANTES de que cargue todo el formulario."""
     if (tramo or "").strip().upper() == TRAMO_VARIABLE:
         return {"libre": True, "tomados": []}
-    conn = get_connection()
-    rows = conn.execute("""
-        SELECT chofer_nombre, chofer_usuario, estado FROM rendiciones_corp
-        WHERE cliente=? AND tramo=? AND fecha_servicio=?
-          AND estado IN ('completado','entrante','saliente')
-    """, (cliente.strip(), tramo.strip(), fecha.strip())).fetchall()
-    conn.close()
+    tc = _tramo_c(cliente, tramo)
+    rows = [r for r in _marcas_dia(cliente, fecha) if r["tramo_c"] == tc]
     yo = (chofer_usuario or "").strip().lower()
-    tomados = [{"chofer_nombre": r["chofer_nombre"], "estado": r["estado"],
+    tomados = [{"chofer_nombre": r["chofer_nombre"] or r["chofer_usuario"] or "otro chofer", "estado": r["estado"],
+                "coche": r.get("bus_interno") or "", "cargado": _cuando(r.get("cargado")),
                 "yo": bool(yo) and (r["chofer_usuario"] or "").strip().lower() == yo} for r in rows]
     return {"libre": len(tomados) == 0, "tomados": tomados}
 
@@ -1051,22 +1089,16 @@ def horarios_ocupados(chofer_usuario, fecha, cliente):
 def marcados_del_dia(cliente, fecha, chofer_usuario=""):
     """Para la lista de tramos del chofer: quién ya marcó cada tramo del
     cliente ese día, y qué mitad. {tramo: [{"quien", "estado", "yo"}]}"""
-    conn = get_connection()
-    try:
-        filas = conn.execute("""SELECT tramo, chofer_nombre, chofer_usuario, estado FROM rendiciones_corp
-                                WHERE cliente=? AND fecha_servicio=?
-                                  AND estado IN ('completado','entrante','saliente')
-                                ORDER BY id""", (cliente.strip(), fecha.strip())).fetchall()
-    finally:
-        conn.close()
+    filas = sorted(_marcas_dia(cliente, fecha), key=lambda r: r["id"])
     yo = (chofer_usuario or "").strip().lower()
     out = {}
     for f in filas:
-        if _es_variable(f["tramo"]):
+        if _es_variable(f["tramo_c"]):
             continue
         es_yo = bool(yo) and (f["chofer_usuario"] or "").strip().lower() == yo
-        out.setdefault(f["tramo"], []).append({"quien": f["chofer_nombre"] or f["chofer_usuario"] or "otro chofer",
-                                               "estado": f["estado"], "yo": es_yo})
+        out.setdefault(f["tramo_c"], []).append({"quien": f["chofer_nombre"] or f["chofer_usuario"] or "otro chofer",
+                                               "estado": f["estado"], "yo": es_yo, "coche": f.get("bus_interno") or "",
+                                               "cargado": _cuando(f.get("cargado"))})
     return out
 
 
@@ -1536,17 +1568,19 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
 
     conn = get_connection()
     rows = [dict(r) for r in conn.execute("""
-        SELECT fecha_servicio, tramo, estado, chofer_nombre
+        SELECT fecha_servicio, cliente, tramo, estado, chofer_nombre
         FROM rendiciones_corp
-        WHERE cliente=? AND fecha_servicio>=? AND fecha_servicio<=?
-    """, (cliente, desde_real, hasta)).fetchall()]
+        WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<=?
+    """, (" ".join(cliente.split()).upper(), desde_real, hasta + "~")).fetchall()]
     conn.close()
 
     reportado = {}
     for r in rows:
-        if _es_variable(r["tramo"]):
+        t = _tramo_c(r["cliente"], r["tramo"])
+        if _es_variable(t):
             continue
-        reportado.setdefault((r["fecha_servicio"], r["tramo"]), []).append(r)
+        r["estado"] = _estado_norm(r["estado"])
+        reportado.setdefault((str(r["fecha_servicio"])[:10], t), []).append(r)
 
     # Lo que en la Asignación del día se marcó "no corre" (un feriado de la
     # planta, por ejemplo) no se espera: no cuenta como faltante.

@@ -114,7 +114,55 @@ def marcados(fecha):
         "total": len(servicios), "suspendidos": sum(1 for s in servicios if s["estado"] == "suspendido"),
         "con_aviso": len(avisos), "promedio": prom, "semana": semana,
         "puede_borrar": C._rol_efectivo() in ("admin", "operador_corp"),
+        "choferes_corp": _choferes_corp() if C._rol_efectivo() in ("admin", "operador_corp") else [],
     }
+
+
+def _choferes_corp():
+    conn = get_connection()
+    try:
+        return [{"usuario": r["usuario"], "nombre": apellido_primero(r["nombre"] or r["usuario"])}
+                for r in conn.execute("""SELECT usuario, nombre FROM usuarios WHERE rol='chofer_corp'
+                                         AND COALESCE(activo,1)=1 ORDER BY nombre""").fetchall()]
+    finally:
+        conn.close()
+
+
+def pasar_a_chofer(rid, usuario, quien):
+    """Pasa un servicio marcado a otro chofer: para cuando lo marcó uno y lo
+    hizo otro (o alguien entró con el usuario equivocado)."""
+    usuario = (usuario or "").strip().lower()
+    conn = get_connection()
+    try:
+        r = conn.execute("""SELECT id, chofer_usuario, chofer_nombre, cliente, tramo, fecha_servicio, estado,
+                                   COALESCE(liquidado,0) AS liquidado FROM rendiciones_corp WHERE id=?""", (rid,)).fetchone()
+        if not r:
+            return None, "Ese servicio ya no existe"
+        if r["liquidado"]:
+            return None, "Ya está liquidado: para cambiarlo hay que revertir la liquidación"
+        u = conn.execute("""SELECT usuario, nombre FROM usuarios WHERE LOWER(usuario)=? AND rol='chofer_corp'""",
+                         (usuario,)).fetchone()
+        if not u:
+            return None, "Elegí un chofer de corporativos"
+        if (r["chofer_usuario"] or "").strip().lower() == usuario:
+            return None, "Ya está a nombre de ese chofer"
+        tc = C._tramo_c(r["cliente"], r["tramo"])
+        if not C._es_variable(tc) and any(
+                x["tramo_c"] == tc and (x["chofer_usuario"] or "").strip().lower() == usuario
+                for x in C._marcas_dia(r["cliente"], str(r["fecha_servicio"])[:10], excluir_id=r["id"])):
+            return None, f"{apellido_primero(u['nombre'])} ya tiene marcado ese tramo ese día"
+        conn.execute("""UPDATE rendiciones_corp SET chofer_usuario=?, chofer_nombre=?, editado_por=?, fecha_edicion=?
+                        WHERE id=?""", (u["usuario"], u["nombre"], quien, C.ahora_iso(), rid))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        from app import auditar
+    except Exception:
+        auditar = C.auditar
+    auditar("Pasó un servicio de corporativos a otro chofer", "Corporativos",
+              f"{r['cliente']} {r['tramo']} del {str(r['fecha_servicio'])[:10]}: de {r['chofer_nombre']} a {u['nombre']}")
+    return {"chofer": apellido_primero(u["nombre"]), "antes": apellido_primero(r["chofer_nombre"] or "")}, None
 
 
 @bp_corp_marcados.route("/api/corp/marcados", methods=["GET"])
@@ -127,3 +175,15 @@ def api_marcados():
     except ValueError:
         return jsonify({"error": "Fecha inválida"}), 400
     return jsonify(marcados(fecha))
+
+
+@bp_corp_marcados.route("/api/corp/marcados/<int:rid>/chofer", methods=["POST"])
+def api_pasar_a_chofer(rid):
+    if C._rol_efectivo() not in ("admin", "operador_corp"):
+        return jsonify({"error": "Sin permiso"}), 403
+    from flask import session
+    r, err = pasar_a_chofer(rid, (request.get_json(silent=True) or {}).get("usuario"),
+                            session.get("nombre") or session.get("usuario") or "")
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    return jsonify({"ok": True, "msg": f"Pasó de {r['antes']} a {r['chofer']}"})

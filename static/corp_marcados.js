@@ -162,7 +162,7 @@ function smLista() {
           ? `<span class="sm-liq" title="Ya está liquidado: para borrarlo hay que revertir la liquidación"><i class="ti ti-lock"></i> Liquidado</span>`
           : sm.confirmar === s.id
             ? `<span class="sm-conf"><button class="btn btn-danger btn-sm" onclick="smEliminar(${s.id})">Sí, eliminar</button><button class="btn btn-ghost btn-sm" onclick="smConfirmar(0)">No</button></span>`
-            : `<button class="sm-borrar" onclick="smConfirmar(${s.id})" title="Eliminar este servicio" aria-label="Eliminar este servicio"><i class="ti ti-trash"></i></button>`) : ""}
+            : `<span class="sm-acc"><button class="sm-borrar" onclick="smPasar(${s.id})" title="Pasar a otro chofer (lo marcó uno y lo hizo otro)" aria-label="Pasar a otro chofer"><i class="ti ti-user-share"></i></button><button class="sm-borrar" onclick="smConfirmar(${s.id})" title="Eliminar este servicio" aria-label="Eliminar este servicio"><i class="ti ti-trash"></i></button></span>`) : ""}
       </div>${sm.verAviso === s.id ? smChoque(s, puede) : ""}`).join("")}</div>` : `<div class="empty chico">Ningún servicio con ese filtro</div>`}`;
 }
 
@@ -219,6 +219,37 @@ async function smEliminarSel() {
     document.querySelector(".modal-overlay")?.remove();
     toast((r && r.msg) || (r && r.error) || "No se pudo eliminar", r && r.ok ? "success" : "error");
     if (r && r.ok) sm.sel.clear();
+    smCargar(true);
+  };
+}
+
+// Pasar un servicio a otro chofer: cuando lo marcó uno y lo hizo otro, o
+// alguien entró con el usuario equivocado.
+function smPasar(id) {
+  const s = sm.d.servicios.find(x => x.id === id);
+  if (!s) return;
+  const lista = (sm.d.choferes_corp || []).filter(c => c.usuario.toLowerCase() !== s.usuario);
+  rvModal({
+    titulo: "Pasar a otro chofer", icono: "user-share", ancho: 460,
+    sub: `${smE(s.cliente)} ${smE(s.tramo)} · ${smFechaLarga(sm.d.fecha)}. Hoy figura a nombre de <b>${smE(s.chofer)}</b>.`,
+    cuerpo: `<label class="form-label" for="sm-pasar-a">¿Quién hizo el servicio?</label>
+      <input class="form-input" id="sm-pasar-q" placeholder="Buscar chofer…" autocomplete="off" style="margin-bottom:8px">
+      <select class="form-input" id="sm-pasar-a" size="8" style="height:auto">${lista.map(c => `<option value="${smE(c.usuario)}">${smE(c.nombre)} (${smE(c.usuario)})</option>`).join("")}</select>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="sm-pasar-si"><i class="ti ti-user-share"></i> Pasar</button>`,
+  });
+  const sel = $("#sm-pasar-a");
+  $("#sm-pasar-q").oninput = e => {
+    const q = e.target.value.trim().toLowerCase();
+    [...sel.options].forEach(o => { o.hidden = q && !o.textContent.toLowerCase().includes(q); });
+  };
+  $("#sm-pasar-si").onclick = async e => {
+    if (!sel.value) { toast("Elegí el chofer", "error"); return; }
+    e.target.disabled = true;
+    const r = await api(`/api/corp/marcados/${id}/chofer`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usuario: sel.value }) }).catch(err => ({ error: err.message }));
+    document.querySelector(".modal-overlay")?.remove();
+    toast((r && (r.msg || r.error)) || "No se pudo pasar", r && r.ok ? "success" : "error");
     smCargar(true);
   };
 }

@@ -485,11 +485,14 @@ def _rendiciones(conn, fecha, hasta=None):
     for r in conn.execute("""SELECT id, chofer_usuario, chofer_nombre, cliente, tramo, estado, bus_interno,
                                     hora_inicio, hora_fin, fecha_servicio
                              FROM rendiciones_corp WHERE fecha_servicio >= ? AND fecha_servicio <= ?""",
-                          (fecha, hasta or fecha)).fetchall():
+                          (fecha, (hasta or fecha) + "~")).fetchall():
         r = dict(r)
+        r["fecha_servicio"] = str(r["fecha_servicio"] or "")[:10]
+        r["chofer_usuario"] = (r["chofer_usuario"] or "").strip().lower()
+        r["estado"] = C._estado_norm(r["estado"])
         cli, tr = _canon(r["cliente"], r["tramo"])
-        r["cliente_c"] = cli or r["cliente"]
-        r["tramo_c"] = tr or r["tramo"]
+        r["cliente_c"] = cli or " ".join(str(r["cliente"] or "").split()).upper()
+        r["tramo_c"] = tr or " ".join(str(r["tramo"] or "").split()).upper()
         out.append(r)
     return out
 
@@ -520,7 +523,7 @@ def _control(fecha, clientes, rends):
     for c in clientes:
         for t in c["tramos"]:
             rs = por_tramo.get((t["cliente"], t["tramo"]), [])
-            asignados = {s["chofer_usuario"] for s in t["slots"] if s.get("chofer_usuario")}
+            asignados = {(s["chofer_usuario"] or "").strip().lower() for s in t["slots"] if s.get("chofer_usuario")}
             if t["estado"] == "no_corre":
                 vivos = [r for r in rs if r["estado"] != "suspendido"]
                 for r in rs:
@@ -535,7 +538,8 @@ def _control(fecha, clientes, rends):
                     s["control"] = None
                     continue
                 lado = s["lado"]
-                mias = [r for r in rs if r["chofer_usuario"] == s["chofer_usuario"]]
+                yo = (s["chofer_usuario"] or "").strip().lower()
+                mias = [r for r in rs if r["chofer_usuario"] == yo]
                 cubre = [r for r in mias if r["estado"] in CUBRE[lado]]
                 if cubre:
                     r = cubre[0]
@@ -552,7 +556,7 @@ def _control(fecha, clientes, rends):
                         usadas.add(r["id"])
                     hechas = sorted({r["estado"] for r in medias})
                     falta = "saliente" if hechas == ["entrante"] else "entrante" if hechas == ["saliente"] else ""
-                    otros = [r for r in rs if r["chofer_usuario"] != s["chofer_usuario"] and r["estado"] == falta]
+                    otros = [r for r in rs if r["chofer_usuario"] != yo and r["estado"] == falta]
                     txt = f"Rindió solo el {hechas[0]}" if len(hechas) == 1 else "Rindió entrante y saliente por separado"
                     if otros:
                         txt += f"; el {falta} lo rindió {nom(otros[0])}"
@@ -565,13 +569,39 @@ def _control(fecha, clientes, rends):
                     usadas.add(susp[0]["id"])
                     poner(s, "suspendido", "Lo rindió como suspendido", susp[0], "Suspendido")
                     continue
-                otro = [r for r in rs if r["chofer_usuario"] not in asignados and r["estado"] in CUBRE[lado]]
+                # Lo marcó otro chofer: primero uno que no estaba asignado al
+                # tramo; si no, cualquiera (por ejemplo, el del otro lado que
+                # marcó el tramo completo). Es la misma regla con la que la
+                # app del chofer dice «ya está marcado».
+                vivos = [r for r in rs if r["chofer_usuario"] != yo and r["estado"] in CUBRE[lado]]
+                otro = ([r for r in vivos if r["chofer_usuario"] not in asignados and r["id"] not in usadas]
+                        or [r for r in vivos if r["id"] not in usadas] or vivos)
                 if otro:
-                    usadas.add(otro[0]["id"])
-                    poner(s, "otro_chofer", f"Lo rindió {nom(otro[0])}" +
-                          (f" con el coche {otro[0]['bus_interno']}" if otro[0].get("bus_interno") else ""), otro[0],
-                          f"Lo rindió {nom(otro[0])}")
+                    o = otro[0]
+                    usadas.add(o["id"])
+                    que = " completo" if o["estado"] == "completado" and lado != "completo" else ""
+                    poner(s, "otro_chofer", f"Lo rindió {nom(o)}{que}" +
+                          (f" con el coche {o['bus_interno']}" if o.get("bus_interno") else ""), o,
+                          f"Lo rindió {nom(o)}")
                     continue
+                if lado == "completo":
+                    mitades = {}
+                    for r in rs:
+                        if r["chofer_usuario"] != yo and r["estado"] in ("entrante", "saliente"):
+                            mitades.setdefault(r["estado"], r)
+                    if mitades:
+                        for r in mitades.values():
+                            usadas.add(r["id"])
+                        quien = " y ".join(f"el {e} {nom(r)}" for e, r in sorted(mitades.items()))
+                        if len(mitades) == 2:
+                            poner(s, "otro_chofer", f"Lo rindieron otros: {quien}", mitades["entrante"],
+                                  "Lo rindieron otros")
+                        else:
+                            e = next(iter(mitades))
+                            falta = "saliente" if e == "entrante" else "entrante"
+                            poner(s, "parcial", f"Marcó {quien}; falta el {falta}", mitades[e],
+                                  f"{nom(mitades[e])}: solo el {e}")
+                        continue
                 if pasado:
                     poner(s, "sin_rendir", "No lo rindió")
                 else:
@@ -582,7 +612,7 @@ def _control(fecha, clientes, rends):
                 s["control"] = None
                 continue
             rs = [r for r in rends if r["cliente_c"] == s["cliente"] and C._es_variable(r["tramo_c"])
-                  and r["chofer_usuario"] == s["chofer_usuario"] and r["id"] not in usadas]
+                  and r["chofer_usuario"] == (s["chofer_usuario"] or "").strip().lower() and r["id"] not in usadas]
             if rs:
                 r = rs[0]
                 usadas.add(r["id"])

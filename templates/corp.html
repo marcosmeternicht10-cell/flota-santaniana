@@ -121,6 +121,7 @@
     .aviso.libre { background: var(--ok-bg); color: var(--ok); }
     .aviso.parcial { background: #EAF1F8; color: var(--azul); }
     .aviso.tomado { background: var(--rojo-bg); color: var(--rojo); }
+    .aviso .marco { display: block; margin: 6px 0; padding: 8px 10px; border-radius: 10px; background: rgba(255,255,255,.6); color: #3b1d1d; }
 
 
     .btn-guardar {
@@ -483,8 +484,11 @@
         const mitades = new Set(m.map(x => x.estado));
         const lleno = completo || (mitades.has("entrante") && mitades.has("saliente"));
         const todo = b.completado && b.entrante && b.saliente;
-        o.disabled = !!(lleno || todo);
-        o.textContent = completo ? `${o.value} — ${completo.yo ? "ya lo marcaste vos" : "ya lo marcó " + completo.quien}`
+        // No se deshabilita: así el chofer lo puede elegir y ver quién lo
+        // marcó, con qué coche y cuándo. Guardar igual queda bloqueado.
+        o.disabled = !!(todo && !lleno);
+        o.textContent = completo ? `🔒 ${o.value} — ${completo.yo ? "ya lo marcaste vos" : "ya lo marcó " + completo.quien}`
+          : lleno ? `🔒 ${o.value} — ${m.map(x => `${quien(x)} (${x.estado})`).join(", ")}`
           : m.length ? `${o.value} — ${m.map(x => `${quien(x)} (${x.estado})`).join(", ")}`
           : todo ? `${o.value} — misma hora que otro tuyo`
           : o.value;
@@ -580,18 +584,24 @@
           habilitarEstados([]);
           return;
         }
+        const esc = x => String(x ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+        const ficha = t => `<span class="marco"><b>${t.yo ? "Vos" : esc(t.chofer_nombre)}</b> · ${t.estado === "completado" ? "completo" : "solo el " + t.estado}`
+          + `${t.coche ? ` · coche ${esc(t.coche)}` : ""}${t.cargado ? ` · lo marcó ${esc(t.cargado)}` : ""}</span>`;
         const completo = d.tomados.find(t => t.estado === "completado");
-        if(completo){
-          cont.innerHTML = completo.yo
-            ? `<div class="aviso tomado"><i class="ti ti-lock"></i><span>Este tramo <b>ya lo marcaste vos</b> ese día. No se puede marcar dos veces.</span></div>`
-            : `<div class="aviso tomado"><i class="ti ti-lock"></i><span>Este tramo ya lo marcó <b>${completo.chofer_nombre}</b> (completo). No se puede marcar de nuevo: revisá el tramo o la fecha.</span></div>`;
+        const mitades = new Set(d.tomados.map(t => t.estado));
+        if(completo || (mitades.has("entrante") && mitades.has("saliente"))){
+          const soloYo = d.tomados.every(t => t.yo);
+          cont.innerHTML = `<div class="aviso tomado"><i class="ti ti-lock"></i><span>
+            ${soloYo ? "Este tramo <b>ya lo marcaste vos</b> ese día." : "Este tramo ya está marcado:"}
+            ${d.tomados.map(ficha).join("")}
+            ${soloYo ? "No se puede marcar dos veces." : "Si el servicio lo hiciste vos, avisá a la oficina para que lo corrija. Revisá también que la fecha sea la del servicio."}
+          </span></div>`;
           habilitarEstados(["completado","entrante","saliente"]);
           return;
         }
         const estados = d.tomados.map(t => t.estado);
-        const quien = d.tomados.map(t => t.yo ? `<b>Vos</b> ya marcaste el ${t.estado}` : `<b>${t.chofer_nombre}</b> marcó el ${t.estado}`).join(", ");
         const falta = estados.includes("entrante") ? "saliente" : "entrante";
-        cont.innerHTML = `<div class="aviso parcial"><i class="ti ti-users"></i><span>${quien}. Si vos hiciste la otra mitad, marcá «solo el ${falta}».</span></div>`;
+        cont.innerHTML = `<div class="aviso parcial"><i class="ti ti-users"></i><span>Ya marcaron una mitad:${d.tomados.map(ficha).join("")}Si vos hiciste la otra mitad, marcá «solo el ${falta}».</span></div>`;
         habilitarEstados(estados.concat(["completado"]));
       }, 250);
     }
