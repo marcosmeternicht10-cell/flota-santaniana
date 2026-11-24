@@ -14294,17 +14294,30 @@ function panelFaltantes({ faltas, cob }) {
   const g = agruparFaltas(faltas);
   const conPistas = faltas.filter(f => (f.pistas || []).length).length;
   const pista = p => `<div class="falta-pista ${p.tipo}">
-      <i class="ti ti-${p.tipo === "fecha" ? "calendar-time" : p.tipo === "tramo" ? "arrows-exchange" : "user-question"}"></i>
+      <i class="ti ti-${p.tipo === "fecha" ? "calendar-time" : p.tipo === "tramo" || p.tipo === "hora" ? "arrows-exchange" : "user-question"}"></i>
       <span>${esc(p.texto)}</span>
-      ${puede && p.id && !p.liquidado ? (p.tipo === "fecha"
-        ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();moverRendicion(${p.id}, {fecha:'${p.fecha}'}, this)">Pasar al ${p.fecha.slice(8, 10)}/${p.fecha.slice(5, 7)}</button>`
-        : p.tipo === "tramo" ? `<button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();moverRendicion(${p.id}, {tramo:'${esc(p.tramo).replace(/'/g, "\\'")}'}, this)">Cambiarlo a este tramo</button>` : "") : ""}
+      ${puede && p.id ? (p.tipo === "fecha" ? (p.liquidado ? "" : `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();moverRendicion(${p.id}, {fecha:'${p.fecha}'}, this)">Pasar al ${p.fecha.slice(8, 10)}/${p.fecha.slice(5, 7)}</button>`)
+        : p.tipo === "tramo" || p.tipo === "hora" ? `<button class="btn ${p.tipo === "hora" ? "btn-primary" : "btn-ghost"} btn-sm" onclick="event.stopPropagation();moverRendicion(${p.id}, {tramo:'${esc(p.tramo).replace(/'/g, "\\'")}'}, this)">Cambiarlo a ${esc(p.tramo)}</button>` : "") : ""}
       ${p.liquidado ? `<span class="mini-chip">liquidado</span>` : ""}
     </div>`;
+  // Si el mismo chofer marcó varios días el tramo de al lado a esa hora
+  // (ITAUGUA 22:00 en vez de ITA 22:00), se cambian todos juntos
+  const grupos = {};
+  faltas.forEach(f => (f.pistas || []).filter(p => p.tipo === "hora").forEach(p => {
+    const k = p.u + "|" + p.desde_tramo + "|" + p.tramo;
+    (grupos[k] = grupos[k] || { ...p, ids: [], dias: [] }).ids.push(p.id);
+    grupos[k].dias.push(f.fecha);
+  }));
+  empGruposHora = Object.values(grupos).filter(g => g.ids.length >= 2);
+  const cajaHora = puede ? empGruposHora.map((g, i) => `<div class="falta-todos">
+      <i class="ti ti-arrows-exchange"></i>
+      <span><b>${esc(g.chofer)}</b> marcó <b>${esc(g.desde_tramo)}</b> los ${g.dias.length} días que <b>${esc(g.tramo)}</b> quedó vacío
+        (${g.dias.map(d => d.slice(8, 10) + "/" + d.slice(5, 7)).join(", ")}). Si en realidad hizo ${esc(g.tramo)}, cambialos todos juntos.</span>
+      <button class="btn btn-primary btn-sm" onclick="moverGrupoHora(${i}, this)">Cambiar los ${g.ids.length} a ${esc(g.tramo)}</button></div>`).join("") : "";
   return `
     <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> Agrupado por día. Tocá una fila para ver qué tramos fueron.
       ${conPistas ? ` En <b>${conPistas}</b> el sistema encontró una posible explicación (marcado con otra fecha u otro tramo).` : ""}</p>
-    ${cajaMal}
+    ${cajaMal}${cajaHora}
     ${g.map((x, i) => {
       const nP = x.items.filter(f => (f.pistas || []).length).length;
       return `
@@ -14329,6 +14342,20 @@ function panelFaltantes({ faltas, cob }) {
 }
 
 const empFaltaAbierta = new Set();
+let empGruposHora = [];
+async function moverGrupoHora(i, btn) {
+  const g = empGruposHora[i];
+  if (!g || !confirm(`¿Cambiar a ${g.tramo} los ${g.ids.length} servicios de ${g.chofer} marcados como ${g.desde_tramo}?\n\nQueda en la auditoría.`)) return;
+  btn.disabled = true;
+  let ok = 0, mal = [];
+  for (const id of g.ids) {
+    const r = await api(`/api/corp/rendicion/${id}/mover`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tramo: g.tramo }) }).catch(e => ({ error: e.message }));
+    if (r && r.ok) ok++; else mal.push((r && r.error) || "error");
+  }
+  toast(`${ok} cambiados${mal.length ? ` · ${mal.length} no se pudieron: ${mal[0]}` : ""}`, mal.length ? "error" : "success");
+  cargarControlEmpresa();
+}
 async function moverRendicion(id, cambio, btn) {
   if (btn) btn.disabled = true;
   const r = await api(`/api/corp/rendicion/${id}/mover`, { method: "POST", headers: { "Content-Type": "application/json" },

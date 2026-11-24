@@ -1580,6 +1580,10 @@ def primer_servicio(cliente=None):
     return f
 
 
+# Cuántos días antes del período se miran para saber qué tramos corren.
+DIAS_ACTIVIDAD = 35
+
+
 def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
     """Qué tramos se esperaban y cuáles se reportaron realmente.
 
@@ -1652,8 +1656,29 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
     # ── Qué tramos operan de verdad, y qué días ──
     # Se mira en qué días de la semana apareció cada tramo: si nunca apareció
     # un fin de semana, se asume que solo corre de lunes a viernes.
+    # Se mira también el mes anterior al período: un tramo que corre siempre
+    # y que justo esa semana nadie marcó (ITA 22:00 marcado como ITAUGUA) tiene
+    # que aparecer como sin cubrir, no desaparecer del control.
     actividad = {}
-    for (fecha, tramo), regs in reportado.items():
+    vistos_act = set()
+    try:
+        antes = (_dt.date.fromisoformat(desde_real[:10]) - _dt.timedelta(days=DIAS_ACTIVIDAD)).isoformat()
+        conn = get_connection()
+        try:
+            previas = [dict(r) for r in conn.execute(
+                """SELECT fecha_servicio, cliente, tramo FROM rendiciones_corp
+                   WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<?""",
+                (" ".join(cliente.split()).upper(), antes, desde_real)).fetchall()]
+        finally:
+            conn.close()
+    except Exception:
+        previas = []
+    marcas_act = [(f, t) for (f, t) in reportado.keys()] + \
+                 [(str(r["fecha_servicio"])[:10], _tramo_c(r["cliente"], r["tramo"])) for r in previas]
+    for fecha, tramo in marcas_act:
+        if (fecha, tramo) in vistos_act or _es_variable(tramo):
+            continue
+        vistos_act.add((fecha, tramo))
         a = actividad.setdefault(tramo, {"veces": 0, "findes": 0})
         a["veces"] += 1
         try:
@@ -1834,6 +1859,25 @@ def _pistas_control(cliente, cob, desde, hasta):
                               f"antes de la hora del servicio: es el del {ddmm(antes)}.")})
     cob["mal_fechados"] = mal
 
+    # ── Historial (60 días) para decir qué suele marcar cada chofer ──
+    hist = {}
+    try:
+        h0 = (_dt.date.fromisoformat(hasta[:10]) - _dt.timedelta(days=60)).isoformat()
+        conn = get_connection()
+        try:
+            for x in conn.execute("""SELECT chofer_usuario, cliente, tramo FROM rendiciones_corp
+                                     WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<=?
+                                       AND estado <> 'suspendido'""", (cli_u, h0, d1 + "~")).fetchall():
+                k = ((x["chofer_usuario"] or "").strip().lower(), _tramo_c(x["cliente"], x["tramo"]))
+                hist[k] = hist.get(k, 0) + 1
+        finally:
+            conn.close()
+    except Exception:
+        hist = {}
+    intentos = {}
+    for x in intentos_bloqueados(cliente, desde, hasta):
+        intentos.setdefault(x["fecha"], []).append(x)
+
     # ── Pistas para cada hueco ──
     asig_dia = {}
     for a in asig:
@@ -1864,8 +1908,82 @@ def _pistas_control(cliente, cob, desde, hasta):
                 })
             elif not suyos:
                 pistas.append({"tipo": "info", "texto": f"Estaba asignado a {quien}, que no marcó nada de {cliente} ese día."})
+        # 3. A esa misma hora ese día se marcó otro tramo del mismo cliente
+        #    (ITA 22:00 vacío e ITAUGUA 22:00 marcado): ¿se equivocó de tramo?
+        ini = inicio_servicio(t)
+        ya_ids = {p.get("id") for p in pistas}
+        if ini is not None and it.get("situacion") == "faltante":
+            cands = [r for r in por_dia.get(dia, [])
+                     if r["tramo_c"] != t and r["estado"] in ESTADOS_CON_PAGO and r["id"] not in ya_ids
+                     and inicio_servicio(r["tramo_c"]) == ini]
+            # Primero los que otras veces hicieron este tramo; si nadie, todos (hasta 3)
+            con_hist = [r for r in cands if hist.get((r["u"], t), 0)]
+            for r in (con_hist or cands)[:3]:
+                n_t, n_s = hist.get((r["u"], t), 0), hist.get((r["u"], r["tramo_c"]), 0)
+                txt = f"A esa hora, {nom(r)} marcó {r['tramo_c']}{'' if r['estado'] == 'completado' else ' (' + r['estado'] + ')'}."
+                if n_t:
+                    txt += f" En los últimos dos meses marcó {t} {n_t} {'vez' if n_t == 1 else 'veces'} y {r['tramo_c']} {n_s}."
+                txt += f" Si en realidad hizo {t}, cambialo."
+                pistas.append({"tipo": "hora", "id": r["id"], "tramo": t, "desde_tramo": r["tramo_c"], "u": r["u"],
+                               "chofer": nom(r), "liquidado": bool(r["liquidado"]), "texto": txt})
+        # 4. Alguien quiso marcar algo a esa hora y el sistema no lo dejó
+        for x in intentos.get(dia, []):
+            if x["tramo_c"] == t or (ini is not None and inicio_servicio(x["tramo_c"]) == ini):
+                pistas.append({"tipo": "info", "texto": (f"El {dia[8:10]}/{dia[5:7]} a las {x['cuando'][11:16]} "
+                                                          f"{x['chofer']} quiso marcar {x['tramo_c']} y no lo dejó: {x['motivo']}")})
         if pistas:
             it["pistas"] = pistas
+
+
+def _tabla_intentos(conn):
+    conn.execute(f"""CREATE TABLE IF NOT EXISTS corp_intentos (
+        id {PK}, cuando TEXT, chofer_usuario TEXT, chofer_nombre TEXT, cliente TEXT, tramo TEXT,
+        fecha_servicio TEXT, estado TEXT, motivo TEXT)""")
+
+
+def registrar_intento(datos, motivo):
+    """Cuando al chofer no lo deja marcar (ya estaba marcado, la fecha, etc.)
+    queda anotado: después la oficina puede ver quién quiso marcar qué."""
+    try:
+        conn = get_connection()
+        try:
+            _tabla_intentos(conn)
+            conn.execute("""INSERT INTO corp_intentos (cuando, chofer_usuario, chofer_nombre, cliente, tramo, fecha_servicio, estado, motivo)
+                            VALUES (?,?,?,?,?,?,?,?)""",
+                         (ahora_iso(), datos.get("chofer_usuario", ""), datos.get("chofer_nombre", ""),
+                          str(datos.get("cliente", ""))[:80], str(datos.get("tramo", ""))[:120],
+                          str(datos.get("fecha_servicio", ""))[:10], str(datos.get("estado", ""))[:20], str(motivo)[:300]))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[corporativos] intento: {e}")
+
+
+def intentos_bloqueados(cliente, desde, hasta):
+    from nombres import apellido_primero
+    out = []
+    try:
+        conn = get_connection()
+        try:
+            _tabla_intentos(conn)
+            conn.commit()
+            filas = [dict(r) for r in conn.execute(
+                """SELECT * FROM corp_intentos WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<=?
+                   ORDER BY id""", (" ".join(cliente.split()).upper(), desde, hasta)).fetchall()]
+        finally:
+            conn.close()
+    except Exception:
+        return []
+    vistos = set()
+    for f in filas:
+        k = (f["chofer_usuario"], f["tramo"], f["fecha_servicio"], f["motivo"])
+        if k in vistos:
+            continue                                  # el mismo intento repetido
+        vistos.add(k)
+        out.append({"fecha": f["fecha_servicio"], "tramo_c": _tramo_c(cliente, f["tramo"]), "cuando": str(f["cuando"]),
+                    "chofer": apellido_primero(f["chofer_nombre"] or f["chofer_usuario"] or ""), "motivo": f["motivo"]})
+    return out
 
 
 def mover_rendicion(rid, fecha=None, tramo=None, quien="", cliente=None, estado=None, observacion=None):
@@ -1885,8 +2003,6 @@ def mover_rendicion(rid, fecha=None, tramo=None, quien="", cliente=None, estado=
     if not r:
         return None, "Ese servicio ya no existe"
     r = dict(r)
-    if r["liquidado"]:
-        return None, "Ya está liquidado: para cambiarlo hay que revertir la liquidación"
     f = (fecha or str(r["fecha_servicio"]))[:10]
     try:
         if _dt.date.fromisoformat(f) > _dt.date.fromisoformat(hoy()):
@@ -1908,10 +2024,16 @@ def mover_rendicion(rid, fecha=None, tramo=None, quien="", cliente=None, estado=
     cli_antes = _canonizar(r["cliente"], "")[0] or r["cliente"]
     if (f, cli, tc, est, obs) == (str(r["fecha_servicio"])[:10], cli_antes, _tramo_c(r["cliente"], r["tramo"]), est_antes, r["observacion"]):
         return None, "No cambia nada"
+    monto = r["monto"] if r["monto_fijo"] else calcular_monto(tc, est, cli)
+    if r["liquidado"]:
+        # Ya se le pagó: solo se deja corregir el nombre del tramo (el de las
+        # 22:00 de Itá marcado como Itauguá) si el pago no cambia.
+        mismo_pago = abs(float(monto or 0) - float(r["monto"] or 0)) < 1
+        if not (mismo_pago and f == str(r["fecha_servicio"])[:10] and est == est_antes and obs == r["observacion"]):
+            return None, "Ya está liquidado: solo se le puede cambiar el tramo si el monto queda igual. Para lo demás, revertí la liquidación"
     ocupado = tramo_ocupado(cli, tc, f, est, excluir_id=rid)
     if ocupado:
         return None, ocupado.replace("Ese tramo", f"{tc} del {f[8:10]}/{f[5:7]}")
-    monto = r["monto"] if r["monto_fijo"] else calcular_monto(tc, est, cli)
     conn = get_connection()
     try:
         conn.execute("""UPDATE rendiciones_corp SET cliente=?, tramo=?, fecha_servicio=?, estado=?, monto=?, observacion=?,
@@ -2893,6 +3015,8 @@ def api_corp_rendicion():
     d["chofer_nombre"] = session.get("nombre", "") or session.get("usuario", "")
     es_chofer = session.get("rol") == "chofer_corp"
     ok, msg = registrar_rendicion(d, limitar_fecha=es_chofer)
+    if not ok and es_chofer and isinstance(msg, str):
+        registrar_intento(d, msg)
     if isinstance(msg, dict):          # choca en horario: falta la explicación
         return jsonify({"ok": False, **msg}), 409
     return jsonify({"ok": ok, "msg": msg}), (200 if ok else 400)
