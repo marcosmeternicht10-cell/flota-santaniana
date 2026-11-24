@@ -1683,6 +1683,13 @@ td.center, th.center { text-align: center; }
 .mini-chip.azul { background: var(--info-bg); color: var(--brand-blue); }
 .falta-mal-lista { flex-basis: 100%; margin-left: 36px; }
 .falta-mal-lista summary { cursor: pointer; font-weight: 600; color: var(--brand-blue); font-size: 12.5px; }
+.falta-pend { margin-bottom: 12px; padding: 10px 16px; border-radius: 12px; background: var(--surface2); border: 1px solid var(--border); font-size: 13px; color: var(--text); }
+.falta-pend summary { display: flex; align-items: center; gap: 10px; cursor: pointer; list-style: none; }
+.falta-pend summary::-webkit-details-marker { display: none; }
+.falta-pend summary .ti { font-size: 20px; color: var(--muted); }
+.falta-pend summary span { flex: 1; }
+.falta-pend summary em { font-style: normal; font-weight: 600; font-size: 12.5px; color: var(--brand-blue); }
+.falta-pend .falta-mal { border-top-color: var(--border); }
 .falta-mal { padding: 5px 0; border-top: 1px solid rgba(31,78,140,.12); font-size: 12.5px; }
 
 /* ═══════════════════════════════════════════════════════════════════

@@ -1582,6 +1582,8 @@ def primer_servicio(cliente=None):
 
 # Cuántos días antes del período se miran para saber qué tramos corren.
 DIAS_ACTIVIDAD = 35
+# El atraso de carga que se tolera como «todavía puede cargarlo», como mucho.
+ATRASO_MAX_DIAS = 10
 
 
 def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
@@ -1620,13 +1622,14 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
              "tramos_activos": 0, "tramos_catalogo": len(fijos),
              "tramos_sin_actividad": [], "solo_habiles": [],
              "desde_real": desde_real, "hasta_real": hasta,
-             "rango_ajustado": ajustado, "primer_servicio": primero}
+             "rango_ajustado": ajustado, "primer_servicio": primero, "pendientes_carga": []}
     if not fijos or not dias:
         return vacio
 
     conn = get_connection()
     rows = [dict(r) for r in conn.execute("""
-        SELECT fecha_servicio, cliente, tramo, estado, chofer_nombre
+        SELECT fecha_servicio, cliente, tramo, estado, chofer_nombre, chofer_usuario,
+               COALESCE(cargado_el, fecha_carga) AS cargado
         FROM rendiciones_corp
         WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<=?
     """, (" ".join(cliente.split()).upper(), desde_real, hasta + "~")).fetchall()]
@@ -1666,7 +1669,8 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
         conn = get_connection()
         try:
             previas = [dict(r) for r in conn.execute(
-                """SELECT fecha_servicio, cliente, tramo FROM rendiciones_corp
+                """SELECT fecha_servicio, cliente, tramo, estado, chofer_nombre, chofer_usuario,
+                          COALESCE(cargado_el, fecha_carga) AS cargado FROM rendiciones_corp
                    WHERE UPPER(TRIM(cliente))=? AND fecha_servicio>=? AND fecha_servicio<?""",
                 (" ".join(cliente.split()).upper(), antes, desde_real)).fetchall()]
         finally:
@@ -1699,6 +1703,59 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
 
     sin_actividad = [t for t in fijos if t not in controlados]
 
+    # ── Con cuánto atraso se suele cargar cada tramo, y quién lo hace ──
+    # Hay choferes que cargan la semana entera de una vez (ITA lo carga Leiva
+    # cada 5 a 8 días). Mientras un día esté dentro de ese atraso habitual, lo
+    # que falta no es «sin hacer»: es «todavía no lo cargó». Y lo de hoy que
+    # todavía no pasó (el de las 22:00 a las 20:00) no se espera.
+    atrasos, quienes = {}, {}
+    for r in rows + previas:
+        t = _tramo_c(r["cliente"], r["tramo"])
+        if _es_variable(t) or _estado_norm(r.get("estado")) == "suspendido":
+            continue
+        f, c = str(r["fecha_servicio"])[:10], str(r.get("cargado") or "")[:10]
+        try:
+            atrasos.setdefault(t, []).append(max(0, (_dt.date.fromisoformat(c) - _dt.date.fromisoformat(f)).days))
+        except ValueError:
+            pass
+        q = quienes.setdefault(t, {})
+        k = (r.get("chofer_usuario") or "", r.get("chofer_nombre") or "")
+        q[k] = q.get(k, 0) + 1
+
+    def atraso_habitual(t):
+        a = sorted(atrasos.get(t) or [0])
+        return max(1, min(ATRASO_MAX_DIAS, a[min(len(a) - 1, int(0.9 * len(a)))]))
+
+    def quien_suele(t):
+        q = quienes.get(t) or {}
+        if not q:
+            return ""
+        (u, n), _ = max(q.items(), key=lambda kv: kv[1])
+        from nombres import apellido_primero
+        return apellido_primero(n or u)
+
+    hoy_d = _dt.date.fromisoformat(hoy())
+    ahora_m = int(ahora_iso()[11:13]) * 60 + int(ahora_iso()[14:16])
+
+    def todavia_no(tramo, dia):
+        """None si ya se tendría que haber cargado; si no, por qué todavía no."""
+        try:
+            d = _dt.date.fromisoformat(dia)
+        except ValueError:
+            return None
+        if d > hoy_d:
+            return "es un día que todavía no pasó"
+        if d == hoy_d:
+            ini = inicio_servicio(tramo)
+            if ini is not None and ahora_m < ini + 60:
+                return "todavía no pasó la hora del servicio"
+        espera = atraso_habitual(tramo)
+        if (hoy_d - d).days <= espera:
+            quien = quien_suele(tramo)
+            return (f"todavía no lo cargaron: {quien + ' ' if quien else ''}lo suele cargar "
+                    f"con hasta {espera} {'día' if espera == 1 else 'días'} de atraso")
+        return None
+
     def corre(tramo, dia):
         if controlados.get(tramo) == "habiles":
             try:
@@ -1707,7 +1764,7 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
                 return True
         return True
 
-    periodos, detalle = {}, []
+    periodos, detalle, pendientes = {}, [], []
     tot = {"esperados": 0, "cubiertos": 0, "parciales": 0,
            "faltantes": 0, "suspendidos": 0}
 
@@ -1724,6 +1781,14 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
             if not regs and (dia, tramo) in no_corre:
                 continue
             estados = {x["estado"] for x in regs}
+            cubierto = "completado" in estados or ("entrante" in estados and "saliente" in estados)
+            if not cubierto and "suspendido" not in estados:
+                motivo = todavia_no(tramo, dia)
+                if motivo:                    # no se cuenta todavía: está a tiempo
+                    pendientes.append({"fecha": dia, "tramo": tramo, "motivo": motivo,
+                                       "situacion": "parcial" if estados else "faltante",
+                                       "quien": ", ".join(x["chofer_nombre"] for x in regs)})
+                    continue
             p["esperados"] += 1; tot["esperados"] += 1
             if "completado" in estados or ("entrante" in estados and "saliente" in estados):
                 p["cubiertos"] += 1; tot["cubiertos"] += 1
@@ -1762,6 +1827,7 @@ def control_cobertura(cliente, desde, hasta, agrupacion="total", modo="reales"):
         "cobertura": round(tot["cubiertos"] / tot["esperados"] * 100, 1) if tot["esperados"] else 0,
         "periodos": lista,
         "detalle_faltantes": sorted(detalle, key=lambda x: (x["fecha"], x["tramo"])),
+        "pendientes_carga": sorted(pendientes, key=lambda x: (x["fecha"], x["tramo"])),
     }
     try:
         _pistas_control(cliente, salida, desde_real, hasta)

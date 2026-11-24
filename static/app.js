@@ -14288,8 +14288,17 @@ function panelFaltantes({ faltas, cob }) {
       <details class="falta-mal-lista"><summary>Ver cuáles</summary>
         ${mal.map(m => `<div class="falta-mal">${esc(m.chofer)} · <b>${esc(m.tramo)}</b> · marcado con fecha ${m.marcado.slice(8, 10)}/${m.marcado.slice(5, 7)} a las ${esc(m.hora)} → es del <b>${m.fecha.slice(8, 10)}/${m.fecha.slice(5, 7)}</b>${m.liquidado ? " (liquidado: no se puede mover)" : ""}</div>`).join("")}
       </details></div>` : "";
+  // Lo de los últimos días que todavía no se cargó pero está a tiempo (el
+  // chofer suele cargar con atraso) o que todavía no pasó: no cuenta como sin hacer
+  const pend = (cob || []).flatMap(c => (c.pendientes_carga || []).map(x => ({ ...x, cliente: c.cliente })));
+  const porMotivo = {};
+  pend.forEach(x => (porMotivo[x.tramo + "|" + x.motivo] = porMotivo[x.tramo + "|" + x.motivo] || { ...x, dias: [] }).dias.push(x.fecha));
+  const cajaPend = pend.length ? `<details class="falta-pend"><summary><i class="ti ti-hourglass"></i>
+      <span><b>${pend.length} ${pend.length === 1 ? "tramo de los últimos días todavía no se cargó" : "tramos de los últimos días todavía no se cargaron"}</b>, pero están a tiempo: no cuentan como sin hacer.</span><em>Ver cuáles</em></summary>
+      ${Object.values(porMotivo).sort((a, b) => a.tramo.localeCompare(b.tramo)).map(x => `<div class="falta-mal"><b>${esc(x.tramo)}</b> (${x.dias.map(d => d.slice(8, 10) + "/" + d.slice(5, 7)).join(", ")}): ${esc(x.motivo)}</div>`).join("")}
+    </details>` : "";
   if (!faltas.length) {
-    return cajaMal + `<div class="empty"><i class="ti ti-circle-check"></i>Se cubrieron todos los tramos del período.</div>`;
+    return cajaMal + cajaPend + `<div class="empty"><i class="ti ti-circle-check"></i>Se cubrieron todos los tramos del período${pend.length ? " (sin contar lo que todavía está a tiempo de cargarse)" : ""}.</div>`;
   }
   const g = agruparFaltas(faltas);
   const conPistas = faltas.filter(f => (f.pistas || []).length).length;
@@ -14317,7 +14326,7 @@ function panelFaltantes({ faltas, cob }) {
   return `
     <p class="hint" style="margin-bottom:12px"><i class="ti ti-info-circle"></i> Agrupado por día. Tocá una fila para ver qué tramos fueron.
       ${conPistas ? ` En <b>${conPistas}</b> el sistema encontró una posible explicación (marcado con otra fecha u otro tramo).` : ""}</p>
-    ${cajaMal}${cajaHora}
+    ${cajaMal}${cajaHora}${cajaPend}
     ${g.map((x, i) => {
       const nP = x.items.filter(f => (f.pistas || []).length).length;
       return `
