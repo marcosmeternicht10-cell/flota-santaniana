@@ -1226,18 +1226,24 @@ def obtener_rendiciones(chofer_usuario=None, desde=None, hasta=None, cliente=Non
     q = "SELECT * FROM rendiciones_corp WHERE 1=1"
     params = []
     if chofer_usuario:
-        q += " AND chofer_usuario=?"; params.append(chofer_usuario)
+        q += " AND LOWER(TRIM(chofer_usuario))=?"; params.append(chofer_usuario.strip().lower())
     if desde:
         q += " AND fecha_servicio>=?"; params.append(desde)
     if hasta:
-        q += " AND fecha_servicio<=?"; params.append(hasta)
+        q += " AND fecha_servicio<=?"; params.append(hasta + "~")    # aunque la fecha venga con hora
     if cliente:
-        q += " AND cliente=?"; params.append(cliente)
+        q += " AND UPPER(TRIM(cliente))=?"; params.append(" ".join(cliente.split()).upper())
     q += " ORDER BY fecha_servicio DESC, id DESC"
     conn = get_connection()
     rows = conn.execute(q, params).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    out = []
+    for r in rows:
+        r = dict(r)
+        r["fecha_servicio"] = str(r.get("fecha_servicio") or "")[:10]
+        r["estado"] = _estado_norm(r.get("estado"))
+        out.append(r)
+    return out
 
 
 
@@ -3385,9 +3391,18 @@ def api_corp_rendiciones():
         desde=request.args.get("desde") or None,
         hasta=request.args.get("hasta") or None,
         cliente=request.args.get("cliente") or None)
+    from nombres import apellido_primero
+    for r in rends:                       # para la pantalla: nombres prolijos y el tramo del catálogo
+        c, t = _canonizar(r.get("cliente"), r.get("tramo"))
+        r["cliente_c"] = c or " ".join(str(r.get("cliente") or "").split()).upper()
+        r["tramo_c"] = t or (r.get("tramo") or "").strip()
+        r["chofer"] = apellido_primero(r.get("chofer_nombre") or r.get("chofer_usuario") or "")
+        r["usuario"] = (r.get("chofer_usuario") or "").strip().lower()
+        r["cargado"] = str(r.get("cargado_el") or r.get("fecha_carga") or "")[:16].replace("T", " ")
     return jsonify({
         "rendiciones": rends,
         "liquidacion": liquidacion_por_chofer(rends),
+        "hoy": hoy(),
     })
 
 
