@@ -317,6 +317,7 @@ function crVistaDetalle(rs) {
           ${op ? (r.liquidado ? `<span class="sm-liq" title="Ya está liquidado"><i class="ti ti-lock"></i> Liquidado</span>`
             : `<span class="sm-acc">
                 <button class="sm-borrar cr-ed" title="Cambiar el monto" onclick="editarMontoRendicion(${r.id}, ${+r.monto || 0}, ${r.monto_fijo ? 1 : 0})"><i class="ti ti-pencil"></i></button>
+                <button class="sm-borrar cr-ed" title="Corregir fecha, empresa, tramo o lo que hizo" onclick="crCorregir(cr.d.rendiciones.find(x => x.id === ${r.id}), cargarRendiciones)"><i class="ti ti-replace"></i></button>
                 <button class="sm-borrar cr-ed" title="Pasar a otro chofer" onclick="crPasar(${r.id})"><i class="ti ti-user-share"></i></button>
                 <button class="sm-borrar" title="Eliminar" onclick="borrarRendicion(${r.id}, '${crE(r.chofer).replace(/'/g, "\\'")}', '${f}')"><i class="ti ti-trash"></i></button></span>`) : ""}
         </div>`;
@@ -373,5 +374,48 @@ function crPasarLote() {
     document.querySelector(".modal-overlay")?.remove();
     toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok ? "success" : "error");
     cargarRendiciones();
+  };
+}
+
+// Corregir un servicio ya marcado: la fecha, la empresa, el tramo o lo que
+// hizo (completo, una mitad, suspendido). Se usa acá y en la ventana de
+// servicios del chofer (Ranking). Las reglas las controla el servidor.
+let crCfg = null;
+async function crCorregir(r, alListo) {
+  if (!r) return;
+  if (!crCfg) crCfg = await api("/api/corp/config").catch(() => null);
+  const ct = Object.assign({}, (crCfg && crCfg.clientes_tramos) || {});
+  if (!ct[r.cliente_c]) ct[r.cliente_c] = [r.tramo_c];
+  const op = (v, t, sel) => `<option value="${crE(v)}" ${sel ? "selected" : ""}>${crE(t)}</option>`;
+  const est = r.estado === "ok" ? "completado" : r.estado;
+  rvModal({
+    titulo: "Corregir servicio", icono: "replace", ancho: 560,
+    sub: `${crE(r.chofer)} · hoy figura <b>${crE(r.cliente_c)} ${crE(r.tramo_c)}</b> del ${csFC(r.fecha_servicio)} (${(CR_EST[est] || est).toLowerCase()}).`,
+    cuerpo: `<div class="cr-corr">
+      <label class="rv-f"><span>Fecha</span><input type="date" id="crc-fecha" value="${r.fecha_servicio}" max="${crIso(new Date())}"></label>
+      <label class="rv-f"><span>Empresa</span><select id="crc-cli">${Object.keys(ct).map(c => op(c, c, c === r.cliente_c)).join("")}</select></label>
+      <label class="rv-f cr-corr-ancho"><span>Tramo</span><select id="crc-tramo"></select></label>
+      <label class="rv-f cr-corr-ancho"><span>¿Qué hizo?</span><select id="crc-est">
+        ${op("completado", "Completo (entrante y saliente)", est === "completado")}${op("entrante", "Solo el entrante", est === "entrante")}
+        ${op("saliente", "Solo el saliente", est === "saliente")}${op("suspendido", "Suspendido", est === "suspendido")}</select></label>
+      <label class="rv-f cr-corr-ancho"><span>Observación <small id="crc-obs-oblig">${est === "suspendido" ? "(obligatoria: el motivo)" : ""}</small></span>
+        <input id="crc-obs" value="${crE(r.observacion || "")}" placeholder="Por ejemplo: no salió el coche"></label>
+    </div>
+    <p class="cr-nota"><i class="ti ti-info-circle"></i> Si el tramo ya lo marcó otro ese día, no deja guardar y te dice quién. El monto se recalcula (salvo que lo hayas fijado a mano). Queda en la auditoría.</p>`,
+    pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+          <button class="btn btn-primary" id="crc-ok"><i class="ti ti-check"></i> Guardar</button>`,
+  });
+  const cli = $("#crc-cli"), tr = $("#crc-tramo");
+  const tramos = () => { tr.innerHTML = (ct[cli.value] || []).map(t => op(t, t, cli.value === r.cliente_c && t === r.tramo_c)).join(""); };
+  cli.onchange = tramos; tramos();
+  $("#crc-est").onchange = e => { $("#crc-obs-oblig").textContent = e.target.value === "suspendido" ? "(obligatoria: el motivo)" : ""; };
+  $("#crc-ok").onclick = async e => {
+    e.target.disabled = true;
+    const x = await api(`/api/corp/rendicion/${r.id}/mover`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fecha: $("#crc-fecha").value, cliente: cli.value, tramo: tr.value, estado: $("#crc-est").value, observacion: $("#crc-obs").value }) })
+      .catch(err => ({ error: err.message }));
+    toast((x && (x.msg || x.error)) || "No se pudo", x && x.ok ? "success" : "error");
+    if (x && x.ok) { document.querySelector(".modal-overlay")?.remove(); if (alListo) alListo(); }
+    else e.target.disabled = false;
   };
 }

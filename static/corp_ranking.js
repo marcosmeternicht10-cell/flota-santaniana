@@ -213,7 +213,7 @@ async function rkServicios(u, nombre) {
   Object.assign(rks, { u: u.toLowerCase(), nombre, desde: rk.desde, hasta: rk.hasta > trHoy() ? trHoy() : rk.hasta, d: null });
   rvModal({
     titulo: rkE(nombre), icono: "calendar-user", ancho: 860, clase: "rks-modal",
-    sub: "Sus servicios día por día" + (puedeOperarCorp() ? ". Podés agregar lo que no marcó, quitar lo que está de más, pasarlo a otro chofer o corregirle la fecha." : "."),
+    sub: "Sus servicios día por día" + (puedeOperarCorp() ? ". Podés agregar lo que no marcó, quitar lo que está de más, pasarlo a otro chofer o corregirlo (fecha, tramo o lo que hizo)." : "."),
     cuerpo: `<div id="rks"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>`,
     pie: `<button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cerrar</button>`,
   });
@@ -272,7 +272,7 @@ function rksPintar() {
                       r.editado_por && (r.editado_por.startsWith("cargado por") ? rkE(r.editado_por) : "corregido por " + rkE(r.editado_por)),
                       r.monto && `Gs. ${fmtNum(Math.round(r.monto))}`, r.observacion && rkE(r.observacion)].filter(Boolean).join(" · ")}</small>
             ${puede ? (r.liquidado ? `<span class="sm-liq" title="Ya está liquidado"><i class="ti ti-lock"></i> Liquidado</span>` : `<span class="rks-acc">
-              <button class="sm-borrar rks-ed" title="Cambiar la fecha" onclick="rksFecha(${r.id}, '${f}')"><i class="ti ti-calendar-event"></i></button>
+              <button class="sm-borrar rks-ed" title="Corregir fecha, empresa, tramo o lo que hizo" onclick="crCorregir(rks.d.rendiciones.find(x => x.id === ${r.id}), () => { rksCargar(); rkCargar(true); })"><i class="ti ti-replace"></i></button>
               <button class="sm-borrar rks-ed" title="Pasar a otro chofer" onclick="rksPasar(${r.id})"><i class="ti ti-user-share"></i></button>
               <button class="sm-borrar" title="Quitar este servicio" onclick="rksQuitar(${r.id})"><i class="ti ti-trash"></i></button></span>`) : ""}
           </div>`).join("") : `<span class="rks-nada">Sin servicios</span>`}</div>

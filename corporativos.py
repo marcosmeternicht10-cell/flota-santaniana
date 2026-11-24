@@ -1868,14 +1868,17 @@ def _pistas_control(cliente, cob, desde, hasta):
             it["pistas"] = pistas
 
 
-def mover_rendicion(rid, fecha=None, tramo=None, quien=""):
-    """Corrige la fecha o el tramo de un servicio marcado (desde el Control).
-    Respeta las mismas reglas que al marcar: no deja pisar un tramo ya marcado."""
+def mover_rendicion(rid, fecha=None, tramo=None, quien="", cliente=None, estado=None, observacion=None):
+    """Corrige la fecha, la empresa, el tramo o lo que hizo (completo, una
+    mitad, suspendido) de un servicio ya marcado. Respeta las mismas reglas
+    que al marcar: no deja pisar un tramo ya marcado. Recalcula el monto
+    (salvo que se haya fijado a mano) y deja constancia."""
     import datetime as _dt
     conn = get_connection()
     try:
         r = conn.execute("""SELECT id, chofer_usuario, chofer_nombre, cliente, tramo, fecha_servicio, estado, monto,
-                                   COALESCE(monto_fijo, 0) AS monto_fijo, COALESCE(liquidado, 0) AS liquidado
+                                   COALESCE(monto_fijo, 0) AS monto_fijo, COALESCE(liquidado, 0) AS liquidado,
+                                   COALESCE(observacion, '') AS observacion
                             FROM rendiciones_corp WHERE id=?""", (rid,)).fetchone()
     finally:
         conn.close()
@@ -1890,30 +1893,39 @@ def mover_rendicion(rid, fecha=None, tramo=None, quien=""):
             return None, "Esa fecha es futura"
     except ValueError:
         return None, "Fecha inválida"
-    cli, tc = _canonizar(r["cliente"], tramo or r["tramo"])
-    if not cli or not tc:
-        return None, "Ese tramo no es de ese cliente"
-    if f == str(r["fecha_servicio"])[:10] and tc == _tramo_c(r["cliente"], r["tramo"]):
+    cli, tc = _canonizar(cliente or r["cliente"], tramo or r["tramo"])
+    if not cli:
+        return None, "Esa empresa no existe"
+    if not tc:
+        return None, f"Ese tramo no es de {cli}"
+    est_antes = _estado_norm(r["estado"])
+    est = _estado_norm(estado) if estado else est_antes
+    if est not in ESTADOS_CON_PAGO + ("suspendido",):
+        return None, "Estado inválido"
+    obs = r["observacion"] if observacion is None else str(observacion).strip()[:500]
+    if est == "suspendido" and not obs.strip():
+        return None, "Si fue suspendido, poné el motivo"
+    cli_antes = _canonizar(r["cliente"], "")[0] or r["cliente"]
+    if (f, cli, tc, est, obs) == (str(r["fecha_servicio"])[:10], cli_antes, _tramo_c(r["cliente"], r["tramo"]), est_antes, r["observacion"]):
         return None, "No cambia nada"
-    estado = _estado_norm(r["estado"])
-    ocupado = tramo_ocupado(cli, tc, f, estado, excluir_id=rid)
+    ocupado = tramo_ocupado(cli, tc, f, est, excluir_id=rid)
     if ocupado:
         return None, ocupado.replace("Ese tramo", f"{tc} del {f[8:10]}/{f[5:7]}")
-    monto = r["monto"] if r["monto_fijo"] else calcular_monto(tc, estado, cli)
+    monto = r["monto"] if r["monto_fijo"] else calcular_monto(tc, est, cli)
     conn = get_connection()
     try:
-        conn.execute("""UPDATE rendiciones_corp SET cliente=?, tramo=?, fecha_servicio=?, monto=?, editado_por=?, fecha_edicion=?
-                        WHERE id=?""", (cli, tc, f, monto, quien, ahora_iso(), rid))
+        conn.execute("""UPDATE rendiciones_corp SET cliente=?, tramo=?, fecha_servicio=?, estado=?, monto=?, observacion=?,
+                               editado_por=?, fecha_edicion=? WHERE id=?""", (cli, tc, f, est, monto, obs, quien, ahora_iso(), rid))
         conn.commit()
     except IntegrityError:
         conn.rollback()
         return None, "Ese tramo ya está marcado ese día"
     finally:
         conn.close()
-    antes = f"{r['tramo']} del {str(r['fecha_servicio'])[:10]}"
-    despues = f"{tc} del {f}"
+    antes = f"{cli_antes} {r['tramo']} del {str(r['fecha_servicio'])[:10]} ({est_antes})"
+    despues = f"{cli} {tc} del {f} ({est})"
     auditar("Corrigió un servicio de corporativos", "Corporativos",
-            f"{r['chofer_nombre']} · {cli}: {antes} → {despues}")
+            f"{r['chofer_nombre']}: {antes} → {despues}")
     return {"antes": antes, "despues": despues}, None
 
 
@@ -3111,7 +3123,8 @@ def api_corp_mover_rendicion(rid):
         return jsonify({"error": "Sin permiso"}), 403
     d = request.get_json(silent=True) or {}
     r, err = mover_rendicion(rid, d.get("fecha"), d.get("tramo"),
-                             session.get("nombre") or session.get("usuario") or "")
+                             session.get("nombre") or session.get("usuario") or "",
+                             cliente=d.get("cliente"), estado=d.get("estado"), observacion=d.get("observacion"))
     if err:
         return jsonify({"ok": False, "error": err}), 400
     return jsonify({"ok": True, "msg": f"Listo: {r['despues']}"})

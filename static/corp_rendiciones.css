@@ -144,3 +144,5 @@
   background: var(--info-bg); border: 1px solid var(--border); font-size: 13px; color: var(--azul-oscuro); }
 .cr-lote > .ti { font-size: 22px; color: var(--brand-blue); }
 .cr-lote > span { flex: 1; min-width: 220px; }
+.cr-corr { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+.cr-corr-ancho { grid-column: span 2; }
