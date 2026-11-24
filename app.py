@@ -274,6 +274,8 @@ app.register_blueprint(bp_corp_ranking)
 # Servicios marcados: todo lo del día, quién marcó cada uno y quién marcó más
 from corp_marcados import bp_corp_marcados
 app.register_blueprint(bp_corp_marcados)
+from corp_propuestas import bp_corp_propuestas
+app.register_blueprint(bp_corp_propuestas)
 # Agencias de venta de pasajes: fichas, contratos con versiones, papeles y vencimientos
 from agencias import bp_agencias, init_agencias
 init_agencias()

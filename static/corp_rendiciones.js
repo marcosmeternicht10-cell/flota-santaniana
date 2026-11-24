@@ -84,8 +84,10 @@ async function renderCorpResumen() {
         <label class="cs-busca cr-busca"><i class="ti ti-search"></i><input type="search" value="${crE(cr.q)}" placeholder="Buscar tramo, coche o chofer" oninput="cr.q=this.value;crPintar()"></label>
         <label class="cr-toggle"><input type="checkbox" ${cr.pend ? "checked" : ""} onchange="cr.pend=this.checked;crPintar()"> Solo sin liquidar</label>
       </div>
+      <div id="cr-propuestas"></div>
       <div id="corp-resultado"><div class="dossier-loading"><div class="dossier-spinner"></div></div></div>
     </div>`;
+  if (op) crPropuestas();
   api("/api/corp/choferes").then(l => {
     cr.choferes = Array.isArray(l) ? l : [];
     const sel = $("#corp-chofer");
@@ -418,4 +420,40 @@ async function crCorregir(r, alListo) {
     if (x && x.ok) { document.querySelector(".modal-overlay")?.remove(); if (alListo) alListo(); }
     else e.target.disabled = false;
   };
+}
+
+// ── Correcciones listas para aplicar (corp_propuestas.py) ──
+// Un grupo de servicios que tiene que quedar a nombre de un chofer: se ve cómo
+// está cada uno hoy y se aplica con un botón.
+const CR_SIT = { ok: ["Ya está a su nombre", "ok"], otro: ["", "otro"], falta: ["No está cargado: se carga", "falta"], liquidado: ["", "liq"] };
+async function crPropuestas() {
+  const box = $("#cr-propuestas");
+  if (!box) return;
+  const d = await api("/api/corp/propuestas").catch(() => null);
+  if (!$("#cr-propuestas")) return;
+  const ps = (d && d.propuestas) || [];
+  box.innerHTML = ps.map(p => {
+    const c = p.cuenta, hacer = c.otro + c.falta;
+    const txt = it => it.situacion === "otro" ? `Está a nombre de <b>${crE(it.quien)}</b> (${crE(it.quien_usuario)}): se pasa`
+      : it.situacion === "liquidado" ? `Está liquidado a nombre de ${crE(it.quien)}: no se puede mover` : CR_SIT[it.situacion][0];
+    return `<div class="cr-prop">
+      <div class="cr-prop-cab"><i class="ti ti-clipboard-list"></i>
+        <div><b>${crE(p.titulo)} → ${crE(p.chofer)}</b>
+          <span>${crE(p.motivo)} ${c.ok ? `${c.ok} ya están a su nombre. ` : ""}${c.otro ? `${c.otro} están a nombre de otro chofer. ` : ""}${c.falta ? `${c.falta} no están cargados. ` : ""}${c.liquidado ? `${c.liquidado} ya liquidados a otro.` : ""}</span></div>
+        ${!p.existe_chofer ? `<span class="cr-prop-mal">No encontré la cuenta de ${crE(p.chofer)}</span>`
+          : hacer ? `<button class="btn btn-primary" onclick="crAplicarPropuesta('${crE(p.clave)}', this, ${hacer}, '${crE(p.chofer).replace(/'/g, "\\'")}')"><i class="ti ti-user-check"></i> Pasar todo a ${crE(p.chofer)}</button>`
+          : `<button class="btn btn-ghost" onclick="crAplicarPropuesta('${crE(p.clave)}', this, 0, '')"><i class="ti ti-check"></i> Ya está todo: cerrar</button>`}
+      </div>
+      <details class="cr-prop-det"><summary>Ver los ${p.items.length} servicios</summary>
+        ${p.items.map(it => `<div class="cr-prop-it ${CR_SIT[it.situacion][1]}"><span>${csFC(it.fecha)}</span><span><span class="sm-cli">${crE(it.cliente)}</span> ${crE(it.tramo)} · ${(CR_EST[it.estado] || it.estado).toLowerCase()}</span><span>${txt(it)}</span></div>`).join("")}
+      </details></div>`;
+  }).join("");
+}
+async function crAplicarPropuesta(clave, btn, n, chofer) {
+  if (n && !confirm(`¿Pasar a ${chofer} los ${n} servicios que no están a su nombre?\n\nLos que están a nombre de otro chofer se le pasan y los que faltan se cargan. Queda en la auditoría.`)) return;
+  btn.disabled = true;
+  const r = await api(`/api/corp/propuestas/${encodeURIComponent(clave)}/aplicar`, { method: "POST" }).catch(e => ({ error: e.message }));
+  toast((r && (r.msg || r.error)) || "No se pudo", r && r.ok && !(r.errores || []).length ? "success" : "error");
+  if (r && r.errores && r.errores.length) alert("Algunos no se pudieron:\n\n" + r.errores.join("\n"));
+  crPropuestas(); cargarRendiciones();
 }
